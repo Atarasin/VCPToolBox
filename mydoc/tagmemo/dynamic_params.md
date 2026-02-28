@@ -78,3 +78,30 @@ _truncateCoreTags(tags, ratio, metrics) {
 ```bash
 node -e "require('./Plugin/RAGDiaryPlugin/RAGDiaryPlugin');"
 ```
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 以 EPA 逻辑深度与共振衡量意图强度  
+- 以语义宽度衡量噪音与发散程度  
+- 将 Beta、K 与 Tag 截断统一纳入动态调参闭环  
+
+### 核心作用
+
+- 动态平衡召回数量与精度  
+- 防止 Tag 过载导致的噪音扩散  
+- 使检索策略随问题复杂度自适应  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[Query向量] --> B[EPA指标]
+  A --> C[语义宽度]
+  B --> D[动态Beta/K]
+  C --> D
+  D --> E[标签截断与权重]
+```

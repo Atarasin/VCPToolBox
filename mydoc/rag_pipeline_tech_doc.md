@@ -378,3 +378,30 @@ SELECT COUNT(*) FROM tags;
 - [KnowledgeBaseManager.js](file:///home/zh/projects/VCPToolBox/KnowledgeBaseManager.js#L277-L731)  
 - [EPAModule.js](file:///home/zh/projects/VCPToolBox/EPAModule.js#L7-L201)  
 - [ResidualPyramid.js](file:///home/zh/projects/VCPToolBox/ResidualPyramid.js#L7-L360)  
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 通过消息预处理链统一完成变量替换、插件增强与 RAG 注入  
+- 以 SQLite 作为结构化记忆底座，以向量索引作为语义召回底座  
+- 通过 TagMemo 与去重/重排提升结果可解释性与多样性  
+
+### 核心作用
+
+- 建立从用户消息到响应的可追踪检索闭环  
+- 将“检索 + 生成”串联为稳定的系统级流程  
+- 支持时间检索与语义检索的混合模式  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[用户消息] --> B[消息预处理]
+  B --> C[RAG 解析与检索]
+  C --> D[上下文组装]
+  D --> E[LLM 调用]
+  E --> F[响应输出]
+```

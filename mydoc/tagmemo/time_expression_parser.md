@@ -227,3 +227,29 @@ module.exports = {
 ```bash
 node -e "require('./Plugin/RAGDiaryPlugin/TimeExpressionParser');"
 ```
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 以正则模式库描述中文时间表达，匹配后将语义映射为时间区间  
+- 通过 handler 字符串动态生成解析函数，保持模式库可配置与可扩展  
+- 统一输出 `{ startDate, endDate }`，为 Time-Aware RAG 提供结构化时间锚点  
+
+### 核心作用
+
+- 将模糊时间词转换为可检索的时间范围  
+- 保障时间召回的精确性与可解释性  
+- 作为时间检索链路的第一步，为后续 SQL/向量筛选提供约束  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[输入文本] --> B[时间表达模式匹配]
+  B --> C[Handler 解析]
+  C --> D[生成 startDate/endDate]
+  D --> E[Time-Aware RAG 检索约束]
+```

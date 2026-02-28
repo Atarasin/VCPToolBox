@@ -395,3 +395,29 @@ impl VexusIndex {
 ```bash
 node -e "const { VexusIndex } = require('./rust-vexus-lite'); const idx = new VexusIndex(8, 10); const v = new Float32Array(8).fill(0.1); idx.add(1, Buffer.from(v.buffer)); const res = idx.search(Buffer.from(v.buffer), 1); console.log(res);"
 ```
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 使用 USearch HNSW 作为核心 ANN 索引结构  
+- 通过 Rust N-API 将高频数学计算下沉  
+- 提供检索与正交投影、SVD、握手分析等通用算子  
+
+### 核心作用
+
+- 作为 RAG/TagMemo 的高性能检索底座  
+- 提供可复用的线性代数加速能力  
+- 保证大规模向量场景下的低延迟查询  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[向量写入] --> B[HNSW索引]
+  C[Query向量] --> D[ANN搜索]
+  D --> E[ID/Score结果]
+  E --> F[上层SQLite回填]
+```

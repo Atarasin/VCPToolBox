@@ -342,3 +342,30 @@ function applyTagBoostV3(query, baseTagBoost):
 - [EPAModule.project](file:///home/zh/projects/VCPToolBox/EPAModule.js#L67-L161)  
 - [ResidualPyramid.analyze](file:///home/zh/projects/VCPToolBox/ResidualPyramid.js#L25-L119)  
 - [ResultDeduplicator.deduplicate](file:///home/zh/projects/VCPToolBox/ResultDeduplicator.js#L44-L167)  
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 向量索引负责高效近似检索，作为底层召回入口  
+- TagMemo 通过 EPA 与残差结构进行语义重塑，补偿向量投影信息损失  
+- 两者结合形成“快速召回 + 结构增强”的双阶段检索策略  
+
+### 核心作用
+
+- 提升召回精度与多样性  
+- 降低高维投影碰撞造成的语义混淆  
+- 为记忆型 RAG 提供可解释的结构信号  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[Query向量] --> B[向量索引召回]
+  A --> C[TagMemo增强]
+  C --> D[增强向量]
+  D --> B
+  B --> E[结果集]
+```

@@ -162,3 +162,32 @@ for (const pluginName of finalOrder) {
 - “通用消息预处理器”是对 `messagePreprocessors` Map 的通用遍历调用机制，实际实现由插件 manifest 与 entryPoint 脚本定义。  
 - `chatCompletionHandler.js#L518-529` 是所有非特殊预处理器的集中入口，执行顺序由 `PluginManager.loadPlugins()` 决定，默认情况下为预处理器名称排序。  
 - 若需要追踪某个具体预处理器的实现，应从 `Plugin/<Name>/plugin-manifest.json` 的 `entryPoint.script` 进入其 `processMessages` 实现文件。
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 以插件注册与清单驱动的方式解耦预处理器  
+- 通过统一执行入口实现顺序控制与依赖注入  
+- 采用串行 await 保证处理链的可预测性  
+
+### 核心作用
+
+- 为请求提供可扩展的消息预处理管道  
+- 允许插件在进入 LLM 前统一修剪、规范化与增强  
+- 保证不同预处理器之间的顺序一致与可追踪  
+
+### 时序图
+
+```mermaid
+sequenceDiagram
+  participant H as Handler
+  participant P as PluginManager
+  participant M as MessagePreprocessor
+  H->>P: executeMessagePreprocessor(name, messages)
+  P->>M: processMessages(messages, config)
+  M-->>P: processedMessages
+  P-->>H: processedMessages
+```

@@ -141,3 +141,29 @@ module.exports = ContextVectorManager;
 ```bash
 node -e "require('./Plugin/RAGDiaryPlugin/ContextVectorManager');"
 ```
+
+---
+
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 将长上下文切分为可控片段，降低单一 query 偏差  
+- 通过重叠窗口与缓存机制提升检索稳定性与性能  
+- 语义宽度量化为动态参数输入，驱动 TagMemo 的自适应权重  
+
+### 核心作用
+
+- 支持 Shotgun Query 的多段召回，提高覆盖率  
+- 为动态 Beta/K 与标签截断提供语义宽度信号  
+- 让检索策略从“单点”升级为“多视角”  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[上下文] --> B[切分与重叠]
+  B --> C[段向量生成]
+  C --> D[语义宽度计算]
+  D --> E[动态参数驱动]
+```

@@ -5,6 +5,31 @@
 
 ---
 
+## 追加章节：实现原理与核心作用
+
+### 设计思路与实现机制
+
+- 使用 files/chunks/tags/file_tags/kv_store 五表模型承载记忆与索引映射  
+- 将向量与文本分离：索引只存 ID 与 BLOB，hydrate 回填文本  
+- 通过 kv_store 缓存 EPA 基底与名称向量，降低冷启动成本  
+
+### 核心作用
+
+- 为向量索引与 TagMemo 提供稳定的结构化数据底座  
+- 保障检索链条的可追溯性与可复查性（ID→文本）  
+- 支持并行日记域与局部索引的工程实践  
+
+### 流程图
+
+```mermaid
+flowchart LR
+  A[files] --> B[chunks]
+  A --> C[file_tags]
+  D[tags] --> C
+  E[kv_store] --> F[EPA/名称向量缓存]
+  B --> G[ID回填文本]
+```
+
 ## 数据库概览
 
 - 物理位置：VectorStore/knowledge_base.sqlite
@@ -347,4 +372,3 @@ DELETE FROM files     WHERE id = ?;
 - Hydrate 查询示例：[KnowledgeBaseManager.js:L362-L369](file:///home/zh/projects/VCPToolBox/KnowledgeBaseManager.js#L362-L369)
 - 并行全局检索回填：[KnowledgeBaseManager.js:L423-L427](file:///home/zh/projects/VCPToolBox/KnowledgeBaseManager.js#L423-L427)
 - 共现矩阵构建查询：[KnowledgeBaseManager.js:L1302-L1328](file:///home/zh/projects/VCPToolBox/KnowledgeBaseManager.js#L1302-L1328)
-
