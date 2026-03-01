@@ -2614,6 +2614,8 @@ class RAGDiaryPlugin {
         const apiKey = process.env.API_Key;
         const apiUrl = process.env.API_URL;
         const embeddingModel = process.env.WhitelistEmbeddingModel;
+        const rawDimensions = process.env.EMBEDDING_DIMENSIONS || process.env.VECTORDB_DIMENSION;
+        const dimensions = rawDimensions ? parseInt(rawDimensions, 10) : NaN;
 
         if (!apiKey || !apiUrl || !embeddingModel) {
             console.error('[RAGDiaryPlugin] Embedding API credentials or model is not configured in environment variables.');
@@ -2636,10 +2638,14 @@ class RAGDiaryPlugin {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const response = await axios.post(`${apiUrl}/v1/embeddings`, {
+                const requestBody = {
                     model: embeddingModel,
-                    input: textChunks // 传入所有文本块
-                }, {
+                    input: textChunks
+                };
+                if (Number.isFinite(dimensions)) {
+                    requestBody.dimensions = dimensions;
+                }
+                const response = await axios.post(`${apiUrl}/v1/embeddings`, requestBody, {
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
                         'Content-Type': 'application/json'

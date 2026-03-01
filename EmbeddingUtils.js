@@ -5,13 +5,18 @@ const encoding = get_encoding("cl100k_base");
 // 配置
 const embeddingMaxToken = parseInt(process.env.WhitelistEmbeddingModelMaxToken, 10) || 8000;
 const safeMaxTokens = Math.floor(embeddingMaxToken * 0.85);
-const MAX_BATCH_ITEMS = 100; // Gemini/OpenAI 限制
+const RAW_MAX_BATCH_ITEMS = process.env.EMBEDDING_MAX_BATCH_ITEMS;
+const MAX_BATCH_ITEMS = RAW_MAX_BATCH_ITEMS ? parseInt(RAW_MAX_BATCH_ITEMS, 10) : NaN;
+const DEFAULT_MAX_BATCH_ITEMS = 10;
 const DEFAULT_CONCURRENCY = parseInt(process.env.TAG_VECTORIZE_CONCURRENCY) || 5; // 🌟 读取并发配置
+const DISABLE_BATCHING = (process.env.EMBEDDING_DISABLE_BATCHING || 'false').toLowerCase() === 'true';
+const RAW_EMBEDDING_DIMENSIONS = process.env.EMBEDDING_DIMENSIONS || process.env.VECTORDB_DIMENSION;
+const EMBEDDING_DIMENSIONS = RAW_EMBEDDING_DIMENSIONS ? parseInt(RAW_EMBEDDING_DIMENSIONS, 10) : NaN;
 
 /**
  * 内部函数：发送单个批次
  */
-async function _sendBatch(batchTexts, config, batchNumber) {
+async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dimensions) {
     const { default: fetch } = await import('node-fetch');
     const retryAttempts = 3;
     const baseDelay = 1000;
@@ -19,7 +24,10 @@ async function _sendBatch(batchTexts, config, batchNumber) {
     for (let attempt = 1; attempt <= retryAttempts; attempt++) {
         try {
             const requestUrl = `${config.apiUrl}/v1/embeddings`;
-            const requestBody = { model: config.model, input: batchTexts };
+            const requestBody = { model: config.model, input: disableBatching ? batchTexts[0] : batchTexts };
+            if (Number.isFinite(dimensions)) {
+                requestBody.dimensions = dimensions;
+            }
             const requestHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` };
 
             const response = await fetch(requestUrl, {
@@ -103,6 +111,10 @@ async function _sendBatch(batchTexts, config, batchNumber) {
  */
 async function getEmbeddingsBatch(texts, config) {
     if (!texts || texts.length === 0) return [];
+    const disableBatching = DISABLE_BATCHING;
+    const dimensions = Number.isFinite(EMBEDDING_DIMENSIONS) ? EMBEDDING_DIMENSIONS : NaN;
+    const maxBatchItems = disableBatching ? 1 : (Number.isFinite(MAX_BATCH_ITEMS) ? MAX_BATCH_ITEMS : DEFAULT_MAX_BATCH_ITEMS);
+    const concurrency = disableBatching ? 1 : DEFAULT_CONCURRENCY;
 
     // 1. ⚡️ 第一步：纯 CPU 操作，先把所有文本切分成 Batches
     //    同时记录每个文本在原始数组中的索引，以便后续对齐
@@ -122,7 +134,7 @@ async function getEmbeddingsBatch(texts, config) {
         }
 
         const isTokenFull = currentBatchTexts.length > 0 && (currentBatchTokens + textTokens > safeMaxTokens);
-        const isItemFull = currentBatchTexts.length >= MAX_BATCH_ITEMS;
+        const isItemFull = currentBatchTexts.length >= maxBatchItems;
 
         if (isTokenFull || isItemFull) {
             batches.push({ texts: currentBatchTexts, originalIndices: currentBatchIndices });
@@ -142,7 +154,7 @@ async function getEmbeddingsBatch(texts, config) {
     if (oversizeIndices.size > 0) {
         console.warn(`[Embedding] ⚠️ ${oversizeIndices.size} texts skipped due to token limit.`);
     }
-    console.log(`[Embedding] Prepared ${batches.length} batches from ${texts.length} texts. Executing with concurrency: ${DEFAULT_CONCURRENCY}...`);
+    console.log(`[Embedding] Prepared ${batches.length} batches. Executing with concurrency: ${concurrency}...`);
 
     // 2. 🌊 第二步：并发执行器
     const batchResults = new Array(batches.length); // 预分配结果数组，保证顺序
@@ -159,7 +171,7 @@ async function getEmbeddingsBatch(texts, config) {
             try {
                 // 执行请求 (Batch ID 从 1 开始显示)
                 batchResults[batchIndex] = {
-                    vectors: await _sendBatch(batch.texts, config, batchIndex + 1),
+                    vectors: await _sendBatch(batch.texts, config, batchIndex + 1, disableBatching, dimensions),
                     originalIndices: batch.originalIndices
                 };
             } catch (e) {
@@ -177,7 +189,7 @@ async function getEmbeddingsBatch(texts, config) {
 
     // 启动 N 个 Worker
     const workers = [];
-    for (let i = 0; i < DEFAULT_CONCURRENCY; i++) {
+    for (let i = 0; i < concurrency; i++) {
         workers.push(worker(i));
     }
 

@@ -6,7 +6,6 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
-**/dream_logs/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -202,3 +201,5 @@ rust-vexus-lite/target/
 
 # ==== 分布式开发 ====
 VCPDistributedServer
+**/dream_logs/
+Plugin/AgentDream/dream_schedule_state.json

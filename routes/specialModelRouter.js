@@ -102,6 +102,8 @@ router.post('/v1/chat/completions', async (req, res) => {
 // 处理向量化模型
 router.post('/v1/embeddings', async (req, res) => {
     const model = req.body.model;
+    const rawDimensions = process.env.EMBEDDING_DIMENSIONS || process.env.VECTORDB_DIMENSION;
+    const dimensions = rawDimensions ? parseInt(rawDimensions, 10) : NaN;
 
     if (!WHITELIST_EMBEDDING_MODELS.includes(model)) {
         return res.status(400).json({ error: "模型不匹配向量化模型白名单" });
@@ -110,6 +112,11 @@ router.post('/v1/embeddings', async (req, res) => {
     if (DEBUG_MODE) console.log(`[SpecialRouter] 正在处理向量化模型 (透传): ${model}`);
 
     try {
+        const modifiedBody = { ...req.body };
+        if (Number.isFinite(dimensions) && !Number.isFinite(modifiedBody.dimensions)) {
+            modifiedBody.dimensions = dimensions;
+        }
+
         const { default: fetch } = await import('node-fetch');
         const apiResponse = await fetch(`${API_URL}/v1/embeddings`, {
             method: 'POST',
@@ -119,7 +126,7 @@ router.post('/v1/embeddings', async (req, res) => {
                 ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] }),
                 'Accept': req.headers['accept'] || 'application/json',
             },
-            body: JSON.stringify(req.body),
+            body: JSON.stringify(modifiedBody),
         });
 
         const responseJson = await apiResponse.json();
