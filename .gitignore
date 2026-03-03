@@ -6,6 +6,7 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
+**/dream_logs/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -178,6 +179,7 @@ Plugin/VCPLog/log/VCPlog.txt
 Plugin/WeatherReporter/weather_cache.json
 Plugin/WeatherReporter/weather_cache.txt
 Plugin/WeatherReporter/city_cache.txt
+Plugin/AgentDream/dream_schedule_state.json
 
 # ===== 图片 / 媒体 =====
 # 忽略通用表情包目录下的所有内容...
@@ -201,5 +203,3 @@ rust-vexus-lite/target/
 
 # ==== 分布式开发 ====
 VCPDistributedServer
-**/dream_logs/
-Plugin/AgentDream/dream_schedule_state.json
