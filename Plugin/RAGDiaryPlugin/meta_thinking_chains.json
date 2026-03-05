@@ -1,35 +1,9 @@
 {
   "chains": {
-    "default": {
-      "clusters": [
-        "前思维簇",
-        "逻辑推理簇",
-        "反思簇",
-        "结果辩证簇",
-        "陈词总结梳理簇"
-      ],
-      "kSequence": [
-        2,
-        1,
-        1,
-        1,
-        1
-      ]
-    },
-    "novel_ideation": {
-      "clusters": [
-        "定位校准簇",
-        "受众画像簇",
-        "爽点体系簇",
-        "赛道差异簇"
-      ],
-      "kSequence": [
-        2,
-        2,
-        1,
-        1
-      ]
-    }
+    "default": { "clusters": ["前思维簇", "逻辑推理簇", "反思簇", "结果辩证簇", "陈词总结梳理簇"], "kSequence": [2, 1, 1, 1, 1] },
+    "novel_ideation": { "clusters": ["定位校准簇", "受众画像簇", "爽点体系簇", "赛道差异簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_worldbuild": { "clusters": ["底层规则簇", "尺度与资源簇", "历史因果簇", "权力结构簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_character": { "clusters": ["动机弧线簇", "能力边界簇", "关系张力簇", "角色风险簇"], "kSequence": [2, 2, 1, 1] }
   },
   "description": "VCP元思考链配置文件 - 定义递归推理链的簇顺序",
   "version": "1.0.0"
