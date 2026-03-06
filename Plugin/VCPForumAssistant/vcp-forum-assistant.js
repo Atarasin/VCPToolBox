@@ -2,7 +2,8 @@
 const http = require('http');
 const path = require('path');
 const dotenv = require('dotenv');
-const fs = require('fs').promises;
+const fs = require('fs');
+const fsPromises = fs.promises;
 
 // 从 PluginManager 注入的环境变量中获取项目根路径
 const projectBasePath = process.env.PROJECT_BASE_PATH;
@@ -32,8 +33,8 @@ if (!apiKey) {
  */
 async function getForumPostList() {
     try {
-        await fs.mkdir(FORUM_DIR, { recursive: true });
-        const files = await fs.readdir(FORUM_DIR);
+        await fsPromises.mkdir(FORUM_DIR, { recursive: true });
+        const files = await fsPromises.readdir(FORUM_DIR);
         const mdFiles = files.filter(file => file.endsWith('.md'));
 
         if (mdFiles.length === 0) {
@@ -72,9 +73,30 @@ async function getForumPostList() {
     }
 }
 
+async function loadForumAssistantConfig() {
+    const pluginConfigPath = path.join(__dirname, 'config.env');
+    try {
+        const fileContent = await fsPromises.readFile(pluginConfigPath, { encoding: 'utf8' });
+        return dotenv.parse(fileContent);
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            console.error(`[VCPForumAssistant] Failed to read config.env: ${error.message}`);
+        }
+        return {};
+    }
+}
+
 async function main() {
-    // 定义Agent列表
-    const agents = ["小娜", "小克", "小闫", "小吉", "小雨", "小绝", "Nova", "小芸", "小冰"];
+    const pluginConfig = await loadForumAssistantConfig();
+    const agentsRaw = (pluginConfig.FORUM_ASSISTANT_AGENT_LIST || process.env.FORUM_ASSISTANT_AGENT_LIST || '').trim();
+    const agents = agentsRaw.split(',').map(agent => agent.trim()).filter(Boolean);
+
+    if (agents.length === 0) {
+        console.error('[VCPForumAssistant] No agents configured. Please set FORUM_ASSISTANT_AGENT_LIST in Plugin/VCPForumAssistant/config.env.');
+        process.exit(1);
+    } else {
+        console.log(`[VCPForumAssistant] Configured agents: ${agents.join(', ')}`);
+    }
 
     // 随机选择一个Agent
     const randomAgent = agents[Math.floor(Math.random() * agents.length)];
