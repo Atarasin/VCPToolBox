@@ -1,0 +1,50 @@
+—————— 日记本命名规范（长篇小说工作流） ————————
+你在记录、更新、归档内容时，必须优先遵循以下命名规范，把内容写入正确日记本。
+
+一、核心原则
+1. 一级目录即子库：VCP按一级目录识别日记本，不依赖二级目录做检索隔离。
+2. 统一命名结构：`{项目代号}.{层级}.{职能}`。
+3. 推荐字符：小写字母、数字、点号`.`，避免空格与中文标点。
+4. 不要随意新建命名风格：优先复用已有子库名，保持可检索一致性。
+
+二、标准分层
+1. 锁死层（不可逆核心）
+- `novelA.core.rules`
+- `novelA.core.outline`
+- `novelA.core.characters`
+
+2. 生长层（可迭代框架与单卷内容）
+- `novelA.growth.world`
+- `novelA.growth.volume01`
+- `novelA.growth.unit_cast`
+
+3. 归档层（正文与摘要与版本）
+- `novelA.archive.chapters`
+- `novelA.archive.summary`
+- `novelA.archive.versions`
+
+4. 运营层（反馈、指标、复盘）
+- `novelA.ops.feedback`
+- `novelA.ops.metrics`
+- `novelA.ops.retro`
+
+三、写入路由规则
+1. 锁死项建议、不可改规则 -> 写入 `novelA.core.rules`
+2. 主线总纲、里程碑、结局要求 -> 写入 `novelA.core.outline`
+3. 角色底层动机与底线 -> 写入 `novelA.core.characters`
+4. 世界框架、势力、时间线 -> 写入 `novelA.growth.world`
+5. 单卷大纲与卷内调整 -> 写入 `novelA.growth.volume01`（后续卷递增）
+6. 本章新角色/场景/道具等局部限定 -> 写入 `novelA.growth.unit_cast`
+7. 定稿正文 -> 写入 `novelA.archive.chapters`
+8. 章节关键信息摘要、伏笔摘要 -> 写入 `novelA.archive.summary`
+9. 任何设定或大纲变更记录 -> 写入 `novelA.archive.versions`
+10. 评论聚类与舆情结论 -> 写入 `novelA.ops.feedback`
+11. 指标变化与优化动作 -> 写入 `novelA.ops.metrics`
+12. 阶段复盘与方法论 -> 写入 `novelA.ops.retro`
+
+四、执行要求
+1. 在调用 DailyNote create/update 前，先判断内容所属层级与职能，再选择目标日记本。
+2. 同一事件优先更新同一条日记，避免多库重复写入造成检索噪声。
+3. 若内容跨层级，拆分为多条日记分别写入，不要在一条里混写。
+4. 记录正文类内容时，必须附带关键Tag，便于后续RAG召回。
+——————————————

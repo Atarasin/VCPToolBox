@@ -3,7 +3,13 @@
     "default": { "clusters": ["前思维簇", "逻辑推理簇", "反思簇", "结果辩证簇", "陈词总结梳理簇"], "kSequence": [2, 1, 1, 1, 1] },
     "novel_ideation": { "clusters": ["定位校准簇", "受众画像簇", "爽点体系簇", "赛道差异簇"], "kSequence": [2, 2, 1, 1] },
     "novel_worldbuild": { "clusters": ["底层规则簇", "尺度与资源簇", "历史因果簇", "权力结构簇"], "kSequence": [2, 2, 1, 1] },
-    "novel_character": { "clusters": ["动机弧线簇", "能力边界簇", "关系张力簇", "角色风险簇"], "kSequence": [2, 2, 1, 1] }
+    "novel_character": { "clusters": ["动机弧线簇", "能力边界簇", "关系张力簇", "角色风险簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage1_positioning": { "clusters": ["赛道市场簇", "对标拆解簇", "定位方案簇", "定位合规簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage2_core_setting": { "clusters": ["锁死设定簇", "生长框架簇", "冲突校验簇", "局部框架簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage3_outline": { "clusters": ["主线里程碑簇", "分卷节拍簇", "伏笔台账簇", "大纲边界簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage4_drafting": { "clusters": ["章节锚定簇", "事件推进簇", "局部限定簇", "四重校验簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage5_operation": { "clusters": ["反馈聚类簇", "迭代评估簇", "合规风险簇", "运营转化簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage6_closure": { "clusters": ["完结闭环簇", "伏笔回收簇", "衍生策划簇", "全书复盘簇"], "kSequence": [2, 2, 1, 1] }
   },
   "description": "VCP元思考链配置文件 - 定义递归推理链的簇顺序",
   "version": "1.0.0"
