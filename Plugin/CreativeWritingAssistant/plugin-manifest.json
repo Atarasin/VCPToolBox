@@ -1,0 +1,45 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "CreativeWritingAssistant",
+  "version": "1.4.0",
+  "displayName": "创作助手",
+  "description": "面向小说创作流程的辅助插件，提供章节创作、审查、字数校验与定向修订能力。",
+  "author": "VCPToolBox",
+  "pluginType": "synchronous",
+  "entryPoint": {
+    "type": "nodejs",
+    "command": "node CreativeWritingAssistant.js"
+  },
+  "communication": {
+    "protocol": "stdio",
+    "timeout": 660000
+  },
+  "configSchema": {
+    "REVIEW_AGENT_LIST": "string",
+    "DEFAULT_REVIEW_AGENT": "string",
+    "DRAFT_AGENT_LIST": "string",
+    "DEFAULT_DRAFT_AGENT": "string",
+    "EDIT_AGENT_LIST": "string",
+    "DEFAULT_EDIT_AGENT": "string"
+  },
+  "capabilities": {
+    "invocationCommands": [
+      {
+        "commandIdentifier": "CountChapterLength",
+        "description": "统计章节字数并判断是否达标。\n参数:\n- text (字符串, 必需): 完整章节正文全文（必须包含章节全部正文内容，禁止仅传标题或摘要，如“【二次修订后章节正文·第 1 章 钥匙】（3781 字）”这类非正文文本）。\n- targetMin (整数, 可选): 目标最小字数（按中文字符数口径，阶段4建议设为 2500）。\n- targetMax (整数, 可选): 目标最大字数（按中文字符数口径，阶段4建议设为 3500；在 lengthPolicy=min_only 时仅作参考，不触发回炉）。\n- countMode (字符串, 可选): 统计口径，支持 cn_chars 或 non_whitespace_chars，默认 cn_chars。\n- lengthPolicy (字符串, 可选): 判定策略，支持 range 或 min_only，默认 range；阶段4建议使用 min_only。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」CreativeWritingAssistant「末」,\ncommand:「始」CountChapterLength「末」,\ntext:「始」这里放正文全文……「末」,\ntargetMin:「始」2500「末」,\ntargetMax:「始」3500「末」,\ncountMode:「始」cn_chars「末」,\nlengthPolicy:「始」min_only「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "commandIdentifier": "RequestExternalReview",
+        "description": "通过内置 AgentAssistant 联动能力，将章节正文发送给外部审查Agent并返回审查结果。\n参数:\n- text (字符串, 必需): 完整章节正文全文（必须包含章节全部正文内容，禁止仅传标题或摘要，如“【二次修订后章节正文·第 1 章 钥匙】（3781 字）”这类非正文文本）。\n- agentName (字符串, 可选): 审查Agent名称，默认使用 REVIEW_AGENT_LIST 第一项，若未配置则使用 DEFAULT_REVIEW_AGENT，默认值 NovelStage4ExternalReviewAgent。\n- reviewFocus (字符串, 可选): 附加审查重点。\n- identity (字符串, 可选): 调用方身份描述，默认“我是阶段4正文连载Agent”。\n- temporaryContact (布尔值, 可选): 是否临时通讯，默认 true。\n- timeoutMs (整数, 可选): 审查请求超时时间，默认 60000。\n- dryRun (布尔值, 可选): 仅输出将发送的payload，不实际调用。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」CreativeWritingAssistant「末」,\ncommand:「始」RequestExternalReview「末」,\ntext:「始」这里放正文全文……「末」,\nagentName:「始」NovelStage4ExternalReviewAgent「末」,\nreviewFocus:「始」重点看节奏断点与人物OOC风险「末」,\ndryRun:「始」true「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "commandIdentifier": "RequestChapterDraft",
+        "description": "通过内置 AgentAssistant 联动能力，将章节创作上下文发送给外部章节创作Agent并返回正文草稿。\n参数:\n- text (字符串, 必需): 章节创作上下文（锁死项摘要、本章大纲、局部限定内容、上一章结尾等）。\n- agentName (字符串, 可选): 创作Agent名称，默认使用 DRAFT_AGENT_LIST 第一项，若未配置则使用 DEFAULT_DRAFT_AGENT，默认值 NovelStage4ChapterCreationAgent。\n- draftingFocus (字符串, 可选): 附加创作重点。\n- targetLength (字符串, 可选): 目标字数区间说明（例如 2500-3500 字，阶段4建议区间）。\n- identity (字符串, 可选): 调用方身份描述，默认“我是阶段4正文连载Agent”。\n- temporaryContact (布尔值, 可选): 是否临时通讯，默认 true。\n- timeoutMs (整数, 可选): 创作请求超时时间，默认 65000。\n- dryRun (布尔值, 可选): 仅输出将发送的payload，不实际调用。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」CreativeWritingAssistant「末」,\ncommand:「始」RequestChapterDraft「末」,\ntext:「始」这里放章节创作上下文……「末」,\nagentName:「始」NovelStage4ChapterCreationAgent「末」,\ntargetLength:「始」2500-3500字「末」,\ndraftingFocus:「始」重点强化冲突升级与结尾钩子「末」,\ndryRun:「始」true「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "commandIdentifier": "EditChapterContent",
+        "description": "对已有章节执行定向修订，只修改问题段落或指定内容元素，避免整章重写。\n参数:\n- text (字符串, 必需): 完整章节正文全文（必须包含章节全部正文内容，禁止仅传标题或摘要，如“【二次修订后章节正文·第 1 章 钥匙】（3781 字）”这类非正文文本）。\n- agentName (字符串, 可选): 修订Agent名称，默认使用 EDIT_AGENT_LIST 第一项，若未配置则使用 DEFAULT_EDIT_AGENT，默认值 NovelStage4ChapterRevisionAgent。\n- editInstructions (字符串, 可选): 本次修订任务指令。\n- editTargets (数组/字符串, 可选): 需要优先修改的段落索引（从1开始）。\n- issues (数组/字符串, 可选): 问题清单（如逻辑冲突、人设冲突、文风偏移等）。\n- mustKeep (数组/字符串, 可选): 必须保留约束（锁死项、主线关键点等）。\n- outlineConstraints (数组/字符串, 可选): 本章大纲边界约束。\n- styleConstraints (数组/字符串, 可选): 文风一致性约束。\n- maxRewriteRatio (数字, 可选): 最大改写比例，0到1之间，默认 0.35。\n- identity (字符串, 可选): 调用方身份描述，默认“我是阶段4正文连载Agent”。\n- temporaryContact (布尔值, 可选): 是否临时通讯，默认 true。\n- timeoutMs (整数, 可选): 修订请求超时时间，默认 70000。\n- dryRun (布尔值, 可选): 仅输出将发送的payload，不实际调用。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」CreativeWritingAssistant「末」,\ncommand:「始」EditChapterContent「末」,\ntext:「始」这里放待修订章节全文正文……「末」,\neditInstructions:「始」优先修复角色动机断裂与结尾节奏失衡，保持既定主线推进「末」,\neditTargets:「始」2,5,7「末」,\nissues:「始」人物A在本章中违背前文设定；第三幕转折动机不足「末」,\nmustKeep:「始」主线事件节点不可改写；关键伏笔“黑匣子编号”必须保留「末」,\nmaxRewriteRatio:「始」0.35「末」,\ndryRun:「始」true「末」\n<<<[END_TOOL_REQUEST]>>>"
+      }
+    ]
+  }
+}

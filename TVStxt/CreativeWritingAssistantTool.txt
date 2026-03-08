@@ -1,0 +1,122 @@
+# CreativeWritingAssistant 调用格式与参数指南（阶段4专用）
+
+<<<[TOOL_REQUEST]>>>
+maid:「始」你的署名「末」, //建议字段，用于任务追踪
+tool_name:「始」CreativeWritingAssistant「末」, //必要字段
+command:「始」具体命令名「末」, //必要字段
+arg:「始」按命令要求填写参数「末」
+<<<[END_TOOL_REQUEST]>>>
+
+## 1. 章节创作（RequestChapterDraft）
+
+命令参数说明：
+- tool_name: 必须是 CreativeWritingAssistant
+- command: 必须是 RequestChapterDraft
+- text: (必需) 章节创作上下文，建议包含“锁死项摘要、核心人物约束、本章大纲、本章局部限定内容、上一章结尾”
+- agentName: (可选) 创作Agent名称；不填时走插件默认（NovelStage4ChapterCreationAgent 或 DRAFT_AGENT_LIST第一项）
+- targetLength: (可选) 目标字数区间说明，如“2500-3500字”（阶段4建议区间）
+- draftingFocus: (可选) 附加创作重点，如“强化冲突升级与结尾钩子”
+- identity: (可选) 调用方身份描述；不填默认“我是阶段4正文连载Agent”
+- temporaryContact: (可选) 是否临时通讯，默认 true
+- timeoutMs: (可选) 超时时间（毫秒），默认 65000
+- dryRun: (可选) true 时仅返回将发送的payload，不真正调用外部Agent
+
+调用示例：
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」CreativeWritingAssistant「末」,
+command:「始」RequestChapterDraft「末」,
+text:「始」锁死项摘要：{{novelA.core.rules日记本}}
+核心人物约束：{{novelA.core.characters日记本}}
+本章大纲：{{ChapterOutline}}
+本章局部限定内容：{{ChapterLocalConstraints}}
+上一章结尾：{{PrevChapterEnding}}
+「末」,
+agentName:「始」NovelStage4ChapterCreationAgent「末」,
+targetLength:「始」2500-3500字「末」,
+draftingFocus:「始」严格贴合大纲推进并保证结尾钩子强度「末」,
+timeoutMs:「始」65000「末」
+<<<[END_TOOL_REQUEST]>>>
+
+## 2. 字数检查（CountChapterLength）
+
+命令参数说明：
+- tool_name: 必须是 CreativeWritingAssistant
+- command: 必须是 CountChapterLength
+- text: (必需) 完整章节正文全文（必须包含章节全部正文内容，禁止仅传标题或摘要，如“【二次修订后章节正文·第 1 章 钥匙】（3781 字）”这类非正文文本）
+- targetMin: (可选) 目标最小字数，整数（阶段4建议设为 2500）
+- targetMax: (可选) 目标最大字数，整数（阶段4建议设为 3500；在 lengthPolicy=min_only 下仅作为参考，不触发回炉）
+- countMode: (可选) 统计口径，支持 cn_chars 或 non_whitespace_chars，默认 cn_chars
+- lengthPolicy: (可选) 字数判定策略，支持 range 或 min_only，默认 range；阶段4建议使用 min_only
+
+调用示例：
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」CreativeWritingAssistant「末」,
+command:「始」CountChapterLength「末」,
+text:「始」{{ChapterFullText}}「末」,
+targetMin:「始」2500「末」,
+targetMax:「始」3500「末」,
+countMode:「始」cn_chars「末」,
+lengthPolicy:「始」min_only「末」
+<<<[END_TOOL_REQUEST]>>>
+
+## 3. 外部审查（RequestExternalReview）
+
+命令参数说明：
+- tool_name: 必须是 CreativeWritingAssistant
+- command: 必须是 RequestExternalReview
+- text: (必需) 完整章节正文全文（必须包含章节全部正文内容，禁止仅传标题或摘要，如“【二次修订后章节正文·第 1 章 钥匙】（3781 字）”这类非正文文本）
+- agentName: (可选) 审查Agent名称；不填时走插件默认（NovelStage4ExternalReviewAgent 或 REVIEW_AGENT_LIST第一项）
+- reviewFocus: (可选) 附加审查重点
+- identity: (可选) 调用方身份描述；不填默认“我是阶段4正文连载Agent”
+- temporaryContact: (可选) 是否临时通讯，默认 true
+- timeoutMs: (可选) 超时时间（毫秒），默认 60000（阶段4建议 65000）
+- dryRun: (可选) true 时仅返回将发送的payload，不真正调用外部Agent
+
+调用示例：
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」CreativeWritingAssistant「末」,
+command:「始」RequestExternalReview「末」,
+text:「始」{{ChapterFullText}}「末」,
+agentName:「始」NovelStage4ExternalReviewAgent「末」,
+reviewFocus:「始」节奏、可读性、人设一致性、逻辑漏洞、局部限定内容越界风险、内容合规「末」,
+timeoutMs:「始」65000「末」
+<<<[END_TOOL_REQUEST]>>>
+
+## 4. 定向修订（EditChapterContent）
+
+命令参数说明：
+- tool_name: 必须是 CreativeWritingAssistant
+- command: 必须是 EditChapterContent
+- text: (必需) 完整章节正文全文（必须包含章节全部正文内容，禁止仅传标题或摘要，如“【二次修订后章节正文·第 1 章 钥匙】（3781 字）”这类非正文文本）
+- editInstructions: (可选) 本次修订任务指令
+- editTargets: (可选) 需要优先修改的段落索引（从1开始），可用数组或逗号分隔字符串
+- issues: (可选) 问题清单（逻辑冲突、人设冲突、文风偏移等）
+- mustKeep: (可选) 必须保留约束（锁死项、主线关键点等）
+- outlineConstraints: (可选) 本章大纲边界约束
+- styleConstraints: (可选) 文风一致性约束
+- maxRewriteRatio: (可选) 最大改写比例，0到1之间，默认 0.35
+- agentName: (可选) 修订Agent名称；不填时走插件默认（NovelStage4ChapterRevisionAgent 或 EDIT_AGENT_LIST第一项）
+- identity: (可选) 调用方身份描述；不填默认“我是阶段4正文连载Agent”
+- temporaryContact: (可选) 是否临时通讯，默认 true
+- timeoutMs: (可选) 超时时间（毫秒），默认 70000
+- dryRun: (可选) true 时仅返回将发送的payload，不真正调用外部Agent
+
+调用示例：
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」CreativeWritingAssistant「末」,
+command:「始」EditChapterContent「末」,
+text:「始」{{ChapterFullText}}「末」,
+editInstructions:「始」优先修复人物动机断裂与结尾节奏失衡，保持主线不变「末」,
+editTargets:「始」2,5,7「末」,
+issues:「始」人物A行为与设定冲突；第三幕转折动机不足「末」,
+mustKeep:「始」主线事件节点不可改写；关键伏笔“黑匣子编号”必须保留「末」,
+maxRewriteRatio:「始」0.35「末」,
+timeoutMs:「始」70000「末」
+<<<[END_TOOL_REQUEST]>>>
+
+## 5. 阶段4判定规则
+
+1. 必须先拿到章节草稿，再执行字数检查；  
+2. 字数校验目标区间为 2500-3500；执行策略按下限阈值判定：低于 2500 直接回炉，高于 3500 不触发回炉；  
+3. 外部审查不通过时，优先调用 EditChapterContent 做定向修订，再复检；  
+4. 仅当“字数达标 + 外部审查通过”时进入定稿沉淀。  
