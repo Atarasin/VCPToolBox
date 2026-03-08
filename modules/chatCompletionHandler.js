@@ -100,7 +100,15 @@ async function getRealAuthCode(debugMode = false) {
 async function fetchWithRetry(
   url,
   options,
-  { retries = 3, delay = 1000, debugMode = false, onRetry = null, connectionTimeout = 120000 } = {},
+  {
+    retries = 3,
+    delay = 1000,
+    debugMode = false,
+    onRetry = null,
+    connectionTimeout = 120000,
+    onAttemptFailure = null,
+    onAttemptSuccess = null,
+  } = {},
 ) {
   const { default: fetch } = await import('node-fetch');
   for (let i = 0; i < retries; i++) {
@@ -138,6 +146,13 @@ async function fetchWithRetry(
       cleanup();
 
       if (response.status === 500 || response.status === 503 || response.status === 429) {
+        if (onAttemptFailure) {
+          await onAttemptFailure(i + 1, {
+            status: response.status,
+            reason: `HTTP_${response.status}`,
+            message: response.statusText,
+          });
+        }
         const currentDelay = delay * (i + 1);
         if (debugMode) {
           console.warn(
@@ -150,6 +165,22 @@ async function fetchWithRetry(
         await new Promise(resolve => setTimeout(resolve, currentDelay));
         continue;
       }
+      if (response.status >= 500) {
+        if (onAttemptFailure) {
+          await onAttemptFailure(i + 1, {
+            status: response.status,
+            reason: `HTTP_${response.status}`,
+            message: response.statusText,
+          });
+        }
+        return response;
+      }
+      if (onAttemptSuccess) {
+        await onAttemptSuccess(i + 1, {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      }
       return response;
     } catch (error) {
       cleanup();
@@ -159,6 +190,13 @@ async function fetchWithRetry(
         if (didTimeout) {
           // 超时中止 → 视为可重试的网络错误
           const msg = `Connection timed out after ${connectionTimeout / 1000}s`;
+          if (onAttemptFailure) {
+            await onAttemptFailure(i + 1, {
+              status: 'TIMEOUT',
+              reason: 'TIMEOUT',
+              message: msg,
+            });
+          }
           if (i === retries - 1) {
             console.error(`[Fetch Retry] ${msg}. All retries exhausted.`);
             throw new Error(msg);
@@ -175,6 +213,13 @@ async function fetchWithRetry(
         throw error;
       }
 
+      if (onAttemptFailure) {
+        await onAttemptFailure(i + 1, {
+          status: 'NETWORK_ERROR',
+          reason: 'NETWORK_ERROR',
+          message: error.message,
+        });
+      }
       if (i === retries - 1) {
         console.error(`[Fetch Retry] All retries failed. Last error: ${error.message}`);
         throw error;
@@ -191,6 +236,111 @@ async function fetchWithRetry(
     }
   }
   throw new Error('Fetch failed after all retries.');
+}
+
+const upstreamLinkState = new Map();
+// 熔断参数：连续失败达到阈值后，短时间内直接阻断请求，避免雪崩重试
+const CIRCUIT_FAILURE_THRESHOLD = 3;
+const CIRCUIT_OPEN_MS = 15000;
+// 健康探测参数：用于在熔断期间/请求前做轻量探活
+const HEALTH_PROBE_INTERVAL_MS = 15000;
+const HEALTH_PROBE_TIMEOUT_MS = 3000;
+
+function resolveUpstreamOrigin(url) {
+  try {
+    return new URL(url).origin;
+  } catch (e) {
+    return null;
+  }
+}
+
+function shouldTrackUpstream(url) {
+  // 当前仅对本机 3001 链路启用健康检查与熔断，避免影响其他上游
+  try {
+    const target = new URL(url);
+    return ['localhost', '127.0.0.1', '::1'].includes(target.hostname) && target.port === '3001';
+  } catch (e) {
+    return false;
+  }
+}
+
+function getUpstreamState(origin) {
+  // 以 origin 为粒度保存链路状态，支持未来扩展多上游
+  if (!upstreamLinkState.has(origin)) {
+    upstreamLinkState.set(origin, {
+      consecutiveFailures: 0,
+      circuitOpenUntil: 0,
+      lastFailureReason: '',
+      lastFailureAt: 0,
+      lastHealthCheckAt: 0,
+      lastHealthOk: null,
+    });
+  }
+  return upstreamLinkState.get(origin);
+}
+
+function logCircuitFailure(origin, state, failure) {
+  const now = Date.now();
+  state.consecutiveFailures += 1;
+  state.lastFailureReason = failure.reason || failure.message || 'UNKNOWN';
+  state.lastFailureAt = now;
+
+  console.warn(
+    `[Upstream Circuit] ${origin} failure #${state.consecutiveFailures}/${CIRCUIT_FAILURE_THRESHOLD} ` +
+    `(attempt=${failure.attempt || 'N/A'}, status=${failure.status || 'UNKNOWN'}, reason=${state.lastFailureReason})`
+  );
+
+  if (state.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && state.circuitOpenUntil < now) {
+    // 达到阈值即打开熔断窗口，在窗口内优先拒绝新请求
+    state.circuitOpenUntil = now + CIRCUIT_OPEN_MS;
+    console.error(
+      `[Upstream Circuit] OPEN ${origin} for ${CIRCUIT_OPEN_MS}ms after ${state.consecutiveFailures} consecutive failures.`
+    );
+  }
+}
+
+function logCircuitSuccess(origin, state, success) {
+  // 任意一次成功都视为链路恢复，关闭熔断并清空连续失败计数
+  if (state.consecutiveFailures > 0 || state.circuitOpenUntil > 0) {
+    console.log(
+      `[Upstream Circuit] CLOSE ${origin}. recovered at attempt=${success.attempt || 'N/A'}, status=${success.status || 'UNKNOWN'}.`
+    );
+  }
+  state.consecutiveFailures = 0;
+  state.circuitOpenUntil = 0;
+  state.lastFailureReason = '';
+}
+
+async function probeUpstream(origin, apiKey) {
+  // 使用 /v1/models 做轻量健康探测，避免额外消耗模型推理资源
+  const { default: fetch } = await import('node-fetch');
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${origin}/v1/models`, {
+      method: 'GET',
+      headers: {
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      signal: controller.signal,
+    });
+    return {
+      // 401/403 也表示服务可达，仅权限不通过，依然判定链路存活
+      ok: response.ok || response.status === 401 || response.status === 403,
+      status: response.status,
+      latency: Date.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 'NETWORK_ERROR',
+      message: error.message,
+      latency: Date.now() - startedAt,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 // 辅助函数：根据新上下文刷新对话历史中的RAG区块
 async function _refreshRagBlocksIfNeeded(messages, newContext, pluginManager, debugMode = false) {
@@ -596,95 +746,192 @@ class ChatCompletionHandler {
       await writeDebugLog('LogOutputAfterProcessing', originalBody);
 
       const willStreamResponse = isOriginalRequestStreaming;
+      const upstreamRequestUrl = `${apiUrl}/v1/chat/completions`;
+      const upstreamOrigin = resolveUpstreamOrigin(upstreamRequestUrl);
+      const trackUpstream = upstreamOrigin && shouldTrackUpstream(upstreamRequestUrl);
+      const upstreamState = trackUpstream ? getUpstreamState(upstreamOrigin) : null;
 
-      let firstAiAPIResponse = await fetchWithRetry(
-        `${apiUrl}/v1/chat/completions`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-            ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] }),
-            Accept: willStreamResponse ? 'text/event-stream' : req.headers['accept'] || 'application/json',
-          },
-          body: JSON.stringify({ ...originalBody, stream: willStreamResponse }),
-          signal: abortController.signal,
-        },
-        {
-          retries: apiRetries,
-          delay: apiRetryDelay,
-          debugMode: DEBUG_MODE,
-          onRetry: async (attempt, errorInfo) => {
-            if (!res.headersSent && isOriginalRequestStreaming) {
-              if (DEBUG_MODE)
-                console.log(`[VCP Retry] First retry attempt (#${attempt}). Sending 200 OK to client to establish stream.`);
-              res.status(200);
-              res.setHeader('Content-Type', 'text/event-stream');
-              res.setHeader('Cache-Control', 'no-cache');
-              res.setHeader('Connection', 'keep-alive');
+      if (upstreamState) {
+        const now = Date.now();
+        // 熔断打开时先探活，探活成功立即恢复；失败则继续阻断，保护上游
+        if (upstreamState.circuitOpenUntil > now) {
+          const shouldProbe = now - upstreamState.lastHealthCheckAt >= HEALTH_PROBE_INTERVAL_MS;
+          if (shouldProbe) {
+            const probe = await probeUpstream(upstreamOrigin, apiKey);
+            upstreamState.lastHealthCheckAt = Date.now();
+            upstreamState.lastHealthOk = probe.ok;
+            if (probe.ok) {
+              console.log(`[Upstream Health] ${upstreamOrigin} probe recovered. status=${probe.status}, latency=${probe.latency}ms`);
+              logCircuitSuccess(upstreamOrigin, upstreamState, { attempt: 'probe', status: probe.status });
+            } else {
+              console.warn(
+                `[Upstream Health] ${upstreamOrigin} probe failed. status=${probe.status}, latency=${probe.latency}ms, message=${probe.message || 'N/A'}`
+              );
             }
+          }
+          if (upstreamState.circuitOpenUntil > Date.now()) {
+            const retryAfterMs = upstreamState.circuitOpenUntil - Date.now();
+            console.error(
+              `[Upstream Circuit] OPEN ${upstreamOrigin}. request blocked, retry_after=${retryAfterMs}ms, last_reason=${upstreamState.lastFailureReason || 'UNKNOWN'}`
+            );
+            throw new Error(`Upstream circuit open: ${upstreamOrigin}, retry after ${retryAfterMs}ms`);
+          }
+        } else if (now - upstreamState.lastHealthCheckAt >= HEALTH_PROBE_INTERVAL_MS) {
+          // 非熔断状态下按间隔做背景健康检查，用于提前感知链路劣化
+          const probe = await probeUpstream(upstreamOrigin, apiKey);
+          upstreamState.lastHealthCheckAt = Date.now();
+          upstreamState.lastHealthOk = probe.ok;
+          if (probe.ok) {
+            if (DEBUG_MODE) {
+              console.log(`[Upstream Health] ${upstreamOrigin} healthy. status=${probe.status}, latency=${probe.latency}ms`);
+            }
+          } else {
+            console.warn(
+              `[Upstream Health] ${upstreamOrigin} degraded before request. status=${probe.status}, latency=${probe.latency}ms, message=${probe.message || 'N/A'}`
+            );
+          }
+        }
+      }
+
+      let retryKeepAliveTimer = null;
+      const stopRetryKeepAlive = () => {
+        if (retryKeepAliveTimer) {
+          clearInterval(retryKeepAliveTimer);
+          retryKeepAliveTimer = null;
+        }
+      };
+
+      const sendRetryKeepAlive = () => {
+        if (!isOriginalRequestStreaming || res.writableEnded || res.destroyed) {
+          stopRetryKeepAlive();
+          return;
+        }
+        try {
+          res.write(': vcp-retry-keepalive\n\n');
+          if (typeof res.flush === 'function') res.flush();
+        } catch (e) {
+          stopRetryKeepAlive();
+        }
+      };
+
+      let firstAiAPIResponse;
+      try {
+        firstAiAPIResponse = await fetchWithRetry(
+          upstreamRequestUrl,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+              ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] }),
+              Accept: willStreamResponse ? 'text/event-stream' : req.headers['accept'] || 'application/json',
+            },
+            body: JSON.stringify({ ...originalBody, stream: willStreamResponse }),
+            signal: abortController.signal,
           },
-        },
-      );
+          {
+            retries: apiRetries,
+            delay: apiRetryDelay,
+            debugMode: DEBUG_MODE,
+            onAttemptFailure: async (attempt, failure) => {
+              // 每次失败都推进熔断状态机并输出结构化失败日志
+              if (upstreamState) {
+                logCircuitFailure(upstreamOrigin, upstreamState, {
+                  attempt,
+                  status: failure.status,
+                  reason: failure.reason || failure.message,
+                });
+              }
+            },
+            onAttemptSuccess: async (attempt, success) => {
+              // 任意成功即复位熔断状态，避免“假故障”长期阻断
+              if (upstreamState) {
+                logCircuitSuccess(upstreamOrigin, upstreamState, {
+                  attempt,
+                  status: success.status,
+                });
+              }
+            },
+            onRetry: async (attempt, errorInfo) => {
+              if (!isOriginalRequestStreaming || res.writableEnded || res.destroyed) return;
+
+              if (!res.headersSent) {
+                if (DEBUG_MODE)
+                  console.log(`[VCP Retry] First retry attempt (#${attempt}). Sending 200 OK to client to establish stream.`);
+                res.status(200);
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                if (typeof res.flushHeaders === 'function') res.flushHeaders();
+              }
+
+              try {
+                res.write(`: vcp-retry-${attempt}-${errorInfo.status || 'UNKNOWN'}\n\n`);
+                if (typeof res.flush === 'function') res.flush();
+              } catch (e) {}
+
+              if (!retryKeepAliveTimer) {
+                retryKeepAliveTimer = setInterval(sendRetryKeepAlive, 5000);
+              }
+            },
+          },
+        );
+      } finally {
+        stopRetryKeepAlive();
+      }
 
       const isUpstreamStreaming =
         willStreamResponse && firstAiAPIResponse.headers.get('content-type')?.includes('text/event-stream');
 
-      if (!res.headersSent) {
-        const upstreamStatus = firstAiAPIResponse.status;
+      const upstreamStatus = firstAiAPIResponse.status;
 
-        if (isOriginalRequestStreaming && upstreamStatus !== 200) {
-          // If streaming was requested, but upstream returned a non-200 status (e.g., 400, 401, 502, 504),
-          // we must return 200 OK and stream the error as an SSE chunk to prevent client listener termination.
+      if (isOriginalRequestStreaming && upstreamStatus !== 200) {
+        if (!res.headersSent) {
           res.status(200);
           res.setHeader('Content-Type', 'text/event-stream');
           res.setHeader('Cache-Control', 'no-cache');
           res.setHeader('Connection', 'keep-alive');
+        }
 
-          // Read the error body from the upstream response
-          const errorBodyText = await firstAiAPIResponse.text();
+        const errorBodyText = await firstAiAPIResponse.text();
+        console.error(`[Upstream Error Stream Proxy] Upstream API returned status ${upstreamStatus}. Streaming error to client: ${errorBodyText}`);
 
-          // Log the error
-          console.error(`[Upstream Error Stream Proxy] Upstream API returned status ${upstreamStatus}. Streaming error to client: ${errorBodyText}`);
-
-          // Construct the error message for the client
-          const errorContent = `[UPSTREAM_ERROR] 上游API返回状态码 ${upstreamStatus}，错误信息: ${errorBodyText}`;
-
-          // Send an error chunk
-          const errorPayload = {
-            id: `chatcmpl-VCP-upstream-error-${Date.now()}`,
-            object: 'chat.completion.chunk',
-            created: Math.floor(Date.now() / 1000),
-            model: originalBody.model || 'unknown',
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  content: errorContent,
-                },
-                finish_reason: 'stop',
+        const errorContent = `[UPSTREAM_ERROR] 上游API返回状态码 ${upstreamStatus}，错误信息: ${errorBodyText}`;
+        const errorPayload = {
+          id: `chatcmpl-VCP-upstream-error-${Date.now()}`,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: originalBody.model || 'unknown',
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: errorContent,
               },
-            ],
-          };
-          try {
-            res.write(`data: ${JSON.stringify(errorPayload)}\n\n`);
-            res.write('data: [DONE]\n\n', () => {
+              finish_reason: 'stop',
+            },
+          ],
+        };
+        try {
+          res.write(`data: ${JSON.stringify(errorPayload)}\n\n`);
+          res.write('data: [DONE]\n\n', () => {
+            res.end();
+          });
+        } catch (writeError) {
+          console.error('[Upstream Error] Failed to write error to stream:', writeError.message);
+          if (!res.writableEnded) {
+            try {
               res.end();
-            });
-          } catch (writeError) {
-            console.error('[Upstream Error] Failed to write error to stream:', writeError.message);
-            if (!res.writableEnded) {
-              try {
-                res.end();
-              } catch (endError) {
-                console.error('[Upstream Error] Failed to end response:', endError.message);
-              }
+            } catch (endError) {
+              console.error('[Upstream Error] Failed to end response:', endError.message);
             }
           }
-
-          // We are done with this request. Return early.
-          return;
         }
+
+        return;
+      }
+
+      if (!res.headersSent) {
 
         // Normal header setting for non-streaming or successful streaming responses
         res.status(upstreamStatus);
