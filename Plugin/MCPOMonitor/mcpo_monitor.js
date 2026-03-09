@@ -168,7 +168,7 @@ class MCPOMonitor {
                 
                 // 解析可用服务
                 const description = healthResult.data.info?.description || '';
-                const servicePattern = /\[([^\]]+)\]\(\/([^/\)]+)\/docs\)/g;
+                const servicePattern = /\[([^\]]+)\]\((?:https?:\/\/[^/\)]+)?\/([^/\)]+)\/docs\)/g;
                 let match;
                 while ((match = servicePattern.exec(description)) !== null) {
                     results.availableServices.push({
@@ -245,7 +245,7 @@ class MCPOMonitor {
             }
 
             const description = mainResult.data.info?.description || '';
-            const servicePattern = /\[([^\]]+)\]\(\/([^/\)]+)\/docs\)/g;
+            const servicePattern = /\[([^\]]+)\]\((?:https?:\/\/[^/\)]+)?\/([^/\)]+)\/docs\)/g;
             const services = [];
             let match;
             

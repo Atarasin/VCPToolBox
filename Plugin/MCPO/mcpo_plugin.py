@@ -32,6 +32,8 @@ class MCPOPlugin:
         self.mcpo_pid_file = Path(os.path.abspath("mcpo.pid"))
         self.base_url = f"http://localhost:{self.config['MCPO_PORT']}"
         self.api_key = self.config['MCPO_API_KEY']
+        self.mcpo_executable = self.config['MCPO_EXECUTABLE']
+        self._hot_reload_supported = None
         self.headers = {
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json'
@@ -80,6 +82,7 @@ class MCPOPlugin:
             'MCPO_PORT': int(os.getenv('MCPO_PORT', '9000')),
             'MCPO_API_KEY': os.getenv('MCPO_API_KEY', 'vcp-mcpo-secret'),
             'MCPO_AUTO_START': os.getenv('MCPO_AUTO_START', 'true').lower() == 'true',
+            'MCPO_EXECUTABLE': os.getenv('MCPO_EXECUTABLE', 'mcpo'),
             'PYTHON_EXECUTABLE': os.getenv('PYTHON_EXECUTABLE', 'python'),
             'MCP_CONFIG_PATH': default_config_path,  # 使用处理后的路径
             'MCPO_HOT_RELOAD': os.getenv('MCPO_HOT_RELOAD', 'true').lower() == 'true',
@@ -87,9 +90,29 @@ class MCPOPlugin:
             'DEFAULT_TIMEZONE': os.getenv('DEFAULT_TIMEZONE', 'Asia/Shanghai') # 新增时区配置
         }
         
-        self.logger.info(f"Loaded config: Port={config['MCPO_PORT']}, ConfigPath={config['MCP_CONFIG_PATH']}, HotReload={config['MCPO_HOT_RELOAD']}, CustomConfigName={config['MCPO_CONFIG_NAME']}")
+        self.logger.info(f"Loaded config: Port={config['MCPO_PORT']}, ConfigPath={config['MCP_CONFIG_PATH']}, HotReload={config['MCPO_HOT_RELOAD']}, Executable={config['MCPO_EXECUTABLE']}, CustomConfigName={config['MCPO_CONFIG_NAME']}")
         
         return config
+
+    def _check_hot_reload_supported(self) -> bool:
+        """检查mcpo是否支持--hot-reload"""
+        if self._hot_reload_supported is not None:
+            return self._hot_reload_supported
+        try:
+            help_proc = subprocess.run(
+                [self.mcpo_executable, '--help'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=os.environ.copy()
+            )
+            combined_help = f"{help_proc.stdout}\n{help_proc.stderr}"
+            self._hot_reload_supported = '--hot-reload' in combined_help
+            return self._hot_reload_supported
+        except Exception as e:
+            self.logger.warning(f"Unable to detect hot-reload support: {e}")
+            self._hot_reload_supported = False
+            return False
     
     def _find_mcpo_process(self) -> Optional[int]:
         """查找 MCPO 进程 PID"""
@@ -162,14 +185,16 @@ class MCPOPlugin:
             
             # 构建启动命令
             cmd = [
-                'mcpo',  # 直接使用 mcpo 命令
+                self.mcpo_executable,
                 '--config', config_path,
                 '--port', str(self.config['MCPO_PORT']),
                 '--api-key', self.config['MCPO_API_KEY']
             ]
             
-            if self.config['MCPO_HOT_RELOAD']:
+            if self.config['MCPO_HOT_RELOAD'] and self._check_hot_reload_supported():
                 cmd.append('--hot-reload')
+            elif self.config['MCPO_HOT_RELOAD']:
+                self.logger.warning("MCPO_HOT_RELOAD=true but current mcpo executable does not support --hot-reload, starting without this flag.")
             
             self.logger.info(f"Starting MCPO server with command: {' '.join(cmd)}")
             
@@ -193,6 +218,14 @@ class MCPOPlugin:
             
             # 等待服务器启动
             for i in range(60):  # 等待最多 60 秒（增加超时时间）
+                if self.mcpo_process.poll() is not None:
+                    _, stderr_data = self.mcpo_process.communicate(timeout=1)
+                    stderr_text = (stderr_data or "").strip()
+                    if stderr_text:
+                        self.logger.error(f"MCPO process exited early: {stderr_text}")
+                    else:
+                        self.logger.error(f"MCPO process exited early with code {self.mcpo_process.returncode}")
+                    return False
                 if self._is_server_running():
                     self.logger.info("MCPO server started successfully")
                     return True
@@ -330,12 +363,12 @@ class MCPOPlugin:
             description = main_spec.get('info', {}).get('description', '')
             servers = []
             
-            # 解析描述中的服务器链接
+            # 解析描述中的服务器链接，兼容相对路径和绝对 URL
             import re
-            server_pattern = r'\[([^\]]+)\]\(/([^/\)]+)/docs\)'
+            server_pattern = r'\[([^\]]+)\]\((?:https?://[^/\)]+)?/([^/\)]+)/docs\)'
             matches = re.findall(server_pattern, description)
-            
-            for server_name, server_path in matches:
+
+            for _, server_path in matches:
                 servers.append(server_path)
             
             self.logger.info(f"Found servers: {servers}")
