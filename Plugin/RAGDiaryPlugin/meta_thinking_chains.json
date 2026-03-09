@@ -7,7 +7,7 @@
     "novel_stage1_positioning": { "clusters": ["赛道市场簇", "对标拆解簇", "定位方案簇", "定位合规簇"], "kSequence": [2, 2, 1, 1] },
     "novel_stage2_core_setting": { "clusters": ["锁死设定簇", "生长框架簇", "冲突校验簇", "局部框架簇"], "kSequence": [2, 2, 1, 1] },
     "novel_stage3_outline": { "clusters": ["主线里程碑簇", "分卷节拍簇", "伏笔台账簇", "大纲边界簇"], "kSequence": [2, 2, 1, 1] },
-    "novel_stage4_drafting": { "clusters": ["章节锚定簇", "事件推进簇", "局部限定簇", "四重校验簇"], "kSequence": [2, 2, 1, 1] },
+    "novel_stage4_orchestration": { "clusters": ["插件调度簇", "回炉重试簇", "质量闸门簇", "归档沉淀簇"], "kSequence": [2, 2, 1, 1] },
     "novel_stage5_operation": { "clusters": ["反馈聚类簇", "迭代评估簇", "合规风险簇", "运营转化簇"], "kSequence": [2, 2, 1, 1] },
     "novel_stage6_closure": { "clusters": ["完结闭环簇", "伏笔回收簇", "衍生策划簇", "全书复盘簇"], "kSequence": [2, 2, 1, 1] }
   },
