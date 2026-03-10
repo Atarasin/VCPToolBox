@@ -6,15 +6,19 @@
         "mcp-server-time"
       ]
     },
-    "context7": {
-      "command": "npx",
+    "WebSearch": {
+      "command": "bash",
       "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ],
-      "env": {
-        "DEFAULT_MINIMUM_TOKENS": "12800"
-      }
+        "-lc",
+        "npx -y mcp-remote https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp --header \"Authorization: Bearer ${DASHSCOPE_API_KEY}\""
+      ]
+    },
+    "WebParser": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "npx -y mcp-remote https://dashscope.aliyuncs.com/api/v1/mcps/WebParser/sse --transport sse-only --header \"Authorization: Bearer ${DASHSCOPE_API_KEY}\""
+      ]
     }
   }
 }

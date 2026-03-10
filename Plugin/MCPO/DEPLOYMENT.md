@@ -94,6 +94,11 @@ python test_mcpo_plugin.py
 
 如果看到 "🎉 所有测试通过！"，说明插件部署成功。
 
+手动测试mcpo服务是否可用。
+```bash
+mcpo --config ./Plugin/MCPO/custom-mcp-config/mcp-config.json --port 9050 --api-key testkey 2>&1
+```
+
 ### 5. 在 VCP 系统中启用
 
 在 AI 的系统提示词中添加：
@@ -108,6 +113,13 @@ python test_mcpo_plugin.py
 
 ```bash
 node server.js
+```
+
+若mcpo服务没有起来，则先手动调用来启动mcpo服务。
+```bash
+python mcpo_plugin.py <<'EOF'
+{"action":"manage_server","operation":"start"}
+EOF
 ```
 
 ## 🔧 配置指南
