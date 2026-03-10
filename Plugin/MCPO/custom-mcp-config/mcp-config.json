@@ -12,13 +12,6 @@
         "-lc",
         "npx -y mcp-remote https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp --header \"Authorization: Bearer ${DASHSCOPE_API_KEY}\""
       ]
-    },
-    "WebParser": {
-      "command": "bash",
-      "args": [
-        "-lc",
-        "npx -y mcp-remote https://dashscope.aliyuncs.com/api/v1/mcps/WebParser/sse --transport sse-only --header \"Authorization: Bearer ${DASHSCOPE_API_KEY}\""
-      ]
     }
   }
 }
