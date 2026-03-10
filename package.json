@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "@dqbd/tiktoken": "^1.0.22",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@mozilla/readability": "^0.6.0",
     "@node-rs/jieba": "^2.0.1",
     "@tavily/core": "^0.5.2",

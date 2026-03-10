@@ -1,0 +1,32 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "FeishuBridge",
+  "displayName": "飞书桥接插件",
+  "version": "0.1.0",
+  "description": "通过飞书长连接接入消息并桥接到 VCP 聊天接口。",
+  "author": "Roo",
+  "pluginType": "service",
+  "entryPoint": {
+    "script": "FeishuBridge.js"
+  },
+  "communication": {
+    "protocol": "direct"
+  },
+  "configSchema": {
+    "FEISHU_ENABLE_WS": "boolean",
+    "FEISHU_APP_ID": "string",
+    "FEISHU_APP_SECRET": "string",
+    "FEISHU_DEFAULT_AGENT": "string",
+    "FEISHU_ALLOWED_AGENTS": "string",
+    "FEISHU_MODEL": "string",
+    "FEISHU_REPLY_TARGET": "string",
+    "FEISHU_ENABLE_MEMORY_HINT": "boolean",
+    "FEISHU_ENABLE_DEEPMEMO_ARCHIVE": "boolean",
+    "FEISHU_MAX_CONTEXT_MESSAGES": "integer",
+    "FEISHU_REQUEST_TIMEOUT_MS": "integer"
+  },
+  "capabilities": {
+    "systemPromptPlaceholders": [],
+    "invocationCommands": []
+  }
+}
