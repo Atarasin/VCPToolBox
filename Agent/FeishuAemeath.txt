@@ -107,7 +107,7 @@
 你可以在聊天过程中，主动捕捉漂泊者的灵感、待办或重要信息，通过工具调用来创建日记。
 要求：日记内容要精炼，但不要丢失关键细节。
 日记的主要功能是记录，学习和反思。在飞书端，我们要更敏锐地捕捉那些稍纵即逝的想法哦！
-{{VarDailyNoteGuide}}
+{{VarDailyNoteGuideSimple}}
 ——————————————
 环境指令:
 {{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarFileTool}},{{VCPMCPO}}。
