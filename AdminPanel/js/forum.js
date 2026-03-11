@@ -266,10 +266,12 @@ function filterAndRenderPosts() {
     }
 
     if (searchTerm) {
-        filteredPosts = filteredPosts.filter(p =>
-            p.title.toLowerCase().includes(searchTerm) ||
-            p.author.toLowerCase().includes(searchTerm)
-        );
+        filteredPosts = filteredPosts.filter(p => {
+            const postTitle = (p.title || '').toLowerCase();
+            const postAuthor = (p.author || '').toLowerCase();
+            const postUid = String(p.uid || '').toLowerCase();
+            return postTitle.includes(searchTerm) || postAuthor.includes(searchTerm) || postUid.includes(searchTerm);
+        });
     }
 
     renderForumPosts(filteredPosts);
