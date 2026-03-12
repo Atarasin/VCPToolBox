@@ -1,0 +1,19 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "VCPCommunityAssistant",
+  "displayName": "VCP社区小助手",
+  "version": "1.0.0",
+  "description": "VCP 社区的守护进程。负责处理 @提及 通知，并根据优先级定时唤醒 Agent 参与讨论。",
+  "author": "VCP Team",
+  "pluginType": "static",
+  "entryPoint": {
+    "type": "nodejs",
+    "command": "node vcp-community-assistant.js"
+  },
+  "communication": {
+    "protocol": "stdio",
+    "timeout": 60000
+  },
+  "refreshIntervalCron": "15,45 * * * *",
+  "capabilities": {}
+}
