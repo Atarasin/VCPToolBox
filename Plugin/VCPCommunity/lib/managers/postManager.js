@@ -9,9 +9,8 @@ const { sanitizeFilename, getTimestamp } = require('../utils/helpers');
  * 负责帖子的创建、读取、列表、回复以及内容引用处理。
  */
 class PostManager {
-    constructor(communityManager, notificationManager) {
+    constructor(communityManager) {
         this.communityManager = communityManager;
-        this.notificationManager = notificationManager;
     }
 
     /**
@@ -23,19 +22,101 @@ class PostManager {
      * @param {string} titleOrSummary 标题或摘要
      */
     async processMentions(content, sourceAgent, communityId, postUid, titleOrSummary) {
-        const mentionRegex = /@([\w\u4e00-\u9fa5]+)/g;
-        const matches = [...content.matchAll(mentionRegex)];
-        const mentionedAgents = new Set();
+        // Phase 3 起不再写 notifications.json
+        // @ 提及由 GetAgentSituation 通过帖子内容增量检索得到
+        void content;
+        void sourceAgent;
+        void communityId;
+        void postUid;
+        void titleOrSummary;
+    }
 
-        for (const match of matches) {
-            const targetAgent = match[1];
-            // 避免重复通知和提及自己
-            if (targetAgent !== sourceAgent && !mentionedAgents.has(targetAgent)) {
-                mentionedAgents.add(targetAgent);
-                const summary = `${sourceAgent} 在 '${titleOrSummary}' 中提到了你。`;
-                await this.notificationManager.addReply(sourceAgent, targetAgent, postUid, communityId, summary);
-            }
+    /**
+     * 辅助方法：提取帖子文件名中的元信息
+     * @param {string} file 帖子文件名
+     * @returns {object|null} 元信息对象
+     */
+    parsePostFilename(file) {
+        const match = file.match(/^\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\]\.md$/);
+        if (!match) return null;
+        const [, communityId, title, author, timestamp, uid] = match;
+        return { communityId, title, author, timestamp, uid, filename: file };
+    }
+
+    /**
+     * 获取 Agent 被 @提及的帖子摘要
+     * @param {string} agentName Agent 名称
+     * @param {Set<string>} visibleCommunityIds 可见社区集合
+     * @param {number} sinceTs 增量起始时间戳（毫秒）
+     * @param {number} limit 返回数量上限
+     * @returns {Promise<Array>} 提及摘要列表
+     */
+    async getAgentMentions(agentName, visibleCommunityIds, sinceTs = 0, limit = 5) {
+        await fs.mkdir(POSTS_DIR, { recursive: true });
+        const files = await fs.readdir(POSTS_DIR);
+        const escapedAgent = agentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const mentionRegex = new RegExp(`@${escapedAgent}(?![\\w\\u4e00-\\u9fa5])`);
+
+        const mentions = [];
+        for (const file of files) {
+            if (!file.endsWith('.md')) continue;
+            const meta = this.parsePostFilename(file);
+            if (!meta) continue;
+            if (!visibleCommunityIds.has(meta.communityId)) continue;
+
+            const fullPath = path.join(POSTS_DIR, file);
+            const stat = await fs.stat(fullPath);
+            if (sinceTs && stat.mtimeMs <= sinceTs) continue;
+
+            const content = await fs.readFile(fullPath, 'utf-8');
+            if (!mentionRegex.test(content)) continue;
+
+            const matchedLine = content.split('\n').find((line) => mentionRegex.test(line)) || '';
+            mentions.push({
+                post_uid: meta.uid,
+                community_id: meta.communityId,
+                title: meta.title,
+                author: meta.author,
+                matched_line: matchedLine.trim().slice(0, 120),
+                updated_at: Math.floor(stat.mtimeMs),
+            });
         }
+
+        mentions.sort((a, b) => b.updated_at - a.updated_at);
+        return mentions.slice(0, limit);
+    }
+
+    /**
+     * 获取可见社区的逛帖推荐
+     * @param {string} agentName Agent 名称
+     * @param {Set<string>} visibleCommunityIds 可见社区集合
+     * @param {number} limit 返回数量上限
+     * @returns {Promise<Array>} 推荐帖子列表
+     */
+    async getExploreCandidates(agentName, visibleCommunityIds, limit = 5) {
+        await fs.mkdir(POSTS_DIR, { recursive: true });
+        const files = await fs.readdir(POSTS_DIR);
+        const posts = [];
+
+        for (const file of files) {
+            if (!file.endsWith('.md')) continue;
+            const meta = this.parsePostFilename(file);
+            if (!meta) continue;
+            if (!visibleCommunityIds.has(meta.communityId)) continue;
+            const stat = await fs.stat(path.join(POSTS_DIR, file));
+            posts.push({
+                post_uid: meta.uid,
+                community_id: meta.communityId,
+                title: meta.title,
+                author: meta.author,
+                updated_at: Math.floor(stat.mtimeMs),
+            });
+        }
+
+        posts.sort((a, b) => b.updated_at - a.updated_at);
+        const preferred = posts.filter((p) => p.author !== agentName);
+        const fallback = posts.filter((p) => p.author === agentName);
+        return [...preferred, ...fallback].slice(0, limit);
     }
 
     /**
@@ -116,11 +197,17 @@ ${content}
         const posts = [];
         for (const file of mdFiles) {
             // 解析文件名元数据
-            const match = file.match(/^\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\]\.md$/);
-            if (match) {
-                const [, cId, title, author, ts, uid] = match;
-                if (visibleCommunities.includes(cId)) {
-                    posts.push({ communityId: cId, title, author, timestamp: ts, uid, filename: file });
+            const meta = this.parsePostFilename(file);
+            if (meta) {
+                if (visibleCommunities.includes(meta.communityId)) {
+                    posts.push({
+                        communityId: meta.communityId,
+                        title: meta.title,
+                        author: meta.author,
+                        timestamp: meta.timestamp,
+                        uid: meta.uid,
+                        filename: meta.filename
+                    });
                 }
             }
         }

@@ -2,15 +2,20 @@
 const fs = require('fs').promises;
 const path = require('path');
 const http = require('http');
+const { execFile } = require('child_process');
+const util = require('util');
+const execFileAsync = util.promisify(execFile);
 
 // 配置路径
-const PROJECT_BASE_PATH = process.env.PROJECT_BASE_PATH || path.resolve(__dirname, '../../..');
-const DATA_DIR = path.join(PROJECT_BASE_PATH, 'VCPToolBox', 'data', 'VCPCommunity');
+// 基础路径配置
+// 如果未设置环境变量，则向上回溯到 VCPToolBox 根目录
+const PROJECT_BASE_PATH = process.env.PROJECT_BASE_PATH || path.resolve(__dirname, '../../');
+const DATA_DIR = path.join(PROJECT_BASE_PATH, 'data', 'VCPCommunity');
 const CONFIG_DIR = path.join(DATA_DIR, 'config');
-const POSTS_DIR = path.join(DATA_DIR, 'posts');
-const NOTIFICATIONS_FILE = path.join(CONFIG_DIR, 'notifications.json');
 const PROPOSALS_FILE = path.join(CONFIG_DIR, 'proposals.json');
 const COMMUNITIES_FILE = path.join(CONFIG_DIR, 'communities.json');
+const ASSISTANT_STATE_FILE = path.join(CONFIG_DIR, 'assistant_state.json');
+const COMMUNITY_PLUGIN_SCRIPT = path.join(PROJECT_BASE_PATH, 'Plugin', 'VCPCommunity', 'VCPCommunity.js');
 
 // VCP HTTP Server Config
 const PORT = process.env.PORT || '8080';
@@ -66,100 +71,407 @@ temporary_contact:「始」true「末」,
     });
 }
 
-// 优先级 1: 处理通知
-async function processNotifications() {
+/**
+ * 调用 VCPCommunity 聚合接口
+ * @param {string} command 命令名
+ * @param {object} args 参数对象
+ * @returns {Promise<any>} 命令结果
+ */
+async function invokeCommunity(command, args) {
+    const input = JSON.stringify({ command, ...args });
     try {
-        await fs.mkdir(CONFIG_DIR, { recursive: true });
-        let notifications = [];
-        try {
-            const data = await fs.readFile(NOTIFICATIONS_FILE, 'utf-8');
-            notifications = JSON.parse(data);
-        } catch (e) {
-            if (e.code !== 'ENOENT') throw e;
+        const { stdout } = await execFileAsync('node', [COMMUNITY_PLUGIN_SCRIPT, input], {
+            maxBuffer: 2 * 1024 * 1024,
+        });
+        const resp = JSON.parse(stdout);
+        if (resp.status !== 'success') {
+            throw new Error(resp.error || `VCPCommunity 调用失败: ${command}`);
         }
-
-        if (notifications.length === 0) return false;
-
-        // 取出第一条通知（FIFO）
-        const notification = notifications.shift();
-        
-        // 保存剩余通知
-        await fs.writeFile(NOTIFICATIONS_FILE, JSON.stringify(notifications, null, 2), 'utf-8');
-
-        console.log(`[VCPCommunityAssistant] 处理通知: ${notification.source_agent} -> ${notification.target_agent}`);
-        
-        // 根据通知类型构造提示词
-        let prompt;
-        if (notification.type === 'review_request') {
-            prompt = `[提案审查请求] 社区有新的 Wiki 更新提案需要审核。\n` +
-                     `提案发起者: ${notification.source_agent}\n` +
-                     `所在社区: ${notification.community_id}\n` +
-                     `请求摘要: ${notification.context_summary}\n\n` +
-                     `请使用 VCPCommunity 工具查看提案详情并审核。\n` +
-                     `建议指令: ReadPost(agent_name="${notification.target_agent}", post_uid="${notification.post_uid}")`;
-        } else if (notification.type === 'review') {
-            prompt = `[提案审核提醒] 你的提案已收到审核结果。\n` +
-                     `审核人: ${notification.source_agent}\n` +
-                     `所在社区: ${notification.community_id}\n` +
-                     `审核摘要: ${notification.context_summary}\n\n` +
-                     `请使用 VCPCommunity 工具查看提案贴的最新回复。\n` +
-                     `建议指令: ReadPost(agent_name="${notification.target_agent}", post_uid="${notification.post_uid}")`;
-        } else {
-            // 默认按回复通知处理
-            prompt = `[社区回复提醒] 你收到了来自 ${notification.source_agent} 的新回复。\n` +
-                     `所在社区: ${notification.community_id}\n` +
-                     `消息摘要: ${notification.context_summary}\n\n` +
-                     `请使用 VCPCommunity 工具查看详情并回复。\n` +
-                     `建议指令: ReadPost(agent_name="${notification.target_agent}", post_uid="${notification.post_uid}")`;
-        }
-
-        await invokeAgent(notification.target_agent, prompt);
-        return true; // 表示已处理一条高优先级任务
-
+        return resp.result;
     } catch (e) {
-        console.error(`[VCPCommunityAssistant] 处理通知失败: ${e.message}`);
-        return false;
+        if (e.stdout) {
+            const resp = JSON.parse(e.stdout);
+            throw new Error(resp.error || e.message);
+        }
+        throw e;
     }
 }
 
-// 优先级 2: 随机唤醒 (逛论坛)
-async function randomBrowse() {
+/**
+ * 读取社区配置
+ * @returns {Promise<Array>} 社区数组
+ */
+async function loadCommunities() {
     try {
-        // 读取社区配置以获取可用 Agent 列表
-        let communities = [];
-        try {
-            const data = await fs.readFile(COMMUNITIES_FILE, 'utf-8');
-            const config = JSON.parse(data);
-            communities = config.communities || [];
-        } catch (e) {
-            console.error(`[VCPCommunityAssistant] 读取社区配置失败: ${e.message}`);
-            return;
-        }
+        const data = await fs.readFile(COMMUNITIES_FILE, 'utf-8');
+        const parsed = JSON.parse(data);
+        return Array.isArray(parsed.communities) ? parsed.communities : [];
+    } catch (e) {
+        if (e.code === 'ENOENT') return [];
+        throw e;
+    }
+}
 
-        // 收集所有去重后的 Agent（仅成员列表）
-        const allAgents = new Set();
-        communities.forEach(c => {
-            if (c.members) c.members.forEach(m => allAgents.add(m));
-        });
-        
-        const agentList = Array.from(allAgents);
+/**
+ * 聚合社区中的 Agent（成员 + 维护者）
+ * @param {Array} communities 社区数组
+ * @returns {Array<string>} 去重后的 Agent 列表
+ */
+function collectAgents(communities) {
+    const allAgents = new Set();
+    communities.forEach((community) => {
+        (community.members || []).forEach((agent) => allAgents.add(agent));
+        (community.maintainers || []).forEach((agent) => allAgents.add(agent));
+    });
+    return Array.from(allAgents);
+}
+
+/**
+ * 读取助手状态文件
+ * @returns {Promise<object>} 助手状态
+ */
+async function loadAssistantState() {
+    try {
+        const data = await fs.readFile(ASSISTANT_STATE_FILE, 'utf-8');
+        const parsed = JSON.parse(data);
+        return parsed && parsed.agents ? parsed : { agents: {} };
+    } catch (e) {
+        if (e.code === 'ENOENT') return { agents: {} };
+        throw e;
+    }
+}
+
+/**
+ * 保存助手状态文件
+ * @param {object} state 助手状态
+ */
+async function saveAssistantState(state) {
+    await fs.mkdir(CONFIG_DIR, { recursive: true });
+    await fs.writeFile(ASSISTANT_STATE_FILE, JSON.stringify(state, null, 2), 'utf-8');
+}
+
+/**
+ * 计算状态摘要哈希，用于去重提醒
+ * @param {object} situation Agent 处境聚合结果
+ * @returns {string} 摘要键
+ */
+function buildSituationDigest(situation) {
+    const mentionUids = (situation.mentions || []).map((m) => m.post_uid).sort().join('|');
+    const pendingUids = (situation.pending_reviews || []).map((p) => p.post_uid).sort().join('|');
+    const updateUids = (situation.proposal_updates || []).map((u) => `${u.post_uid}:${u.outcome}`).sort().join('|');
+    return `${mentionUids}#${pendingUids}#${updateUids}`;
+}
+
+/**
+ * 将处境聚合结果压缩为计数快照，便于前后轮次对比
+ * @param {object} situation Agent 处境聚合结果
+ * @returns {object} 快照对象
+ */
+function buildSituationSnapshot(situation) {
+    return {
+        mentions: (situation.mentions || []).length,
+        pending_reviews: (situation.pending_reviews || []).length,
+        proposal_updates: (situation.proposal_updates || []).length,
+        explore_candidates: (situation.explore_candidates || []).length,
+    };
+}
+
+/**
+ * 基于处境与历史反馈生成本轮建议优先级
+ * @param {object} situation Agent 处境聚合结果
+ * @param {object} feedback 历史反馈信息
+ * @returns {Array<string>} 建议优先级列表
+ */
+function buildPriorityRecommendations(situation, feedback = {}) {
+    const candidates = [
+        { key: '@你提醒', score: (situation.mentions || []).length * 100 },
+        { key: '待你评审', score: (situation.pending_reviews || []).length * 90 },
+        { key: '提案进展', score: (situation.proposal_updates || []).length * 70 },
+        { key: '可逛帖推荐', score: (situation.explore_candidates || []).length * 40 },
+    ];
+
+    // 引入历史反馈：若某类经常带来正向结果，轻微上调权重
+    const feedbackBonus = feedback.category_success || {};
+    candidates.forEach((item) => {
+        item.score += Number(feedbackBonus[item.key] || 0) * 5;
+    });
+
+    return candidates
+        .sort((a, b) => b.score - a.score)
+        .filter((item) => item.score > 0)
+        .map((item) => item.key);
+}
+
+/**
+ * 从 Agent 返回文本中识别行为信号，用于回流反馈
+ * @param {string} text Agent 返回文本
+ * @returns {object} 行为信号
+ */
+function parseAgentActionSignals(text) {
+    const raw = typeof text === 'string' ? text : '';
+    return {
+        review_action: /ReviewProposal/.test(raw) ? 1 : 0,
+        reply_action: /ReplyPost/.test(raw) ? 1 : 0,
+        create_post_action: /CreatePost/.test(raw) ? 1 : 0,
+        read_post_action: /ReadPost/.test(raw) ? 1 : 0,
+    };
+}
+
+/**
+ * 合并回流反馈并累计统计
+ * @param {object} prevFeedback 历史反馈
+ * @param {object} prevSnapshot 上轮快照
+ * @param {object} currentSnapshot 当前快照
+ * @param {object} actionSignals 本轮行为信号
+ * @param {Array<string>} suggestedPriorities 本轮建议优先级
+ * @returns {object} 新反馈
+ */
+function mergeFeedback(prevFeedback = {}, prevSnapshot = {}, currentSnapshot = {}, actionSignals = {}, suggestedPriorities = []) {
+    const feedback = {
+        category_success: { ...(prevFeedback.category_success || {}) },
+        total_wakeups: Number(prevFeedback.total_wakeups || 0) + 1,
+        total_actions: Number(prevFeedback.total_actions || 0),
+        last_action_signals: actionSignals,
+    };
+
+    const totalActionSignals =
+        Number(actionSignals.review_action || 0) +
+        Number(actionSignals.reply_action || 0) +
+        Number(actionSignals.create_post_action || 0) +
+        Number(actionSignals.read_post_action || 0);
+    feedback.total_actions += totalActionSignals;
+
+    // 通过“积压下降”识别建议是否有效，并回流到类别成功分
+    const mentionReduced = Number(prevSnapshot.mentions || 0) > Number(currentSnapshot.mentions || 0);
+    const pendingReduced = Number(prevSnapshot.pending_reviews || 0) > Number(currentSnapshot.pending_reviews || 0);
+    const updatesChanged = Number(prevSnapshot.proposal_updates || 0) !== Number(currentSnapshot.proposal_updates || 0);
+    const explored = totalActionSignals > 0 || Number(currentSnapshot.explore_candidates || 0) !== Number(prevSnapshot.explore_candidates || 0);
+
+    if (mentionReduced) feedback.category_success['@你提醒'] = Number(feedback.category_success['@你提醒'] || 0) + 1;
+    if (pendingReduced) feedback.category_success['待你评审'] = Number(feedback.category_success['待你评审'] || 0) + 1;
+    if (updatesChanged) feedback.category_success['提案进展'] = Number(feedback.category_success['提案进展'] || 0) + 1;
+    if (explored) feedback.category_success['可逛帖推荐'] = Number(feedback.category_success['可逛帖推荐'] || 0) + 1;
+
+    // 若本轮有动作，给第一优先项额外反馈，形成“建议->结果”闭环
+    if (totalActionSignals > 0 && suggestedPriorities[0]) {
+        const top = suggestedPriorities[0];
+        feedback.category_success[top] = Number(feedback.category_success[top] || 0) + 1;
+    }
+
+    return feedback;
+}
+
+/**
+ * 计算 Agent 被唤醒权重（积压度 + 活跃度 + 空闲时长）
+ * @param {object} situation Agent 处境
+ * @param {object} agentState Agent 历史状态
+ * @param {number} now 当前时间戳
+ * @returns {{weight:number, reason:string}} 权重与原因
+ */
+function calculateAgentWeight(situation, agentState, now) {
+    const mentions = (situation.mentions || []).length;
+    const pendingReviews = (situation.pending_reviews || []).length;
+    const proposalUpdates = (situation.proposal_updates || []).length;
+    const exploreCandidates = (situation.explore_candidates || []).length;
+
+    // 积压分：优先处理明确待办
+    const backlogScore = mentions * 4 + pendingReviews * 5 + proposalUpdates * 2 + Math.min(exploreCandidates, 3);
+
+    // 空闲分：长时间未唤醒的 Agent 权重提升，避免饥饿
+    const lastTick = Number(agentState.last_tick_at || 0);
+    const idleHours = Math.max(0, (now - lastTick) / (60 * 60 * 1000));
+    const idleScore = Math.min(6, Math.floor(idleHours));
+
+    // 活跃分：历史有行动回流则轻微提升，鼓励有效参与
+    const feedback = agentState.feedback || {};
+    const activityScore = Math.min(6, Math.floor(Number(feedback.total_actions || 0) / 3));
+
+    const weight = Math.max(1, backlogScore + idleScore + activityScore + 1);
+    const reason = `积压=${backlogScore}, 空闲=${idleScore}, 活跃=${activityScore}`;
+    return { weight, reason };
+}
+
+/**
+ * 按权重随机选择 Agent
+ * @param {Array<{agentName:string, weight:number}>} weightedAgents 带权候选
+ * @param {number} randomValue [0,1) 随机值
+ * @returns {string|null} 选中的 Agent
+ */
+function pickAgentByWeight(weightedAgents, randomValue) {
+    if (!Array.isArray(weightedAgents) || weightedAgents.length === 0) return null;
+    const total = weightedAgents.reduce((sum, item) => sum + item.weight, 0);
+    if (total <= 0) return weightedAgents[0].agentName;
+
+    let cursor = randomValue * total;
+    for (const item of weightedAgents) {
+        cursor -= item.weight;
+        if (cursor <= 0) return item.agentName;
+    }
+    return weightedAgents[weightedAgents.length - 1].agentName;
+}
+
+/**
+ * 构建 Agent 行动看板提示词
+ * @param {object} situation Agent 处境聚合结果
+ * @param {Array<string>} suggestedPriorities 本轮建议优先级
+ * @param {string} selectionReason 选中原因摘要
+ * @returns {string} 看板提示词
+ */
+function buildActionBoardPrompt(situation, suggestedPriorities = [], selectionReason = '') {
+    const agentName = situation.agent_name;
+    const mentions = situation.mentions || [];
+    const pendingReviews = situation.pending_reviews || [];
+    const proposalUpdates = situation.proposal_updates || [];
+    const exploreCandidates = situation.explore_candidates || [];
+
+    const mentionLines = mentions.length === 0
+        ? ['- 当前没有新的 @提醒。']
+        : mentions.map((mention) =>
+            `- [${mention.post_uid}] ${mention.title} (by ${mention.author}, 社区: ${mention.community_id})`
+        );
+
+    const pendingLines = pendingReviews.length === 0
+        ? ['- 当前没有待你评审的提案。']
+        : pendingReviews.map((proposal) =>
+            `- [${proposal.post_uid}] 社区 ${proposal.community_id} 的页面 ${proposal.page_name} 待你审核`
+        );
+
+    const updateLines = proposalUpdates.length === 0
+        ? ['- 当前没有新的提案结果更新。']
+        : proposalUpdates.map((update) =>
+            `- [${update.post_uid}] 页面 ${update.page_name} 结果: ${update.outcome}`
+        );
+
+    const exploreLines = exploreCandidates.length === 0
+        ? ['- 当前没有可推荐帖子，可直接执行 ListPosts 查看全部。']
+        : exploreCandidates.map((post) =>
+            `- [${post.post_uid}] ${post.title} (by ${post.author}, 社区: ${post.community_id})`
+        );
+
+    return `[社区行动看板]\n` +
+        `Agent: ${agentName}\n\n` +
+        `本轮被唤醒原因: ${selectionReason || '常规轮询'}\n` +
+        `本轮建议优先级: ${suggestedPriorities.length > 0 ? suggestedPriorities.join(' > ') : '无明显优先级'}\n\n` +
+        `你可自主选择以下动作（可做 0~N 项，也可以全部做）：\n\n` +
+        `1) @你提醒（${mentions.length}条）\n` +
+        `${mentionLines.join('\n')}\n\n` +
+        `2) 待你评审（${pendingReviews.length}条）\n` +
+        `${pendingLines.join('\n')}\n\n` +
+        `3) 提案进展（${proposalUpdates.length}条）\n` +
+        `${updateLines.join('\n')}\n\n` +
+        `4) 可逛帖推荐（${exploreCandidates.length}条）\n` +
+        `${exploreLines.join('\n')}\n\n` +
+        `建议工具指令：\n` +
+        `- ListPosts(agent_name="${agentName}")\n` +
+        `- ReadPost(agent_name="${agentName}", post_uid="...")\n` +
+        `- ReviewProposal(agent_name="${agentName}", post_uid="...", decision="Approve|Reject", comment="...")\n` +
+        `- ReplyPost(agent_name="${agentName}", post_uid="...", content="...")\n` +
+        `- CreatePost(agent_name="${agentName}", community_id="...", title="...", content="...")`;
+}
+
+// Phase 1: 停用通知消费，保留函数用于兼容旧调用方
+async function processNotifications(options = {}) {
+    void options;
+    console.log('[VCPCommunityAssistant] Phase 1 已停用 notifications 队列消费。');
+    return false;
+}
+
+// Phase 2: 随机选择 Agent，通过聚合接口生成状态看板后唤醒
+async function randomBrowse(options = {}) {
+    const invoker = options.invokeAgent || invokeAgent;
+    const communityInvoker = options.invokeCommunity || invokeCommunity;
+    const nowProvider = options.nowProvider || (() => Date.now());
+    try {
+        const communities = await loadCommunities();
+
+        // 聚合成员与维护者，作为可被唤醒对象池
+        const agentList = collectAgents(communities);
         if (agentList.length === 0) {
             console.log('[VCPCommunityAssistant] 没有配置任何 Agent，跳过随机唤醒。');
-            return;
+            return false;
         }
 
-        const randomAgent = agentList[Math.floor(Math.random() * agentList.length)];
-        
-        console.log(`[VCPCommunityAssistant] 随机唤醒 Agent: ${randomAgent} 逛论坛`);
+        const state = await loadAssistantState();
+        const now = nowProvider();
 
-        const prompt = `[论坛时间] 又是新的一天，去 VCP 社区看看有没有什么新鲜事吧？\n` +
-                       `你可以浏览你所在的私有社区，或者去综合讨论区看看。\n` +
-                       `建议指令: ListPosts(agent_name="${randomAgent}")`;
+        // 先拉取全部候选 Agent 的处境，再进行加权随机
+        const snapshots = [];
+        for (const agentName of agentList) {
+            const agentState = state.agents[agentName] || {
+                last_tick_at: 0,
+                last_digest_hash: '',
+                last_snapshot: {},
+                feedback: {},
+            };
 
-        await invokeAgent(randomAgent, prompt);
+            const situation = await communityInvoker('GetAgentSituation', {
+                agent_name: agentName,
+                since_ts: agentState.last_tick_at || 0,
+                limit: 5,
+            });
+            if (!situation || typeof situation !== 'object') {
+                throw new Error(`GetAgentSituation 返回无效: ${agentName}`);
+            }
+
+            const weightInfo = calculateAgentWeight(situation, agentState, now);
+            snapshots.push({
+                agent_name: agentName,
+                situation,
+                agent_state: agentState,
+                weight: weightInfo.weight,
+                weight_reason: weightInfo.reason,
+            });
+        }
+
+        const selectedAgent = pickAgentByWeight(
+            snapshots.map((item) => ({ agentName: item.agent_name, weight: item.weight })),
+            Math.random()
+        );
+        const selected = snapshots.find((item) => item.agent_name === selectedAgent);
+        if (!selected) return false;
+
+        const digest = buildSituationDigest(selected.situation);
+        if (digest && digest === selected.agent_state.last_digest_hash) {
+            // 新旧摘要一致时跳过，避免重复提醒
+            state.agents[selected.agent_name] = {
+                ...selected.agent_state,
+                last_tick_at: now,
+            };
+            await saveAssistantState(state);
+            console.log(`[VCPCommunityAssistant] Agent ${selected.agent_name} 状态无变化，跳过本轮唤醒。`);
+            return false;
+        }
+
+        const priorities = buildPriorityRecommendations(selected.situation, selected.agent_state.feedback);
+        console.log(`[VCPCommunityAssistant] 加权唤醒 Agent: ${selected.agent_name}（${selected.weight_reason}）`);
+
+        const prompt = buildActionBoardPrompt(selected.situation, priorities, selected.weight_reason);
+
+        const invokeResult = await invoker(selected.agent_name, prompt);
+        const actionSignals = parseAgentActionSignals(invokeResult);
+        const currentSnapshot = buildSituationSnapshot(selected.situation);
+        const prevSnapshot = selected.agent_state.last_snapshot || {};
+        const mergedFeedback = mergeFeedback(
+            selected.agent_state.feedback,
+            prevSnapshot,
+            currentSnapshot,
+            actionSignals,
+            priorities
+        );
+
+        state.agents[selected.agent_name] = {
+            last_tick_at: selected.situation.generated_at || now,
+            last_digest_hash: digest,
+            last_snapshot: currentSnapshot,
+            feedback: mergedFeedback,
+            last_priorities: priorities,
+        };
+        await saveAssistantState(state);
+        return true;
 
     } catch (e) {
         console.error(`[VCPCommunityAssistant] 随机唤醒失败: ${e.message}`);
+        return false;
     }
 }
 
@@ -177,14 +489,6 @@ async function checkReviewTimeouts(now = Date.now()) {
 
     if (!Array.isArray(proposals) || proposals.length === 0) return false;
 
-    let notifications = [];
-    try {
-        const data = await fs.readFile(NOTIFICATIONS_FILE, 'utf-8');
-        notifications = JSON.parse(data);
-    } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-    }
-
     let hasTimeout = false;
     for (const proposal of proposals) {
         if (proposal.finalized) continue;
@@ -193,6 +497,7 @@ async function checkReviewTimeouts(now = Date.now()) {
         // 超时：标记完成并补齐未评审项
         proposal.finalized = true;
         proposal.outcome = 'TimeoutReject';
+        proposal.updated_at = now;
         if (proposal.reviews) {
             Object.keys(proposal.reviews).forEach((m) => {
                 if (!proposal.reviews[m].decision) {
@@ -201,48 +506,20 @@ async function checkReviewTimeouts(now = Date.now()) {
             });
         }
 
-        // 通知提案者评审结果
-        if (proposal.proposer) {
-            const reviewSummary = Object.entries(proposal.reviews || {})
-                .map(([maintainer, info]) => `${maintainer}(${info.decision})=${info.comment || '无'}`)
-                .join('; ');
-            notifications.push({
-                target_agent: proposal.proposer,
-                type: 'review',
-                source_agent: 'System',
-                post_uid: proposal.post_uid,
-                community_id: proposal.community_id,
-                context_summary: `评审结果: 超时拒绝；评语汇总: ${reviewSummary}`,
-                timestamp: now,
-            });
-        }
-
-        // 清理对应的审查请求通知
-        notifications = notifications.filter(
-            (n) => !(n.type === 'review_request' && n.post_uid === proposal.post_uid)
-        );
-
         hasTimeout = true;
     }
 
     if (hasTimeout) {
         await fs.writeFile(PROPOSALS_FILE, JSON.stringify(proposals, null, 2), 'utf-8');
-        await fs.writeFile(NOTIFICATIONS_FILE, JSON.stringify(notifications, null, 2), 'utf-8');
     }
 
     return hasTimeout;
 }
 
 async function main() {
-    // 先处理超时，再处理高优先级通知
+    // Phase 3 调度顺序：先处理超时，再按加权策略发送行动看板
     await checkReviewTimeouts();
-    const handledHighPriority = await processNotifications();
-    
-    if (!handledHighPriority) {
-        // 只有当没有高优先级通知时，才进行随机唤醒
-        // 或者可以设置一定概率随机唤醒
-        await randomBrowse();
-    }
+    await randomBrowse();
 }
 
 if (require.main === module && !SKIP_ASSISTANT_BOOTSTRAP) {
@@ -251,4 +528,7 @@ if (require.main === module && !SKIP_ASSISTANT_BOOTSTRAP) {
 
 module.exports = {
     checkReviewTimeouts,
+    processNotifications,
+    randomBrowse,
+    buildActionBoardPrompt,
 };

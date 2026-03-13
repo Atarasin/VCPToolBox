@@ -6,11 +6,10 @@ const { PROPOSALS_FILE } = require('../constants');
  * 负责生成提案贴和处理提案审核（Approve/Reject）。
  */
 class ProposalManager {
-    constructor(communityManager, postManager, wikiManager, notificationManager) {
+    constructor(communityManager, postManager, wikiManager) {
         this.communityManager = communityManager;
         this.postManager = postManager;
         this.wikiManager = wikiManager;
-        this.notificationManager = notificationManager;
     }
 
     async loadProposals() {
@@ -26,6 +25,62 @@ class ProposalManager {
     async saveProposals(proposals) {
         // proposals.json 作为提案评审状态的唯一来源
         await fs.writeFile(PROPOSALS_FILE, JSON.stringify(proposals, null, 2), 'utf-8');
+    }
+
+    /**
+     * 获取 Agent 待评审提案列表
+     * @param {string} agentName Agent 名称
+     * @param {Set<string>} visibleCommunityIds 可见社区集合
+     * @param {number} limit 返回数量上限
+     * @returns {Promise<Array>} 待评审提案
+     */
+    async getPendingReviews(agentName, visibleCommunityIds, limit = 5) {
+        const proposals = await this.loadProposals();
+        const pending = proposals.filter((proposal) =>
+            !proposal.finalized &&
+            visibleCommunityIds.has(proposal.community_id) &&
+            proposal.reviews &&
+            proposal.reviews[agentName] &&
+            !proposal.reviews[agentName].decision
+        );
+
+        pending.sort((a, b) => (b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0));
+        return pending.slice(0, limit).map((proposal) => ({
+            post_uid: proposal.post_uid,
+            community_id: proposal.community_id,
+            page_name: proposal.page_name,
+            created_at: proposal.created_at,
+            updated_at: proposal.updated_at || proposal.created_at,
+        }));
+    }
+
+    /**
+     * 获取提案发起者可见的提案进展摘要
+     * @param {string} agentName Agent 名称
+     * @param {Set<string>} visibleCommunityIds 可见社区集合
+     * @param {number} sinceTs 增量起始时间戳（毫秒）
+     * @param {number} limit 返回数量上限
+     * @returns {Promise<Array>} 提案进展摘要
+     */
+    async getProposalUpdates(agentName, visibleCommunityIds, sinceTs = 0, limit = 5) {
+        const proposals = await this.loadProposals();
+        const updates = proposals.filter((proposal) => {
+            if (proposal.proposer !== agentName) return false;
+            if (!visibleCommunityIds.has(proposal.community_id)) return false;
+            if (!proposal.finalized) return false;
+            const changedAt = proposal.updated_at || proposal.created_at || 0;
+            if (sinceTs && changedAt <= sinceTs) return false;
+            return true;
+        });
+
+        updates.sort((a, b) => (b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0));
+        return updates.slice(0, limit).map((proposal) => ({
+            post_uid: proposal.post_uid,
+            community_id: proposal.community_id,
+            page_name: proposal.page_name,
+            outcome: proposal.outcome,
+            updated_at: proposal.updated_at || proposal.created_at,
+        }));
     }
 
     /**
@@ -90,15 +145,19 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
             content: proposalContent,
         });
 
-        // 5. 自动通知 Maintainer，并初始化评审记录
+        // 5. 初始化评审记录
         const proposalUid = result.match(/UID: ([0-9a-fA-F-]+)/)?.[1];
         const maintainers = community.maintainers || [];
         if (maintainers.length > 0 && proposalUid) {
+            // 若提案者本身是 Maintainer，则无需自己再审核一次，只保留“其他维护者”作为审核人
+            const reviewers = maintainers.filter((m) => m !== agent_name);
             const reviews = {};
-            maintainers.forEach((m) => {
+            reviewers.forEach((m) => {
                 reviews[m] = { decision: null, comment: null };
             });
 
+            const isMaintainerProposer = maintainers.includes(agent_name);
+            const noOtherReviewer = isMaintainerProposer && reviewers.length === 0;
             const proposals = await this.loadProposals();
             proposals.push({
                 post_uid: proposalUid,
@@ -106,23 +165,24 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
                 page_name,
                 proposer: agent_name,
                 reviews,
-                finalized: false,
-                outcome: null,
+                // 提案者是唯一维护者时，提案可直接通过，无需进入待审核状态
+                finalized: noOtherReviewer,
+                outcome: noOtherReviewer ? 'Approve' : null,
                 created_at: Date.now(),
+                updated_at: Date.now(),
             });
             await this.saveProposals(proposals);
 
-            const maintainerMentions = maintainers.map((m) => `@${m}`).join(' ');
-            await this.postManager.replyPost({
-                agent_name: 'System',
-                post_uid: proposalUid,
-                content: `请 ${maintainerMentions} 审核此提案。`,
-                system_override: true,
-            });
-
-            const reviewSummary = `社区 ${community_id} 收到新的 Wiki 更新提案，请进行审核。`;
-            for (const maintainer of maintainers) {
-                await this.notificationManager.addReviewRequest(agent_name, maintainer, proposalUid, community_id, reviewSummary);
+            if (noOtherReviewer) {
+                // 只有提案者自己是 Maintainer 时，直接合并 Wiki 变更
+                await this.wikiManager.updateWiki({
+                    agent_name,
+                    community_id,
+                    page_name,
+                    content,
+                    edit_summary: `Merged proposal from ${proposalUid} (Only maintainer proposer)`,
+                });
+                return `提案已提交并自动通过（提案者为唯一维护者）。帖子 UID: ${proposalUid}`;
             }
         }
 
@@ -144,14 +204,12 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
         // 2. 解析元数据
         const communityMatch = postContent.match(/\*\*社区:\*\* (.*?) \((.*?)\)/);
         const pageMatch = postContent.match(/\*\*目标页面:\*\* (.*)/);
-        const proposerMatch = postContent.match(/\*\*提案者:\*\*\s*@([^\s]+)/);
         if (!communityMatch || !pageMatch) {
             throw new Error('无法解析提案贴元数据。');
         }
 
         const communityId = communityMatch[2];
         const pageName = pageMatch[1].trim();
-        const proposer = proposerMatch?.[1];
         // 提取完整内容（从提案贴中的标记段落读取）
         const fullContentMatch = postContent.match(/<!-- FULL_CONTENT_START -->([\s\S]*?)<!-- FULL_CONTENT_END -->/);
         const newContent = fullContentMatch ? fullContentMatch[1].trim() : null;
@@ -177,9 +235,14 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
             throw new Error('该提案已完成评审。');
         }
         if (!proposal.reviews?.[agent_name]) {
+            // 提案者若同时是 Maintainer，会在提案创建时从 reviews 中排除，避免自审
+            if (proposal.proposer === agent_name && maintainers.includes(agent_name)) {
+                throw new Error('作为维护者也是提案者，你不需要进行审核。请等待其他维护者审核。');
+            }
             throw new Error('该提案不包含当前 Maintainer。');
         }
         proposal.reviews[agent_name] = { decision, comment: comment || '无' };
+        proposal.updated_at = Date.now();
         await this.saveProposals(proposals);
 
         // 5. 检查是否全员完成
@@ -202,10 +265,6 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
 
         // 7. 全员完成后统一处理结果并汇总评语
         if (allCompleted) {
-            const reviewSummary = Object.entries(proposal.reviews)
-                .map(([maintainer, info]) => `${maintainer}(${info.decision})=${info.comment || '无'}`)
-                .join('; ');
-
             if (allApproved) {
                 await this.wikiManager.updateWiki({
                     agent_name,
@@ -216,24 +275,18 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
                 });
                 proposal.finalized = true;
                 proposal.outcome = 'Approve';
+                proposal.updated_at = Date.now();
                 await this.saveProposals(proposals);
-
-                if (proposer) {
-                    const summary = `评审结果: 通过；评语汇总: ${reviewSummary}`;
-                    await this.notificationManager.addReview(agent_name, proposer, post_uid, communityId, summary);
-                }
+                // Phase 3：提案结果由 GetAgentSituation.proposal_updates 暴露，不再写通知队列
                 return '提案已通过并完成合并。';
             }
 
             if (anyReject) {
                 proposal.finalized = true;
                 proposal.outcome = 'Reject';
+                proposal.updated_at = Date.now();
                 await this.saveProposals(proposals);
-
-                if (proposer) {
-                    const summary = `评审结果: 拒绝；评语汇总: ${reviewSummary}`;
-                    await this.notificationManager.addReview(agent_name, proposer, post_uid, communityId, summary);
-                }
+                // Phase 3：提案结果由 GetAgentSituation.proposal_updates 暴露，不再写通知队列
                 return '提案已被拒绝。';
             }
         }

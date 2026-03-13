@@ -1,5 +1,12 @@
 const fs = require('fs').promises;
-const { CONFIG_DIR, COMMUNITIES_FILE, DEFAULT_COMMUNITIES_FILE } = require('../constants');
+const {
+    CONFIG_DIR,
+    COMMUNITIES_FILE,
+    DEFAULT_COMMUNITIES_FILE,
+    POSTS_DIR,
+    WIKI_DIR,
+    PROPOSALS_FILE,
+} = require('../constants');
 
 /**
  * 社区管理器 (CommunityManager)
@@ -8,6 +15,41 @@ const { CONFIG_DIR, COMMUNITIES_FILE, DEFAULT_COMMUNITIES_FILE } = require('../c
 class CommunityManager {
     constructor() {
         this.communities = [];
+    }
+
+    /**
+     * 初始化社区运行目录与基础文件
+     */
+    async initStorage() {
+        // 确保核心目录存在
+        await fs.mkdir(CONFIG_DIR, { recursive: true });
+        await fs.mkdir(POSTS_DIR, { recursive: true });
+        await fs.mkdir(WIKI_DIR, { recursive: true });
+
+        // 初始化 communities.json 并加载到内存
+        await this.load();
+
+        // 初始化提案文件
+        await this.ensureJsonFile(PROPOSALS_FILE, []);
+
+        return '社区初始化完成。';
+    }
+
+    /**
+     * 初始化 JSON 文件（若不存在则创建）
+     * @param {string} filePath 文件路径
+     * @param {object|array} defaultValue 默认内容
+     */
+    async ensureJsonFile(filePath, defaultValue) {
+        try {
+            await fs.access(filePath);
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                await fs.writeFile(filePath, JSON.stringify(defaultValue, null, 2), 'utf-8');
+                return;
+            }
+            throw e;
+        }
     }
 
     /**
@@ -89,8 +131,8 @@ class CommunityManager {
         return this.communities.filter((c) => {
             // 公开社区对所有人可见
             if (c.type === 'public') return true;
-            // 私有社区仅对成员可见
-            return c.members.includes(agentName);
+            // 私有社区对成员和维护者可见
+            return (c.members || []).includes(agentName) || (c.maintainers || []).includes(agentName);
         });
     }
 

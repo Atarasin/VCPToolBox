@@ -3,21 +3,21 @@
  * 负责初始化各个管理器，处理标准输入输出，以及分发命令。
  */
 const CommunityManager = require('./lib/managers/communityManager');
-const NotificationManager = require('./lib/managers/notificationManager');
 const PostManager = require('./lib/managers/postManager');
 const WikiManager = require('./lib/managers/wikiManager');
 const ProposalManager = require('./lib/managers/proposalManager');
+const { DATA_DIR, COMMUNITIES_FILE, POSTS_DIR, WIKI_DIR } = require('./lib/constants');
 
 async function main() {
     // 初始化社区管理器并加载配置
     const communityManager = new CommunityManager();
     await communityManager.load();
+    console.error(`[VCPCommunity] paths: data=${DATA_DIR}, communities=${COMMUNITIES_FILE}, posts=${POSTS_DIR}, wiki=${WIKI_DIR}`);
 
     // 初始化其他管理器，并注入依赖
-    const notificationManager = new NotificationManager();
-    const postManager = new PostManager(communityManager, notificationManager);
+    const postManager = new PostManager(communityManager);
     const wikiManager = new WikiManager(communityManager);
-    const proposalManager = new ProposalManager(communityManager, postManager, wikiManager, notificationManager);
+    const proposalManager = new ProposalManager(communityManager, postManager, wikiManager);
 
     // 获取输入数据 (优先尝试命令行参数，否则读取 stdin)
     let inputData = '';
@@ -38,6 +38,10 @@ async function main() {
 
         // 命令分发
         switch (command) {
+            case 'InitCommunity':
+                // 初始化社区数据目录与基础文件
+                result = await communityManager.initStorage();
+                break;
             case 'ListCommunities': {
                 // 列出可见社区
                 const communities = communityManager.listVisibleCommunities(args.agent_name);
@@ -89,6 +93,51 @@ async function main() {
                 // 审核提案
                 result = await proposalManager.reviewProposal(args);
                 break;
+            case 'GetAgentSituation': {
+                // 聚合返回 Agent 当前社区处境，供助手生成状态看板
+                const { agent_name, since_ts, limit } = args;
+                if (!agent_name) {
+                    throw new Error('缺少必要参数: agent_name');
+                }
+                const normalizedLimit = Math.max(1, Math.min(Number(limit) || 5, 20));
+                const normalizedSinceTs = Math.max(0, Number(since_ts) || 0);
+
+                const visibleCommunities = communityManager.listVisibleCommunities(agent_name);
+                const visibleCommunityIds = new Set(visibleCommunities.map((c) => c.id));
+
+                const mentions = await postManager.getAgentMentions(
+                    agent_name,
+                    visibleCommunityIds,
+                    normalizedSinceTs,
+                    normalizedLimit
+                );
+                const pendingReviews = await proposalManager.getPendingReviews(
+                    agent_name,
+                    visibleCommunityIds,
+                    normalizedLimit
+                );
+                const proposalUpdates = await proposalManager.getProposalUpdates(
+                    agent_name,
+                    visibleCommunityIds,
+                    normalizedSinceTs,
+                    normalizedLimit
+                );
+                const exploreCandidates = await postManager.getExploreCandidates(
+                    agent_name,
+                    visibleCommunityIds,
+                    normalizedLimit
+                );
+
+                result = {
+                    agent_name,
+                    mentions,
+                    pending_reviews: pendingReviews,
+                    proposal_updates: proposalUpdates,
+                    explore_candidates: exploreCandidates,
+                    generated_at: Date.now(),
+                };
+                break;
+            }
             default:
                 throw new Error(`未知的指令: ${command}`);
         }
