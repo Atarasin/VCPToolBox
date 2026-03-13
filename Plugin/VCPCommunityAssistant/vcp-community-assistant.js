@@ -12,6 +12,7 @@ const execFileAsync = util.promisify(execFile);
 const PROJECT_BASE_PATH = process.env.PROJECT_BASE_PATH || path.resolve(__dirname, '../../');
 const DATA_DIR = path.join(PROJECT_BASE_PATH, 'data', 'VCPCommunity');
 const CONFIG_DIR = path.join(DATA_DIR, 'config');
+const POSTS_DIR = path.join(DATA_DIR, 'posts');
 const PROPOSALS_FILE = path.join(CONFIG_DIR, 'proposals.json');
 const COMMUNITIES_FILE = path.join(CONFIG_DIR, 'communities.json');
 const ASSISTANT_STATE_FILE = path.join(CONFIG_DIR, 'assistant_state.json');
@@ -124,6 +125,58 @@ function collectAgents(communities) {
         (community.maintainers || []).forEach((agent) => allAgents.add(agent));
     });
     return Array.from(allAgents);
+}
+
+/**
+ * 标准化 Agent 名称
+ * @param {string} raw 原始名称
+ * @returns {string} 标准化名称
+ */
+function normalizeAgentName(raw) {
+    if (typeof raw !== 'string') return '';
+    return raw.trim().replace(/^@/, '');
+}
+
+/**
+ * 从帖子文件名解析元信息
+ * 支持普通帖与带 DEL 标记的软删除帖
+ * @param {string} fileName 文件名
+ * @returns {object|null} 元信息
+ */
+function parsePostFilename(fileName) {
+    const match = fileName.match(/^\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\](?:\[(.*?)\])?\.md$/);
+    if (!match) return null;
+    const [, communityId, title, author, timestamp, uid, statusTag] = match;
+    const isDeleted = typeof statusTag === 'string' && statusTag.startsWith('DEL@');
+    return { communityId, title, author, timestamp, uid, isDeleted };
+}
+
+/**
+ * L3: 从帖子作者中发现活跃 Agent
+ * @returns {Promise<Array<string>>} 活跃 Agent 列表
+ */
+async function collectActiveAgents() {
+    const activeAgents = new Set();
+
+    // 仅从帖子作者中发现活跃 Agent
+    try {
+        await fs.mkdir(POSTS_DIR, { recursive: true });
+        const files = await fs.readdir(POSTS_DIR);
+        for (const file of files) {
+            if (!file.endsWith('.md')) continue;
+            const meta = parsePostFilename(file);
+            if (!meta) continue;
+            // 软删除帖不作为活跃发现来源，避免拉入过时活跃者
+            if (meta.isDeleted) continue;
+
+            const author = normalizeAgentName(meta.author);
+            if (author) activeAgents.add(author);
+        }
+    } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+    }
+
+    return Array.from(activeAgents);
 }
 
 /**
@@ -369,14 +422,7 @@ function buildActionBoardPrompt(situation, suggestedPriorities = [], selectionRe
         `- CreatePost(agent_name="${agentName}", community_id="...", title="...", content="...")`;
 }
 
-// Phase 1: 停用通知消费，保留函数用于兼容旧调用方
-async function processNotifications(options = {}) {
-    void options;
-    console.log('[VCPCommunityAssistant] Phase 1 已停用 notifications 队列消费。');
-    return false;
-}
-
-// Phase 2: 随机选择 Agent，通过聚合接口生成状态看板后唤醒
+// 随机选择 Agent，通过聚合接口生成状态看板后唤醒
 async function randomBrowse(options = {}) {
     const invoker = options.invokeAgent || invokeAgent;
     const communityInvoker = options.invokeCommunity || invokeCommunity;
@@ -384,12 +430,15 @@ async function randomBrowse(options = {}) {
     try {
         const communities = await loadCommunities();
 
-        // 聚合成员与维护者，作为可被唤醒对象池
-        const agentList = collectAgents(communities);
+        // L2（成员+维护者）与 L3（活跃发现）并集，作为可被唤醒对象池
+        const l2Agents = collectAgents(communities);
+        const l3Agents = await collectActiveAgents();
+        const agentList = Array.from(new Set([...l2Agents, ...l3Agents]));
         if (agentList.length === 0) {
             console.log('[VCPCommunityAssistant] 没有配置任何 Agent，跳过随机唤醒。');
             return false;
         }
+        console.log(`[VCPCommunityAssistant] 随机唤醒 Agent: ${agentList.join(', ')}`);
 
         const state = await loadAssistantState();
         const now = nowProvider();
@@ -528,7 +577,6 @@ if (require.main === module && !SKIP_ASSISTANT_BOOTSTRAP) {
 
 module.exports = {
     checkReviewTimeouts,
-    processNotifications,
     randomBrowse,
     buildActionBoardPrompt,
 };

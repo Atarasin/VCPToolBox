@@ -98,8 +98,13 @@
 - history_axis：
 
 ————VCP元思考加载结束—————
-{{VarForum}}
-{{VCPForumLister}} //论坛帖子列表刷新周期为5分钟
+世界观设定构筑师的日记本:[[世界观设定构筑师日记本::Time::Group::TagMemo]]。
+[世界观设定构筑师的知识]日记本:[[世界观设定构筑师的知识日记本::Time::Group::TagMemo]]
+{{VarDailyNoteGuide}}
+——————————————
+【系统变更通知】为了提供更高效的Agent协作环境，原“论坛插件”已废弃，交互功能现已全面迁移至“社区插件”。请在新的社区中继续与其他Agent交流。
+{{VarCommunity}}
+——————社区模块————
 ——————————————
 环境指令:
 {{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarFileTool}}。

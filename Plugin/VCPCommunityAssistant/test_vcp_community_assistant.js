@@ -15,7 +15,7 @@ const PROPOSALS_FILE = path.join(CONFIG_DIR, 'proposals.json');
 const COMMUNITIES_FILE = path.join(CONFIG_DIR, 'communities.json');
 const ASSISTANT_STATE_FILE = path.join(CONFIG_DIR, 'assistant_state.json');
 
-const { processNotifications, randomBrowse, checkReviewTimeouts } = require('./vcp-community-assistant');
+const { randomBrowse, checkReviewTimeouts } = require('./vcp-community-assistant');
 
 async function writeJson(filePath, data) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -33,20 +33,6 @@ async function resetFiles() {
     await fs.mkdir(POSTS_DIR, { recursive: true });
     await writeJson(PROPOSALS_FILE, []);
     await writeJson(COMMUNITIES_FILE, { communities: [] });
-}
-
-async function testProcessNotificationsDisabled() {
-    await resetFiles();
-    const calls = [];
-    const invoked = await processNotifications({
-        invokeAgent: async (agentName, prompt) => {
-            calls.push({ agentName, prompt });
-        }
-    });
-
-    // Phase 1 下通知消费被停用：不调用 Agent，不修改队列
-    assert.strictEqual(invoked, false);
-    assert.strictEqual(calls.length, 0);
 }
 
 async function testRandomBrowseActionBoard() {
@@ -147,6 +133,67 @@ async function testRandomBrowseNoAgents() {
     });
     assert.strictEqual(invoked, false);
     assert.strictEqual(calls.length, 0);
+}
+
+async function testRandomBrowseDiscoverFromPublicActivity() {
+    await resetFiles();
+    await writeJson(COMMUNITIES_FILE, {
+        communities: [
+            {
+                id: 'general',
+                type: 'public',
+                members: [],
+                maintainers: [],
+            }
+        ]
+    });
+
+    // public 社区成员为空，依赖 L3 活跃发现（帖子作者）
+    const publicPostFile = '[general][公共讨论][PublicAgent][2026-03-14T10-00-00][public-post-1].md';
+    const publicPostContent = `
+# 公共讨论
+**社区:** 通用社区 (general)
+**作者:** PublicAgent
+**UID:** public-post-1
+**发布时间:** 2026-03-14T10:00:00
+---
+hello world
+`.trim();
+    await fs.writeFile(path.join(POSTS_DIR, publicPostFile), publicPostContent, 'utf-8');
+
+    const calls = [];
+    const communityCalls = [];
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+    try {
+        const invoked = await randomBrowse({
+            invokeAgent: async (agentName, prompt) => {
+                calls.push({ agentName, prompt });
+                return '';
+            },
+            invokeCommunity: async (command, args) => {
+                communityCalls.push({ command, args });
+                assert.strictEqual(command, 'GetAgentSituation');
+                assert.strictEqual(args.agent_name, 'PublicAgent');
+                return {
+                    agent_name: 'PublicAgent',
+                    mentions: [],
+                    pending_reviews: [],
+                    proposal_updates: [],
+                    explore_candidates: [{ post_uid: 'public-post-1' }],
+                    generated_at: 7000,
+                };
+            },
+            nowProvider: () => 7000,
+        });
+        assert.strictEqual(invoked, true);
+    } finally {
+        Math.random = originalRandom;
+    }
+
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].agentName, 'PublicAgent');
+    assert.strictEqual(communityCalls.length, 1);
 }
 
 async function testRandomBrowseDigestDedup() {
@@ -279,12 +326,12 @@ async function testCheckReviewTimeouts() {
 
 async function run() {
     console.log('=== VCPCommunityAssistant 测试开始 ===');
-    await testProcessNotificationsDisabled();
-    console.log('✓ 已停用 notifications 队列消费');
     await testRandomBrowseActionBoard();
     console.log('✓ 状态看板唤醒逻辑');
     await testRandomBrowseNoAgents();
     console.log('✓ 无 Agent 场景处理');
+    await testRandomBrowseDiscoverFromPublicActivity();
+    console.log('✓ public 社区活跃发现对象池');
     await testRandomBrowseDigestDedup();
     console.log('✓ 状态摘要去重逻辑');
     await testWeightedSelectionByBacklog();
