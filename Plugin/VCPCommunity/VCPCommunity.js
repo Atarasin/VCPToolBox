@@ -73,6 +73,10 @@ async function main() {
                 // 回复帖子
                 result = await postManager.replyPost(args);
                 break;
+            case 'DeletePost':
+                // 删除帖子（软删除）
+                result = await postManager.deletePost(args);
+                break;
             case 'ReadWiki':
                 // 读取 Wiki 页面
                 result = await wikiManager.readWiki(args);

@@ -15,6 +15,7 @@ const PLUGIN_SCRIPT = path.join(PLUGIN_DIR, 'VCPCommunity.js');
 const DATA_DIR = path.join(TEST_SANDBOX_ROOT, 'data', 'VCPCommunity');
 const COMMUNITIES_FILE = path.join(DATA_DIR, 'config', 'communities.json');
 const PROPOSALS_FILE = path.join(DATA_DIR, 'config', 'proposals.json');
+const POSTS_DIR = path.join(DATA_DIR, 'posts');
 
 // 颜色输出
 const colors = {
@@ -144,6 +145,87 @@ async function runTests() {
         }
         log(colors.green, '✓ 引用解析成功 (摘要已注入)');
 
+        // Test 5.1: 删帖权限与软删除行为
+        log(colors.yellow, '\nTest 5.1: 删帖权限与软删除行为');
+        const resp5DeleteDenied = await runCommand('DeletePost', {
+            agent_name: 'WriterAgent',
+            post_uid: postUid,
+            reason: 'not allowed'
+        });
+        if (!(resp5DeleteDenied.status === 'error' && resp5DeleteDenied.error.includes('权限不足'))) {
+            throw new Error(`非作者非维护者删帖未被正确拦截: ${JSON.stringify(resp5DeleteDenied)}`);
+        }
+        log(colors.green, '✓ 非授权删帖被拦截');
+
+        const resp5Delete = await runCommand('DeletePost', {
+            agent_name: 'DevAgent',
+            post_uid: postUid,
+            reason: '测试删除'
+        });
+        if (!(resp5Delete.status === 'success' && resp5Delete.result.includes('软删除'))) {
+            throw new Error(`作者删帖失败: ${JSON.stringify(resp5Delete)}`);
+        }
+        log(colors.green, '✓ 作者删帖成功（软删除）');
+
+        const postFiles = await fs.readdir(POSTS_DIR);
+        if (!postFiles.some((f) => f.includes(`[${postUid}]`) && f.includes('[DEL@DevAgent@'))) {
+            throw new Error('软删除后文件名未包含 DEL 标记');
+        }
+        log(colors.green, '✓ 文件名已写入 DEL 软删除标记');
+
+        const resp5ListAfterDelete = await runCommand('ListPosts', { agent_name: 'DevAgent' });
+        if (!(resp5ListAfterDelete.status === 'success' && !resp5ListAfterDelete.result.includes(postUid))) {
+            throw new Error('已删除帖子仍出现在列表中');
+        }
+        log(colors.green, '✓ 已删除帖子不再出现在列表');
+
+        const resp5ReadDeleted = await runCommand('ReadPost', {
+            agent_name: 'DevAgent',
+            post_uid: postUid
+        });
+        if (!(resp5ReadDeleted.status === 'success' && resp5ReadDeleted.result.includes('已删除'))) {
+            throw new Error('读取已删除帖子未返回删除提示');
+        }
+        log(colors.green, '✓ 读取已删除帖子返回删除提示');
+
+        const resp5ReplyDeleted = await runCommand('ReplyPost', {
+            agent_name: 'CodeReviewer',
+            post_uid: postUid,
+            content: 'reply deleted post'
+        });
+        if (!(resp5ReplyDeleted.status === 'error' && resp5ReplyDeleted.error.includes('已删除'))) {
+            throw new Error('对已删除帖子回复未被拦截');
+        }
+        log(colors.green, '✓ 对已删除帖子回复被拦截');
+
+        const resp5MentionAfterDelete = await runCommand('GetAgentSituation', {
+            agent_name: 'CodeReviewer',
+            since_ts: 0,
+            limit: 10
+        });
+        if (resp5MentionAfterDelete.status !== 'success') throw new Error(resp5MentionAfterDelete.error);
+        if (resp5MentionAfterDelete.result.mentions.some((m) => m.post_uid === postUid)) {
+            throw new Error('已删除帖子仍出现在 @提醒中');
+        }
+        log(colors.green, '✓ 已删除帖子不会出现在 @提醒中');
+
+        const resp5CreateRefPost = await runCommand('CreatePost', {
+            agent_name: 'DevAgent',
+            community_id: 'dev-core',
+            title: '引用已删除帖子测试',
+            content: `尝试引用 >>${postUid}`
+        });
+        if (resp5CreateRefPost.status !== 'success') throw new Error(resp5CreateRefPost.error);
+        const refPostUid = resp5CreateRefPost.result.match(/UID: ([0-9a-fA-F-]+)/)[1];
+        const resp5ReadRefPost = await runCommand('ReadPost', {
+            agent_name: 'DevAgent',
+            post_uid: refPostUid
+        });
+        if (!(resp5ReadRefPost.status === 'success' && resp5ReadRefPost.result.includes('该帖子已删除'))) {
+            throw new Error('引用已删除帖子时未显示删除占位提示');
+        }
+        log(colors.green, '✓ 引用已删除帖子时返回删除占位提示');
+
         // Test 6: 创建 Wiki 页面并记录保护状态
         log(colors.yellow, '\nTest 6: 创建 Wiki 页面并记录保护状态');
         const resp6 = await runCommand('UpdateWiki', {
@@ -189,6 +271,16 @@ async function runTests() {
         if (resp8.status !== 'success') throw new Error(resp8.error);
         const proposalUid = resp8.result.match(/UID: ([0-9a-fA-F-]+)/)[1];
         log(colors.green, `✓ 提案发起成功，UID: ${proposalUid}`);
+
+        const resp8DeleteProposal = await runCommand('DeletePost', {
+            agent_name: 'DevAgent',
+            post_uid: proposalUid,
+            reason: 'try delete pending proposal'
+        });
+        if (!(resp8DeleteProposal.status === 'error' && resp8DeleteProposal.error.includes('未完成的提案贴'))) {
+            throw new Error(`未完成提案贴删除保护失效: ${JSON.stringify(resp8DeleteProposal)}`);
+        }
+        log(colors.green, '✓ 未完成提案贴删除保护生效');
 
         // 验证待评审项由聚合接口提供
         const reviewSituation = await runCommand('GetAgentSituation', {
