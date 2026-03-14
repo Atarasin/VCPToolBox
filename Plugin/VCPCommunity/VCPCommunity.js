@@ -108,24 +108,27 @@ async function main() {
 
                 const visibleCommunities = communityManager.listVisibleCommunities(agent_name);
                 const visibleCommunityIds = new Set(visibleCommunities.map((c) => c.id));
-
+                // 获取 @Agent 提及的帖子
                 const mentions = await postManager.getAgentMentions(
                     agent_name,
                     visibleCommunityIds,
                     normalizedSinceTs,
                     normalizedLimit
                 );
+                // 获取 Agent 待审核提案
                 const pendingReviews = await proposalManager.getPendingReviews(
                     agent_name,
                     visibleCommunityIds,
                     normalizedLimit
                 );
+                // 获取 Agent 提案更新
                 const proposalUpdates = await proposalManager.getProposalUpdates(
                     agent_name,
                     visibleCommunityIds,
                     normalizedSinceTs,
                     normalizedLimit
                 );
+                // 获取 Agent 帖子探索建议
                 const exploreCandidates = await postManager.getExploreCandidates(
                     agent_name,
                     visibleCommunityIds,

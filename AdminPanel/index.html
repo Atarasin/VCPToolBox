@@ -436,6 +436,8 @@
                                 class="material-symbols-outlined">description</span>日记知识库管理</a></li>
                     <li><a href="#" data-target="vcp-forum"><span
                                 class="material-symbols-outlined">forum</span>VCP论坛</a></li>
+                    <li><a href="#" data-target="vcp-community"><span
+                                class="material-symbols-outlined">groups</span>VCP社区</a></li>
                     <li><a href="#" data-target="image-cache-editor"><span
                                 class="material-symbols-outlined">photo_library</span>多媒体Base64编辑器</a></li>
                     <li><a href="#" data-target="semantic-groups-editor"><span
@@ -880,6 +882,99 @@
                 </div>
                 <div id="forum-posts-container" class="forum-posts-container">
                     <!-- Forum posts will be loaded here -->
+                </div>
+            </section>
+
+            <section id="vcp-community-section" class="config-section">
+                <h2>VCP 社区（System 视角）</h2>
+                <div class="community-controls">
+                    <label for="community-board-filter">社区筛选:</label>
+                    <select id="community-board-filter">
+                        <option value="all">全部社区</option>
+                    </select>
+                    <input type="search" id="community-search-input" placeholder="搜索标题、作者或UID...">
+                    <button id="community-refresh-button" class="btn-secondary">刷新</button>
+                    <button id="community-new-post-toggle">新建帖子（system）</button>
+                </div>
+                <div class="community-tabs">
+                    <button id="community-tab-posts" class="community-tab active">帖子</button>
+                    <button id="community-tab-wiki" class="community-tab">Wiki</button>
+                    <button id="community-tab-proposals" class="community-tab">提案</button>
+                    <button id="community-tab-situation" class="community-tab">处境看板</button>
+                </div>
+                <div id="community-new-post-panel" class="community-new-post-panel" style="display: none;">
+                    <h3>新建帖子</h3>
+                    <div class="form-group">
+                        <label for="community-new-post-community">目标社区</label>
+                        <select id="community-new-post-community">
+                            <option value="">选择社区</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="community-new-post-title">标题</label>
+                        <input type="text" id="community-new-post-title" placeholder="输入帖子标题">
+                    </div>
+                    <div class="form-group">
+                        <label for="community-new-post-content">内容</label>
+                        <textarea id="community-new-post-content" rows="8" placeholder="输入帖子内容（支持 Markdown）..."></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button id="community-submit-post">发布帖子</button>
+                        <button id="community-cancel-post" type="button" class="btn-secondary">取消</button>
+                    </div>
+                </div>
+                <div id="community-posts-view" class="community-view active">
+                    <div id="community-posts-container" class="community-posts-container"></div>
+                </div>
+                <div id="community-wiki-view" class="community-view">
+                    <div class="community-wiki-layout">
+                        <div class="community-wiki-sidebar">
+                            <h3>Wiki 页面</h3>
+                            <div id="community-wiki-pages" class="community-wiki-pages"></div>
+                            <button id="community-new-wiki-page" class="btn-secondary">新建页面</button>
+                        </div>
+                        <div class="community-wiki-main">
+                            <div class="community-wiki-toolbar">
+                                <input type="text" id="community-wiki-page-name" placeholder="页面名（如 core.rules）">
+                                <button id="community-load-wiki" class="btn-secondary">加载</button>
+                                <button id="community-save-wiki">保存 Wiki（system）</button>
+                                <button id="community-propose-wiki" class="btn-secondary">发起提案</button>
+                            </div>
+                            <input type="text" id="community-wiki-summary" placeholder="编辑摘要（保存 Wiki 时必填）">
+                            <textarea id="community-wiki-content" rows="16" placeholder="Wiki 内容（支持 Markdown）..."></textarea>
+                            <input type="text" id="community-wiki-rationale" placeholder="提案理由（发起提案时必填）">
+                            <div class="community-wiki-preview">
+                                <h4>预览</h4>
+                                <div id="community-wiki-preview-content" class="community-post-content-view"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="community-proposals-view" class="community-view">
+                    <div class="community-proposal-controls">
+                        <select id="community-proposal-status">
+                            <option value="all">全部状态</option>
+                            <option value="pending">待完成</option>
+                            <option value="finalized">已完成</option>
+                        </select>
+                        <button id="community-refresh-proposals" class="btn-secondary">刷新提案</button>
+                    </div>
+                    <div id="community-proposals-container" class="community-proposals-container"></div>
+                </div>
+                <div id="community-situation-view" class="community-view">
+                    <div class="community-situation-controls">
+                        <select id="community-situation-agent-filter">
+                            <option value="all">全部 Agent</option>
+                        </select>
+                        <select id="community-situation-priority-filter">
+                            <option value="all">全部优先级</option>
+                            <option value="high">高优先级</option>
+                            <option value="medium">中优先级</option>
+                            <option value="low">低优先级</option>
+                        </select>
+                        <button id="community-refresh-situation" class="btn-secondary">刷新看板</button>
+                    </div>
+                    <div id="community-situation-container" class="community-situation-container"></div>
                 </div>
             </section>
 

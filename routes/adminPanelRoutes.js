@@ -2318,6 +2318,582 @@ module.exports = function (DEBUG_MODE, dailyNoteRootPath, pluginManager, getCurr
         res.status(200).json({ authenticated: true });
     });
 
+    const COMMUNITY_SYSTEM_IDENTITY = 'System';
+    const COMMUNITY_DATA_DIR = path.join(process.env.PROJECT_BASE_PATH || path.join(__dirname, '..'), 'data', 'VCPCommunity');
+    const COMMUNITY_CONFIG_DIR = path.join(COMMUNITY_DATA_DIR, 'config');
+    const COMMUNITY_POSTS_DIR = path.join(COMMUNITY_DATA_DIR, 'posts');
+    const COMMUNITY_COMMUNITIES_FILE = path.join(COMMUNITY_CONFIG_DIR, 'communities.json');
+    const COMMUNITY_PROPOSALS_FILE = path.join(COMMUNITY_CONFIG_DIR, 'proposals.json');
+
+    async function invokeVcpCommunity(command, args = {}) {
+        if (!pluginManager.plugins || !pluginManager.plugins.has('VCPCommunity')) {
+            await pluginManager.loadPlugins();
+        }
+        const input = JSON.stringify({ command, ...args });
+        const result = await pluginManager.executePlugin('VCPCommunity', input);
+        if (result.status !== 'success') {
+            throw new Error(result.error || `VCPCommunity 调用失败: ${command}`);
+        }
+        return result.result;
+    }
+
+    function parseCommunityPostFilename(file) {
+        const match = file.match(/^\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\]\[(.*?)\](?:\[(.*?)\])?\.md$/);
+        if (!match) return null;
+        const [, communityId, title, author, timestamp, uid, statusTag] = match;
+        let isDeleted = false;
+        if (statusTag && statusTag.startsWith('DEL@')) {
+            isDeleted = true;
+        }
+        return { communityId, title, author, timestamp, uid, isDeleted, filename: file };
+    }
+
+    function extractLastReplyMeta(content) {
+        const replyPattern = /\*\*回复者:\*\* (.+?)\s*\n\*\*时间:\*\* (.+?)\s*\n/g;
+        let match;
+        let lastReplyBy = null;
+        let lastReplyAt = null;
+        while ((match = replyPattern.exec(content)) !== null) {
+            lastReplyBy = match[1].trim();
+            lastReplyAt = match[2].trim();
+        }
+        return { lastReplyBy, lastReplyAt };
+    }
+
+    async function listAllCommunityPostMetas() {
+        await fs.mkdir(COMMUNITY_POSTS_DIR, { recursive: true });
+        const files = await fs.readdir(COMMUNITY_POSTS_DIR);
+        const metas = [];
+        for (const file of files) {
+            if (!file.endsWith('.md')) continue;
+            const meta = parseCommunityPostFilename(file);
+            if (!meta || meta.isDeleted) continue;
+            metas.push(meta);
+        }
+        return metas;
+    }
+
+    async function findCommunityPostByUid(uid) {
+        const metas = await listAllCommunityPostMetas();
+        return metas.find((m) => m.uid === uid) || null;
+    }
+
+    async function loadCommunityProposals() {
+        await fs.mkdir(COMMUNITY_CONFIG_DIR, { recursive: true });
+        try {
+            const text = await fs.readFile(COMMUNITY_PROPOSALS_FILE, 'utf-8');
+            const arr = JSON.parse(text);
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) {
+            if (e.code === 'ENOENT') return [];
+            throw e;
+        }
+    }
+
+    function isProposalTitle(title) {
+        return String(title || '').startsWith('[Proposal]');
+    }
+
+    function parseWikiPagesText(resultText) {
+        if (!resultText || typeof resultText !== 'string') return [];
+        if (resultText.includes('暂无 Wiki 页面')) return [];
+        return resultText
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.endsWith('.md'))
+            .map((line) => line.replace(/\.md$/, ''));
+    }
+
+    async function collectSituationAgents() {
+        const agentSet = new Set();
+
+        try {
+            const communityText = await fs.readFile(COMMUNITY_COMMUNITIES_FILE, 'utf-8');
+            const communities = JSON.parse(communityText)?.communities || [];
+            communities.forEach((community) => {
+                (community.members || []).forEach((name) => {
+                    if (name) agentSet.add(String(name));
+                });
+                (community.maintainers || []).forEach((name) => {
+                    if (name) agentSet.add(String(name));
+                });
+            });
+        } catch (e) {
+            if (e.code !== 'ENOENT') throw e;
+        }
+
+        const metas = await listAllCommunityPostMetas();
+        metas.forEach((meta) => {
+            if (meta.author) {
+                agentSet.add(String(meta.author));
+            }
+        });
+        agentSet.delete(COMMUNITY_SYSTEM_IDENTITY);
+        return Array.from(agentSet);
+    }
+
+    function computeSituationPriority(situation) {
+        const mentions = Array.isArray(situation.mentions) ? situation.mentions.length : 0;
+        const pendingReviews = Array.isArray(situation.pending_reviews) ? situation.pending_reviews.length : 0;
+        const proposalUpdates = Array.isArray(situation.proposal_updates) ? situation.proposal_updates.length : 0;
+        const exploreCandidates = Array.isArray(situation.explore_candidates) ? situation.explore_candidates.length : 0;
+
+        const score = pendingReviews * 3 + mentions * 2 + proposalUpdates * 1.5 + exploreCandidates * 0.8;
+        let level = 'low';
+        if (pendingReviews > 0 || score >= 8) {
+            level = 'high';
+        } else if (score >= 3) {
+            level = 'medium';
+        }
+        return {
+            level,
+            score: Number(score.toFixed(2))
+        };
+    }
+
+    function buildSituationActions(agentName, situation) {
+        const actions = [];
+        const pending = (situation.pending_reviews || []).slice(0, 3).map((item) => ({
+            type: 'pending_review',
+            priority: 'high',
+            label: `审核提案 ${item.post_uid}`,
+            post_uid: item.post_uid,
+            community_id: item.community_id,
+            page_name: item.page_name,
+            deep_link: { kind: 'proposal', post_uid: item.post_uid }
+        }));
+        const mentions = (situation.mentions || []).slice(0, 3).map((item) => ({
+            type: 'mention',
+            priority: 'high',
+            label: `处理 @提及 ${item.post_uid}`,
+            post_uid: item.post_uid,
+            community_id: item.community_id,
+            title: item.title,
+            deep_link: { kind: 'post', post_uid: item.post_uid }
+        }));
+        const activeProposalUpdates = (situation.proposal_updates || []).filter((item) => {
+            return !['Approve', 'Reject', 'TimeoutReject'].includes(item?.outcome);
+        });
+        const proposalUpdates = activeProposalUpdates.slice(0, 3).map((item) => ({
+            type: 'proposal_update',
+            priority: 'medium',
+            label: `关注提案进展 ${item.post_uid}`,
+            post_uid: item.post_uid,
+            community_id: item.community_id,
+            page_name: item.page_name,
+            pending_reviewers: item.pending_reviewers || [],
+            deep_link: { kind: 'proposal', post_uid: item.post_uid }
+        }));
+        const explore = (situation.explore_candidates || []).slice(0, 3).map((item) => ({
+            type: 'explore',
+            priority: 'low',
+            label: `浏览推荐帖子 ${item.post_uid}`,
+            post_uid: item.post_uid,
+            community_id: item.community_id,
+            title: item.title,
+            deep_link: { kind: 'post', post_uid: item.post_uid }
+        }));
+
+        actions.push(...pending, ...mentions, ...proposalUpdates, ...explore);
+        actions.sort((a, b) => {
+            const rank = { high: 3, medium: 2, low: 1 };
+            return (rank[b.priority] || 0) - (rank[a.priority] || 0);
+        });
+        return actions.slice(0, 8).map((item) => ({ ...item, agent_name: agentName }));
+    }
+
+    adminApiRouter.get('/community/communities', async (req, res) => {
+        try {
+            await fs.mkdir(COMMUNITY_CONFIG_DIR, { recursive: true });
+            let communitiesData = { communities: [] };
+            try {
+                const text = await fs.readFile(COMMUNITY_COMMUNITIES_FILE, 'utf-8');
+                communitiesData = JSON.parse(text);
+            } catch (e) {
+                if (e.code !== 'ENOENT') throw e;
+            }
+
+            const metas = await listAllCommunityPostMetas();
+            const countMap = new Map();
+            for (const meta of metas) {
+                if (isProposalTitle(meta.title)) continue;
+                countMap.set(meta.communityId, (countMap.get(meta.communityId) || 0) + 1);
+            }
+
+            const communities = (communitiesData.communities || []).map((c) => ({
+                id: c.id,
+                name: c.name || c.id,
+                description: c.description || '',
+                type: c.type || 'public',
+                members: Array.isArray(c.members) ? c.members : [],
+                maintainers: Array.isArray(c.maintainers) ? c.maintainers : [],
+                postCount: countMap.get(c.id) || 0,
+            }));
+
+            res.json({ success: true, data: { communities } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取社区列表失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.get('/community/posts', async (req, res) => {
+        try {
+            const { community_id, search } = req.query;
+            const metas = await listAllCommunityPostMetas();
+            const normalizedSearch = String(search || '').trim().toLowerCase();
+            const filtered = metas.filter((m) => {
+                if (isProposalTitle(m.title)) return false;
+                if (community_id && m.communityId !== community_id) return false;
+                if (!normalizedSearch) return true;
+                return (
+                    m.title.toLowerCase().includes(normalizedSearch) ||
+                    m.author.toLowerCase().includes(normalizedSearch) ||
+                    m.uid.toLowerCase().includes(normalizedSearch)
+                );
+            });
+
+            const posts = [];
+            for (const meta of filtered) {
+                const fullPath = path.join(COMMUNITY_POSTS_DIR, meta.filename);
+                const content = await fs.readFile(fullPath, 'utf-8');
+                const lastReplyMeta = extractLastReplyMeta(content);
+                posts.push({
+                    uid: meta.uid,
+                    communityId: meta.communityId,
+                    title: meta.title,
+                    author: meta.author,
+                    timestamp: meta.timestamp,
+                    lastReplyBy: lastReplyMeta.lastReplyBy,
+                    lastReplyAt: lastReplyMeta.lastReplyAt,
+                });
+            }
+
+            posts.sort((a, b) => {
+                const aTime = new Date((a.lastReplyAt || a.timestamp).replace(/-/g, ':')).getTime();
+                const bTime = new Date((b.lastReplyAt || b.timestamp).replace(/-/g, ':')).getTime();
+                return bTime - aTime;
+            });
+
+            res.json({ success: true, data: { posts } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取帖子列表失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.get('/community/posts/:uid', async (req, res) => {
+        try {
+            const { uid } = req.params;
+            const meta = await findCommunityPostByUid(uid);
+            if (!meta) {
+                return res.status(404).json({ success: false, error: `未找到帖子: ${uid}` });
+            }
+
+            const content = await invokeVcpCommunity('ReadPost', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                post_uid: uid,
+                system_override: true,
+            });
+
+            res.json({
+                success: true,
+                data: {
+                    uid: meta.uid,
+                    communityId: meta.communityId,
+                    title: meta.title,
+                    author: meta.author,
+                    timestamp: meta.timestamp,
+                    content: String(content || ''),
+                },
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取帖子详情失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.post('/community/posts', async (req, res) => {
+        try {
+            const { community_id, title, content } = req.body || {};
+            if (!community_id || !title || !content) {
+                return res.status(400).json({ success: false, error: '缺少参数: community_id, title, content' });
+            }
+            const resultText = await invokeVcpCommunity('CreatePost', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                community_id,
+                title,
+                content,
+            });
+            const uidMatch = String(resultText || '').match(/UID:\s*([0-9a-zA-Z-]+)/);
+            res.json({
+                success: true,
+                data: {
+                    message: String(resultText || '帖子创建成功'),
+                    uid: uidMatch ? uidMatch[1] : null,
+                },
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `创建帖子失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.post('/community/posts/:uid/replies', async (req, res) => {
+        try {
+            const { uid } = req.params;
+            const { content } = req.body || {};
+            if (!content) {
+                return res.status(400).json({ success: false, error: '缺少参数: content' });
+            }
+            const resultText = await invokeVcpCommunity('ReplyPost', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                post_uid: uid,
+                content,
+                system_override: true,
+            });
+            res.json({ success: true, data: { message: String(resultText || '回复成功') } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `回复失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.delete('/community/posts/:uid', async (req, res) => {
+        try {
+            const { uid } = req.params;
+            const { reason } = req.body || {};
+            const resultText = await invokeVcpCommunity('DeletePost', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                post_uid: uid,
+                reason: reason || '',
+            });
+            res.json({ success: true, data: { message: String(resultText || '删除成功') } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `删除失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.get('/community/wiki/pages', async (req, res) => {
+        try {
+            const { community_id } = req.query;
+            if (!community_id) {
+                return res.status(400).json({ success: false, error: '缺少参数: community_id' });
+            }
+            const resultText = await invokeVcpCommunity('ListWikiPages', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                community_id
+            });
+            const pages = parseWikiPagesText(resultText);
+            res.json({ success: true, data: { pages } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取 Wiki 页面列表失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.get('/community/wiki/page', async (req, res) => {
+        try {
+            const { community_id, page_name } = req.query;
+            if (!community_id || !page_name) {
+                return res.status(400).json({ success: false, error: '缺少参数: community_id, page_name' });
+            }
+            const content = await invokeVcpCommunity('ReadWiki', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                community_id,
+                page_name
+            });
+            res.json({ success: true, data: { communityId: community_id, pageName: page_name, content: String(content || '') } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取 Wiki 页面失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.post('/community/wiki/page', async (req, res) => {
+        try {
+            const { community_id, page_name, content, edit_summary } = req.body || {};
+            if (!community_id || !page_name || !content || !edit_summary) {
+                return res.status(400).json({ success: false, error: '缺少参数: community_id, page_name, content, edit_summary' });
+            }
+            const resultText = await invokeVcpCommunity('UpdateWiki', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                community_id,
+                page_name,
+                content,
+                edit_summary
+            });
+            res.json({ success: true, data: { message: String(resultText || 'Wiki 更新成功') } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `更新 Wiki 失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.post('/community/proposals', async (req, res) => {
+        try {
+            const { community_id, page_name, content, rationale } = req.body || {};
+            if (!community_id || !page_name || !content || !rationale) {
+                return res.status(400).json({ success: false, error: '缺少参数: community_id, page_name, content, rationale' });
+            }
+            const resultText = await invokeVcpCommunity('ProposeWikiUpdate', {
+                agent_name: COMMUNITY_SYSTEM_IDENTITY,
+                community_id,
+                page_name,
+                content,
+                rationale
+            });
+            const uidMatch = String(resultText || '').match(/UID:\s*([0-9a-zA-Z-]+)/);
+            res.json({
+                success: true,
+                data: {
+                    message: String(resultText || '提案已提交'),
+                    postUid: uidMatch ? uidMatch[1] : null
+                }
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `提交提案失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.get('/community/proposals', async (req, res) => {
+        try {
+            const { community_id, status } = req.query;
+            const proposals = await loadCommunityProposals();
+            const filtered = proposals.filter((proposal) => {
+                if (community_id && proposal.community_id !== community_id) return false;
+                if (status === 'pending' && proposal.finalized) return false;
+                if (status === 'finalized' && !proposal.finalized) return false;
+                return true;
+            }).sort((a, b) => (b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0));
+
+            const data = filtered.map((proposal) => {
+                const reviews = proposal.reviews || {};
+                const reviewEntries = Object.entries(reviews).map(([reviewer, review]) => ({
+                    reviewer,
+                    decision: review?.decision || null,
+                    comment: review?.comment || null
+                }));
+                const pendingReviewers = reviewEntries.filter((r) => !r.decision).map((r) => r.reviewer);
+                return {
+                    post_uid: proposal.post_uid,
+                    community_id: proposal.community_id,
+                    page_name: proposal.page_name,
+                    proposer: proposal.proposer,
+                    finalized: !!proposal.finalized,
+                    outcome: proposal.outcome || null,
+                    created_at: proposal.created_at || null,
+                    updated_at: proposal.updated_at || proposal.created_at || null,
+                    pending_reviewers: pendingReviewers,
+                    reviews: reviewEntries
+                };
+            });
+            res.json({ success: true, data: { proposals: data } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取提案列表失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.post('/community/proposals/:postUid/review', async (req, res) => {
+        try {
+            const { postUid } = req.params;
+            const { decision, comment, reviewer } = req.body || {};
+            if (!postUid || !decision) {
+                return res.status(400).json({ success: false, error: '缺少参数: postUid, decision' });
+            }
+            if (!['Approve', 'Reject'].includes(decision)) {
+                return res.status(400).json({ success: false, error: "decision 必须是 'Approve' 或 'Reject'" });
+            }
+
+            let executedReviewer = reviewer || COMMUNITY_SYSTEM_IDENTITY;
+            if (executedReviewer === COMMUNITY_SYSTEM_IDENTITY) {
+                const proposals = await loadCommunityProposals();
+                const proposal = proposals.find((item) => item.post_uid === postUid);
+                if (!proposal) {
+                    return res.status(404).json({ success: false, error: `未找到提案: ${postUid}` });
+                }
+                if (proposal.finalized) {
+                    return res.status(400).json({ success: false, error: '提案已完成评审，无法重复审核。' });
+                }
+                const pendingReviewer = Object.entries(proposal.reviews || {}).find(([, review]) => !review?.decision);
+                if (!pendingReviewer) {
+                    return res.status(400).json({ success: false, error: '当前提案没有可执行的待审核维护者。' });
+                }
+                executedReviewer = pendingReviewer[0];
+            }
+
+            const resultText = await invokeVcpCommunity('ReviewProposal', {
+                agent_name: executedReviewer,
+                post_uid: postUid,
+                decision,
+                comment: comment || 'AdminPanel system 审核'
+            });
+            res.json({
+                success: true,
+                data: {
+                    message: String(resultText || '审核完成'),
+                    executed_as: executedReviewer
+                }
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `提案审核失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.get('/community/situation', async (req, res) => {
+        try {
+            const { agent_name, priority } = req.query;
+            const allAgents = await collectSituationAgents();
+            const targetAgents = agent_name && agent_name !== 'all'
+                ? allAgents.filter((name) => name === agent_name)
+                : allAgents;
+
+            const board = [];
+            for (const name of targetAgents) {
+                try {
+                    const situation = await invokeVcpCommunity('GetAgentSituation', {
+                        agent_name: name,
+                        since_ts: 0,
+                        limit: 10
+                    });
+                    const activeProposalUpdates = (situation.proposal_updates || []).filter((item) => {
+                        return !['Approve', 'Reject', 'TimeoutReject'].includes(item?.outcome);
+                    });
+                    const normalizedSituation = {
+                        ...situation,
+                        proposal_updates: activeProposalUpdates
+                    };
+                    const priorityMeta = computeSituationPriority(normalizedSituation);
+                    const actions = buildSituationActions(name, normalizedSituation);
+                    board.push({
+                        agent_name: name,
+                        priority: priorityMeta,
+                        counts: {
+                            mentions: (normalizedSituation.mentions || []).length,
+                            pending_reviews: (normalizedSituation.pending_reviews || []).length,
+                            proposal_updates: (normalizedSituation.proposal_updates || []).length,
+                            explore_candidates: (normalizedSituation.explore_candidates || []).length
+                        },
+                        actions,
+                        raw: normalizedSituation
+                    });
+                } catch (e) {
+                    board.push({
+                        agent_name: name,
+                        error: e.message
+                    });
+                }
+            }
+
+            let filteredBoard = board;
+            if (priority && ['high', 'medium', 'low'].includes(priority)) {
+                filteredBoard = filteredBoard.filter((item) => item.priority?.level === priority);
+            }
+            filteredBoard.sort((a, b) => (b.priority?.score || 0) - (a.priority?.score || 0));
+            res.json({
+                success: true,
+                data: {
+                    generated_at: Date.now(),
+                    board: filteredBoard
+                }
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取处境看板失败: ${error.message}` });
+        }
+    });
+
     // ========================
     // AgentDream 梦境审批 API
     // ========================

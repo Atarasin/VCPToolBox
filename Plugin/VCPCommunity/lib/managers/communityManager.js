@@ -128,6 +128,9 @@ class CommunityManager {
      * @returns {Array} 可见社区列表
      */
     listVisibleCommunities(agentName) {
+        if (agentName === 'System') {
+            return this.communities;
+        }
         return this.communities.filter((c) => {
             // 公开社区对所有人可见
             if (c.type === 'public') return true;

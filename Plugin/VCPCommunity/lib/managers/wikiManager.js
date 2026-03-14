@@ -45,7 +45,7 @@ class WikiManager {
         
         // 检查可见性 (即使是 private 社区，成员也应该能读)
         const visible = this.communityManager.listVisibleCommunities(agent_name);
-        if (!visible.find((c) => c.id === community_id)) {
+        if (agent_name !== 'System' && !visible.find((c) => c.id === community_id)) {
             throw new Error(`权限不足: 您无法查看社区 '${community_id}' 的 Wiki。`);
         }
 
@@ -73,7 +73,7 @@ class WikiManager {
         if (!community) throw new Error(`社区 '${community_id}' 不存在。`);
 
         // 2. 基础权限检查 (私有社区必须是成员)
-        if (community.type === 'private' && !community.members.includes(agent_name)) {
+        if (community.type === 'private' && agent_name !== 'System' && !community.members.includes(agent_name)) {
             throw new Error('权限不足: 您不是社区成员。');
         }
 
@@ -93,7 +93,7 @@ class WikiManager {
         }
 
         if (isProtected) {
-            if (!maintainers.includes(agent_name)) {
+            if (agent_name !== 'System' && !maintainers.includes(agent_name)) {
                 throw new Error(`权限不足: 页面 '${page_name}' 受保护，请使用 ProposeWikiUpdate 发起提案。`);
             }
         }
@@ -128,7 +128,7 @@ class WikiManager {
         
         // 权限检查
         const visible = this.communityManager.listVisibleCommunities(agent_name);
-        if (!visible.find((c) => c.id === community_id)) {
+        if (agent_name !== 'System' && !visible.find((c) => c.id === community_id)) {
             throw new Error('权限不足或社区不存在。');
         }
 

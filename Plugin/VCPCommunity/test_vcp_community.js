@@ -54,6 +54,11 @@ async function runCommand(command, args) {
     }
 }
 
+async function findPostFilenameByUid(uid) {
+    const files = await fs.readdir(POSTS_DIR);
+    return files.find((file) => file.includes(`[${uid}]`) && file.endsWith('.md')) || null;
+}
+
 async function runTests() {
     log(colors.blue, '=== 开始 VCPCommunity 全链路测试 ===\n');
 
@@ -262,6 +267,42 @@ async function runTests() {
         }
         log(colors.green, '✓ 权限控制生效 (正确拦截)');
 
+        // Test 7.1: System 视角权限（全量浏览 + 可参与）
+        log(colors.yellow, '\nTest 7.1: System 视角权限');
+        const resp71ListCommunities = await runCommand('ListCommunities', { agent_name: 'System' });
+        if (!(resp71ListCommunities.status === 'success' && resp71ListCommunities.result.includes('dev-core'))) {
+            throw new Error(`System 未获得全量社区可见权限: ${JSON.stringify(resp71ListCommunities)}`);
+        }
+        const resp71ReadWiki = await runCommand('ReadWiki', {
+            agent_name: 'System',
+            community_id: 'dev-core',
+            page_name: 'core.rules'
+        });
+        if (!(resp71ReadWiki.status === 'success' && resp71ReadWiki.result.includes('Core Rules'))) {
+            throw new Error(`System 读取私有社区 Wiki 失败: ${JSON.stringify(resp71ReadWiki)}`);
+        }
+        const resp71UpdateWiki = await runCommand('UpdateWiki', {
+            agent_name: 'System',
+            community_id: 'dev-core',
+            page_name: 'core.rules',
+            content: '# Core Rules\n\n1. Rule A\n2. Rule B\n3. SystemPatch',
+            edit_summary: 'system direct update'
+        });
+        if (resp71UpdateWiki.status !== 'success') {
+            throw new Error(`System 更新受保护 Wiki 失败: ${JSON.stringify(resp71UpdateWiki)}`);
+        }
+        const resp71Propose = await runCommand('ProposeWikiUpdate', {
+            agent_name: 'System',
+            community_id: 'dev-core',
+            page_name: 'core.rules',
+            content: '# Core Rules\n\n1. Rule A\n2. Rule B\n3. Rule C',
+            rationale: 'system propose permission check'
+        });
+        if (resp71Propose.status !== 'success') {
+            throw new Error(`System 发起提案失败: ${JSON.stringify(resp71Propose)}`);
+        }
+        log(colors.green, '✓ System 具备全量浏览与参与能力');
+
         // Test 8: 发起提案
         log(colors.yellow, '\nTest 8: 发起提案 (ProposeWikiUpdate)');
         const resp8 = await runCommand('ProposeWikiUpdate', {
@@ -274,6 +315,12 @@ async function runTests() {
         if (resp8.status !== 'success') throw new Error(resp8.error);
         const proposalUid = resp8.result.match(/UID: ([0-9a-fA-F-]+)/)[1];
         log(colors.green, `✓ 提案发起成功，UID: ${proposalUid}`);
+
+        const proposalFilename = await findPostFilenameByUid(proposalUid);
+        if (!proposalFilename || !proposalFilename.includes('[[Proposal] Update Wiki_ core.rules]')) {
+            throw new Error(`提案贴命名未规范化: ${proposalFilename || 'not found'}`);
+        }
+        log(colors.green, '✓ 提案贴命名已规范化');
 
         const resp8DeleteProposal = await runCommand('DeletePost', {
             agent_name: 'DevAgent',
@@ -308,6 +355,18 @@ async function runTests() {
         if (resp9.status !== 'success') throw new Error(resp9.error);
         log(colors.green, '✓ CodeReviewer 审核通过');
 
+        const proposerSituationInProgress = await runCommand('GetAgentSituation', {
+            agent_name: 'DevAgent',
+            since_ts: 0,
+            limit: 10
+        });
+        if (proposerSituationInProgress.status !== 'success') throw new Error(proposerSituationInProgress.error);
+        const activeUpdate = proposerSituationInProgress.result.proposal_updates.find((u) => u.post_uid === proposalUid);
+        if (!activeUpdate || activeUpdate.status !== 'InProgress') {
+            throw new Error('进行中的提案未在 proposal_updates 中体现');
+        }
+        log(colors.green, '✓ proposal_updates 仅展示进行中的提案进展');
+
         const resp9b = await runCommand('ReadWiki', {
             agent_name: 'DevAgent',
             community_id: 'dev-core',
@@ -339,7 +398,7 @@ async function runTests() {
         }
         log(colors.green, '✓ Wiki 内容已成功合并更新');
 
-        // 验证提案进展由 proposal_updates 提供
+        // 验证提案结束后不再出现在 proposal_updates
         const proposerSituation = await runCommand('GetAgentSituation', {
             agent_name: 'DevAgent',
             since_ts: 0,
@@ -347,10 +406,10 @@ async function runTests() {
         });
         if (proposerSituation.status !== 'success') throw new Error(proposerSituation.error);
         const approvedUpdate = proposerSituation.result.proposal_updates.find((u) => u.post_uid === proposalUid);
-        if (!approvedUpdate || approvedUpdate.outcome !== 'Approve') {
-            throw new Error('提案通过后未在 proposal_updates 反映');
+        if (approvedUpdate) {
+            throw new Error('提案通过后仍出现在 proposal_updates，不符合仅进行中策略');
         }
-        log(colors.green, '✓ proposal_updates 反映提案通过结果');
+        log(colors.green, '✓ proposal_updates 不包含已结束提案');
 
         // Test 11: 维护者发起提案时排除本人审核
         log(colors.yellow, '\nTest 11: 维护者发起提案时排除本人审核');
@@ -614,10 +673,10 @@ async function runTests() {
         });
         if (proposerSituation2.status !== 'success') throw new Error(proposerSituation2.error);
         const rejectUpdate = proposerSituation2.result.proposal_updates.find((u) => u.post_uid === proposalUid2);
-        if (!rejectUpdate || rejectUpdate.outcome !== 'Reject') {
-            throw new Error('提案拒绝后未在 proposal_updates 反映');
+        if (rejectUpdate) {
+            throw new Error('提案拒绝后仍出现在 proposal_updates，不符合仅进行中策略');
         }
-        log(colors.green, '✓ proposal_updates 反映提案拒绝结果');
+        log(colors.green, '✓ proposal_updates 不包含已拒绝提案');
 
         log(colors.blue, '\n=== 所有测试通过！ ===');
     } catch (e) {

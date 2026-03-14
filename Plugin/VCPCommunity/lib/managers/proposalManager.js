@@ -12,6 +12,10 @@ class ProposalManager {
         this.wikiManager = wikiManager;
     }
 
+    buildProposalTitle(communityId, pageName) {
+        return `[Proposal] Update Wiki: ${pageName}`;
+    }
+
     async loadProposals() {
         try {
             const data = await fs.readFile(PROPOSALS_FILE, 'utf-8');
@@ -67,7 +71,7 @@ class ProposalManager {
         const updates = proposals.filter((proposal) => {
             if (proposal.proposer !== agentName) return false;
             if (!visibleCommunityIds.has(proposal.community_id)) return false;
-            if (!proposal.finalized) return false;
+            if (proposal.finalized) return false;
             const changedAt = proposal.updated_at || proposal.created_at || 0;
             if (sinceTs && changedAt <= sinceTs) return false;
             return true;
@@ -78,7 +82,10 @@ class ProposalManager {
             post_uid: proposal.post_uid,
             community_id: proposal.community_id,
             page_name: proposal.page_name,
-            outcome: proposal.outcome,
+            status: 'InProgress',
+            pending_reviewers: Object.entries(proposal.reviews || {})
+                .filter(([, review]) => !review?.decision)
+                .map(([reviewer]) => reviewer),
             updated_at: proposal.updated_at || proposal.created_at,
         }));
     }
@@ -94,7 +101,7 @@ class ProposalManager {
         // 1. 社区权限检查
         const community = this.communityManager.getCommunity(community_id);
         if (!community) throw new Error(`社区 '${community_id}' 不存在。`);
-        if (community.type === 'private' && !community.members.includes(agent_name)) {
+        if (community.type === 'private' && agent_name !== 'System' && !community.members.includes(agent_name)) {
             throw new Error('权限不足: 您不是社区成员。');
         }
 
@@ -108,7 +115,7 @@ class ProposalManager {
         }
 
         // 3. 生成提案贴内容
-        const proposalTitle = `[Proposal] Update Wiki: ${page_name}`;
+        const proposalTitle = this.buildProposalTitle(community_id, page_name);
         const proposalContent = `
 **提案者:** @${agent_name}
 **目标页面:** ${page_name}

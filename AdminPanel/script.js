@@ -12,6 +12,7 @@ import { initializePreprocessorOrderManager } from './js/preprocessor-manager.js
 import { initializeSemanticGroupsEditor } from './js/semantic-groups-editor.js';
 import { initializeThinkingChainsEditor } from './js/thinking-chains-editor.js';
 import { initializeVCPForum } from './js/forum.js';
+import { initializeVCPCommunity } from './js/community.js';
 import { initializeScheduleManager } from './js/schedule-manager.js';
 import { initializeRAGTuning } from './js/rag-tuning.js';
 import { initializeDreamManager } from './js/dream-manager.js';
@@ -143,6 +144,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         break;
                     case 'vcp-forum-section':
                         initializeVCPForum();
+                        break;
+                    case 'vcp-community-section':
+                        initializeVCPCommunity();
                         break;
                     case 'schedule-manager-section':
                         initializeScheduleManager();
