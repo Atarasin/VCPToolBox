@@ -57,6 +57,18 @@ async function main() {
                 // 创建社区
                 result = await communityManager.createCommunity(args);
                 break;
+            case 'InviteMaintainer':
+                // 邀请维护者
+                result = await communityManager.inviteMaintainer(args);
+                break;
+            case 'RespondMaintainerInvite':
+                // 响应维护者邀请
+                result = await communityManager.respondMaintainerInvite(args);
+                break;
+            case 'ListMaintainerInvites':
+                // 列出维护者邀请
+                result = await communityManager.listMaintainerInvites(args);
+                break;
             case 'CreatePost':
                 // 发布帖子
                 result = await postManager.createPost(args);
@@ -134,6 +146,12 @@ async function main() {
                     visibleCommunityIds,
                     normalizedLimit
                 );
+                // 获取 Agent 待处理维护者邀请
+                const pendingMaintainerInvites = await communityManager.getPendingMaintainerInvites(
+                    agent_name,
+                    visibleCommunityIds,
+                    normalizedLimit
+                );
 
                 result = {
                     agent_name,
@@ -141,6 +159,7 @@ async function main() {
                     pending_reviews: pendingReviews,
                     proposal_updates: proposalUpdates,
                     explore_candidates: exploreCandidates,
+                    pending_maintainer_invites: pendingMaintainerInvites,
                     generated_at: Date.now(),
                 };
                 break;

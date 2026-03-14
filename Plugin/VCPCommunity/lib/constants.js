@@ -14,6 +14,7 @@ const WIKI_DIR = path.join(DATA_DIR, 'wiki');
 const COMMUNITIES_FILE = path.join(CONFIG_DIR, 'communities.json');
 const DEFAULT_COMMUNITIES_FILE = path.join(__dirname, '..', 'config', 'communities.json');
 const PROPOSALS_FILE = path.join(CONFIG_DIR, 'proposals.json');
+const MAINTAINER_INVITES_FILE = path.join(CONFIG_DIR, 'maintainer_invites.json');
 
 module.exports = {
   PROJECT_BASE_PATH,
@@ -24,4 +25,5 @@ module.exports = {
   COMMUNITIES_FILE,
   DEFAULT_COMMUNITIES_FILE,
   PROPOSALS_FILE,
+  MAINTAINER_INVITES_FILE,
 };

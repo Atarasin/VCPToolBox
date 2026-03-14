@@ -689,14 +689,18 @@ function renderCommunitySituation(board) {
         const priority = item.priority || { level: 'low', score: 0 };
         const actions = (item.actions || []).slice(0, 6);
         const actionHtml = actions.map((action) => {
+            const actionKind = action.deep_link?.kind || 'post';
+            const actionTarget = actionKind === 'maintainer_invite' ? (action.invite_id || action.deep_link?.invite_id || '') : (action.post_uid || '');
+            const buttonText = actionKind === 'maintainer_invite' ? '处理' : '打开';
             return `
                 <li>
                     <span class="community-priority-tag ${action.priority || 'low'}">${toPriorityText(action.priority)}</span>
                     <span>${action.label}</span>
                     <button class="btn-secondary community-situation-link-btn"
-                        data-kind="${action.deep_link?.kind || 'post'}"
-                        data-post-uid="${action.post_uid || ''}">
-                        打开
+                        data-kind="${actionKind}"
+                        data-target-id="${actionTarget}"
+                        data-agent-name="${action.agent_name || item.agent_name}">
+                        ${buttonText}
                     </button>
                 </li>
             `;
@@ -709,7 +713,7 @@ function renderCommunitySituation(board) {
                     <span class="community-priority-tag ${priority.level}">建议优先级: ${toPriorityText(priority.level)} (${priority.score})</span>
                 </div>
                 <p class="description">
-                    @提及: ${counts.mentions || 0} ｜ 待审核: ${counts.pending_reviews || 0} ｜ 提案进展: ${counts.proposal_updates || 0} ｜ 推荐: ${counts.explore_candidates || 0}
+                    @提及: ${counts.mentions || 0} ｜ 待审核: ${counts.pending_reviews || 0} ｜ 提案进展: ${counts.proposal_updates || 0} ｜ 维护者邀请: ${counts.pending_maintainer_invites || 0} ｜ 推荐: ${counts.explore_candidates || 0}
                 </p>
                 <ul class="community-situation-actions">${actionHtml || '<li>暂无建议行动</li>'}</ul>
                 <details class="community-raw-details">
@@ -727,14 +731,19 @@ function renderCommunitySituation(board) {
 
 async function handleSituationDeepLink(event) {
     const kind = event.currentTarget.dataset.kind;
-    const postUid = event.currentTarget.dataset.postUid;
-    if (!postUid) return;
+    const targetId = event.currentTarget.dataset.targetId;
+    const actionAgentName = event.currentTarget.dataset.agentName;
+    if (!targetId) return;
+    if (kind === 'maintainer_invite') {
+        await handleMaintainerInviteAction(actionAgentName, targetId);
+        return;
+    }
     if (kind === 'proposal') {
-        await focusProposalByPostUid(postUid);
+        await focusProposalByPostUid(targetId);
         return;
     }
     switchCommunityView('posts');
-    await viewCommunityPost(postUid);
+    await viewCommunityPost(targetId);
 }
 
 async function focusProposalByPostUid(postUid) {
@@ -819,6 +828,32 @@ async function handleQuickReviewProposal(event) {
         await initializeVCPCommunity();
     } catch (error) {
         showMessage(`审核失败: ${error.message}`, 'error');
+    }
+}
+
+async function handleMaintainerInviteAction(agentName, inviteId) {
+    if (!agentName || !inviteId) return;
+    const decisionInput = prompt(`以 ${agentName} 身份处理邀请 ${inviteId}，请输入 Accept 或 Reject`, 'Accept');
+    if (!decisionInput) return;
+    const decision = decisionInput.trim();
+    if (!['Accept', 'Reject'].includes(decision)) {
+        showMessage('邀请处理结果只能是 Accept 或 Reject', 'error');
+        return;
+    }
+    const comment = prompt('请输入处理说明（可为空）', '') || '';
+    try {
+        await apiFetch(`${API_BASE_URL}/maintainer-invites/${encodeURIComponent(inviteId)}/respond`, {
+            method: 'POST',
+            body: JSON.stringify({
+                agent_name: agentName,
+                decision,
+                comment
+            })
+        });
+        showMessage(`邀请处理成功：${decision}`, 'success');
+        await refreshCommunitySituation();
+    } catch (error) {
+        showMessage(`邀请处理失败: ${error.message}`, 'error');
     }
 }
 

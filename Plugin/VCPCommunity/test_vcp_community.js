@@ -15,6 +15,7 @@ const PLUGIN_SCRIPT = path.join(PLUGIN_DIR, 'VCPCommunity.js');
 const DATA_DIR = path.join(TEST_SANDBOX_ROOT, 'data', 'VCPCommunity');
 const COMMUNITIES_FILE = path.join(DATA_DIR, 'config', 'communities.json');
 const PROPOSALS_FILE = path.join(DATA_DIR, 'config', 'proposals.json');
+const MAINTAINER_INVITES_FILE = path.join(DATA_DIR, 'config', 'maintainer_invites.json');
 const POSTS_DIR = path.join(DATA_DIR, 'posts');
 
 // 颜色输出
@@ -107,6 +108,119 @@ async function runTests() {
             throw new Error('未记录社区创建者');
         }
         log(colors.green, '✓ communities.json 记录创建者');
+
+        log(colors.yellow, '\nTest 2.1: 维护者邀请机制');
+        const inviteResp = await runCommand('InviteMaintainer', {
+            agent_name: 'ArchitectAgent',
+            community_id: 'dev-core',
+            invitee: 'DevAgent',
+            reason: 'invite for maintainer'
+        });
+        if (inviteResp.status !== 'success') throw new Error(inviteResp.error);
+        const inviteIdMatch = inviteResp.result.match(/invite_id:\s*(inv-[0-9a-z-]+)/i);
+        const inviteId = inviteIdMatch?.[1];
+        if (!inviteId) throw new Error(`未解析邀请ID: ${inviteResp.result}`);
+
+        const duplicateInvite = await runCommand('InviteMaintainer', {
+            agent_name: 'ArchitectAgent',
+            community_id: 'dev-core',
+            invitee: 'DevAgent'
+        });
+        if (!(duplicateInvite.status === 'error' && duplicateInvite.error.includes('待处理邀请'))) {
+            throw new Error('重复待处理邀请未被拦截');
+        }
+
+        const unauthorizedInvite = await runCommand('InviteMaintainer', {
+            agent_name: 'WriterAgent',
+            community_id: 'dev-core',
+            invitee: 'NarratorAgent'
+        });
+        if (!(unauthorizedInvite.status === 'error' && unauthorizedInvite.error.includes('权限不足'))) {
+            throw new Error('非维护者邀请未被拦截');
+        }
+
+        const inviteList = await runCommand('ListMaintainerInvites', {
+            agent_name: 'DevAgent',
+            status: 'Pending'
+        });
+        if (!(inviteList.status === 'success' && Array.isArray(inviteList.result) && inviteList.result.some((x) => x.invite_id === inviteId))) {
+            throw new Error('被邀请者未看到待处理邀请');
+        }
+
+        const pendingInviteSituation = await runCommand('GetAgentSituation', {
+            agent_name: 'DevAgent',
+            since_ts: 0,
+            limit: 10
+        });
+        if (pendingInviteSituation.status !== 'success') throw new Error(pendingInviteSituation.error);
+        if (!pendingInviteSituation.result.pending_maintainer_invites?.some((item) => item.invite_id === inviteId)) {
+            throw new Error('GetAgentSituation 未返回待处理维护者邀请');
+        }
+
+        const wrongResponder = await runCommand('RespondMaintainerInvite', {
+            agent_name: 'CodeReviewer',
+            invite_id: inviteId,
+            decision: 'Accept'
+        });
+        if (!(wrongResponder.status === 'error' && wrongResponder.error.includes('仅被邀请者'))) {
+            throw new Error('非被邀请者响应未被拦截');
+        }
+
+        const acceptInvite = await runCommand('RespondMaintainerInvite', {
+            agent_name: 'DevAgent',
+            invite_id: inviteId,
+            decision: 'Accept',
+            comment: 'accept invite'
+        });
+        if (acceptInvite.status !== 'success') throw new Error(acceptInvite.error);
+
+        const communitiesAfterInvite = JSON.parse(await fs.readFile(COMMUNITIES_FILE, 'utf-8'));
+        const devCoreAfterInvite = communitiesAfterInvite.communities.find((c) => c.id === 'dev-core');
+        if (!devCoreAfterInvite?.maintainers?.includes('DevAgent')) {
+            throw new Error('接受邀请后未写入 maintainers');
+        }
+        if (!devCoreAfterInvite?.members?.includes('DevAgent')) {
+            throw new Error('接受邀请后未保证 private 社区成员身份');
+        }
+
+        const invitesData = JSON.parse(await fs.readFile(MAINTAINER_INVITES_FILE, 'utf-8'));
+        const acceptedInvite = invitesData.find((x) => x.invite_id === inviteId);
+        if (!acceptedInvite || acceptedInvite.status !== 'Accepted') {
+            throw new Error('邀请状态未更新为 Accepted');
+        }
+
+        const pendingInviteSituationAfterAccept = await runCommand('GetAgentSituation', {
+            agent_name: 'DevAgent',
+            since_ts: 0,
+            limit: 10
+        });
+        if (pendingInviteSituationAfterAccept.status !== 'success') throw new Error(pendingInviteSituationAfterAccept.error);
+        if (pendingInviteSituationAfterAccept.result.pending_maintainer_invites?.some((item) => item.invite_id === inviteId)) {
+            throw new Error('邀请已接受后仍出现在 pending_maintainer_invites');
+        }
+        log(colors.green, '✓ 维护者邀请流程通过');
+
+        const limitCommunityId = `maintainer-limit-${Date.now()}`;
+        const limitCreateResp = await runCommand('CreateCommunity', {
+            agent_name: 'OwnerAgent',
+            community_id: limitCommunityId,
+            name: '维护者上限测试社区',
+            description: 'test max maintainers',
+            type: 'private',
+            members: ['OwnerAgent', 'M2', 'M3', 'M4', 'M5'],
+            maintainers: ['M2', 'M3', 'M4', 'M5']
+        });
+        if (limitCreateResp.status !== 'success') throw new Error(limitCreateResp.error);
+
+        const limitInviteResp = await runCommand('InviteMaintainer', {
+            agent_name: 'OwnerAgent',
+            community_id: limitCommunityId,
+            invitee: 'M6'
+        });
+        if (!(limitInviteResp.status === 'error' && limitInviteResp.error.includes('上限'))) {
+            throw new Error('维护者数量上限未生效');
+        }
+        log(colors.green, '✓ 维护者数量上限生效');
 
         // Test 3: 发帖与 @提及
         log(colors.yellow, '\nTest 3: 发帖与 @提及 (CreatePost)');
@@ -256,7 +370,7 @@ async function runTests() {
         // Test 7: Wiki 权限控制
         log(colors.yellow, '\nTest 7: Wiki 权限控制 (UpdateWiki - Fail)');
         const resp7 = await runCommand('UpdateWiki', {
-            agent_name: 'DevAgent',
+            agent_name: 'WriterAgent',
             community_id: 'dev-core',
             page_name: 'core.rules',
             content: 'Hacked',

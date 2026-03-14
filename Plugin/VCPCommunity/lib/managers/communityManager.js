@@ -6,6 +6,7 @@ const {
     POSTS_DIR,
     WIKI_DIR,
     PROPOSALS_FILE,
+    MAINTAINER_INVITES_FILE,
 } = require('../constants');
 
 /**
@@ -15,6 +16,8 @@ const {
 class CommunityManager {
     constructor() {
         this.communities = [];
+        this.maintainerInvites = [];
+        this.maxMaintainers = 3;
     }
 
     /**
@@ -31,6 +34,8 @@ class CommunityManager {
 
         // 初始化提案文件
         await this.ensureJsonFile(PROPOSALS_FILE, []);
+        await this.ensureJsonFile(MAINTAINER_INVITES_FILE, []);
+        await this.loadMaintainerInvites();
 
         return '社区初始化完成。';
     }
@@ -86,6 +91,22 @@ class CommunityManager {
             console.error(`[VCPCommunity] 加载社区配置失败: ${e.message}`);
             this.communities = [];
         }
+    }
+
+    async loadMaintainerInvites() {
+        try {
+            await fs.mkdir(CONFIG_DIR, { recursive: true });
+            await this.ensureJsonFile(MAINTAINER_INVITES_FILE, []);
+            const data = await fs.readFile(MAINTAINER_INVITES_FILE, 'utf-8');
+            const parsed = JSON.parse(data);
+            this.maintainerInvites = Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            this.maintainerInvites = [];
+        }
+    }
+
+    async saveMaintainerInvites() {
+        await fs.writeFile(MAINTAINER_INVITES_FILE, JSON.stringify(this.maintainerInvites, null, 2), 'utf-8');
     }
 
     /**
@@ -198,6 +219,178 @@ class CommunityManager {
         this.communities.push(newCommunity);
         await this.save();
         return `社区 '${name}' 创建成功。`;
+    }
+
+    /**
+     * 邀请 Agent 成为社区维护者
+     * @param {object} args 参数对象 { agent_name, community_id, invitee, reason }
+     */
+    async inviteMaintainer(args) {
+        const { agent_name, community_id, invitee, reason } = args;
+        if (!agent_name || !community_id || !invitee) {
+            throw new Error('参数缺失: 需要 agent_name, community_id, invitee');
+        }
+
+        const community = this.getCommunity(community_id);
+        if (!community) throw new Error(`社区 '${community_id}' 不存在。`);
+
+        const maintainers = community.maintainers || [];
+        if (agent_name !== 'System' && !maintainers.includes(agent_name)) {
+            throw new Error(`权限不足: Agent '${agent_name}' 不是社区 '${community_id}' 的 Maintainer。`);
+        }
+        if (invitee === agent_name) {
+            throw new Error('不能邀请自己成为维护者。');
+        }
+        if (maintainers.includes(invitee)) {
+            throw new Error(`Agent '${invitee}' 已经是社区 '${community_id}' 的 Maintainer。`);
+        }
+        if (maintainers.length >= this.maxMaintainers) {
+            throw new Error(`社区 '${community_id}' 维护者数量已达到上限 ${this.maxMaintainers}。`);
+        }
+
+        await this.loadMaintainerInvites();
+        const pending = this.maintainerInvites.find((invite) =>
+            invite.community_id === community_id &&
+            invite.invitee === invitee &&
+            invite.status === 'Pending'
+        );
+        if (pending) {
+            throw new Error(`已存在给 '${invitee}' 的待处理邀请: ${pending.invite_id}`);
+        }
+
+        const inviteId = `inv-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+        const now = Date.now();
+        this.maintainerInvites.push({
+            invite_id: inviteId,
+            community_id,
+            inviter: agent_name,
+            invitee,
+            reason: reason || '',
+            status: 'Pending',
+            created_at: now,
+            updated_at: now,
+            decision_comment: null,
+        });
+        await this.saveMaintainerInvites();
+        return `已向 '${invitee}' 发出维护者邀请。invite_id: ${inviteId}`;
+    }
+
+    /**
+     * 响应维护者邀请
+     * @param {object} args 参数对象 { agent_name, invite_id, decision, comment }
+     */
+    async respondMaintainerInvite(args) {
+        const { agent_name, invite_id, decision, comment } = args;
+        if (!agent_name || !invite_id || !decision) {
+            throw new Error('参数缺失: 需要 agent_name, invite_id, decision');
+        }
+        if (!['Accept', 'Reject'].includes(decision)) {
+            throw new Error("decision 必须是 'Accept' 或 'Reject'");
+        }
+
+        await this.loadMaintainerInvites();
+        const invite = this.maintainerInvites.find((item) => item.invite_id === invite_id);
+        if (!invite) {
+            throw new Error(`未找到邀请: ${invite_id}`);
+        }
+        if (invite.status !== 'Pending') {
+            throw new Error(`该邀请已处理，当前状态: ${invite.status}`);
+        }
+        if (invite.invitee !== agent_name) {
+            throw new Error('权限不足: 仅被邀请者可以响应邀请。');
+        }
+
+        const community = this.getCommunity(invite.community_id);
+        if (!community) {
+            throw new Error(`社区 '${invite.community_id}' 不存在。`);
+        }
+        const maintainers = community.maintainers || [];
+
+        if (decision === 'Accept') {
+            if (!maintainers.includes(agent_name) && maintainers.length >= this.maxMaintainers) {
+                throw new Error(`社区 '${invite.community_id}' 维护者数量已达到上限 ${this.maxMaintainers}。`);
+            }
+            if (!maintainers.includes(agent_name)) {
+                maintainers.push(agent_name);
+            }
+            community.maintainers = maintainers;
+            // 如果是私有社区，邀请者也需要加入成员列表
+            if (community.type === 'private' && Array.isArray(community.members) && !community.members.includes(agent_name)) {
+                community.members.push(agent_name);
+            }
+            await this.save();
+            invite.status = 'Accepted';
+        } else {
+            invite.status = 'Rejected';
+        }
+
+        invite.updated_at = Date.now();
+        invite.decision_comment = comment || '';
+        await this.saveMaintainerInvites();
+        return `邀请 ${invite_id} 已${decision === 'Accept' ? '接受' : '拒绝'}。`;
+    }
+
+    /**
+     * 列出 Agent 维护者邀请
+     * @param {string} agent_name - 目标 Agent 名称
+     * @param {string} community_id - 目标社区 ID（可选）
+     * @param {string} status - 邀请状态（可选）
+     * @returns {Promise<Array>} - 邀请列表
+     */
+    async listMaintainerInvites(args) {
+        const { agent_name, community_id, status } = args;
+        if (!agent_name) {
+            throw new Error('参数缺失: 需要 agent_name');
+        }
+
+        await this.loadMaintainerInvites();
+        let invites = this.maintainerInvites.slice();
+        if (community_id) {
+            invites = invites.filter((invite) => invite.community_id === community_id);
+        }
+        if (status) {
+            invites = invites.filter((invite) => invite.status === status);
+        }
+
+        if (agent_name !== 'System') {
+            invites = invites.filter((invite) => {
+                if (invite.invitee === agent_name || invite.inviter === agent_name) return true;
+                const community = this.getCommunity(invite.community_id);
+                const maintainers = community?.maintainers || [];
+                return maintainers.includes(agent_name);
+            });
+        }
+
+        invites.sort((a, b) => (b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0));
+        return invites;
+    }
+
+    /**
+     * 获取 Agent 待处理维护者邀请
+     * @param {string} agentName - 目标 Agent 名称
+     * @param {Set<string>} visibleCommunityIds - 可见社区 ID 集合
+     * @param {number} limit - 最大返回条数，默认 5
+     * @returns {Promise<Array>} - 待处理邀请列表
+     */
+    async getPendingMaintainerInvites(agentName, visibleCommunityIds, limit = 5) {
+        await this.loadMaintainerInvites();
+        const pending = this.maintainerInvites.filter((invite) => {
+            if (invite.status !== 'Pending') return false;
+            if (invite.invitee !== agentName) return false;
+            if (visibleCommunityIds && visibleCommunityIds.size > 0 && !visibleCommunityIds.has(invite.community_id)) {
+                return false;
+            }
+            return true;
+        });
+        pending.sort((a, b) => (b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0));
+        return pending.slice(0, limit).map((invite) => ({
+            invite_id: invite.invite_id,
+            community_id: invite.community_id,
+            inviter: invite.inviter,
+            reason: invite.reason || '',
+            created_at: invite.created_at,
+            updated_at: invite.updated_at || invite.created_at,
+        }));
     }
 
     /**

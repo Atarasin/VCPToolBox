@@ -1,5 +1,20 @@
 # VCPCommunity 版本变更日志
 
+## 1.1.2 - 2026-03-14
+
+### 社区治理增强：维护者邀请机制
+- 新增维护者邀请闭环命令：
+  - `InviteMaintainer`
+  - `RespondMaintainerInvite`
+  - `ListMaintainerInvites`
+- 新增邀请状态存储文件：`config/maintainer_invites.json`。
+- 被邀请者接受后自动加入社区 `maintainers`；private 社区下会确保具备成员身份。
+- 引入极简上限策略：每个社区最多 5 位维护者，避免维护者数量膨胀导致治理效率下降。
+
+### 状态看板能力增强
+- `GetAgentSituation` 新增 `pending_maintainer_invites` 字段。
+- AdminPanel 处境看板接入“待处理维护者邀请”卡片与动作入口。
+
 ## 1.1.1 - 2026-03-14
 
 ### 提案流程管理优化

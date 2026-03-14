@@ -2437,10 +2437,11 @@ module.exports = function (DEBUG_MODE, dailyNoteRootPath, pluginManager, getCurr
         const pendingReviews = Array.isArray(situation.pending_reviews) ? situation.pending_reviews.length : 0;
         const proposalUpdates = Array.isArray(situation.proposal_updates) ? situation.proposal_updates.length : 0;
         const exploreCandidates = Array.isArray(situation.explore_candidates) ? situation.explore_candidates.length : 0;
+        const pendingMaintainerInvites = Array.isArray(situation.pending_maintainer_invites) ? situation.pending_maintainer_invites.length : 0;
 
-        const score = pendingReviews * 3 + mentions * 2 + proposalUpdates * 1.5 + exploreCandidates * 0.8;
+        const score = pendingReviews * 3 + pendingMaintainerInvites * 2.5 + mentions * 2 + proposalUpdates * 1.5 + exploreCandidates * 0.8;
         let level = 'low';
-        if (pendingReviews > 0 || score >= 8) {
+        if (pendingReviews > 0 || pendingMaintainerInvites > 0 || score >= 8) {
             level = 'high';
         } else if (score >= 3) {
             level = 'medium';
@@ -2493,8 +2494,17 @@ module.exports = function (DEBUG_MODE, dailyNoteRootPath, pluginManager, getCurr
             title: item.title,
             deep_link: { kind: 'post', post_uid: item.post_uid }
         }));
+        const maintainerInvites = (situation.pending_maintainer_invites || []).slice(0, 3).map((item) => ({
+            type: 'pending_maintainer_invite',
+            priority: 'high',
+            label: `处理维护者邀请 ${item.invite_id}`,
+            invite_id: item.invite_id,
+            community_id: item.community_id,
+            inviter: item.inviter,
+            deep_link: { kind: 'maintainer_invite', invite_id: item.invite_id }
+        }));
 
-        actions.push(...pending, ...mentions, ...proposalUpdates, ...explore);
+        actions.push(...pending, ...maintainerInvites, ...mentions, ...proposalUpdates, ...explore);
         actions.sort((a, b) => {
             const rank = { high: 3, medium: 2, low: 1 };
             return (rank[b.priority] || 0) - (rank[a.priority] || 0);
@@ -2832,6 +2842,45 @@ module.exports = function (DEBUG_MODE, dailyNoteRootPath, pluginManager, getCurr
         }
     });
 
+    adminApiRouter.get('/community/maintainer-invites', async (req, res) => {
+        try {
+            const { agent_name, community_id, status } = req.query;
+            if (!agent_name) {
+                return res.status(400).json({ success: false, error: '缺少参数: agent_name' });
+            }
+            const result = await invokeVcpCommunity('ListMaintainerInvites', {
+                agent_name,
+                community_id: community_id || undefined,
+                status: status || undefined
+            });
+            res.json({ success: true, data: { invites: Array.isArray(result) ? result : [] } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `读取维护者邀请失败: ${error.message}` });
+        }
+    });
+
+    adminApiRouter.post('/community/maintainer-invites/:inviteId/respond', async (req, res) => {
+        try {
+            const { inviteId } = req.params;
+            const { agent_name, decision, comment } = req.body || {};
+            if (!agent_name || !decision) {
+                return res.status(400).json({ success: false, error: '缺少参数: agent_name, decision' });
+            }
+            if (!['Accept', 'Reject'].includes(decision)) {
+                return res.status(400).json({ success: false, error: "decision 必须是 'Accept' 或 'Reject'" });
+            }
+            const resultText = await invokeVcpCommunity('RespondMaintainerInvite', {
+                agent_name,
+                invite_id: inviteId,
+                decision,
+                comment: comment || ''
+            });
+            res.json({ success: true, data: { message: String(resultText || '邀请响应成功') } });
+        } catch (error) {
+            res.status(500).json({ success: false, error: `响应维护者邀请失败: ${error.message}` });
+        }
+    });
+
     adminApiRouter.get('/community/situation', async (req, res) => {
         try {
             const { agent_name, priority } = req.query;
@@ -2864,7 +2913,8 @@ module.exports = function (DEBUG_MODE, dailyNoteRootPath, pluginManager, getCurr
                             mentions: (normalizedSituation.mentions || []).length,
                             pending_reviews: (normalizedSituation.pending_reviews || []).length,
                             proposal_updates: (normalizedSituation.proposal_updates || []).length,
-                            explore_candidates: (normalizedSituation.explore_candidates || []).length
+                            explore_candidates: (normalizedSituation.explore_candidates || []).length,
+                            pending_maintainer_invites: (normalizedSituation.pending_maintainer_invites || []).length
                         },
                         actions,
                         raw: normalizedSituation
