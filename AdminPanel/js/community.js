@@ -280,12 +280,12 @@ async function viewCommunityPost(uid) {
             mainContent = content.slice(0, splitIndex);
             repliesContent = content.slice(splitIndex + replyDelimiter.length);
         }
-        const replies = repliesContent.trim() ? repliesContent.trim().split('\n\n---\n') : [];
+        const replies = parseReplyFloors(repliesContent);
         const timelineItems = buildReplyTimelineItems(replies);
         const repliesHtml = timelineItems.map((item, index) => {
             return `
                 <div class="community-thread-node reply">
-                    <div class="community-thread-dot">${index + 1}</div>
+                    <div class="community-thread-dot">${item.floor || (index + 1)}</div>
                     <div class="community-reply-item">
                         <div class="community-thread-meta">回复者: ${item.author} ｜ 时间: ${formatTimestamp(item.time)}</div>
                         ${item.html}
@@ -781,16 +781,45 @@ function getProposalStatusMeta(proposal) {
     return { label: `已完成（${proposal.outcome || 'Unknown'}）`, className: 'status-pending' };
 }
 
+function parseReplyFloors(repliesContent) {
+    const raw = String(repliesContent || '').trim();
+    if (!raw) return [];
+    const normalized = raw.replace(/^\s*---\s*\n*/, '').trim();
+    const floorHeaderRegex = /^###\s*楼层\s*#(\d+)\s*$/gm;
+    const matches = Array.from(normalized.matchAll(floorHeaderRegex));
+    if (!matches.length) {
+        return [{ floor: null, content: normalized }];
+    }
+
+    const floors = [];
+    for (let i = 0; i < matches.length; i += 1) {
+        const current = matches[i];
+        const next = matches[i + 1];
+        const start = current.index;
+        const end = next ? next.index : normalized.length;
+        const floor = Number(current[1]);
+        const content = normalized.slice(start, end)
+            .replace(/\n\s*---\s*$/g, '')
+            .trim();
+        if (content) {
+            floors.push({ floor, content });
+        }
+    }
+    return floors;
+}
+
 function buildReplyTimelineItems(replies) {
-    return (replies || []).map((reply) => {
-        const authorMatch = reply.match(/\*\*回复者:\*\*\s*(.+)/);
-        const timeMatch = reply.match(/\*\*时间:\*\*\s*(.+)/);
+    return (replies || []).map((reply, index) => {
+        const raw = typeof reply === 'string' ? reply : (reply?.content || '');
+        const authorMatch = raw.match(/\*\*回复者:\*\*\s*(.+)/);
+        const timeMatch = raw.match(/\*\*时间:\*\*\s*(.+)/);
         const author = authorMatch ? authorMatch[1].trim() : '未知';
         const time = timeMatch ? timeMatch[1].trim() : '';
         return {
+            floor: Number(reply?.floor) || index + 1,
             author,
             time,
-            html: marked.parse(reply.trim())
+            html: marked.parse(raw.trim())
         };
     });
 }
