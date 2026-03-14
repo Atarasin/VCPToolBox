@@ -165,8 +165,8 @@ class CommunityManager {
      */
     async createCommunity(args) {
         const { agent_name, community_id, name, description, type, members, maintainers } = args;
-        if (!community_id || !name || !type) {
-            throw new Error('参数缺失: 需要 community_id, name, type');
+        if (!agent_name || !community_id || !name || !type) {
+            throw new Error('参数缺失: 需要 agent_name, community_id, name, type');
         }
         if (!['public', 'private'].includes(type)) {
             throw new Error("参数错误: type 必须是 'public' 或 'private'");
@@ -175,7 +175,11 @@ class CommunityManager {
             throw new Error(`社区 '${community_id}' 已存在。`);
         }
 
-        // public 社区默认不维护成员与管理者列表
+        // 创建者自动成为维护者，避免出现无维护者导致的流程卡死
+        const maintainerSet = new Set(Array.isArray(maintainers) ? maintainers : []);
+        maintainerSet.add(agent_name);
+
+        // public 社区默认不维护成员列表
         // created_by/created_at 用于追踪社区创建来源
         const newCommunity = {
             id: community_id,
@@ -183,7 +187,7 @@ class CommunityManager {
             description: description || '',
             type,
             members: type === 'public' ? [] : Array.isArray(members) ? members : [],
-            maintainers: type === 'public' ? [] : Array.isArray(maintainers) ? maintainers : [],
+            maintainers: Array.from(maintainerSet),
             created_by: agent_name,
             created_at: Date.now(),
         };

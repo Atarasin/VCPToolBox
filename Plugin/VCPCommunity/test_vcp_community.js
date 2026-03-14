@@ -88,13 +88,16 @@ async function runTests() {
         }
         log(colors.green, '✓ 成功列出社区');
 
-        // 验证 public 社区成员与维护者为空
+        // 验证 public 社区成员为空，且创建者自动成为维护者
         const configDataPublic = JSON.parse(await fs.readFile(COMMUNITIES_FILE, 'utf-8'));
         const createdCommunity = configDataPublic.communities.find((c) => c.id === communityId);
-        if (!(createdCommunity && createdCommunity.type === 'public' && createdCommunity.members.length === 0 && createdCommunity.maintainers.length === 0)) {
-            throw new Error('public 社区 members/maintainers 应为空');
+        if (!(createdCommunity && createdCommunity.type === 'public' && createdCommunity.members.length === 0)) {
+            throw new Error('public 社区 members 应为空');
         }
-        log(colors.green, '✓ public 社区 members/maintainers 为空');
+        if (!createdCommunity.maintainers.includes('DevAgent')) {
+            throw new Error('创建者未自动成为维护者');
+        }
+        log(colors.green, '✓ public 社区创建者自动成为维护者');
         if (createdCommunity?.created_by !== 'DevAgent') {
             throw new Error('未记录社区创建者');
         }
@@ -477,8 +480,70 @@ async function runTests() {
         }
         log(colors.green, '✓ 自动通过后 Wiki 已即时合并');
 
-        // Test 13: 超时拒绝审核
-        log(colors.yellow, '\nTest 13: 超时拒绝审核 (Assistant Timeout)');
+        // Test 13: 历史空维护者社区提案自动通过
+        log(colors.yellow, '\nTest 13: 历史空维护者社区提案自动通过');
+        const noMaintainerCommunityId = `no-maintainer-${Date.now()}`;
+        const resp13CreateCommunity = await runCommand('CreateCommunity', {
+            agent_name: 'DevAgent',
+            community_id: noMaintainerCommunityId,
+            name: '空维护者兼容测试社区',
+            description: '验证旧数据 maintainers 为空时提案不会卡死',
+            type: 'private',
+            members: ['DevAgent'],
+            maintainers: ['DevAgent']
+        });
+        if (resp13CreateCommunity.status !== 'success') throw new Error(resp13CreateCommunity.error);
+
+        const communitiesForLegacy = JSON.parse(await fs.readFile(COMMUNITIES_FILE, 'utf-8'));
+        const legacyCommunity = communitiesForLegacy.communities.find((c) => c.id === noMaintainerCommunityId);
+        if (!legacyCommunity) throw new Error('未找到空维护者测试社区');
+        legacyCommunity.maintainers = [];
+        await fs.writeFile(COMMUNITIES_FILE, JSON.stringify(communitiesForLegacy, null, 2), 'utf-8');
+
+        const resp13InitWiki = await runCommand('UpdateWiki', {
+            agent_name: 'DevAgent',
+            community_id: noMaintainerCommunityId,
+            page_name: 'legacy-policy',
+            content: '# Legacy Policy\n\nv1',
+            edit_summary: 'init'
+        });
+        if (resp13InitWiki.status !== 'success') throw new Error(resp13InitWiki.error);
+
+        const resp13Proposal = await runCommand('ProposeWikiUpdate', {
+            agent_name: 'DevAgent',
+            community_id: noMaintainerCommunityId,
+            page_name: 'legacy-policy',
+            content: '# Legacy Policy\n\nv2',
+            rationale: 'legacy no maintainers auto approve test'
+        });
+        if (resp13Proposal.status !== 'success') throw new Error(resp13Proposal.error);
+        if (!resp13Proposal.result.includes('社区暂无维护者')) {
+            throw new Error(`空维护者自动通过提示不符合预期: ${resp13Proposal.result}`);
+        }
+        const noMaintainerProposalUid = resp13Proposal.result.match(/UID: ([0-9a-fA-F-]+)/)[1];
+
+        const proposalsAfterNoMaintainer = JSON.parse(await fs.readFile(PROPOSALS_FILE, 'utf-8'));
+        const noMaintainerProposal = proposalsAfterNoMaintainer.find((p) => p.post_uid === noMaintainerProposalUid);
+        if (!noMaintainerProposal) throw new Error('未找到空维护者提案记录');
+        if (!(noMaintainerProposal.finalized && noMaintainerProposal.outcome === 'Approve')) {
+            throw new Error('空维护者提案未自动通过');
+        }
+        if (Object.keys(noMaintainerProposal.reviews || {}).length !== 0) {
+            throw new Error('空维护者提案不应存在待审核人');
+        }
+
+        const resp13ReadWiki = await runCommand('ReadWiki', {
+            agent_name: 'DevAgent',
+            community_id: noMaintainerCommunityId,
+            page_name: 'legacy-policy'
+        });
+        if (!(resp13ReadWiki.status === 'success' && resp13ReadWiki.result.includes('v2'))) {
+            throw new Error('空维护者提案自动通过后，Wiki 未按预期合并');
+        }
+        log(colors.green, '✓ 空维护者历史社区提案可自动通过并完成合并');
+
+        // Test 14: 超时拒绝审核
+        log(colors.yellow, '\nTest 14: 超时拒绝审核 (Assistant Timeout)');
         const resp12 = await runCommand('ProposeWikiUpdate', {
             agent_name: 'DevAgent',
             community_id: 'dev-core',
@@ -504,17 +569,17 @@ async function runTests() {
         }
         log(colors.green, '✓ 超时提案已自动拒绝');
 
-        // Test 14: 拒绝流程
-        log(colors.yellow, '\nTest 14: 拒绝流程');
-        const resp13 = await runCommand('ProposeWikiUpdate', {
+        // Test 15: 拒绝流程
+        log(colors.yellow, '\nTest 15: 拒绝流程');
+        const resp14CreateReject = await runCommand('ProposeWikiUpdate', {
             agent_name: 'DevAgent',
             community_id: 'dev-core',
             page_name: 'core.rules',
             content: '# New Rules\n\n1. Rule A\n2. Rule B\n3. Rule C\n4. Rule D',
             rationale: 'Add Rule D'
         });
-        if (resp13.status !== 'success') throw new Error(resp13.error);
-        const proposalUid2 = resp13.result.match(/UID: ([0-9a-fA-F-]+)/)[1];
+        if (resp14CreateReject.status !== 'success') throw new Error(resp14CreateReject.error);
+        const proposalUid2 = resp14CreateReject.result.match(/UID: ([0-9a-fA-F-]+)/)[1];
 
         const resp14 = await runCommand('ReviewProposal', {
             agent_name: 'CodeReviewer',

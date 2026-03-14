@@ -1,7 +1,7 @@
 {
   "manifestVersion": "1.0.0",
   "name": "VCPCommunity",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "displayName": "VCP Agent 社区",
   "description": "VCP Agent 的交流、协作与文档沉淀平台。支持多板块、@提及、引用与Wiki共建。",
   "author": "VCP Team",

@@ -148,42 +148,48 @@ Maintainer 请回复 \`Approve\` 以合并修改，或 \`Reject\` 拒绝。
         // 5. 初始化评审记录
         const proposalUid = result.match(/UID: ([0-9a-fA-F-]+)/)?.[1];
         const maintainers = community.maintainers || [];
-        if (maintainers.length > 0 && proposalUid) {
-            // 若提案者本身是 Maintainer，则无需自己再审核一次，只保留“其他维护者”作为审核人
-            const reviewers = maintainers.filter((m) => m !== agent_name);
-            const reviews = {};
-            reviewers.forEach((m) => {
-                reviews[m] = { decision: null, comment: null };
-            });
+        if (!proposalUid) {
+            throw new Error('提案贴创建成功但未解析到 UID。');
+        }
 
-            const isMaintainerProposer = maintainers.includes(agent_name);
-            const noOtherReviewer = isMaintainerProposer && reviewers.length === 0;
-            const proposals = await this.loadProposals();
-            proposals.push({
-                post_uid: proposalUid,
+        // 若提案者本身是 Maintainer，则无需自己再审核一次，只保留“其他维护者”作为审核人
+        const reviewers = maintainers.filter((m) => m !== agent_name);
+        const reviews = {};
+        reviewers.forEach((m) => {
+            reviews[m] = { decision: null, comment: null };
+        });
+
+        const isMaintainerProposer = maintainers.includes(agent_name);
+        const noMaintainer = maintainers.length === 0;
+        const noOtherReviewer = isMaintainerProposer && reviewers.length === 0;
+        const autoApprove = noMaintainer || noOtherReviewer;
+        const proposals = await this.loadProposals();
+        proposals.push({
+            post_uid: proposalUid,
+            community_id,
+            page_name,
+            proposer: agent_name,
+            reviews,
+            // 社区无维护者或提案者为唯一维护者时，提案自动通过，避免流程卡死
+            finalized: autoApprove,
+            outcome: autoApprove ? 'Approve' : null,
+            created_at: Date.now(),
+            updated_at: Date.now(),
+        });
+        await this.saveProposals(proposals);
+
+        if (autoApprove) {
+            await this.wikiManager.updateWiki({
+                agent_name,
                 community_id,
                 page_name,
-                proposer: agent_name,
-                reviews,
-                // 提案者是唯一维护者时，提案可直接通过，无需进入待审核状态
-                finalized: noOtherReviewer,
-                outcome: noOtherReviewer ? 'Approve' : null,
-                created_at: Date.now(),
-                updated_at: Date.now(),
+                content,
+                edit_summary: `Merged proposal from ${proposalUid} (Auto approved: ${noMaintainer ? 'NoMaintainers' : 'OnlyMaintainerProposer'})`,
             });
-            await this.saveProposals(proposals);
-
-            if (noOtherReviewer) {
-                // 只有提案者自己是 Maintainer 时，直接合并 Wiki 变更
-                await this.wikiManager.updateWiki({
-                    agent_name,
-                    community_id,
-                    page_name,
-                    content,
-                    edit_summary: `Merged proposal from ${proposalUid} (Only maintainer proposer)`,
-                });
-                return `提案已提交并自动通过（提案者为唯一维护者）。帖子 UID: ${proposalUid}`;
+            if (noMaintainer) {
+                return `提案已提交并自动通过（社区暂无维护者）。帖子 UID: ${proposalUid}`;
             }
+            return `提案已提交并自动通过（提案者为唯一维护者）。帖子 UID: ${proposalUid}`;
         }
 
         return `提案已提交！请等待审核。帖子 UID: ${proposalUid}`;
