@@ -296,6 +296,105 @@ async function testWeightedSelectionByBacklog() {
     assert.strictEqual(calls[0].agentName, 'CodeReviewer');
 }
 
+async function testDisabledAssistantAgentList() {
+    await resetFiles();
+    await writeJson(COMMUNITIES_FILE, {
+        communities: [
+            {
+                id: 'dev-core',
+                type: 'private',
+                members: ['ArchitectAgent', 'CodeReviewer'],
+                maintainers: ['DevAgent'],
+            }
+        ]
+    });
+
+    const publicPostFile = '[dev-core][讨论][CodeReviewer][2026-03-14T10-00-00][post-1].md';
+    await fs.writeFile(path.join(POSTS_DIR, publicPostFile), '# test', 'utf-8');
+
+    const calls = [];
+    const communityCalls = [];
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+    try {
+        const invoked = await randomBrowse({
+            disabledAgentList: ['ArchitectAgent', 'CodeReviewer'],
+            invokeAgent: async (agentName, prompt) => {
+                calls.push({ agentName, prompt });
+                return '';
+            },
+            invokeCommunity: async (command, args) => {
+                communityCalls.push(args.agent_name);
+                return {
+                    agent_name: args.agent_name,
+                    mentions: [],
+                    pending_reviews: [],
+                    proposal_updates: [],
+                    explore_candidates: [],
+                    generated_at: 8000,
+                };
+            },
+            nowProvider: () => 8000,
+        });
+        assert.strictEqual(invoked, true);
+    } finally {
+        Math.random = originalRandom;
+    }
+
+    assert.deepStrictEqual(communityCalls, ['DevAgent']);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].agentName, 'DevAgent');
+}
+
+async function testDisabledAssistantAgentListFromConfig() {
+    await resetFiles();
+    await writeJson(COMMUNITIES_FILE, {
+        communities: [
+            {
+                id: 'dev-core',
+                type: 'private',
+                members: ['ArchitectAgent'],
+                maintainers: ['DevAgent'],
+            }
+        ]
+    });
+
+    const calls = [];
+    const communityCalls = [];
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+    try {
+        const invoked = await randomBrowse({
+            loadAssistantConfig: async () => ({
+                DISABLED_ASSISTANT_AGENT_LIST: 'ArchitectAgent'
+            }),
+            invokeAgent: async (agentName, prompt) => {
+                calls.push({ agentName, prompt });
+                return '';
+            },
+            invokeCommunity: async (command, args) => {
+                communityCalls.push(args.agent_name);
+                return {
+                    agent_name: args.agent_name,
+                    mentions: [],
+                    pending_reviews: [],
+                    proposal_updates: [],
+                    explore_candidates: [],
+                    generated_at: 9000,
+                };
+            },
+            nowProvider: () => 9000,
+        });
+        assert.strictEqual(invoked, true);
+    } finally {
+        Math.random = originalRandom;
+    }
+
+    assert.deepStrictEqual(communityCalls, ['DevAgent']);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].agentName, 'DevAgent');
+}
+
 async function testCheckReviewTimeouts() {
     await resetFiles();
     const now = Date.now();
@@ -336,6 +435,10 @@ async function run() {
     console.log('✓ 状态摘要去重逻辑');
     await testWeightedSelectionByBacklog();
     console.log('✓ 加权随机选择逻辑');
+    await testDisabledAssistantAgentList();
+    console.log('✓ 禁用 Agent 名单筛选');
+    await testDisabledAssistantAgentListFromConfig();
+    console.log('✓ config.env 禁用名单注入');
     await testCheckReviewTimeouts();
     console.log('✓ 超时拒绝处理');
     console.log('=== 所有测试通过 ===');

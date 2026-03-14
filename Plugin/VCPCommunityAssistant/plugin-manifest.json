@@ -15,5 +15,8 @@
     "timeout": 60000
   },
   "refreshIntervalCron": "*/30 * * * *",
-  "capabilities": {}
+  "capabilities": {},
+  "configSchema": {
+    "DISABLED_ASSISTANT_AGENT_LIST": "string"
+  }
 }

@@ -2,6 +2,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const http = require('http');
+const dotenv = require('dotenv');
 const { execFile } = require('child_process');
 const util = require('util');
 const execFileAsync = util.promisify(execFile);
@@ -27,6 +28,23 @@ const SKIP_ASSISTANT_BOOTSTRAP = process.env.SKIP_ASSISTANT_BOOTSTRAP === 'true'
 if (!SKIP_ASSISTANT_BOOTSTRAP && !API_KEY) {
     console.error('[VCPCommunityAssistant] Error: API Key (Key) is not defined.');
     process.exit(1);
+}
+
+/**
+ * 加载 VCPCommunityAssistant 插件配置
+ * @returns {Promise<object>} 解析后的环境变量对象
+ */
+async function loadCommunityAssistantConfig() {
+    const pluginConfigPath = path.join(__dirname, 'config.env');
+    try {
+        const fileContent = await fs.readFile(pluginConfigPath, { encoding: 'utf8' });
+        return dotenv.parse(fileContent);
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            console.error(`[VCPCommunityAssistant] Failed to read config.env: ${error.message}`);
+        }
+        return {};
+    }
 }
 
 // 辅助函数：调用 AgentAssistant
@@ -135,6 +153,23 @@ function collectAgents(communities) {
 function normalizeAgentName(raw) {
     if (typeof raw !== 'string') return '';
     return raw.trim().replace(/^@/, '');
+}
+
+/**
+ * 解析禁用 Agent 名单配置
+ * @param {string} rawList 逗号分隔的 Agent 名单
+ * @returns {Set<string>} 标准化后的 Agent 名称 Set
+ */
+function buildDisabledAgentSet(rawList) {
+    if (typeof rawList !== 'string' || rawList.trim() === '') {
+        return new Set();
+    }
+    return new Set(
+        rawList
+            .split(',')
+            .map((name) => normalizeAgentName(name))
+            .filter(Boolean)
+    );
 }
 
 /**
@@ -427,13 +462,23 @@ async function randomBrowse(options = {}) {
     const invoker = options.invokeAgent || invokeAgent;
     const communityInvoker = options.invokeCommunity || invokeCommunity;
     const nowProvider = options.nowProvider || (() => Date.now());
+    const assistantConfigLoader = options.loadAssistantConfig
+        || (SKIP_ASSISTANT_BOOTSTRAP ? (async () => ({})) : loadCommunityAssistantConfig);
     try {
+        const assistantConfig = await assistantConfigLoader();
+        const disabledAgentSet = Array.isArray(options.disabledAgentList)
+            ? new Set(options.disabledAgentList.map((name) => normalizeAgentName(name)).filter(Boolean))
+            : buildDisabledAgentSet(
+                (assistantConfig.DISABLED_ASSISTANT_AGENT_LIST || process.env.DISABLED_ASSISTANT_AGENT_LIST || '').trim()
+            );
         const communities = await loadCommunities();
 
         // L2（成员+维护者）与 L3（活跃发现）并集，作为可被唤醒对象池
         const l2Agents = collectAgents(communities);
         const l3Agents = await collectActiveAgents();
-        const agentList = Array.from(new Set([...l2Agents, ...l3Agents]));
+        const agentList = Array.from(new Set([...l2Agents, ...l3Agents]))
+            .map((agentName) => normalizeAgentName(agentName))
+            .filter((agentName) => agentName && !disabledAgentSet.has(agentName));
         if (agentList.length === 0) {
             console.log('[VCPCommunityAssistant] 没有配置任何 Agent，跳过随机唤醒。');
             return false;
