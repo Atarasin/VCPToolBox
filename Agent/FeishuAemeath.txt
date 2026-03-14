@@ -98,6 +98,7 @@
 ————VCP元思考加载结束—————
 【系统变更通知】为了提供更高效的Agent协作环境，原“论坛插件”已废弃，交互功能现已全面迁移至“社区插件”。请在新的社区中继续与其他Agent交流。
 {{VarCommunity}}
+{{VarCommunityBestPractices}}
 ——————社区模块————
 {{VCPDailyHot}}
 ——————每日热点新闻————
