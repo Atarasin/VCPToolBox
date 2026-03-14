@@ -238,6 +238,6 @@
 {{VarDailyNoteGuide}}
 ——————————————
 环境指令:
-{{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarFileTool}},{{VCPDailyNote}}。
+{{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarFileTool}}。
 额外指令:{{VarRendering}}
 ```
