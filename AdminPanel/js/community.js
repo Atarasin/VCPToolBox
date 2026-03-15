@@ -227,33 +227,66 @@ function renderCommunityPosts(posts) {
         postsContainer.innerHTML = '<p>当前没有可浏览的社区帖子。</p>';
         return;
     }
+    const sortedPosts = [...posts].sort((a, b) => getPostLastActivityMs(b) - getPostLastActivityMs(a));
 
     const table = document.createElement('table');
     table.className = 'community-posts-list';
     table.innerHTML = `
         <thead>
             <tr>
-                <th style="width: 16%;">社区</th>
-                <th style="width: 44%;">标题</th>
+                <th style="width: 14%;">社区</th>
+                <th style="width: 34%;">帖子</th>
                 <th style="width: 14%;">作者</th>
-                <th style="width: 26%;">最后活动</th>
+                <th style="width: 19%;">创建时间</th>
+                <th style="width: 19%;">最后活动</th>
             </tr>
         </thead>
         <tbody></tbody>
     `;
     const tbody = table.querySelector('tbody');
-    posts.forEach((post) => {
+    sortedPosts.forEach((post) => {
+        const safeCommunityId = escapeHtml(post.communityId || 'unknown');
+        const safeTitle = escapeHtml(post.title || 'Untitled');
+        const safeUid = escapeHtml(post.uid || 'N/A');
+        const safeAuthor = escapeHtml(post.author || '未知');
+        const safeLastReplyBy = escapeHtml(post.lastReplyBy || '未知');
+        const authorInitial = escapeHtml((post.author || '?').trim().slice(0, 1).toUpperCase() || '?');
+        const createdAtText = formatTimestamp(post.timestamp);
+        const lastActivityTime = post.lastReplyAt || post.timestamp;
+        const lastActivityBy = post.lastReplyAt ? safeLastReplyBy : safeAuthor;
         const tr = document.createElement('tr');
         tr.dataset.uid = post.uid;
         tr.addEventListener('click', () => viewCommunityPost(post.uid));
-        const lastActive = post.lastReplyAt
-            ? `${post.lastReplyBy || '未知'}<br>${formatTimestamp(post.lastReplyAt)}`
-            : `${post.author}<br>${formatTimestamp(post.timestamp)}`;
         tr.innerHTML = `
-            <td><span class="post-meta">[${post.communityId}]</span></td>
-            <td><span class="post-title">${post.title}</span></td>
-            <td><span class="post-meta">${post.author}</span></td>
-            <td><span class="post-meta">${lastActive}</span></td>
+            <td>
+                <div class="community-cell-community">
+                    <span class="community-chip">${safeCommunityId}</span>
+                </div>
+            </td>
+            <td>
+                <div class="community-cell-post">
+                    <div class="post-title">${safeTitle}</div>
+                    <div class="post-submeta">UID: ${safeUid}</div>
+                </div>
+            </td>
+            <td>
+                <div class="community-cell-author">
+                    <span class="author-avatar">${authorInitial}</span>
+                    <span class="post-meta">${safeAuthor}</span>
+                </div>
+            </td>
+            <td>
+                <div class="community-time-cell">
+                    <span class="time-label">创建</span>
+                    <span class="time-value">${createdAtText}</span>
+                </div>
+            </td>
+            <td>
+                <div class="community-time-cell">
+                    <span class="time-label">${lastActivityBy}</span>
+                    <span class="time-value">${formatTimestamp(lastActivityTime)}</span>
+                </div>
+            </td>
         `;
         tbody.appendChild(tr);
     });
@@ -919,6 +952,27 @@ function closePostPanel() {
     if (communitySelect) communitySelect.value = '';
     if (titleInput) titleInput.value = '';
     if (contentInput) contentInput.value = '';
+}
+
+function getPostLastActivityMs(post) {
+    const lastActivity = post?.lastReplyAt || post?.timestamp;
+    return parseTimestampMs(lastActivity);
+}
+
+function parseTimestampMs(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return 0;
+    const directMs = Date.parse(raw);
+    if (!Number.isNaN(directMs)) return directMs;
+    const normalizedHyphenTime = raw.replace(
+        /(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/,
+        '$1-$2-$3T$4:$5:$6'
+    );
+    const normalizedMs = Date.parse(normalizedHyphenTime);
+    if (!Number.isNaN(normalizedMs)) return normalizedMs;
+    const legacyMs = Date.parse(raw.replace(/-/g, ':'));
+    if (!Number.isNaN(legacyMs)) return legacyMs;
+    return 0;
 }
 
 function formatTimestamp(value) {

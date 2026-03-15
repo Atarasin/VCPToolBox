@@ -517,29 +517,31 @@ async function randomBrowse(options = {}) {
             });
         }
 
+        const snapshotsWithDigest = snapshots.map((item) => ({
+            ...item,
+            digest: buildSituationDigest(item.situation),
+        }));
+        const changedSnapshots = snapshotsWithDigest.filter(
+            (item) => item.digest !== (item.agent_state.last_digest_hash || '')
+        );
+        const selectionPool = changedSnapshots.length > 0 ? changedSnapshots : snapshotsWithDigest;
         const selectedAgent = pickAgentByWeight(
-            snapshots.map((item) => ({ agentName: item.agent_name, weight: item.weight })),
+            selectionPool.map((item) => ({ agentName: item.agent_name, weight: item.weight })),
             Math.random()
         );
-        const selected = snapshots.find((item) => item.agent_name === selectedAgent);
+        const selected = selectionPool.find((item) => item.agent_name === selectedAgent);
         if (!selected) return false;
 
-        const digest = buildSituationDigest(selected.situation);
-        if (digest && digest === selected.agent_state.last_digest_hash) {
-            // 新旧摘要一致时跳过，避免重复提醒
-            state.agents[selected.agent_name] = {
-                ...selected.agent_state,
-                last_tick_at: now,
-            };
-            await saveAssistantState(state);
-            console.log(`[VCPCommunityAssistant] Agent ${selected.agent_name} 状态无变化，跳过本轮唤醒。`);
-            return false;
-        }
+        const digest = selected.digest;
+        const isKeepaliveWakeup = changedSnapshots.length === 0;
 
         const priorities = buildPriorityRecommendations(selected.situation, selected.agent_state.feedback);
-        console.log(`[VCPCommunityAssistant] 加权唤醒 Agent: ${selected.agent_name}（${selected.weight_reason}）`);
+        const selectionReason = isKeepaliveWakeup
+            ? `${selected.weight_reason}, 保活轮询`
+            : `${selected.weight_reason}, 命中状态变更`;
+        console.log(`[VCPCommunityAssistant] 加权唤醒 Agent: ${selected.agent_name}（${selectionReason}）`);
 
-        const prompt = buildActionBoardPrompt(selected.situation, priorities, selected.weight_reason);
+        const prompt = buildActionBoardPrompt(selected.situation, priorities, selectionReason);
 
         const invokeResult = await invoker(selected.agent_name, prompt);
         const actionSignals = parseAgentActionSignals(invokeResult);

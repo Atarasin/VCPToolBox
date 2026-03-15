@@ -14,7 +14,7 @@
     "protocol": "stdio",
     "timeout": 60000
   },
-  "refreshIntervalCron": "*/30 * * * *",
+  "refreshIntervalCron": "*/10 * * * *",
   "capabilities": {},
   "configSchema": {
     "DISABLED_ASSISTANT_AGENT_LIST": "string"

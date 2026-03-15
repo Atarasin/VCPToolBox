@@ -196,7 +196,7 @@ hello world
     assert.strictEqual(communityCalls.length, 1);
 }
 
-async function testRandomBrowseDigestDedup() {
+async function testRandomBrowseKeepaliveWakeup() {
     await resetFiles();
     await writeJson(COMMUNITIES_FILE, {
         communities: [
@@ -233,14 +233,15 @@ async function testRandomBrowseDigestDedup() {
             nowProvider: () => 3000,
         });
         assert.strictEqual(first, true);
-        assert.strictEqual(second, false);
+        assert.strictEqual(second, true);
     } finally {
         Math.random = originalRandom;
     }
 
-    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls.length, 2);
+    assert.ok(calls[1].prompt.includes('保活轮询'));
     const state = await readJson(ASSISTANT_STATE_FILE);
-    assert.strictEqual(state.agents.ArchitectAgent.last_tick_at, 3000);
+    assert.strictEqual(state.agents.ArchitectAgent.last_tick_at, 2000);
 }
 
 async function testWeightedSelectionByBacklog() {
@@ -431,8 +432,8 @@ async function run() {
     console.log('✓ 无 Agent 场景处理');
     await testRandomBrowseDiscoverFromPublicActivity();
     console.log('✓ public 社区活跃发现对象池');
-    await testRandomBrowseDigestDedup();
-    console.log('✓ 状态摘要去重逻辑');
+    await testRandomBrowseKeepaliveWakeup();
+    console.log('✓ 保活唤醒逻辑');
     await testWeightedSelectionByBacklog();
     console.log('✓ 加权随机选择逻辑');
     await testDisabledAssistantAgentList();

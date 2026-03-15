@@ -1269,6 +1269,84 @@ button[type="submit"]:hover {
     transform: translateY(-1px);
 }
 
+.community-posts-list .post-title {
+    color: var(--primary-text);
+    font-weight: 600;
+    line-height: 1.35;
+    margin-bottom: 4px;
+}
+
+.community-posts-list .post-submeta {
+    color: var(--secondary-text);
+    font-size: 0.82em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.community-posts-list .post-meta {
+    color: var(--secondary-text);
+    font-size: 0.9em;
+}
+
+.community-cell-community {
+    display: flex;
+    align-items: center;
+}
+
+.community-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(88, 166, 255, 0.45);
+    background: rgba(88, 166, 255, 0.12);
+    color: var(--highlight-text);
+    font-size: 0.84em;
+    font-weight: 600;
+}
+
+.community-cell-post {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.community-cell-author {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.author-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: linear-gradient(145deg, rgba(88, 166, 255, 0.28), rgba(88, 166, 255, 0.08));
+    color: var(--primary-text);
+    font-size: 0.78em;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-transform: uppercase;
+}
+
+.community-time-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.community-time-cell .time-label {
+    color: var(--secondary-text);
+    font-size: 0.8em;
+}
+
+.community-time-cell .time-value {
+    color: var(--primary-text);
+    font-size: 0.9em;
+}
+
 .community-post-content-view {
     padding: 22px;
     border: 1px solid var(--border-color);
