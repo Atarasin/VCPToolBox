@@ -111,4 +111,4 @@
 {{VarDailyNoteGuide}}
 ——————————————
 环境指令:
-{{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarFileTool}},{{VCPMCPO}}。
+{{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarServerFileTool}},{{VCPMCPO}}。
