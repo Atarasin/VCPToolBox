@@ -1,0 +1,63 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "WeChatPublisher",
+  "displayName": "微信公众号发布工作流",
+  "version": "0.1.3",
+  "description": "抓取 GitHub AI 项目语料，生成公众号前言，并通过 FeishuBridge 推送人工审核消息。",
+  "author": "VCPToolBox",
+  "pluginType": "synchronous",
+  "entryPoint": {
+    "type": "nodejs",
+    "command": "node index.js"
+  },
+  "communication": {
+    "protocol": "stdio",
+    "timeout": 120000
+  },
+  "configSchema": {
+    "WECHAT_PUBLISHER_SCHEDULE_HOURS": {
+      "type": "string",
+      "description": "每日触发小时列表，逗号分隔，默认 8,14,20",
+      "default": "8,14,20"
+    },
+    "WECHAT_PUBLISHER_MAX_ITEMS": {
+      "type": "integer",
+      "description": "每次抓取最大候选项目数",
+      "default": 20
+    },
+    "WECHAT_PUBLISHER_REVIEW_RECEIVE_ID_TYPE": {
+      "type": "string",
+      "description": "飞书接收者类型，可选 open_id/chat_id/email/user_id/union_id",
+      "default": "chat_id"
+    },
+    "WECHAT_PUBLISHER_REVIEW_RECEIVE_ID": {
+      "type": "string",
+      "description": "飞书接收者 ID",
+      "default": ""
+    }
+  },
+  "capabilities": {
+    "invocationCommands": [
+      {
+        "commandIdentifier": "RunWorkflow",
+        "description": "执行阶段1-3：定时触发上下文下抓取 GitHub 语料、生成公众号前言草稿，并调用 FeishuBridge 推送审核消息。参数:\n- force (boolean, 可选): true 时忽略 7 天去重。\n- dry_run (boolean, 可选): true 时不调用飞书推送。"
+      },
+      {
+        "commandIdentifier": "BootstrapSchedule",
+        "description": "创建每日 08:00/14:00/20:00 的后续调度任务。参数:\n- days (integer, 可选): 预创建天数，默认 1，最大 7。"
+      },
+      {
+        "commandIdentifier": "FetchCorpus",
+        "description": "仅执行阶段1，抓取并输出 GitHub 语料。参数:\n- force (boolean, 可选): true 时忽略 7 天去重。"
+      },
+      {
+        "commandIdentifier": "GenerateDraft",
+        "description": "仅执行阶段2，基于输入项目数据生成前言草稿。参数:\n- source (object, 必需): 单个项目数据对象。"
+      },
+      {
+        "commandIdentifier": "PushReview",
+        "description": "仅执行阶段3，将草稿推送到飞书审核。参数:\n- draft (object, 必需): 阶段2输出草稿对象。"
+      }
+    ]
+  }
+}
