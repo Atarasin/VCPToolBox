@@ -67,6 +67,14 @@ test('FeishuBridge initializes, registers routes, and shuts down', async () => {
     await plugin.shutdown();
 });
 
+test('FeishuBridge registerRoutes signature is PluginManager compatible', () => {
+    assert.equal(plugin.registerRoutes.length >= 4, true);
+    const app = createRouter();
+    const admin = createRouter();
+    plugin.registerRoutes(app, admin, {}, path.join(__dirname, '..', '..'));
+    assert.equal(admin.routes.post.has('/feishu-bridge/push'), true);
+});
+
 test('FeishuBridge requires app credentials', async () => {
     await assert.rejects(
         plugin.initialize({

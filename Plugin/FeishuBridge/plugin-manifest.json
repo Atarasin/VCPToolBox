@@ -2,7 +2,7 @@
   "manifestVersion": "1.0.0",
   "name": "FeishuBridge",
   "displayName": "飞书桥接插件",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "通过飞书长连接接入消息并桥接到 VCP 聊天接口。",
   "author": "Roo",
   "pluginType": "service",

@@ -1,5 +1,14 @@
 # FeishuBridge 版本变更日志
 
+## 0.6.3 - 2026-03-16
+
+### 修复
+- 修复 service 插件路由注册签名兼容问题，`registerRoutes` 统一为四参数签名，匹配 `PluginManager.initializeServices` 的调用分支。
+- 修复后 `POST /admin_api/feishu-bridge/push` 等管理路由可正常挂载，不再出现 404。
+
+### 测试覆盖
+- 新增路由注册签名兼容测试，校验 `registerRoutes` 与 PluginManager 调用约定一致。
+
 ## 0.6.2 - 2026-03-15
 
 ### 自动回复二进制下发增强：支持本地路径

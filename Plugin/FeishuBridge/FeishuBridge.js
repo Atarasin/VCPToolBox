@@ -340,7 +340,7 @@ async function initialize(config, dependencies) {
  * 注册 HTTP 路由接口
  * 提供状态查询、手动推送消息等管理功能
  */
-function registerRoutes(app, adminApiRouter) {
+function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
     if (adminApiRouter && typeof adminApiRouter.get === 'function') {
         adminApiRouter.get('/feishu-bridge/status', async (req, res) => {
             try {
