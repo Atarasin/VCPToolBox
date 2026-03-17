@@ -1,6 +1,11 @@
 const axios = require('axios');
 const crypto = require('crypto');
 
+/**
+ * 解析调度小时配置字符串
+ * @param {string} value - 以逗号分隔的小时字符串 (例如 "8,14,20")
+ * @returns {Array<number>} 排序后的小时数组 (0-23)
+ */
 function parseScheduleHours(value) {
     const raw = String(value || '8,14,20')
         .split(',')
@@ -11,6 +16,13 @@ function parseScheduleHours(value) {
     return unique.sort((a, b) => a - b);
 }
 
+/**
+ * 计算未来的运行时间点
+ * @param {Date} now - 当前时间
+ * @param {Array<number>} hours - 每天的运行小时
+ * @param {number} [days=1] - 计算未来几天的调度 (1-7天)
+ * @returns {Array<Date>} 排序后的未来运行时间点数组
+ */
 function computeUpcomingRuns(now, hours, days = 1) {
     const result = [];
     const targetDays = Math.max(1, Math.min(7, Number.parseInt(days, 10) || 1));
@@ -27,6 +39,13 @@ function computeUpcomingRuns(now, hours, days = 1) {
     return result.sort((a, b) => a.getTime() - b.getTime());
 }
 
+/**
+ * 初始化调度任务
+ * 计算未来运行时间并向调度系统注册任务
+ * @param {Object} options - 配置选项
+ * @returns {Promise<Object>} 注册结果
+ * @throws {Error} 如果缺少 Key 或注册失败
+ */
 async function bootstrapSchedules(options = {}) {
     const config = options.config || {};
     const port = config.PORT || process.env.PORT || '8080';
