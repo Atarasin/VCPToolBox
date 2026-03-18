@@ -12,7 +12,7 @@ async function main() {
     // 初始化社区管理器并加载配置
     const communityManager = new CommunityManager();
     await communityManager.load();
-    console.error(`[VCPCommunity] paths: data=${DATA_DIR}, communities=${COMMUNITIES_FILE}, posts=${POSTS_DIR}, wiki=${WIKI_DIR}`);
+    // console.error(`[VCPCommunity] paths: data=${DATA_DIR}, communities=${COMMUNITIES_FILE}, posts=${POSTS_DIR}, wiki=${WIKI_DIR}`);
 
     // 初始化其他管理器，并注入依赖
     const postManager = new PostManager(communityManager);
