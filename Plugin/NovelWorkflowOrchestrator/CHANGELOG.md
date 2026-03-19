@@ -17,6 +17,11 @@
 - 批次 D：更新 README 配置与示例，移除单项目并行表述并对齐单 Tick 单任务语义。
 - 批次 D：补充“设定回合达到最大轮次触发人工介入”集成测试。
 - 批次 D：收敛发布记录，确保 README、测试与当前串行实现一致。
+- 修复人工介入入口可见性：在 tick 结果与 checkpoint 中新增 `manualReviewEntry/replyTemplate`，可直接复制提交 `manualReplies`。
+- 新增无 stdin 定时模式输入回退：自动消费 `storage/inbox/acks.json` 与 `storage/inbox/manual_replies.json`。
+- 新增 inbox 消费原子清空与审计留痕，避免重复消费。
+- 补充单测覆盖 inbox 输入消费与主入口无 stdin 回退读取逻辑。
+- 提取本地时间格式化为公共工具模块 `lib/utils/time.js`，复用于核心与管理器模块。
 
 ## 0.4.0 - 2026-03-18
 

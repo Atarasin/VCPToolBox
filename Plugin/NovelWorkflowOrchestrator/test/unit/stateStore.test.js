@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs/promises');
 const { createStateStore, createDefaultProjectState } = require('../../lib/storage/stateStore');
-const { parseStageAgentsFromEnv } = require('../../NovelWorkflowOrchestrator');
+const { parseStageAgentsFromEnv, resolveTickInput } = require('../../NovelWorkflowOrchestrator');
 
 test('stateStore 初始化目录并写入项目、快照、审计', async () => {
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-store-'));
@@ -58,6 +58,8 @@ test('stateStore 并发写入项目状态时保持文件可读', async () => {
 test('createDefaultProjectState 包含串行化改造字段', () => {
   const project = createDefaultProjectState('project_serial', new Date('2026-03-19T00:00:00.000Z'));
   assert.equal(project.activeWakeupId, null);
+  assert.match(project.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+  assert.equal(project.createdAt.endsWith('Z'), false);
   assert.deepEqual(project.debate, {
     role: 'designer',
     round: 0,
@@ -102,5 +104,81 @@ test('parseStageAgentsFromEnv 解析设定阶段设计者与挑刺者配置', ()
     Object.entries(backup).forEach(([key, value]) => {
       process.env[key] = value;
     });
+  }
+});
+
+test('stateStore 可消费 inbox 输入并清空文件', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-store-inbox-'));
+  const store = createStateStore({
+    pluginRoot,
+    storageRoot: 'storage'
+  });
+  await store.ensureStorageLayout();
+  await fs.writeFile(
+    path.join(store.paths.inbox, 'acks.json'),
+    JSON.stringify({
+      acks: [
+        {
+          projectId: 'project_inbox',
+          wakeupId: 'wk_inbox_1',
+          ackStatus: 'acted'
+        }
+      ]
+    }),
+    'utf8'
+  );
+  await fs.writeFile(
+    path.join(store.paths.inbox, 'manual_replies.json'),
+    JSON.stringify({
+      manualReplies: [
+        {
+          projectId: 'project_inbox',
+          decision: 'resume',
+          resumeStage: 'SETUP_WORLD',
+          resumeSubstate: null
+        }
+      ]
+    }),
+    'utf8'
+  );
+
+  const consumed = await store.consumeInboxInput();
+  assert.equal(consumed.acks.length, 1);
+  assert.equal(consumed.manualReplies.length, 1);
+
+  const emptiedAcks = JSON.parse(await fs.readFile(path.join(store.paths.inbox, 'acks.json'), 'utf8'));
+  const emptiedReplies = JSON.parse(await fs.readFile(path.join(store.paths.inbox, 'manual_replies.json'), 'utf8'));
+  assert.deepEqual(emptiedAcks, { acks: [] });
+  assert.deepEqual(emptiedReplies, { manualReplies: [] });
+});
+
+test('resolveTickInput 在无stdin时回退读取 inbox', async () => {
+  const pluginRoot = path.resolve(path.join(__dirname, '..', '..'));
+  const storageRoot = path.join(pluginRoot, 'storage');
+  const inboxDir = path.join(storageRoot, 'inbox');
+  await fs.mkdir(inboxDir, { recursive: true });
+  const ackPath = path.join(inboxDir, 'acks.json');
+  const manualPath = path.join(inboxDir, 'manual_replies.json');
+  const backupAcks = await fs.readFile(ackPath, 'utf8').catch(() => null);
+  const backupManual = await fs.readFile(manualPath, 'utf8').catch(() => null);
+
+  await fs.writeFile(ackPath, JSON.stringify({ acks: [{ projectId: 'project_fallback', wakeupId: 'wk_fallback', ackStatus: 'acted' }] }), 'utf8');
+  await fs.writeFile(manualPath, JSON.stringify({ manualReplies: [] }), 'utf8');
+
+  try {
+    const resolved = await resolveTickInput('', { storageDir: 'storage' });
+    assert.equal(resolved.acks.length, 1);
+    assert.equal(resolved.acks[0].projectId, 'project_fallback');
+  } finally {
+    if (backupAcks === null) {
+      await fs.rm(ackPath, { force: true });
+    } else {
+      await fs.writeFile(ackPath, backupAcks, 'utf8');
+    }
+    if (backupManual === null) {
+      await fs.rm(manualPath, { force: true });
+    } else {
+      await fs.writeFile(manualPath, backupManual, 'utf8');
+    }
   }
 });

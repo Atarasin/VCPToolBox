@@ -1,4 +1,5 @@
 const { CHAPTER_SUBSTATES, routeChapterSubstate } = require('./stateRouter');
+const { toLocalIsoString } = require('../utils/time');
 
 /**
  * 顶层工作流状态机定义。
@@ -84,7 +85,7 @@ function applyStateTransition(project, ack, now = new Date()) {
   const nextProject = {
     ...project,
     debate,
-    updatedAt: now.toISOString()
+    updatedAt: toLocalIsoString(now)
   };
 
   if (!ack || !ackStatus) {

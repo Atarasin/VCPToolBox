@@ -1,6 +1,7 @@
 /**
  * 人工介入管理器：处理停滞检测、冻结、人工回复恢复与终止逻辑。
  */
+const { toLocalIsoString } = require('../utils/time');
 
 /**
  * 从输入中提取指定项目的人工回复。
@@ -84,8 +85,8 @@ async function openManualReview(store, project, payload, now = new Date()) {
       lastWakeups: payload.lastWakeups || []
     },
     humanReply: null,
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString()
+    createdAt: toLocalIsoString(now),
+    updatedAt: toLocalIsoString(now)
   };
   await store.putManualReview(project.projectId, manualPayload);
   const updatedProject = {
@@ -93,12 +94,12 @@ async function openManualReview(store, project, payload, now = new Date()) {
     state: 'PAUSED_MANUAL_REVIEW',
     manualReview: {
       status: 'waiting_human_reply',
-      requestedAt: now.toISOString(),
+      requestedAt: toLocalIsoString(now),
       resumeStage: payload.resumeStage || project.state,
       resumeSubstate: payload.resumeSubstate ?? project.substate ?? null,
       triggerReason: payload.triggerReason
     },
-    updatedAt: now.toISOString()
+    updatedAt: toLocalIsoString(now)
   };
   return {
     project: updatedProject,
@@ -139,8 +140,8 @@ async function applyManualReply(store, project, input, now = new Date()) {
     ...manualRecord,
     status: 'resolved',
     humanReply: reply,
-    resolvedAt: now.toISOString(),
-    updatedAt: now.toISOString()
+    resolvedAt: toLocalIsoString(now),
+    updatedAt: toLocalIsoString(now)
   });
 
   if (decision === 'abort') {
@@ -152,10 +153,10 @@ async function applyManualReply(store, project, input, now = new Date()) {
         manualReview: {
           ...project.manualReview,
           status: 'resolved',
-          resolvedAt: now.toISOString(),
+          resolvedAt: toLocalIsoString(now),
           decision: 'abort'
         },
-        updatedAt: now.toISOString()
+        updatedAt: toLocalIsoString(now)
       },
       consumed: true,
       resolved: true,
@@ -171,14 +172,14 @@ async function applyManualReply(store, project, input, now = new Date()) {
       manualReview: {
         ...project.manualReview,
         status: 'resolved',
-        resolvedAt: now.toISOString(),
+        resolvedAt: toLocalIsoString(now),
         decision: decision || 'resume'
       },
       stagnation: {
         ...(project.stagnation || {}),
         unchangedTicks: 0
       },
-      updatedAt: now.toISOString()
+      updatedAt: toLocalIsoString(now)
     },
     consumed: true,
     resolved: true,

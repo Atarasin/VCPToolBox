@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const path = require('path');
 const { createStateStore } = require('../storage/stateStore');
 const { applyStateTransition, TOP_LEVEL_STATES } = require('./workflowStateMachine');
 const { resolveAgentsForProject } = require('../managers/agentMappingResolver');
@@ -12,6 +13,7 @@ const {
   openManualReview,
   applyManualReply
 } = require('../managers/manualInterventionManager');
+const { toLocalIsoString, toLocalCompactTimestamp } = require('../utils/time');
 
 /**
  * Tick 运行器：负责一次完整轮询中的状态推进、质量治理、任务派发与审计落盘。
@@ -24,7 +26,7 @@ const {
  * @returns {string} 时间片+随机后缀的 tickId
  */
 function createTickId(now) {
-  const base = now.toISOString().replace(/[^\d]/g, '').slice(0, 14);
+  const base = toLocalCompactTimestamp(now);
   return `${base}_${crypto.randomUUID().slice(0, 8)}`;
 }
 
@@ -152,6 +154,33 @@ function applyCounterUpdates(counters, stateBeforeTransition, ack, transitionRea
   return next;
 }
 
+function buildManualReviewEntry(project, storagePaths) {
+  if (String(project?.manualReview?.status || '') !== 'waiting_human_reply') {
+    return null;
+  }
+  const resumeStage = project?.manualReview?.resumeStage || 'CHAPTER_CREATION';
+  const resumeSubstate = project?.manualReview?.resumeSubstate ?? null;
+  return {
+    projectId: project.projectId,
+    status: 'waiting_human_reply',
+    triggerReason: project?.manualReview?.triggerReason || 'manual_review_pending',
+    requestedAt: project?.manualReview?.requestedAt || null,
+    resumeStage,
+    resumeSubstate,
+    manualRecordPath: path.join(storagePaths.manualReview, `${project.projectId}.json`),
+    replyTemplate: {
+      manualReplies: [
+        {
+          projectId: project.projectId,
+          decision: 'resume',
+          resumeStage,
+          resumeSubstate
+        }
+      ]
+    }
+  };
+}
+
 /**
  * 执行一次 tick。
  * 异常处理：本函数不吞并存储/锁/IO 异常，统一向上抛出以便上层重试与告警。
@@ -187,6 +216,7 @@ async function runTick(options) {
   let wakeupsAcked = 0;
   let manualInterventionsOpened = 0;
   let manualInterventionsResolved = 0;
+  const manualReviewPending = [];
 
   // 项目级串行处理：确保单项目状态快照与任务派发顺序一致。
   for (const originalProject of projects) {
@@ -256,7 +286,7 @@ async function runTick(options) {
           substate: project.substate,
           quality: qualityApplied.quality,
           ack: gatedAck,
-          createdAt: now.toISOString()
+          createdAt: toLocalIsoString(now)
         }, now);
       }
 
@@ -321,7 +351,7 @@ async function runTick(options) {
       ? {
         wakeupId: ack.wakeupId || null,
         ackStatus: ack.ackStatus || null,
-        receivedAt: now.toISOString()
+        receivedAt: toLocalIsoString(now)
       }
       : null;
 
@@ -381,9 +411,13 @@ async function runTick(options) {
     project.lastProgress.lastWakeupIds = dispatchedTasks.map(item => item.wakeupId);
     project.lastProgress.lastWakeupCount = dispatchedTasks.length;
     project.lastProgress.counterSnapshot = counters;
-    project.updatedAt = now.toISOString();
+    project.updatedAt = toLocalIsoString(now);
     await store.putProjectState(project);
     await store.putCounters(project.projectId, counters);
+    const manualReviewEntry = buildManualReviewEntry(project, store.paths);
+    if (manualReviewEntry) {
+      manualReviewPending.push(manualReviewEntry);
+    }
 
     const snapshot = {
       tickId,
@@ -395,7 +429,8 @@ async function runTick(options) {
       ackStatus: gatedAck?.ackStatus || null,
       dispatchedWakeupIds: dispatchedTasks.map(item => item.wakeupId),
       counters,
-      updatedAt: now.toISOString()
+      manualReviewEntry,
+      updatedAt: toLocalIsoString(now)
     };
     checkpoints.push(await store.writeCheckpoint(project.projectId, snapshot, now));
     wakeupSummary.push({
@@ -425,13 +460,14 @@ async function runTick(options) {
       root: store.paths.root,
       checkpointsWritten: checkpoints.length
     },
+    manualReviewPending,
     wakeupSummary
   };
 
   // 审计记录用于离线回放和问题定位。
   const auditPath = await store.writeAudit(tickId, {
     tickId,
-    triggeredAt: now.toISOString(),
+    triggeredAt: toLocalIsoString(now),
     input: options.input || {},
     config: {
       enableAutonomousTick: Boolean(config.enableAutonomousTick),

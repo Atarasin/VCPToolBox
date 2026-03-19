@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { toLocalIsoString } = require('../utils/time');
 
 /**
  * 唤醒派发器：负责构建任务并持久化落盘。
@@ -43,7 +44,7 @@ function createWakeupTask(project, targetAgent, context, tickId) {
       retryCount: 0,
       nextRetryAt: null
     },
-    dispatchedAt: new Date().toISOString()
+    dispatchedAt: toLocalIsoString(new Date())
   };
 }
 

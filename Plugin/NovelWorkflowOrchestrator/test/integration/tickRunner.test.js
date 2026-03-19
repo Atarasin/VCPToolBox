@@ -242,6 +242,10 @@ test('tickRunner 在设定回合达到最大轮次时触发人工介入', async 
 
   assert.equal(tick.manualInterventionsOpened >= 1, true);
   assert.equal(tick.wakeupSummary[0].decision, 'manual_review_opened');
+  assert.equal(Array.isArray(tick.manualReviewPending), true);
+  assert.equal(tick.manualReviewPending.length >= 1, true);
+  assert.equal(tick.manualReviewPending[0].projectId, projectId);
+  assert.equal(tick.manualReviewPending[0].replyTemplate.manualReplies[0].decision, 'resume');
   const updatedProject = await store.getProjectState(projectId);
   assert.equal(updatedProject.state, 'PAUSED_MANUAL_REVIEW');
 });
@@ -270,10 +274,14 @@ test('tickRunner 连续停滞可触发人工介入并冻结唤醒', async () => 
 
   assert.equal(fourthTick.manualInterventionsOpened >= 1, true);
   assert.equal(fourthTick.wakeupSummary[0].decision, 'manual_review_opened');
+  assert.equal(fourthTick.manualReviewPending.length >= 1, true);
+  assert.equal(fourthTick.manualReviewPending[0].projectId, 'novel_week3_manual');
 
   const frozenTick = await runTick({ pluginRoot, input: {}, config });
   assert.equal(frozenTick.wakeupSummary[0].decision, 'manual_review_pending');
   assert.equal(frozenTick.wakeupsDispatched, 0);
+  assert.equal(frozenTick.manualReviewPending.length >= 1, true);
+  assert.equal(frozenTick.manualReviewPending[0].replyTemplate.manualReplies[0].projectId, 'novel_week3_manual');
 });
 
 test('tickRunner 接收人工回复后可恢复调度', async () => {

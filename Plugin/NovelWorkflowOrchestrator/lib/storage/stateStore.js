@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { acquireFileLock } = require('./fileLock');
 const { toStablePrettyJson } = require('./serializers');
+const { toLocalIsoString, toLocalCompactTimestamp } = require('../utils/time');
 
 /**
  * 文件状态存储模块：统一管理项目状态、唤醒任务、计数器、人工介入与审计数据。
@@ -22,6 +23,7 @@ function buildStoragePaths(storageRoot) {
     counters: path.join(storageRoot, 'counters'),
     qualityReports: path.join(storageRoot, 'quality_reports'),
     manualReview: path.join(storageRoot, 'manual_review'),
+    inbox: path.join(storageRoot, 'inbox'),
     checkpoints: path.join(storageRoot, 'checkpoints'),
     audit: path.join(storageRoot, 'audit')
   };
@@ -90,6 +92,10 @@ function buildManualReviewFilePath(projectId, paths) {
   return path.join(paths.manualReview, `${projectId}.json`);
 }
 
+function buildInboxFilePath(name, paths) {
+  return path.join(paths.inbox, `${name}.json`);
+}
+
 /**
  * 原子写入 JSON 文件。
  * 关键逻辑：先写临时文件再 rename，避免半写入状态污染正式文件。
@@ -123,7 +129,7 @@ function createDefaultCounters(projectId) {
     chapterIterations: {
       default_chapter: 0
     },
-    updatedAt: new Date().toISOString()
+    updatedAt: toLocalIsoString(new Date())
   };
 }
 
@@ -136,7 +142,7 @@ function createDefaultCounters(projectId) {
  * @returns {object} 默认项目状态对象
  */
 function createDefaultProjectState(projectId, now, options = {}) {
-  const timestamp = now.toISOString();
+  const timestamp = toLocalIsoString(now);
   return {
     projectId,
     state: 'INIT',
@@ -275,7 +281,7 @@ function createStateStore(options) {
    * @returns {Promise<string>} 检查点文件路径
    */
   async function writeCheckpoint(projectId, payload, now = new Date()) {
-    const ts = now.toISOString().replace(/[^\d]/g, '').slice(0, 14);
+    const ts = toLocalCompactTimestamp(now);
     const filePath = path.join(paths.checkpoints, `${projectId}_${ts}.json`);
     await atomicWriteJson(filePath, payload);
     return filePath;
@@ -373,7 +379,7 @@ function createStateStore(options) {
       ...current,
       ackStatus: ack.ackStatus || current.ackStatus || 'unknown',
       ackPayload: ack,
-      ackedAt: now.toISOString()
+      ackedAt: toLocalIsoString(now)
     }));
   }
 
@@ -401,7 +407,7 @@ function createStateStore(options) {
       await atomicWriteJson(buildCounterFilePath(projectId, paths), {
         ...counters,
         projectId,
-        updatedAt: new Date().toISOString()
+        updatedAt: toLocalIsoString(new Date())
       });
     } finally {
       await lock.release();
@@ -461,10 +467,41 @@ function createStateStore(options) {
    * @returns {Promise<string>} 报告文件路径
    */
   async function writeQualityReport(projectId, chapterId, payload, now = new Date()) {
-    const ts = now.toISOString().replace(/[^\d]/g, '').slice(0, 14);
+    const ts = toLocalCompactTimestamp(now);
     const filePath = path.join(paths.qualityReports, `${projectId}_${chapterId}_${ts}.json`);
     await atomicWriteJson(filePath, payload);
     return filePath;
+  }
+
+  async function consumeInboxInput(now = new Date()) {
+    const lockPath = path.join(paths.inbox, 'inbox.lock');
+    const lock = await acquireFileLock(lockPath);
+    try {
+      const ackPayload = await readJson(buildInboxFilePath('acks', paths), { acks: [] });
+      const manualPayload = await readJson(buildInboxFilePath('manual_replies', paths), { manualReplies: [] });
+      const acks = Array.isArray(ackPayload?.acks)
+        ? ackPayload.acks
+        : (Array.isArray(ackPayload) ? ackPayload : []);
+      const manualReplies = Array.isArray(manualPayload?.manualReplies)
+        ? manualPayload.manualReplies
+        : (Array.isArray(manualPayload) ? manualPayload : []);
+
+      if (acks.length > 0 || manualReplies.length > 0) {
+        const ts = toLocalCompactTimestamp(now);
+        const consumedPath = path.join(paths.audit, `inbox_consumed_${ts}_${crypto.randomUUID().slice(0, 8)}.json`);
+        await atomicWriteJson(consumedPath, {
+          consumedAt: toLocalIsoString(now),
+          acks,
+          manualReplies
+        });
+      }
+
+      await atomicWriteJson(buildInboxFilePath('acks', paths), { acks: [] });
+      await atomicWriteJson(buildInboxFilePath('manual_replies', paths), { manualReplies: [] });
+      return { acks, manualReplies };
+    } finally {
+      await lock.release();
+    }
   }
 
   return {
@@ -487,7 +524,8 @@ function createStateStore(options) {
     bootstrapCountersIfNeeded,
     getManualReview,
     putManualReview,
-    writeQualityReport
+    writeQualityReport,
+    consumeInboxInput
   };
 }
 

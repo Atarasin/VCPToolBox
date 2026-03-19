@@ -1,6 +1,7 @@
 const path = require('path');
 const dotenv = require('dotenv');
 const { runTick } = require('./lib/core/tickRunner');
+const { createStateStore } = require('./lib/storage/stateStore');
 
 const PLUGIN_ROOT = __dirname;
 
@@ -48,6 +49,26 @@ function parseInput(rawInput) {
     return {};
   }
   return JSON.parse(trimmed);
+}
+
+async function resolveTickInput(rawInput, runtimeConfig) {
+  const trimmed = String(rawInput || '').trim();
+  if (trimmed) {
+    return parseInput(trimmed);
+  }
+  const store = createStateStore({
+    pluginRoot: PLUGIN_ROOT,
+    storageRoot: runtimeConfig.storageDir || 'storage'
+  });
+  await store.ensureStorageLayout();
+  const inboxInput = await store.consumeInboxInput();
+  if (
+    Array.isArray(inboxInput.acks) && inboxInput.acks.length > 0 ||
+    Array.isArray(inboxInput.manualReplies) && inboxInput.manualReplies.length > 0
+  ) {
+    return inboxInput;
+  }
+  return {};
 }
 
 function parseStageAgentsFromEnv() {
@@ -101,11 +122,12 @@ function getRuntimeConfig() {
 
 async function main() {
   try {
-    const input = parseInput(await readStdin());
+    const config = getRuntimeConfig();
+    const input = await resolveTickInput(await readStdin(), config);
     const result = await runTick({
       pluginRoot: PLUGIN_ROOT,
       input,
-      config: getRuntimeConfig()
+      config
     });
     process.stdout.write(JSON.stringify(result, null, 2));
     console.error('[NovelWorkflowOrchestrator] Tick completed successfully');
@@ -133,6 +155,7 @@ if (require.main === module) {
 module.exports = {
   main,
   parseInput,
+  resolveTickInput,
   getRuntimeConfig,
   parseStageAgentsFromEnv
 };
