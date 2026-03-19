@@ -232,8 +232,64 @@ storage/
   "wakeupsDispatched": 1,
   "manualInterventionsOpened": 0,
   "manualInterventionsResolved": 0,
+  "health": {
+    "status": "green",
+    "score": 100,
+    "source": "execution_bridge",
+    "backlogAlertTriggered": false
+  },
   "manualReviewPending": [],
   "wakeupSummary": []
+}
+```
+
+说明：
+
+- `health` 是顶层固定字段，运维侧可直接读取，无需依赖 `execution` 子对象。
+- 当执行器关闭时：`status=not_available`；执行器开启但本轮无执行数据时：`status=unknown`。
+
+执行桥接详细字段示例：
+
+```json
+{
+  "execution": {
+    "scanned": 2,
+    "executed": 1,
+    "failed": 1,
+    "retried": 1,
+    "producedAcks": 1,
+    "metrics": {
+      "successRate": 0.5,
+      "retryRate": 0.5,
+      "averageDurationMs": 128.4,
+      "queueBefore": {
+        "pendingTotal": 4,
+        "pendingReady": 3,
+        "pendingDelayed": 1,
+        "running": 0,
+        "failed": 2,
+        "succeeded": 9
+      },
+      "queueAfter": {
+        "pendingTotal": 3,
+        "pendingReady": 2,
+        "pendingDelayed": 1,
+        "running": 0,
+        "failed": 3,
+        "succeeded": 10
+      }
+    },
+    "backlogAlert": {
+      "triggered": false,
+      "threshold": 100,
+      "pendingTotal": 3,
+      "pendingReady": 2
+    },
+    "health": {
+      "status": "yellow",
+      "score": 68
+    }
+  }
 }
 ```
 
@@ -293,6 +349,21 @@ NWO_SETUP_MAX_DEBATE_ROUNDS=3
 NWO_CHAPTER_MAX_ITERATIONS=3
 NWO_CHAPTER_OUTLINE_COVERAGE_MIN=0.90
 NWO_CHAPTER_POINT_COVERAGE_MIN=0.95
+```
+
+### 6.4 执行层可靠性参数
+
+```env
+NWO_EXECUTOR_ENABLED=true
+NWO_EXECUTOR_TYPE=agent_assistant
+NWO_EXECUTOR_MAX_WAKEUPS=20
+NWO_EXECUTOR_MAX_RETRIES=3
+NWO_EXECUTOR_RETRY_BACKOFF_SEC=30
+NWO_EXECUTOR_BACKLOG_ALERT_THRESHOLD=100
+NWO_AGENTASSISTANT_TIMEOUT_MS=120000
+NWO_AGENTASSISTANT_API_HOST=127.0.0.1
+NWO_AGENTASSISTANT_API_PORT=5678
+NWO_AGENTASSISTANT_API_PATH=/v1/human/tool
 ```
 
 ## 7. 使用示例
@@ -356,7 +427,7 @@ NWO_CHAPTER_POINT_COVERAGE_MIN=0.95
 - 当前通信协议仍定义为 `stdio`，inbox 回退属于运行时增强路径，非 manifest 层显式契约。
 - 单项目单 Tick 单任务是硬约束，吞吐量受 Tick 周期与项目数上限影响。
 - 章节迭代使用 `default_chapter` 聚合计数，暂未细分到多章节 ID 粒度。
-- 插件不内建外部 Agent 执行器，ACK 生产依赖外部系统。
+- 已内建 AgentAssistant 执行桥接器，但仍依赖外部 VCP API 的可用性与鉴权配置。
 
 ## 10. 后续扩展计划
 
@@ -393,4 +464,3 @@ NWO_CHAPTER_POINT_COVERAGE_MIN=0.95
 | 人工介入 | `lib/managers/manualInterventionManager.js` |
 | 文件存储 | `lib/storage/stateStore.js` |
 | 文件锁 | `lib/storage/fileLock.js` |
-

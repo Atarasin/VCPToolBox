@@ -89,6 +89,54 @@
       "type": "boolean",
       "default": true
     },
+    "NWO_EXECUTOR_ENABLED": {
+      "type": "boolean",
+      "default": false
+    },
+    "NWO_EXECUTOR_TYPE": {
+      "type": "string",
+      "default": "agent_assistant"
+    },
+    "NWO_EXECUTOR_MAX_WAKEUPS": {
+      "type": "integer",
+      "default": 20
+    },
+    "NWO_EXECUTOR_MAX_RETRIES": {
+      "type": "integer",
+      "default": 3
+    },
+    "NWO_EXECUTOR_RETRY_BACKOFF_SEC": {
+      "type": "integer",
+      "default": 30
+    },
+    "NWO_EXECUTOR_BACKLOG_ALERT_THRESHOLD": {
+      "type": "integer",
+      "default": 100
+    },
+    "NWO_AGENTASSISTANT_TEMPORARY_CONTACT": {
+      "type": "boolean",
+      "default": false
+    },
+    "NWO_AGENTASSISTANT_TIMEOUT_MS": {
+      "type": "integer",
+      "default": 120000
+    },
+    "NWO_AGENTASSISTANT_API_HOST": {
+      "type": "string",
+      "default": "127.0.0.1"
+    },
+    "NWO_AGENTASSISTANT_API_PORT": {
+      "type": "integer",
+      "default": 5678
+    },
+    "NWO_AGENTASSISTANT_API_PATH": {
+      "type": "string",
+      "default": "/v1/human/tool"
+    },
+    "NWO_AGENTASSISTANT_API_KEY": {
+      "type": "string",
+      "default": ""
+    },
     "NWO_STAGE_SETUP_WORLD_DESIGNER": {
       "type": "string",
       "default": ""

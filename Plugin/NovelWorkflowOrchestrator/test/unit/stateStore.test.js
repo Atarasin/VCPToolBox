@@ -182,3 +182,111 @@ test('resolveTickInput 在无stdin时回退读取 inbox', async () => {
     }
   }
 });
+
+test('stateStore 可追加ACK到inbox并按projectId+wakeupId去重', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-store-inbox-append-'));
+  const store = createStateStore({
+    pluginRoot,
+    storageRoot: 'storage'
+  });
+  await store.ensureStorageLayout();
+
+  await store.appendAcksToInbox([
+    { projectId: 'p1', wakeupId: 'wk1', ackStatus: 'waiting' },
+    { projectId: 'p1', wakeupId: 'wk2', ackStatus: 'acted' }
+  ]);
+  await store.appendAcksToInbox([
+    { projectId: 'p1', wakeupId: 'wk1', ackStatus: 'acted' }
+  ]);
+
+  const loaded = JSON.parse(await fs.readFile(path.join(store.paths.inbox, 'acks.json'), 'utf8'));
+  assert.equal(loaded.acks.length, 2);
+  const wk1 = loaded.acks.find(item => item.wakeupId === 'wk1');
+  assert.equal(wk1.ackStatus, 'acted');
+});
+
+test('stateStore listPendingWakeups 仅返回到期重试任务', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-store-pending-wakeups-'));
+  const store = createStateStore({
+    pluginRoot,
+    storageRoot: 'storage'
+  });
+  await store.ensureStorageLayout();
+  const now = new Date('2026-03-20T10:00:00.000Z');
+
+  await store.putWakeupTask({
+    wakeupId: 'wk_due',
+    projectId: 'p_due',
+    tickId: 't1',
+    targetAgent: 'a1',
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    nextRetryAt: '2026-03-20T09:59:00.000+08:00',
+    dispatchedAt: '2026-03-20T09:00:00.000+08:00'
+  });
+  await store.putWakeupTask({
+    wakeupId: 'wk_not_due',
+    projectId: 'p_not_due',
+    tickId: 't1',
+    targetAgent: 'a2',
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    nextRetryAt: '2099-01-01T00:00:00.000+08:00',
+    dispatchedAt: '2026-03-20T09:00:01.000+08:00'
+  });
+
+  const pending = await store.listPendingWakeups(20, now);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].wakeupId, 'wk_due');
+});
+
+test('stateStore summarizeWakeupQueue 可统计积压与执行状态', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-store-queue-summary-'));
+  const store = createStateStore({
+    pluginRoot,
+    storageRoot: 'storage'
+  });
+  await store.ensureStorageLayout();
+  const now = new Date('2026-03-20T10:00:00.000Z');
+
+  await store.putWakeupTask({
+    wakeupId: 'wk_queue_ready',
+    projectId: 'p1',
+    tickId: 't1',
+    targetAgent: 'a1',
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    nextRetryAt: null,
+    dispatchedAt: '2026-03-20T09:00:00.000+08:00'
+  });
+  await store.putWakeupTask({
+    wakeupId: 'wk_queue_delayed',
+    projectId: 'p2',
+    tickId: 't1',
+    targetAgent: 'a2',
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    nextRetryAt: '2099-01-01T00:00:00.000+08:00',
+    dispatchedAt: '2026-03-20T09:00:01.000+08:00'
+  });
+  await store.putWakeupTask({
+    wakeupId: 'wk_queue_running',
+    projectId: 'p3',
+    tickId: 't1',
+    targetAgent: 'a3',
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'running',
+    dispatchedAt: '2026-03-20T09:00:02.000+08:00'
+  });
+
+  const summary = await store.summarizeWakeupQueue(now);
+  assert.equal(summary.pendingTotal, 2);
+  assert.equal(summary.pendingReady, 1);
+  assert.equal(summary.pendingDelayed, 1);
+  assert.equal(summary.running, 1);
+});

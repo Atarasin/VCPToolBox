@@ -2,6 +2,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const { runTick } = require('./lib/core/tickRunner');
 const { createStateStore } = require('./lib/storage/stateStore');
+const { executePendingWakeups } = require('./lib/execution/agentAssistantBridge');
 
 const PLUGIN_ROOT = __dirname;
 
@@ -116,7 +117,45 @@ function getRuntimeConfig() {
     chapterWordcountMinRatio: parseFloatNumber(process.env.NWO_CHAPTER_WORDCOUNT_MIN_RATIO, 0.9),
     chapterWordcountMaxRatio: parseFloatNumber(process.env.NWO_CHAPTER_WORDCOUNT_MAX_RATIO, 1.1),
     criticalInconsistencyZeroTolerance: parseBoolean(process.env.NWO_CRITICAL_INCONSISTENCY_ZERO_TOLERANCE, true),
+    executorEnabled: parseBoolean(process.env.NWO_EXECUTOR_ENABLED, false),
+    executorType: process.env.NWO_EXECUTOR_TYPE || 'agent_assistant',
+    executorMaxWakeups: parseInteger(process.env.NWO_EXECUTOR_MAX_WAKEUPS, 20),
+    executorMaxRetries: parseInteger(process.env.NWO_EXECUTOR_MAX_RETRIES, 3),
+    executorRetryBackoffSec: parseInteger(process.env.NWO_EXECUTOR_RETRY_BACKOFF_SEC, 30),
+    executorBacklogAlertThreshold: parseInteger(process.env.NWO_EXECUTOR_BACKLOG_ALERT_THRESHOLD, 100),
+    agentAssistantTemporaryContact: parseBoolean(process.env.NWO_AGENTASSISTANT_TEMPORARY_CONTACT, false),
+    agentAssistantTimeoutMs: parseInteger(process.env.NWO_AGENTASSISTANT_TIMEOUT_MS, 120000),
+    agentAssistantApiHost: process.env.NWO_AGENTASSISTANT_API_HOST || '127.0.0.1',
+    agentAssistantApiPort: parseInteger(process.env.NWO_AGENTASSISTANT_API_PORT, parseInteger(process.env.PORT, 0)),
+    agentAssistantApiPath: process.env.NWO_AGENTASSISTANT_API_PATH || '/v1/human/tool',
+    agentAssistantApiKey: process.env.NWO_AGENTASSISTANT_API_KEY || process.env.Key || '',
     stageAgents: parseStageAgentsFromEnv()
+  };
+}
+
+function resolveTopLevelHealth(result, config) {
+  const execution = result?.execution;
+  if (!config.executorEnabled || String(config.executorType || '').toLowerCase() !== 'agent_assistant') {
+    return {
+      status: 'not_available',
+      score: null,
+      source: 'executor_disabled',
+      backlogAlertTriggered: false
+    };
+  }
+  if (!execution || !execution.health) {
+    return {
+      status: 'unknown',
+      score: null,
+      source: 'execution_missing',
+      backlogAlertTriggered: false
+    };
+  }
+  return {
+    status: execution.health.status,
+    score: execution.health.score,
+    source: 'execution_bridge',
+    backlogAlertTriggered: Boolean(execution?.backlogAlert?.triggered)
   };
 }
 
@@ -129,6 +168,23 @@ async function main() {
       input,
       config
     });
+    if (config.executorEnabled && String(config.executorType || '').toLowerCase() === 'agent_assistant') {
+      result.execution = await executePendingWakeups({
+        pluginRoot: PLUGIN_ROOT,
+        storageDir: config.storageDir,
+        maxWakeups: config.executorMaxWakeups,
+        maxRetries: config.executorMaxRetries,
+        retryBackoffSeconds: config.executorRetryBackoffSec,
+        backlogAlertThreshold: config.executorBacklogAlertThreshold,
+        temporaryContact: config.agentAssistantTemporaryContact,
+        timeoutMs: config.agentAssistantTimeoutMs,
+        apiHost: config.agentAssistantApiHost,
+        apiPort: config.agentAssistantApiPort,
+        apiPath: config.agentAssistantApiPath,
+        apiKey: config.agentAssistantApiKey
+      });
+    }
+    result.health = resolveTopLevelHealth(result, config);
     process.stdout.write(JSON.stringify(result, null, 2));
     console.error('[NovelWorkflowOrchestrator] Tick completed successfully');
   } catch (error) {
@@ -157,5 +213,6 @@ module.exports = {
   parseInput,
   resolveTickInput,
   getRuntimeConfig,
-  parseStageAgentsFromEnv
+  parseStageAgentsFromEnv,
+  resolveTopLevelHealth
 };

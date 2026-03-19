@@ -1,9 +1,29 @@
+/**
+ * 顶层工作流状态机模块：定义项目从初始化到完成的顶层状态流转逻辑。
+ * 状态流转：
+ * INIT -> SETUP_WORLD -> SETUP_CHARACTER -> SETUP_VOLUME -> SETUP_CHAPTER -> CHAPTER_CREATION -> COMPLETED
+ *                                                      |
+ *                                              (评审不通过可回退)
+ *
+ * @module core/workflowStateMachine
+ * @requires ./stateRouter
+ * @requires ../utils/time
+ */
+
 const { CHAPTER_SUBSTATES, routeChapterSubstate } = require('./stateRouter');
 const { toLocalIsoString } = require('../utils/time');
 
 /**
- * 顶层工作流状态机定义。
- * 业务规则：章节创作完成并进入归档后收敛到 COMPLETED。
+ * 顶层工作流状态常量定义。
+ * @property {string} INIT 初始化状态
+ * @property {string} SETUP_WORLD 世界观设定阶段
+ * @property {string} SETUP_CHARACTER 人物设定阶段
+ * @property {string} SETUP_VOLUME 分卷设定阶段
+ * @property {string} SETUP_CHAPTER 章节规划阶段
+ * @property {string} CHAPTER_CREATION 章节创作阶段
+ * @property {string} PAUSED_MANUAL_REVIEW 人工介入暂停状态
+ * @property {string} COMPLETED 已完成
+ * @property {string} FAILED 已失败
  */
 const TOP_LEVEL_STATES = {
   INIT: 'INIT',
@@ -19,9 +39,15 @@ const TOP_LEVEL_STATES = {
 
 /**
  * 计算设定链路的下一个顶层状态。
+ * 链路顺序：INIT -> SETUP_WORLD -> SETUP_CHARACTER -> SETUP_VOLUME -> SETUP_CHAPTER -> CHAPTER_CREATION
  *
  * @param {string} state 当前状态
- * @returns {string} 下一个状态；无匹配时返回原状态
+ * @returns {string} 下一个状态；若已是最终状态则返回原状态
+ *
+ * @example
+ * getNextSetupState('INIT')           // 返回 'SETUP_WORLD'
+ * getNextSetupState('SETUP_CHAPTER')  // 返回 'CHAPTER_CREATION'
+ * getNextSetupState('CHAPTER_CREATION') // 返回 'CHAPTER_CREATION'（不再前进）
  */
 function getNextSetupState(state) {
   if (state === TOP_LEVEL_STATES.INIT) return TOP_LEVEL_STATES.SETUP_WORLD;
@@ -32,6 +58,13 @@ function getNextSetupState(state) {
   return state;
 }
 
+/**
+ * 判断是否为设定阶段。
+ * 设定阶段包括：SETUP_WORLD、SETUP_CHARACTER、SETUP_VOLUME、SETUP_CHAPTER
+ *
+ * @param {string} state 顶层状态
+ * @returns {boolean} 是否为设定阶段
+ */
 function isSetupState(state) {
   return (
     state === TOP_LEVEL_STATES.SETUP_WORLD ||
@@ -41,6 +74,13 @@ function isSetupState(state) {
   );
 }
 
+/**
+ * 确保辩论状态结构完整。
+ * 用于初始化或修复不完整的 debate 字段
+ *
+ * @param {object} project 项目状态
+ * @returns {object} 完整的辩论状态
+ */
 function ensureDebateState(project) {
   const qualityPolicy = project.qualityPolicy || {};
   const source = project.debate || {};
@@ -53,6 +93,16 @@ function ensureDebateState(project) {
   };
 }
 
+/**
+ * 解析设定阶段是否通过。
+ * 判断逻辑：
+ * 1. 若 ACK 包含 qualityGate.passed 字段，直接使用
+ * 2. 否则根据 setupScore/passScore/score 与阈值比较
+ *
+ * @param {object|null} ack 当前 ACK
+ * @param {object} project 项目状态
+ * @returns {boolean} 是否通过
+ */
 function resolveSetupPass(ack, project) {
   if (!ack) {
     return true;
@@ -67,16 +117,27 @@ function resolveSetupPass(ack, project) {
 
 /**
  * 应用一次状态迁移。
- * 关键逻辑：
- * - INIT 在无 ACK 时自举到 SETUP_WORLD；
- * - blocked/waiting ACK 不推进状态；
- * - CHAPTER_CREATION 交由子状态路由器处理；
- * - 章节归档（CH_ARCHIVE）收敛为顶层 COMPLETED。
+ * 核心状态机逻辑：
+ * 1. 无 ACK 时：INIT 自举到 SETUP_WORLD，blocked/waiting 不推进
+ * 2. acted ACK 时：
+ *    - CHAPTER_CREATION：委托给子状态路由器
+ *    - 设定阶段：designer->critic 角色轮转，或根据评审结果推进
+ * 3. 章节归档时（CH_ARCHIVE）收敛为顶层 COMPLETED
  *
  * @param {object} project 项目状态
  * @param {object|null} ack 当前 ACK
  * @param {Date} [now] 当前时间
- * @returns {{project: object, advanced: boolean, blocked: boolean, reason: string}} 迁移结果
+ * @returns {object} 迁移结果
+ * @property {object} project 更新后的项目状态
+ * @property {boolean} advanced 是否发生状态推进
+ * @property {boolean} blocked 是否被阻塞
+ * @property {string} reason 迁移原因
+ *
+ * @example
+ * const result = applyStateTransition(project, ack, new Date());
+ * if (result.advanced) {
+ *   console.log('状态已推进到:', result.project.state);
+ * }
  */
 function applyStateTransition(project, ack, now = new Date()) {
   const currentState = project.state || TOP_LEVEL_STATES.INIT;

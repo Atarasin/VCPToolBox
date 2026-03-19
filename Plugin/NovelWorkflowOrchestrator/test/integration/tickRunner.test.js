@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs/promises');
 const { runTick } = require('../../lib/core/tickRunner');
 const { createStateStore, createDefaultProjectState } = require('../../lib/storage/stateStore');
+const { executePendingWakeups } = require('../../lib/execution/agentAssistantBridge');
 
 async function findLatestWakeupId(pluginRoot, projectId) {
   const wakeupDir = path.join(pluginRoot, 'storage', 'wakeups');
@@ -626,4 +627,110 @@ test('tickRunner 审计日志结构完整且可回放关键结果', async () => 
   assert.equal(Array.isArray(firstAudit.result.wakeupSummary), true);
   assert.equal(secondAudit.result.wakeupsDispatched >= 1, true);
   assert.equal(secondAudit.result.wakeupsAcked >= 1, true);
+});
+
+test('tickRunner 可通过执行桥接器形成最小闭环', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-tick-bridge-loop-'));
+  const config = {
+    enableAutonomousTick: true,
+    tickMaxProjects: 5,
+    tickMaxWakeups: 20,
+    storageDir: 'storage',
+    bootstrapProjectId: 'novel_bridge_loop',
+    stageAgents: {
+      SETUP_WORLD_DESIGNER: 'world_agent',
+      SETUP_WORLD_CRITIC: 'world_critic',
+      SUPERVISOR: 'supervisor_agent'
+    }
+  };
+
+  const firstTick = await runTick({
+    pluginRoot,
+    input: {},
+    config
+  });
+  assert.equal(firstTick.wakeupsDispatched, 1);
+
+  const executionResult = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    executor: async () => ({
+      status: 'success',
+      result: { content: [{ type: 'text', text: 'ok' }] }
+    })
+  });
+  assert.equal(executionResult.executed, 1);
+  assert.equal(executionResult.metrics.successRate, 1);
+
+  const store = createStateStore({
+    pluginRoot,
+    storageRoot: 'storage'
+  });
+  const inboxInput = await store.consumeInboxInput();
+  assert.equal(inboxInput.acks.length, 1);
+
+  const secondTick = await runTick({
+    pluginRoot,
+    input: inboxInput,
+    config
+  });
+  assert.equal(secondTick.wakeupsAcked >= 1, true);
+  assert.equal(secondTick.wakeupSummary[0].stage, 'SETUP_WORLD');
+});
+
+test('执行桥接器重试后成功可驱动后续tick推进', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-tick-bridge-retry-'));
+  const config = {
+    enableAutonomousTick: true,
+    tickMaxProjects: 5,
+    tickMaxWakeups: 20,
+    storageDir: 'storage',
+    bootstrapProjectId: 'novel_bridge_retry',
+    stageAgents: {
+      SETUP_WORLD_DESIGNER: 'world_agent',
+      SETUP_WORLD_CRITIC: 'world_critic',
+      SUPERVISOR: 'supervisor_agent'
+    }
+  };
+
+  const firstTick = await runTick({ pluginRoot, input: {}, config });
+  assert.equal(firstTick.wakeupsDispatched, 1);
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  const wakeupId = await findLatestWakeupId(pluginRoot, 'novel_bridge_retry');
+
+  const firstExec = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    maxRetries: 2,
+    executor: async () => {
+      throw new Error('mock transient error');
+    }
+  });
+  assert.equal(firstExec.retried, 1);
+  assert.equal(firstExec.metrics.retryRate, 1);
+  const afterFirst = await store.getWakeupTask(wakeupId);
+  assert.equal(afterFirst.executionStatus, 'queued');
+  afterFirst.nextRetryAt = '2000-01-01T00:00:00.000+08:00';
+  await store.putWakeupTask(afterFirst);
+
+  const secondExec = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    maxRetries: 2,
+    executor: async () => ({
+      status: 'success',
+      result: { content: [{ type: 'text', text: 'ok' }] }
+    })
+  });
+  assert.equal(secondExec.executed, 1);
+  assert.equal(secondExec.metrics.successRate, 1);
+
+  const inboxInput = await store.consumeInboxInput();
+  assert.equal(inboxInput.acks.length, 1);
+  const secondTick = await runTick({
+    pluginRoot,
+    input: inboxInput,
+    config
+  });
+  assert.equal(secondTick.wakeupsAcked >= 1, true);
 });

@@ -1,5 +1,21 @@
 # NovelWorkflowOrchestrator 版本变更日志
 
+## 0.6.0 - 2026-03-19
+
+- Phase 1：新增 AgentAssistant 执行桥接器，支持消费 pending wakeup 并回写 ACK 到 inbox。
+- Phase 1：扩展 wakeup 执行元数据（executionStatus/executionAttempt/executor/sessionId）。
+- Phase 1：新增 stateStore 的 pending wakeup 查询与 inbox ACK 追加去重能力。
+- Phase 1：补充执行桥接单测与最小闭环集成测试。
+- Phase 1：执行桥接改为通过 AgentAssistant HTTP API 调用（对齐 VCPForumAssistant 模式），不再直接 require 插件模块。
+- Phase 2：新增执行重试与退避策略（`NWO_EXECUTOR_MAX_RETRIES`、`NWO_EXECUTOR_RETRY_BACKOFF_SEC`）。
+- Phase 2：执行失败按重试上限分流，未达上限回队列，达上限写入 `blocked` 兜底 ACK。
+- Phase 2：新增执行审计落盘 `audit/execution_*.json`，记录每次桥接执行事件。
+- Phase 2：新增重试策略单测与重试后成功推进的集成测试。
+- Phase 3：首批执行指标输出（`successRate`、`retryRate`、`averageDurationMs`）并写入执行审计。
+- Phase 3：新增执行积压指标与阈值告警（`queueBefore/queueAfter`、`backlogAlert`）。
+- Phase 3：新增执行健康评分与告警等级（`health.status`、`health.score`，green/yellow/red）。
+- Phase 3：新增顶层固定健康字段 `result.health`，运维可不依赖 `execution` 子对象统一读取。
+
 ## 0.5.0 - 2026-03-19
 
 - 批次 A：扩展项目默认状态模型，新增 `debate` 回合字段与 `activeWakeupId`。
@@ -22,6 +38,8 @@
 - 新增 inbox 消费原子清空与审计留痕，避免重复消费。
 - 补充单测覆盖 inbox 输入消费与主入口无 stdin 回退读取逻辑。
 - 提取本地时间格式化为公共工具模块 `lib/utils/time.js`，复用于核心与管理器模块。
+- 新增全生命周期端到端集成用例 `fullLifecycle.e2e.test.js`，覆盖 INIT 到 COMPLETED 的完整业务轨迹与数据一致性断言。
+- 新增《全生命周期集成测试方案与执行报告》文档，包含用例设计、时序图、验收标准与异常验证结论。
 
 ## 0.4.0 - 2026-03-18
 
