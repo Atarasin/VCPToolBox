@@ -15,6 +15,8 @@
 - Phase 3：新增执行积压指标与阈值告警（`queueBefore/queueAfter`、`backlogAlert`）。
 - Phase 3：新增执行健康评分与告警等级（`health.status`、`health.score`，green/yellow/red）。
 - Phase 3：新增顶层固定健康字段 `result.health`，运维可不依赖 `execution` 子对象统一读取。
+- 新增端到端用例：覆盖“执行失败 -> 重试 -> 最终成功 -> 生命周期完成”的 Phase 2 可靠性路径。
+- 新增端到端用例：覆盖“最大重试失败 -> blocked ACK -> 人工介入打开”的 Phase 2 可靠性分支。
 
 ## 0.5.0 - 2026-03-19
 
