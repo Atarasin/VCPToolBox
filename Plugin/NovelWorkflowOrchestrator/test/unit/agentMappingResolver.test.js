@@ -2,19 +2,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { resolveAgentsForProject } = require('../../lib/managers/agentMappingResolver');
 
-test('映射解析可按阶段返回多Agent', () => {
+test('映射解析在设定阶段按辩论角色返回单Agent', () => {
   const resolved = resolveAgentsForProject(
     {
       projectId: 'p1',
       state: 'SETUP_WORLD',
-      substate: null
+      substate: null,
+      debate: {
+        role: 'critic'
+      }
     },
     {
-      SETUP_WORLD: 'agent_a,agent_b',
+      SETUP_WORLD_CRITIC: 'agent_c,agent_d',
       SUPERVISOR: 'supervisor'
     }
   );
-  assert.deepEqual(resolved.agents, ['agent_a', 'agent_b']);
+  assert.equal(resolved.key, 'SETUP_WORLD_CRITIC');
+  assert.deepEqual(resolved.agents, ['agent_c']);
   assert.equal(resolved.escalatedToSupervisor, false);
   assert.equal(resolved.blocked, false);
 });

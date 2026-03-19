@@ -35,7 +35,7 @@ function createTickId(now) {
  * @param {object} input 输入载荷
  * @returns {Map<string, object>} projectId 到 ACK 的映射
  */
-function normalizeAcks(input) {
+function groupAcksByProject(input) {
   const list = Array.isArray(input?.acks) ? input.acks : [];
   const priority = { acted: 3, blocked: 2, waiting: 1 };
   const map = new Map();
@@ -45,12 +45,38 @@ function normalizeAcks(input) {
     }
     const status = String(ack.ackStatus || '').toLowerCase();
     const score = priority[status] || 0;
-    const existing = map.get(ack.projectId);
-    if (!existing || score > existing.score) {
-      map.set(ack.projectId, { ack, score });
-    }
+    const existing = map.get(ack.projectId) || [];
+    existing.push({ ack, score });
+    map.set(ack.projectId, existing);
   }
-  return new Map(Array.from(map.entries()).map(([projectId, data]) => [projectId, data.ack]));
+  return new Map(
+    Array.from(map.entries()).map(([projectId, items]) => [
+      projectId,
+      items.sort((a, b) => b.score - a.score).map(item => item.ack)
+    ])
+  );
+}
+
+function selectAckForProject(project, ackList) {
+  const activeWakeupId = project?.activeWakeupId || null;
+  if (!activeWakeupId) {
+    return {
+      matchedAck: null,
+      staleAcks: Array.isArray(ackList) ? ackList : []
+    };
+  }
+  const list = Array.isArray(ackList) ? ackList : [];
+  const matchedAck = list.find(item => item?.wakeupId && item.wakeupId === activeWakeupId) || null;
+  if (!matchedAck) {
+    return {
+      matchedAck: null,
+      staleAcks: list
+    };
+  }
+  return {
+    matchedAck,
+    staleAcks: list.filter(item => item !== matchedAck)
+  };
 }
 
 /**
@@ -103,7 +129,14 @@ function cloneCounters(counters, projectId) {
  */
 function applyCounterUpdates(counters, stateBeforeTransition, ack, transitionReason) {
   const next = cloneCounters(counters, counters.projectId);
-  if (String(ack?.ackStatus || '').toLowerCase() === 'acted') {
+  if (
+    String(ack?.ackStatus || '').toLowerCase() === 'acted' &&
+    (
+      transitionReason === 'setup_critic_passed' ||
+      transitionReason === 'setup_critic_not_passed_retry' ||
+      transitionReason === 'setup_critic_not_passed_max_rounds'
+    )
+  ) {
     const setupKey = getSetupCounterKey(stateBeforeTransition);
     if (setupKey) {
       next.setupDebateRounds[setupKey] += 1;
@@ -144,7 +177,7 @@ async function runTick(options) {
   });
 
   const projects = await store.loadProjects(config.tickMaxProjects ?? 5);
-  const acksByProject = normalizeAcks(options.input || {});
+  const acksByProject = groupAcksByProject(options.input || {});
   const checkpoints = [];
   const wakeupSummary = [];
   let remainingWakeupBudget = config.tickMaxWakeups ?? 20;
@@ -160,8 +193,16 @@ async function runTick(options) {
     let project = originalProject;
     let counters = await store.bootstrapCountersIfNeeded(project.projectId);
     let policy = resolvePolicy(project, config);
-    const ack = acksByProject.get(project.projectId) || null;
-    let transitionReason = 'no_ack';
+    project.debate = {
+      role: String(project?.debate?.role || 'designer').toLowerCase() === 'critic' ? 'critic' : 'designer',
+      round: Number(project?.debate?.round ?? 0),
+      maxRounds: Number(project?.debate?.maxRounds ?? policy.setupMaxDebateRounds ?? 3),
+      lastDesignerWakeupId: project?.debate?.lastDesignerWakeupId ?? null,
+      lastCriticWakeupId: project?.debate?.lastCriticWakeupId ?? null
+    };
+    const ackSelection = selectAckForProject(project, acksByProject.get(project.projectId));
+    const ack = ackSelection.matchedAck;
+    let transitionReason = ackSelection.staleAcks.length > 0 ? 'stale_or_out_of_turn_ack' : 'no_ack';
     let dispatchedTasks = [];
     let decision = 'skipped';
     let shouldSkipDispatch = false;
@@ -192,6 +233,10 @@ async function runTick(options) {
     };
 
     if (!shouldSkipDispatch) {
+      for (const staleAck of ackSelection.staleAcks) {
+        await store.applyAckToWakeup(staleAck, now);
+      }
+
       // 将回执回写到唤醒任务，保证任务生命周期可追踪。
       if (ack) {
         await store.applyAckToWakeup(ack, now);
@@ -219,9 +264,22 @@ async function runTick(options) {
       transition = applyStateTransition(project, gatedAck, now);
       project = transition.project;
       transitionReason = transition.reason;
+      if (!ack && ackSelection.staleAcks.length > 0 && transitionReason === 'no_ack') {
+        transitionReason = 'stale_or_out_of_turn_ack';
+      }
       counters = applyCounterUpdates(counters, stateBeforeTransition, gatedAck, transitionReason);
+      if (ack) {
+        project.activeWakeupId = null;
+      }
       project = updateStagnation(project, transition.advanced, config);
       policy = resolvePolicy(project, config);
+      project.debate = {
+        role: String(project?.debate?.role || 'designer').toLowerCase() === 'critic' ? 'critic' : 'designer',
+        round: Number(project?.debate?.round ?? 0),
+        maxRounds: Number(project?.debate?.maxRounds ?? policy.setupMaxDebateRounds ?? 3),
+        lastDesignerWakeupId: project?.debate?.lastDesignerWakeupId ?? null,
+        lastCriticWakeupId: project?.debate?.lastCriticWakeupId ?? null
+      };
 
       if (transition.advanced) {
         projectsAdvanced += 1;
@@ -258,6 +316,7 @@ async function runTick(options) {
     project.lastProgress = project.lastProgress || {};
     project.lastProgress.lastTickId = tickId;
     project.lastProgress.lastTransitionReason = transitionReason;
+    project.lastProgress.lastStaleAckCount = ackSelection.staleAcks.length;
     project.lastProgress.lastAck = ack
       ? {
         wakeupId: ack.wakeupId || null,
@@ -290,6 +349,16 @@ async function runTick(options) {
         dispatchedTasks = dispatched.tasks;
         wakeupsDispatched += dispatchedTasks.length;
         remainingWakeupBudget = Math.max(0, remainingWakeupBudget - dispatchedTasks.length);
+        project.activeWakeupId = dispatchedTasks.length > 0
+          ? dispatchedTasks[0].wakeupId
+          : project.activeWakeupId;
+        if (dispatchedTasks.length > 0 && String(project.state || '').startsWith('SETUP_')) {
+          if (project.debate.role === 'designer') {
+            project.debate.lastDesignerWakeupId = dispatchedTasks[0].wakeupId;
+          } else if (project.debate.role === 'critic') {
+            project.debate.lastCriticWakeupId = dispatchedTasks[0].wakeupId;
+          }
+        }
         if (resolution.escalatedToSupervisor) {
           projectsBlocked += 1;
           decision = 'escalated_to_supervisor';

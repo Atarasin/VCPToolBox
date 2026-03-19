@@ -63,8 +63,8 @@ function createWakeupTask(project, targetAgent, context, tickId) {
 async function dispatchWakeups(project, agents, context, options) {
   const tickId = options.tickId;
   const stateStore = options.stateStore;
-  const remainingBudget = options.remainingBudget ?? agents.length;
-  const selectedAgents = agents.slice(0, Math.max(remainingBudget, 0));
+  const remainingBudget = Math.max(0, options.remainingBudget ?? 1);
+  const selectedAgents = remainingBudget > 0 ? agents.slice(0, 1) : [];
   const tasks = [];
 
   for (const agent of selectedAgents) {

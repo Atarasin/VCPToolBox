@@ -89,19 +89,35 @@
       "type": "boolean",
       "default": true
     },
-    "NWO_STAGE_SETUP_WORLD": {
+    "NWO_STAGE_SETUP_WORLD_DESIGNER": {
       "type": "string",
       "default": ""
     },
-    "NWO_STAGE_SETUP_CHARACTER": {
+    "NWO_STAGE_SETUP_WORLD_CRITIC": {
       "type": "string",
       "default": ""
     },
-    "NWO_STAGE_SETUP_VOLUME": {
+    "NWO_STAGE_SETUP_CHARACTER_DESIGNER": {
       "type": "string",
       "default": ""
     },
-    "NWO_STAGE_SETUP_CHAPTER": {
+    "NWO_STAGE_SETUP_CHARACTER_CRITIC": {
+      "type": "string",
+      "default": ""
+    },
+    "NWO_STAGE_SETUP_VOLUME_DESIGNER": {
+      "type": "string",
+      "default": ""
+    },
+    "NWO_STAGE_SETUP_VOLUME_CRITIC": {
+      "type": "string",
+      "default": ""
+    },
+    "NWO_STAGE_SETUP_CHAPTER_DESIGNER": {
+      "type": "string",
+      "default": ""
+    },
+    "NWO_STAGE_SETUP_CHAPTER_CRITIC": {
       "type": "string",
       "default": ""
     },

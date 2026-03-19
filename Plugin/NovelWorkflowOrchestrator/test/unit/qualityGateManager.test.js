@@ -39,7 +39,7 @@ test('质量门禁在章节审核不达标时标记 review_failed', () => {
   assert.equal(result.quality.passed, false);
 });
 
-test('质量门禁在设定评分不足时改写为 waiting', () => {
+test('质量门禁在设定评分不足时保留 acted 并标记未通过', () => {
   const policy = resolvePolicy(
     {
       qualityPolicy: {
@@ -61,8 +61,9 @@ test('质量门禁在设定评分不足时改写为 waiting', () => {
     },
     policy
   );
-  assert.equal(result.ack.ackStatus, 'waiting');
+  assert.equal(result.ack.ackStatus, 'acted');
   assert.equal(result.ack.resultType, 'setup_score_not_passed');
+  assert.equal(result.ack.qualityGate.passed, false);
 });
 
 test('计数器超限可触发人工介入信号', () => {

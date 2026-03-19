@@ -1,5 +1,23 @@
 # NovelWorkflowOrchestrator 版本变更日志
 
+## 0.5.0 - 2026-03-19
+
+- 批次 A：扩展项目默认状态模型，新增 `debate` 回合字段与 `activeWakeupId`。
+- 批次 A：调整入口配置解析，设定阶段改为 `*_DESIGNER/*_CRITIC` 显式参数模型。
+- 批次 A：更新 `plugin-manifest.json` 与 `config.env.example`，移除旧设定阶段并行字符串配置项。
+- 批次 A：补充单元测试，覆盖新状态模型字段与新设定阶段环境变量解析。
+- 批次 B：重写 Agent 映射解析，设定阶段按 `debate.role` 映射并强制单角色输出。
+- 批次 B：收敛唤醒派发为单项目单任务，预算不足时不派发。
+- 批次 B：新增 `activeWakeupId` 精确 ACK 消费机制，非活跃 ACK 仅审计不推进状态。
+- 批次 B：更新单元与集成测试，覆盖单角色解析、活跃任务绑定与 stale ACK 场景。
+- 批次 C：设定阶段状态机改为 `designer -> critic -> 判定` 回合模型。
+- 批次 C：设定评分不再改写为 waiting，改为保留 acted 并在状态机内判定 pass/fail。
+- 批次 C：critic 未通过时增加 `debate.round` 并回到 designer，达到上限触发转人工信号。
+- 批次 C：补充回合迁移与活跃 ACK 端到端测试，覆盖回合推进与超限行为。
+- 批次 D：更新 README 配置与示例，移除单项目并行表述并对齐单 Tick 单任务语义。
+- 批次 D：补充“设定回合达到最大轮次触发人工介入”集成测试。
+- 批次 D：收敛发布记录，确保 README、测试与当前串行实现一致。
+
 ## 0.4.0 - 2026-03-18
 
 - 新增 Week4 集成测试：`INIT -> ... -> COMPLETED` happy path 全链路验证。

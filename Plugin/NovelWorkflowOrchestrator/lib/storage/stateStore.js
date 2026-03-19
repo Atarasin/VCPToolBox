@@ -157,6 +157,14 @@ function createDefaultProjectState(projectId, now, options = {}) {
       requestedAt: null,
       resumeStage: null
     },
+    debate: {
+      role: 'designer',
+      round: 0,
+      maxRounds: options.setupMaxDebateRounds ?? 3,
+      lastDesignerWakeupId: null,
+      lastCriticWakeupId: null
+    },
+    activeWakeupId: null,
     createdAt: timestamp,
     updatedAt: timestamp
   };

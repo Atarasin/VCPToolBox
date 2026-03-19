@@ -25,19 +25,73 @@ function normalizeAgentList(value) {
     .filter(Boolean);
 }
 
-/**
- * 计算阶段映射键。
- * 业务规则：顶层为 CHAPTER_CREATION 时，按子状态键路由 Agent。
- *
- * @param {object} project 项目状态
- * @returns {string} 映射键
- */
-function resolveMappingKey(project) {
-  if (project.state === TOP_LEVEL_STATES.CHAPTER_CREATION) {
-    const substate = project.substate || CHAPTER_SUBSTATES.PRECHECK;
-    return substate;
+function pickSingleAgent(value) {
+  const normalized = normalizeAgentList(value);
+  return normalized.length > 0 ? [normalized[0]] : [];
+}
+
+function resolveSetupRoleAgent(project, stageAgents) {
+  const role = String(project?.debate?.role || 'designer').toLowerCase() === 'critic' ? 'CRITIC' : 'DESIGNER';
+  const stage = project.state;
+  const key = `${stage}_${role}`;
+  const agents = pickSingleAgent(stageAgents[key]);
+  if (agents.length > 0) {
+    return {
+      key,
+      agents,
+      blocked: false,
+      escalatedToSupervisor: false,
+      reason: 'resolved'
+    };
   }
-  return project.state;
+  const supervisor = pickSingleAgent(stageAgents.SUPERVISOR);
+  if (supervisor.length > 0) {
+    return {
+      key,
+      agents: supervisor,
+      blocked: true,
+      escalatedToSupervisor: true,
+      reason: 'missing_stage_agent_escalated'
+    };
+  }
+  return {
+    key,
+    agents: [],
+    blocked: true,
+    escalatedToSupervisor: false,
+    reason: 'missing_stage_agent_no_supervisor'
+  };
+}
+
+function resolveChapterAgent(project, stageAgents) {
+  const key = project.substate || CHAPTER_SUBSTATES.PRECHECK;
+  const agents = pickSingleAgent(stageAgents[key]);
+  if (agents.length > 0) {
+    return {
+      key,
+      agents,
+      blocked: false,
+      escalatedToSupervisor: false,
+      reason: 'resolved'
+    };
+  }
+  const supervisor = pickSingleAgent(stageAgents.SUPERVISOR);
+  if (supervisor.length > 0) {
+    return {
+      key,
+      agents: supervisor,
+      blocked: true,
+      escalatedToSupervisor: true,
+      reason: 'missing_stage_agent_escalated'
+    };
+  }
+  return {
+    key,
+    agents: [],
+    blocked: true,
+    escalatedToSupervisor: false,
+    reason: 'missing_stage_agent_no_supervisor'
+  };
 }
 
 /**
@@ -52,36 +106,10 @@ function resolveMappingKey(project) {
  * @returns {{key: string, agents: string[], blocked: boolean, escalatedToSupervisor: boolean, reason: string}} 解析结果
  */
 function resolveAgentsForProject(project, stageAgents) {
-  const key = resolveMappingKey(project);
-  const resolvedAgents = normalizeAgentList(stageAgents[key]);
-  if (resolvedAgents.length > 0) {
-    return {
-      key,
-      agents: resolvedAgents,
-      blocked: false,
-      escalatedToSupervisor: false,
-      reason: 'resolved'
-    };
+  if (project.state === TOP_LEVEL_STATES.CHAPTER_CREATION) {
+    return resolveChapterAgent(project, stageAgents);
   }
-
-  const supervisor = normalizeAgentList(stageAgents.SUPERVISOR);
-  if (supervisor.length > 0) {
-    return {
-      key,
-      agents: supervisor,
-      blocked: true,
-      escalatedToSupervisor: true,
-      reason: 'missing_stage_agent_escalated'
-    };
-  }
-
-  return {
-    key,
-    agents: [],
-    blocked: true,
-    escalatedToSupervisor: false,
-    reason: 'missing_stage_agent_no_supervisor'
-  };
+  return resolveSetupRoleAgent(project, stageAgents);
 }
 
 module.exports = {

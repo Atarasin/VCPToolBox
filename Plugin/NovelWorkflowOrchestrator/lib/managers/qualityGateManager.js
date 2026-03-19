@@ -114,20 +114,10 @@ function applyQualityGateToAck(project, ack, policy) {
 
   if (String(project.state || '').startsWith('SETUP_')) {
     const setupQuality = evaluateSetupQuality(ack, policy);
-    if (!setupQuality.passed) {
-      return {
-        ack: {
-          ...ack,
-          ackStatus: 'waiting',
-          resultType: 'setup_score_not_passed',
-          qualityGate: setupQuality
-        },
-        quality: setupQuality
-      };
-    }
     return {
       ack: {
         ...ack,
+        resultType: setupQuality.passed ? (ack.resultType || 'setup_score_passed') : 'setup_score_not_passed',
         qualityGate: setupQuality
       },
       quality: setupQuality
@@ -157,6 +147,13 @@ function shouldTriggerManualByLimits(project, counters, policy) {
   };
   const setupKey = setupMap[project.state];
   if (setupKey) {
+    const debateRound = Number(project?.debate?.round ?? 0);
+    if (debateRound >= policy.setupMaxDebateRounds) {
+      return {
+        triggered: true,
+        reason: 'setup_debate_rounds_exceeded'
+      };
+    }
     const rounds = Number(counters?.setupDebateRounds?.[setupKey] ?? 0);
     if (rounds >= policy.setupMaxDebateRounds) {
       return {

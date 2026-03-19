@@ -51,11 +51,23 @@ function parseInput(rawInput) {
 }
 
 function parseStageAgentsFromEnv() {
+  const setupWorldDesigner = process.env.NWO_STAGE_SETUP_WORLD_DESIGNER || '';
+  const setupCharacterDesigner = process.env.NWO_STAGE_SETUP_CHARACTER_DESIGNER || '';
+  const setupVolumeDesigner = process.env.NWO_STAGE_SETUP_VOLUME_DESIGNER || '';
+  const setupChapterDesigner = process.env.NWO_STAGE_SETUP_CHAPTER_DESIGNER || '';
   return {
-    SETUP_WORLD: process.env.NWO_STAGE_SETUP_WORLD || '',
-    SETUP_CHARACTER: process.env.NWO_STAGE_SETUP_CHARACTER || '',
-    SETUP_VOLUME: process.env.NWO_STAGE_SETUP_VOLUME || '',
-    SETUP_CHAPTER: process.env.NWO_STAGE_SETUP_CHAPTER || '',
+    SETUP_WORLD: setupWorldDesigner,
+    SETUP_CHARACTER: setupCharacterDesigner,
+    SETUP_VOLUME: setupVolumeDesigner,
+    SETUP_CHAPTER: setupChapterDesigner,
+    SETUP_WORLD_DESIGNER: setupWorldDesigner,
+    SETUP_WORLD_CRITIC: process.env.NWO_STAGE_SETUP_WORLD_CRITIC || '',
+    SETUP_CHARACTER_DESIGNER: setupCharacterDesigner,
+    SETUP_CHARACTER_CRITIC: process.env.NWO_STAGE_SETUP_CHARACTER_CRITIC || '',
+    SETUP_VOLUME_DESIGNER: setupVolumeDesigner,
+    SETUP_VOLUME_CRITIC: process.env.NWO_STAGE_SETUP_VOLUME_CRITIC || '',
+    SETUP_CHAPTER_DESIGNER: setupChapterDesigner,
+    SETUP_CHAPTER_CRITIC: process.env.NWO_STAGE_SETUP_CHAPTER_CRITIC || '',
     CH_PRECHECK: process.env.NWO_STAGE_CH_PRECHECK || '',
     CH_GENERATE: process.env.NWO_STAGE_CH_GENERATE || '',
     CH_REVIEW: process.env.NWO_STAGE_CH_REVIEW || '',

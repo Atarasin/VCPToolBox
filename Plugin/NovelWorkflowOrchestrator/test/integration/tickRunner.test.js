@@ -61,8 +61,10 @@ test('tickRunner 支持角色映射分发与回执推进', async () => {
     bootstrapProjectId: 'novel_week2',
     defaultStagnantTickThreshold: 3,
     stageAgents: {
-      SETUP_WORLD: 'world_agent_a,world_agent_b',
-      SETUP_CHARACTER: 'character_agent',
+      SETUP_WORLD_DESIGNER: 'world_agent_a,world_agent_b',
+      SETUP_WORLD_CRITIC: 'world_critic_agent',
+      SETUP_CHARACTER_DESIGNER: 'character_agent',
+      SETUP_CHARACTER_CRITIC: 'character_critic_agent',
       SUPERVISOR: 'supervisor_agent'
     }
   };
@@ -72,12 +74,15 @@ test('tickRunner 支持角色映射分发与回执推进', async () => {
     input: {},
     config
   });
-  assert.equal(firstTick.wakeupsDispatched, 2);
+  assert.equal(firstTick.wakeupsDispatched, 1);
   assert.equal(firstTick.wakeupSummary[0].decision, 'wakeup_sent');
   const wakeupFiles = await fs.readdir(path.join(pluginRoot, 'storage', 'wakeups'));
   const firstWakeupFile = wakeupFiles.find(name => name.endsWith('.json'));
   assert.equal(Boolean(firstWakeupFile), true);
   const firstWakeupId = firstWakeupFile.replace(/\.json$/, '');
+  const firstProjectRaw = await fs.readFile(path.join(pluginRoot, 'storage', 'projects', 'novel_week2.json'), 'utf8');
+  const firstProjectState = JSON.parse(firstProjectRaw);
+  assert.equal(firstProjectState.activeWakeupId, firstWakeupId);
 
   const secondTick = await runTick({
     pluginRoot,
@@ -93,12 +98,152 @@ test('tickRunner 支持角色映射分发与回执推进', async () => {
     config
   });
 
-  assert.equal(secondTick.projectsAdvanced >= 1, true);
-  assert.equal(secondTick.wakeupsDispatched >= 1, true);
-  assert.equal(secondTick.wakeupSummary[0].stage, 'SETUP_CHARACTER');
+  assert.equal(secondTick.wakeupSummary[0].stage, 'SETUP_WORLD');
+  assert.equal(secondTick.wakeupSummary[0].decision, 'wakeup_sent');
+  const criticWakeupId = await findLatestWakeupId(pluginRoot, 'novel_week2');
+  const thirdTick = await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId: 'novel_week2',
+          wakeupId: criticWakeupId,
+          ackStatus: 'acted',
+          metrics: {
+            setupScore: 90
+          }
+        }
+      ]
+    },
+    config
+  });
+  assert.equal(thirdTick.projectsAdvanced >= 1, true);
+  assert.equal(thirdTick.wakeupsDispatched >= 1, true);
+  assert.equal(thirdTick.wakeupSummary[0].stage, 'SETUP_CHARACTER');
   const countersRaw = await fs.readFile(path.join(pluginRoot, 'storage', 'counters', 'novel_week2.json'), 'utf8');
   const counters = JSON.parse(countersRaw);
   assert.equal(counters.setupDebateRounds.world >= 1, true);
+});
+
+test('tickRunner 仅消费 activeWakeupId 匹配的ACK', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-tick-w2-active-'));
+  const config = {
+    enableAutonomousTick: true,
+    tickMaxProjects: 5,
+    tickMaxWakeups: 20,
+    storageDir: 'storage',
+    bootstrapProjectId: 'novel_week2_active',
+    stageAgents: {
+      SETUP_WORLD_DESIGNER: 'world_agent',
+      SETUP_CHARACTER_DESIGNER: 'character_agent',
+      SUPERVISOR: 'supervisor_agent'
+    }
+  };
+
+  await runTick({ pluginRoot, input: {}, config });
+  const staleTick = await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId: 'novel_week2_active',
+          wakeupId: 'wk_stale_ack',
+          ackStatus: 'acted'
+        }
+      ]
+    },
+    config
+  });
+  assert.equal(staleTick.wakeupSummary[0].stage, 'SETUP_WORLD');
+  const activeWakeupId = await findLatestWakeupId(pluginRoot, 'novel_week2_active');
+
+  const effectiveDesignerTick = await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId: 'novel_week2_active',
+          wakeupId: activeWakeupId,
+          ackStatus: 'acted'
+        }
+      ]
+    },
+    config
+  });
+  assert.equal(effectiveDesignerTick.wakeupSummary[0].stage, 'SETUP_WORLD');
+  const criticWakeupId = await findLatestWakeupId(pluginRoot, 'novel_week2_active');
+  const effectiveCriticTick = await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId: 'novel_week2_active',
+          wakeupId: criticWakeupId,
+          ackStatus: 'acted',
+          metrics: {
+            setupScore: 90
+          }
+        }
+      ]
+    },
+    config
+  });
+  assert.equal(effectiveCriticTick.wakeupSummary[0].stage, 'SETUP_CHARACTER');
+});
+
+test('tickRunner 在设定回合达到最大轮次时触发人工介入', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-tick-w4-setup-max-round-'));
+  const projectId = 'novel_week4_setup_max_round';
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  await store.ensureStorageLayout();
+  const project = createDefaultProjectState(projectId, new Date());
+  project.state = 'SETUP_WORLD';
+  project.activeWakeupId = 'wk_seed_setup_max_round';
+  project.debate = {
+    role: 'critic',
+    round: 2,
+    maxRounds: 3,
+    lastDesignerWakeupId: null,
+    lastCriticWakeupId: 'wk_seed_setup_max_round'
+  };
+  await store.putProjectState(project);
+  await store.bootstrapCountersIfNeeded(projectId);
+
+  const tick = await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId,
+          wakeupId: 'wk_seed_setup_max_round',
+          ackStatus: 'acted',
+          metrics: {
+            setupScore: 70
+          }
+        }
+      ]
+    },
+    config: {
+      enableAutonomousTick: true,
+      tickMaxProjects: 5,
+      tickMaxWakeups: 20,
+      storageDir: 'storage',
+      bootstrapProjectId: '',
+      setupPassThreshold: 85,
+      setupMaxDebateRounds: 3,
+      pauseWakeupWhenManualPending: true,
+      stageAgents: {
+        SETUP_WORLD_DESIGNER: 'world_designer_agent',
+        SETUP_WORLD_CRITIC: 'world_critic_agent',
+        SUPERVISOR: 'supervisor_agent'
+      }
+    }
+  });
+
+  assert.equal(tick.manualInterventionsOpened >= 1, true);
+  assert.equal(tick.wakeupSummary[0].decision, 'manual_review_opened');
+  const updatedProject = await store.getProjectState(projectId);
+  assert.equal(updatedProject.state, 'PAUSED_MANUAL_REVIEW');
 });
 
 test('tickRunner 连续停滞可触发人工介入并冻结唤醒', async () => {
@@ -113,7 +258,7 @@ test('tickRunner 连续停滞可触发人工介入并冻结唤醒', async () => 
     stagnantTickThreshold: 3,
     pauseWakeupWhenManualPending: true,
     stageAgents: {
-      SETUP_WORLD: 'world_agent_a',
+      SETUP_WORLD_DESIGNER: 'world_agent_a',
       SUPERVISOR: 'supervisor_agent'
     }
   };
@@ -143,8 +288,8 @@ test('tickRunner 接收人工回复后可恢复调度', async () => {
     stagnantTickThreshold: 2,
     pauseWakeupWhenManualPending: true,
     stageAgents: {
-      SETUP_WORLD: 'world_agent_a',
-      SETUP_CHARACTER: 'character_agent',
+      SETUP_WORLD_DESIGNER: 'world_agent_a',
+      SETUP_CHARACTER_DESIGNER: 'character_agent',
       SUPERVISOR: 'supervisor_agent'
     }
   };
@@ -186,10 +331,10 @@ test('tickRunner 可完成 INIT 到 COMPLETED 的端到端 happy path', async ()
     stagnantTickThreshold: 3,
     pauseWakeupWhenManualPending: true,
     stageAgents: {
-      SETUP_WORLD: 'world_agent',
-      SETUP_CHARACTER: 'character_agent',
-      SETUP_VOLUME: 'volume_agent',
-      SETUP_CHAPTER: 'chapter_outline_agent',
+      SETUP_WORLD_DESIGNER: 'world_agent',
+      SETUP_CHARACTER_DESIGNER: 'character_agent',
+      SETUP_VOLUME_DESIGNER: 'volume_agent',
+      SETUP_CHAPTER_DESIGNER: 'chapter_outline_agent',
       CH_PRECHECK: 'chapter_precheck_agent',
       CH_GENERATE: 'chapter_writer_agent',
       CH_REVIEW: 'chapter_reviewer_agent',
@@ -202,9 +347,13 @@ test('tickRunner 可完成 INIT 到 COMPLETED 的端到端 happy path', async ()
   assert.equal(tick.wakeupSummary[0].stage, 'SETUP_WORLD');
   const ackInputs = [
     { ackStatus: 'acted' },
+    { ackStatus: 'acted', metrics: { setupScore: 90 } },
     { ackStatus: 'acted' },
+    { ackStatus: 'acted', metrics: { setupScore: 90 } },
     { ackStatus: 'acted' },
+    { ackStatus: 'acted', metrics: { setupScore: 90 } },
     { ackStatus: 'acted' },
+    { ackStatus: 'acted', metrics: { setupScore: 90 } },
     { ackStatus: 'acted' },
     { ackStatus: 'acted' },
     {
@@ -250,6 +399,7 @@ test('tickRunner 支持 CH_REVIEW -> CH_REFLOW -> CH_GENERATE 回流路径', asy
   const project = createDefaultProjectState(projectId, new Date());
   project.state = 'CHAPTER_CREATION';
   project.substate = 'CH_REVIEW';
+  project.activeWakeupId = 'wk_seed_reflow';
   await store.putProjectState(project);
   await store.bootstrapCountersIfNeeded(projectId);
 
@@ -272,6 +422,7 @@ test('tickRunner 支持 CH_REVIEW -> CH_REFLOW -> CH_GENERATE 回流路径', asy
       acks: [
         {
           projectId,
+          wakeupId: 'wk_seed_reflow',
           ackStatus: 'acted',
           issueSeverity: 'major',
           metrics: {
@@ -329,8 +480,8 @@ test('tickRunner 在多项目场景下保持状态隔离', async () => {
       storageDir: 'storage',
       bootstrapProjectId: '',
       stageAgents: {
-        SETUP_WORLD: 'world_agent',
-        SETUP_CHARACTER: 'character_agent',
+        SETUP_WORLD_DESIGNER: 'world_agent',
+        SETUP_CHARACTER_DESIGNER: 'character_agent',
         SUPERVISOR: 'supervisor_agent'
       }
     }
@@ -350,6 +501,7 @@ test('tickRunner 在配置变更后门禁行为符合预期', async () => {
   const baseProject = createDefaultProjectState(projectId, new Date());
   baseProject.state = 'CHAPTER_CREATION';
   baseProject.substate = 'CH_REVIEW';
+  baseProject.activeWakeupId = 'wk_seed_config_strict';
   await store.putProjectState(baseProject);
   await store.bootstrapCountersIfNeeded(projectId);
 
@@ -376,6 +528,7 @@ test('tickRunner 在配置变更后门禁行为符合预期', async () => {
       acks: [
         {
           projectId,
+          wakeupId: 'wk_seed_config_strict',
           ackStatus: 'acted',
           metrics: {
             outlineCoverage: 0.92,
@@ -393,6 +546,7 @@ test('tickRunner 在配置变更后门禁行为符合预期', async () => {
   const resetProject = createDefaultProjectState(projectId, new Date());
   resetProject.state = 'CHAPTER_CREATION';
   resetProject.substate = 'CH_REVIEW';
+  resetProject.activeWakeupId = 'wk_seed_config_loose';
   await store.putProjectState(resetProject);
   await store.bootstrapCountersIfNeeded(projectId);
 
@@ -402,6 +556,7 @@ test('tickRunner 在配置变更后门禁行为符合预期', async () => {
       acks: [
         {
           projectId,
+          wakeupId: 'wk_seed_config_loose',
           ackStatus: 'acted',
           metrics: {
             outlineCoverage: 0.92,
@@ -436,8 +591,8 @@ test('tickRunner 审计日志结构完整且可回放关键结果', async () => 
     storageDir: 'storage',
     bootstrapProjectId: projectId,
     stageAgents: {
-      SETUP_WORLD: 'world_agent',
-      SETUP_CHARACTER: 'character_agent',
+      SETUP_WORLD_DESIGNER: 'world_agent',
+      SETUP_CHARACTER_DESIGNER: 'character_agent',
       SUPERVISOR: 'supervisor_agent'
     }
   };
@@ -461,6 +616,6 @@ test('tickRunner 审计日志结构完整且可回放关键结果', async () => 
   const secondAudit = JSON.parse(await fs.readFile(secondTick.auditPath, 'utf8'));
   assert.equal(firstAudit.result.status, 'success');
   assert.equal(Array.isArray(firstAudit.result.wakeupSummary), true);
-  assert.equal(secondAudit.result.projectsAdvanced >= 1, true);
+  assert.equal(secondAudit.result.wakeupsDispatched >= 1, true);
   assert.equal(secondAudit.result.wakeupsAcked >= 1, true);
 });
