@@ -199,6 +199,7 @@ function applyStateTransition(project, ack, now = new Date()) {
     };
   }
 
+  // 阶段二：章节创作
   if (currentState === TOP_LEVEL_STATES.CHAPTER_CREATION) {
     const routed = routeChapterSubstate(project.substate, ack);
     nextProject.substate = routed.nextSubstate;
@@ -220,7 +221,9 @@ function applyStateTransition(project, ack, now = new Date()) {
     };
   }
 
+  // 阶段一：设定创作
   if (isSetupState(currentState)) {
+    // designer 角色：转换为 critic
     if (debate.role === 'designer') {
       nextProject.debate = {
         ...debate,
@@ -234,6 +237,7 @@ function applyStateTransition(project, ack, now = new Date()) {
       };
     }
 
+    // critic 角色：根据评审结果推进或重试
     const passed = resolveSetupPass(ack, project);
     if (passed) {
       const nextState = getNextSetupState(currentState);

@@ -210,6 +210,16 @@ function applyCounterUpdates(counters, stateBeforeTransition, ack, transitionRea
   return next;
 }
 
+function shouldTreatAsProgressForStagnation(stateBeforeTransition, ack, transitionReason) {
+  if (String(ack?.ackStatus || '').toLowerCase() !== 'acted') {
+    return false;
+  }
+  if (!String(stateBeforeTransition || '').startsWith('SETUP_')) {
+    return false;
+  }
+  return transitionReason === 'setup_designer_to_critic' || transitionReason === 'setup_critic_not_passed_retry';
+}
+
 /**
  * 构建人工介入待处理条目。
  * 当项目处于 waiting_human_reply 状态时生成，用于传递给外部处理
@@ -304,6 +314,7 @@ async function runTick(options) {
     let project = originalProject;
     let counters = await store.bootstrapCountersIfNeeded(project.projectId);
     let policy = resolvePolicy(project, config);
+    let latestCriticFeedback = project?.lastProgress?.lastCriticFeedback ?? null;
 
     project.debate = {
       role: String(project?.debate?.role || 'designer').toLowerCase() === 'critic' ? 'critic' : 'designer',
@@ -337,6 +348,7 @@ async function runTick(options) {
     }
 
     const stateBeforeTransition = project.state;
+    const debateRoleBeforeTransition = String(project?.debate?.role || 'designer').toLowerCase();
     let transition = {
       project,
       advanced: false,
@@ -379,13 +391,27 @@ async function runTick(options) {
         transitionReason = 'stale_or_out_of_turn_ack';
       }
 
+      if (
+        debateRoleBeforeTransition === 'critic' &&
+        String(stateBeforeTransition || '').startsWith('SETUP_') &&
+        String(gatedAck?.ackStatus || '').toLowerCase() === 'acted' &&
+        gatedAck?.feedback
+      ) {
+        latestCriticFeedback = gatedAck.feedback;
+      }
+
       counters = applyCounterUpdates(counters, stateBeforeTransition, gatedAck, transitionReason);
 
       if (ack) {
         project.activeWakeupId = null;
       }
 
-      project = updateStagnation(project, transition.advanced, config);
+      const stagnationAdvanced = transition.advanced || shouldTreatAsProgressForStagnation(
+        stateBeforeTransition,
+        gatedAck,
+        transitionReason
+      );
+      project = updateStagnation(project, stagnationAdvanced, config);
       policy = resolvePolicy(project, config);
 
       project.debate = {
@@ -456,7 +482,8 @@ async function runTick(options) {
       } else {
         const context = assembleWakeupContext(project, resolution, config, tickId, {
           counters,
-          qualityPolicy: policy
+          qualityPolicy: policy,
+          criticFeedback: latestCriticFeedback
         });
 
         const dispatched = await dispatchWakeups(project, resolution.agents, context, {
@@ -503,6 +530,7 @@ async function runTick(options) {
     project.lastProgress.lastWakeupIds = dispatchedTasks.map(item => item.wakeupId);
     project.lastProgress.lastWakeupCount = dispatchedTasks.length;
     project.lastProgress.counterSnapshot = counters;
+    project.lastProgress.lastCriticFeedback = latestCriticFeedback;
     project.updatedAt = toLocalIsoString(now);
 
     await store.putProjectState(project);

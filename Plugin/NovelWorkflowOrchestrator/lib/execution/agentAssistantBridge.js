@@ -65,6 +65,32 @@ function buildExecutionPrompt(task) {
   );
 }
 
+function extractCriticFeedback(result) {
+  const source = result && typeof result === 'object'
+    ? (result.feedback && typeof result.feedback === 'object' ? result.feedback : result)
+    : null;
+  if (!source) {
+    return null;
+  }
+  const feedback = {};
+  if (typeof source.summary === 'string' && source.summary.trim()) {
+    feedback.summary = source.summary.trim();
+  }
+  if (Array.isArray(source.actionsTaken) && source.actionsTaken.length > 0) {
+    feedback.actionsTaken = source.actionsTaken;
+  }
+  if (Array.isArray(source.risks) && source.risks.length > 0) {
+    feedback.risks = source.risks;
+  }
+  if (typeof source.nextSuggestion === 'string' && source.nextSuggestion.trim()) {
+    feedback.nextSuggestion = source.nextSuggestion.trim();
+  }
+  if (typeof source.status === 'string' && source.status.trim()) {
+    feedback.status = source.status.trim();
+  }
+  return Object.keys(feedback).length > 0 ? feedback : null;
+}
+
 /**
  * 根据 Agent 执行结果构建成功确认（ACK）对象。
  * 业务规则：
@@ -93,6 +119,7 @@ function buildExecutionPrompt(task) {
  * }
  */
 function buildSuccessAck(task, response, now) {
+  const criticFeedback = extractCriticFeedback(response?.result);
   const ack = {
     projectId: task.projectId,
     wakeupId: task.wakeupId,
@@ -104,12 +131,21 @@ function buildSuccessAck(task, response, now) {
       targetAgent: task.targetAgent
     },
     receivedAt: toLocalIsoString(now),
-    rawResult: response?.result || response || null
+    rawResult: response?.rawResult ?? response?.result ?? response ?? null
   };
+  if (criticFeedback) {
+    ack.feedback = criticFeedback;
+  }
 
   if (String(task.stage || '').startsWith('SETUP_')) {
+    const setupScore = Number(response?.result?.metrics?.setupScore ?? response?.result?.setupScore);
+    if (!Number.isFinite(setupScore)) {
+      const error = new Error('AgentAssistant result missing setupScore for setup stage');
+      error.rawResponse = response;
+      throw error;
+    }
     ack.metrics = {
-      setupScore: 90
+      setupScore
     };
     ack.resultType = 'setup_score_passed';
   }
@@ -125,6 +161,117 @@ function buildSuccessAck(task, response, now) {
   }
 
   return ack;
+}
+
+function normalizeExecutorResponse(response) {
+  const buildValidationError = message => {
+    const error = new Error(message);
+    error.rawResponse = response;
+    return error;
+  };
+  const tryParseJson = value => {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      return null;
+    }
+  };
+  const parseJsonFromText = text => {
+    const direct = tryParseJson(text);
+    if (direct !== null) {
+      return direct;
+    }
+    const fencedMatch = String(text).match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fencedMatch && fencedMatch[1]) {
+      const fenced = tryParseJson(fencedMatch[1]);
+      if (fenced !== null) {
+        return fenced;
+      }
+    }
+    const raw = String(text);
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return tryParseJson(raw.slice(firstBrace, lastBrace + 1));
+    }
+    return null;
+  };
+  const parseJsonFromContent = content => {
+    if (!Array.isArray(content)) {
+      return null;
+    }
+    for (const item of content) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const parsed = parseJsonFromText(item.text);
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+    return null;
+  };
+  const normalizeResultPayload = rawResult => {
+    if (typeof rawResult === 'string') {
+      return parseJsonFromText(rawResult);
+    }
+    if (!rawResult || typeof rawResult !== 'object') {
+      return null;
+    }
+    if (Array.isArray(rawResult.content)) {
+      const parsed = parseJsonFromContent(rawResult.content);
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+    if (rawResult.result && typeof rawResult.result === 'object') {
+      if (Array.isArray(rawResult.result.content)) {
+        const parsed = parseJsonFromContent(rawResult.result.content);
+        if (parsed !== null) {
+          return parsed;
+        }
+      }
+      return rawResult.result;
+    }
+    return rawResult;
+  };
+  if (!response || String(response.status || '').toLowerCase() !== 'success') {
+    throw buildValidationError(response?.error || 'AgentAssistant returned non-success response');
+  }
+  if (response.result === null || response.result === undefined) {
+    throw buildValidationError('AgentAssistant returned empty result');
+  }
+  if (typeof response.result === 'string' && !response.result.trim()) {
+    throw buildValidationError('AgentAssistant returned empty result');
+  }
+  const normalizedResult = normalizeResultPayload(response.result);
+  if (normalizedResult === null) {
+    throw buildValidationError('AgentAssistant returned invalid JSON result');
+  }
+  return {
+    ...response,
+    rawResult: response.result,
+    result: normalizedResult
+  };
+}
+
+function compactRawResponse(rawResponse) {
+  if (!rawResponse || typeof rawResponse !== 'object') {
+    return rawResponse ?? null;
+  }
+  if ('rawResult' in rawResponse && 'result' in rawResponse && rawResponse.rawResult === rawResponse.result) {
+    const compacted = { ...rawResponse };
+    delete compacted.rawResult;
+    return compacted;
+  }
+  return rawResponse;
 }
 
 /**
@@ -317,10 +464,7 @@ function resolveHealthScore(metrics, backlogAlert) {
  */
 async function executeWithAgentAssistant(task, options) {
   const response = await executeWithAgentAssistantHttp(task, options);
-  if (!response || String(response.status || '').toLowerCase() !== 'success') {
-    throw new Error(response?.error || 'AgentAssistant returned non-success response');
-  }
-  return response;
+  return normalizeExecutorResponse(response);
 }
 
 /**
@@ -402,7 +546,7 @@ async function executePendingWakeups(options) {
     });
 
     try {
-      const response = await executor(task);
+      const response = normalizeExecutorResponse(await executor(task));
       const ack = buildSuccessAck(task, response, now);
       acks.push(ack);
       executed += 1;
@@ -429,6 +573,7 @@ async function executePendingWakeups(options) {
       totalDurationMs += Date.now() - taskStartedAt;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const rawResponse = compactRawResponse(error && typeof error === 'object' ? error.rawResponse : undefined);
       failed += 1;
       const durationMs = Date.now() - taskStartedAt;
       totalDurationMs += durationMs;
@@ -454,6 +599,7 @@ async function executePendingWakeups(options) {
           ackStatus: ack.ackStatus,
           resultType: ack.resultType,
           errorMessage: message,
+          rawResponse,
           durationMs
         });
       } else {
@@ -476,6 +622,7 @@ async function executePendingWakeups(options) {
           status: 'retry_scheduled',
           nextRetryAt,
           errorMessage: message,
+          rawResponse,
           durationMs
         });
       }

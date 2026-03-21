@@ -38,7 +38,7 @@ test('executePendingWakeups 可执行待处理任务并回写ACK', async () => {
     maxWakeups: 10,
     executor: async () => ({
       status: 'success',
-      result: { content: [{ type: 'text', text: 'ok' }] }
+      result: { metrics: { setupScore: 92 }, content: [{ type: 'text', text: 'ok' }] }
     })
   });
 
@@ -59,6 +59,61 @@ test('executePendingWakeups 可执行待处理任务并回写ACK', async () => {
   assert.equal(inbox.acks[0].projectId, 'project_bridge');
   assert.equal(inbox.acks[0].wakeupId, 'wk_bridge_1');
   assert.equal(inbox.acks[0].ackStatus, 'acted');
+  assert.equal(inbox.acks[0].metrics.setupScore, 92);
+});
+
+test('executePendingWakeups 可解析AgentAssistant嵌套content中的JSON结果', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-bridge-nested-content-'));
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  await store.ensureStorageLayout();
+  const project = createDefaultProjectState('project_bridge_nested_content', new Date());
+  project.state = 'SETUP_WORLD';
+  await store.putProjectState(project);
+
+  await store.putWakeupTask({
+    wakeupId: 'wk_bridge_nested_content_1',
+    tickId: 'tick_bridge_nested_content_1',
+    projectId: 'project_bridge_nested_content',
+    stage: 'SETUP_WORLD',
+    substate: null,
+    targetAgent: 'world_agent',
+    context: {},
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    executionAttempt: 0,
+    dispatchedAt: new Date().toISOString()
+  });
+
+  const result = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    executor: async () => ({
+      status: 'success',
+      result: {
+        MaidName: 'NovelWorkflowOrchestrator',
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: '```json\n{"wakeupId":"wk_bridge_nested_content_1","metrics":{"setupScore":88},"summary":"critic summary","risks":["risk1"],"nextSuggestion":"revise settings"}\n```'
+            }
+          ]
+        }
+      }
+    })
+  });
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.executed, 1);
+  assert.equal(result.failed, 0);
+  const inbox = JSON.parse(await fs.readFile(path.join(store.paths.inbox, 'acks.json'), 'utf8'));
+  assert.equal(inbox.acks.length, 1);
+  assert.equal(inbox.acks[0].ackStatus, 'acted');
+  assert.equal(inbox.acks[0].metrics.setupScore, 88);
+  assert.equal(inbox.acks[0].feedback.summary, 'critic summary');
+  assert.equal(Array.isArray(inbox.acks[0].feedback.risks), true);
+  assert.equal(inbox.acks[0].feedback.nextSuggestion, 'revise settings');
 });
 
 test('executePendingWakeups 执行异常时先进入重试队列', async () => {
@@ -163,6 +218,139 @@ test('executePendingWakeups 达到最大重试次数后写入阻塞ACK并标记�
   assert.equal(inbox.acks[0].resultType, 'executor_failed');
 });
 
+test('executePendingWakeups 在成功状态但空结果时进入重试队列', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-bridge-empty-result-'));
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  await store.ensureStorageLayout();
+  const project = createDefaultProjectState('project_bridge_empty_result', new Date());
+  project.state = 'SETUP_WORLD';
+  await store.putProjectState(project);
+
+  await store.putWakeupTask({
+    wakeupId: 'wk_bridge_empty_result_1',
+    tickId: 'tick_bridge_empty_result_1',
+    projectId: 'project_bridge_empty_result',
+    stage: 'SETUP_WORLD',
+    substate: null,
+    targetAgent: 'world_agent',
+    context: {},
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    executionAttempt: 0,
+    dispatchedAt: new Date().toISOString()
+  });
+
+  const result = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    executor: async () => ({
+      status: 'success',
+      result: ''
+    })
+  });
+
+  assert.equal(result.executed, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.retried, 1);
+  const wakeup = await store.getWakeupTask('wk_bridge_empty_result_1');
+  assert.equal(wakeup.executionStatus, 'queued');
+  assert.equal(typeof wakeup.lastError, 'string');
+  assert.equal(wakeup.lastError.includes('empty result'), true);
+});
+
+test('executePendingWakeups 在成功状态但JSON解析失败时进入重试队列', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-bridge-invalid-json-'));
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  await store.ensureStorageLayout();
+  const project = createDefaultProjectState('project_bridge_invalid_json', new Date());
+  project.state = 'SETUP_WORLD';
+  await store.putProjectState(project);
+
+  await store.putWakeupTask({
+    wakeupId: 'wk_bridge_invalid_json_1',
+    tickId: 'tick_bridge_invalid_json_1',
+    projectId: 'project_bridge_invalid_json',
+    stage: 'SETUP_WORLD',
+    substate: null,
+    targetAgent: 'world_agent',
+    context: {},
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    executionAttempt: 0,
+    dispatchedAt: new Date().toISOString()
+  });
+
+  const result = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    executor: async () => ({
+      status: 'success',
+      result: '{invalid-json'
+    })
+  });
+
+  assert.equal(result.executed, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.retried, 1);
+  const wakeup = await store.getWakeupTask('wk_bridge_invalid_json_1');
+  assert.equal(wakeup.executionStatus, 'queued');
+  assert.equal(typeof wakeup.lastError, 'string');
+  assert.equal(wakeup.lastError.includes('invalid JSON result'), true);
+  const audit = JSON.parse(await fs.readFile(result.executionAuditPath, 'utf8'));
+  assert.equal(Array.isArray(audit.events), true);
+  assert.equal(audit.events.length, 1);
+  assert.equal(audit.events[0].status, 'retry_scheduled');
+  assert.equal(typeof audit.events[0].rawResponse, 'object');
+  assert.equal(audit.events[0].rawResponse.result, '{invalid-json');
+});
+
+test('executePendingWakeups 在SETUP阶段缺失setupScore时审计保留rawResponse', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-bridge-missing-score-'));
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  await store.ensureStorageLayout();
+  const project = createDefaultProjectState('project_bridge_missing_score', new Date());
+  project.state = 'SETUP_WORLD';
+  await store.putProjectState(project);
+
+  await store.putWakeupTask({
+    wakeupId: 'wk_bridge_missing_score_1',
+    tickId: 'tick_bridge_missing_score_1',
+    projectId: 'project_bridge_missing_score',
+    stage: 'SETUP_WORLD',
+    substate: null,
+    targetAgent: 'world_agent',
+    context: {},
+    status: 'dispatched',
+    ackStatus: 'pending',
+    executionStatus: 'queued',
+    executionAttempt: 0,
+    dispatchedAt: new Date().toISOString()
+  });
+
+  const result = await executePendingWakeups({
+    pluginRoot,
+    storageDir: 'storage',
+    maxRetries: 1,
+    executor: async () => ({
+      status: 'success',
+      result: { content: [{ type: 'text', text: 'ok-without-score' }] }
+    })
+  });
+
+  assert.equal(result.executed, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.retried, 0);
+  const audit = JSON.parse(await fs.readFile(result.executionAuditPath, 'utf8'));
+  assert.equal(Array.isArray(audit.events), true);
+  assert.equal(audit.events.length, 1);
+  assert.equal(audit.events[0].status, 'failed_final');
+  assert.equal(typeof audit.events[0].rawResponse, 'object');
+  assert.equal(Array.isArray(audit.events[0].rawResponse.result.content), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(audit.events[0].rawResponse, 'rawResult'), false);
+});
+
 test('executePendingWakeups 可在积压超过阈值时触发告警', async () => {
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-bridge-backlog-alert-'));
   const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
@@ -207,7 +395,7 @@ test('executePendingWakeups 可在积压超过阈值时触发告警', async () =
     backlogAlertThreshold: 0,
     executor: async () => ({
       status: 'success',
-      result: { content: [{ type: 'text', text: 'ok' }] }
+      result: { metrics: { setupScore: 90 }, content: [{ type: 'text', text: 'ok' }] }
     })
   });
 

@@ -91,6 +91,7 @@ function buildSuggestedActions(project) {
 function assembleWakeupContext(project, resolution, config, tickId, extras = {}) {
   const counters = extras.counters || {};
   const qualityPolicy = extras.qualityPolicy || project.qualityPolicy || {};
+  const criticFeedback = extras.criticFeedback || project?.lastProgress?.lastCriticFeedback || null;
 
   return {
     tickId,
@@ -101,6 +102,7 @@ function assembleWakeupContext(project, resolution, config, tickId, extras = {})
     objective: buildObjective(project),
     qualityPolicy,
     counterSnapshot: counters,
+    criticFeedback,
     stagnation: project.stagnation || {},
     waitCondition: '缺少依赖信息、上下文不足或外部阻塞时可返回 waiting',
     suggestedActions: buildSuggestedActions(project),

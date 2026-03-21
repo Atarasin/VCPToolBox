@@ -17,6 +17,11 @@
 - Phase 3：新增顶层固定健康字段 `result.health`，运维可不依赖 `execution` 子对象统一读取。
 - 新增端到端用例：覆盖“执行失败 -> 重试 -> 最终成功 -> 生命周期完成”的 Phase 2 可靠性路径。
 - 新增端到端用例：覆盖“最大重试失败 -> blocked ACK -> 人工介入打开”的 Phase 2 可靠性分支。
+- 执行桥接增加成功响应规范化校验：空结果、非 JSON 结果、缺失 setupScore 统一按失败路径处理，避免误写高分 ACK。
+- 执行审计事件新增 `rawResponse` 字段：响应校验失败时保留原始响应，便于故障定位与复盘。
+- 执行审计 `rawResponse` 去重：当 `rawResult` 与 `result` 相同时仅保留 `result`，降低冗余。
+- 设定阶段停滞判定优化：`designer -> critic` 与 `critic未通过重试` 视为有效进展，不再误触发停滞人工介入。
+- 执行 ACK 增补 `feedback` 字段并注入下一轮 designer 上下文，支持按 critic 反馈定向修订。
 
 ## 0.5.0 - 2026-03-19
 

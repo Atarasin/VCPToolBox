@@ -126,6 +126,81 @@ test('tickRunner 支持角色映射分发与回执推进', async () => {
   assert.equal(counters.setupDebateRounds.world >= 1, true);
 });
 
+test('tickRunner 在critic未通过时回到designer并携带critic反馈', async () => {
+  const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-tick-critic-feedback-'));
+  const projectId = 'novel_critic_feedback';
+  const config = {
+    enableAutonomousTick: true,
+    tickMaxProjects: 5,
+    tickMaxWakeups: 20,
+    storageDir: 'storage',
+    bootstrapProjectId: projectId,
+    defaultStagnantTickThreshold: 3,
+    stagnantTickThreshold: 3,
+    setupPassThreshold: 85,
+    stageAgents: {
+      SETUP_WORLD_DESIGNER: 'world_designer_agent',
+      SETUP_WORLD_CRITIC: 'world_critic_agent',
+      SUPERVISOR: 'supervisor_agent'
+    }
+  };
+
+  await runTick({ pluginRoot, input: {}, config });
+  const firstWakeupId = await findLatestWakeupId(pluginRoot, projectId);
+
+  await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId,
+          wakeupId: firstWakeupId,
+          ackStatus: 'acted'
+        }
+      ]
+    },
+    config
+  });
+
+  const criticWakeupId = await findLatestWakeupId(pluginRoot, projectId);
+  const criticTick = await runTick({
+    pluginRoot,
+    input: {
+      acks: [
+        {
+          projectId,
+          wakeupId: criticWakeupId,
+          ackStatus: 'acted',
+          metrics: {
+            setupScore: 70
+          },
+          feedback: {
+            summary: 'critic says fix consistency',
+            risks: ['risk-a'],
+            nextSuggestion: 'rewrite world constraints'
+          }
+        }
+      ]
+    },
+    config
+  });
+
+  assert.equal(criticTick.manualInterventionsOpened, 0);
+  assert.equal(criticTick.wakeupSummary[0].decision, 'wakeup_sent');
+  assert.equal(criticTick.wakeupSummary[0].stage, 'SETUP_WORLD');
+  assert.deepEqual(criticTick.wakeupSummary[0].targetAgents, ['world_designer_agent']);
+
+  const store = createStateStore({ pluginRoot, storageRoot: 'storage' });
+  const project = await store.getProjectState(projectId);
+  assert.equal(project.stagnation.unchangedTicks, 0);
+  assert.equal(project.lastProgress.lastCriticFeedback.summary, 'critic says fix consistency');
+
+  const designerWakeupId = await findLatestWakeupId(pluginRoot, projectId);
+  const designerWakeup = await store.getWakeupTask(designerWakeupId);
+  assert.equal(designerWakeup.context.criticFeedback.summary, 'critic says fix consistency');
+  assert.equal(designerWakeup.context.criticFeedback.nextSuggestion, 'rewrite world constraints');
+});
+
 test('tickRunner 仅消费 activeWakeupId 匹配的ACK', async () => {
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-tick-w2-active-'));
   const config = {
@@ -656,7 +731,7 @@ test('tickRunner 可通过执行桥接器形成最小闭环', async () => {
     storageDir: 'storage',
     executor: async () => ({
       status: 'success',
-      result: { content: [{ type: 'text', text: 'ok' }] }
+      result: { metrics: { setupScore: 90 }, content: [{ type: 'text', text: 'ok' }] }
     })
   });
   assert.equal(executionResult.executed, 1);
@@ -719,7 +794,7 @@ test('执行桥接器重试后成功可驱动后续tick推进', async () => {
     maxRetries: 2,
     executor: async () => ({
       status: 'success',
-      result: { content: [{ type: 'text', text: 'ok' }] }
+      result: { metrics: { setupScore: 90 }, content: [{ type: 'text', text: 'ok' }] }
     })
   });
   assert.equal(secondExec.executed, 1);

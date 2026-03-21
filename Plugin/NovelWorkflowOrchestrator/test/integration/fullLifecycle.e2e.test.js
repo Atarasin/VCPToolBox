@@ -35,6 +35,16 @@ async function fastForwardLatestQueuedRetry(store, projectId) {
   return true;
 }
 
+function buildMockExecutorResult(task, suffix) {
+  const result = {
+    content: [{ type: 'text', text: `${task.stage}/${task.substate || '-'}/${suffix}` }]
+  };
+  if (String(task.stage || '').startsWith('SETUP_')) {
+    result.metrics = { setupScore: 90 };
+  }
+  return result;
+}
+
 test('全生命周期端到端：初始化到整书完成（含执行桥接与ACK映射）', async () => {
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nwo-e2e-lifecycle-'));
   const projectId = 'novel_e2e_lifecycle';
@@ -82,9 +92,7 @@ test('全生命周期端到端：初始化到整书完成（含执行桥接与AC
       maxRetries: 1,
       executor: async task => ({
         status: 'success',
-        result: {
-          content: [{ type: 'text', text: `${task.stage}/${task.substate || '-'}/ok` }]
-        }
+        result: buildMockExecutorResult(task, 'ok')
       })
     });
     assert.equal(execution.failed, 0);
@@ -201,9 +209,7 @@ test('全生命周期端到端：执行失败后重试成功并最终完成', as
         }
         return {
           status: 'success',
-          result: {
-            content: [{ type: 'text', text: `${task.stage}/${task.substate || '-'}/ok` }]
-          }
+          result: buildMockExecutorResult(task, 'ok')
         };
       }
     });
@@ -220,9 +226,7 @@ test('全生命周期端到端：执行失败后重试成功并最终完成', as
         retryBackoffSeconds: 1,
         executor: async task => ({
           status: 'success',
-          result: {
-            content: [{ type: 'text', text: `${task.stage}/${task.substate || '-'}/retry-ok` }]
-          }
+          result: buildMockExecutorResult(task, 'retry-ok')
         })
       });
       assert.equal(retryExecution.executed >= 1, true);
