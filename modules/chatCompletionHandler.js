@@ -976,8 +976,6 @@ class ChatCompletionHandler {
           if (!res.getHeader('Cache-Control')) res.setHeader('Cache-Control', 'no-cache');
           if (!res.getHeader('Connection')) res.setHeader('Connection', 'keep-alive');
         }
-      }
-
       const context = {
         ...this.config,
         toolExecutor: this.toolExecutor,
