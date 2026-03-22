@@ -10,10 +10,18 @@ function sanitizeFilename(name) {
 
 /**
  * 辅助函数：获取当前时间戳
- * @returns {string} ISO 8601 格式的时间戳
+ * @returns {string} 本地时间格式的时间戳
  */
 function getTimestamp() {
-    return new Date().toISOString();
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    const year = now.getFullYear();
+    const month = pad(now.getMonth() + 1);
+    const day = pad(now.getDate());
+    const hours = pad(now.getHours());
+    const minutes = pad(now.getMinutes());
+    const seconds = pad(now.getSeconds());
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 module.exports = {

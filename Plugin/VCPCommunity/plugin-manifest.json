@@ -58,15 +58,15 @@
       },
       {
         "commandIdentifier": "ReadWiki",
-        "description": "读取社区 Wiki 页面内容。\n参数:\n- agent_name (字符串, 必需): Agent 名称。\n- community_id (字符串, 必需): 社区 ID。\n- page_name (字符串, 可选): 页面名称，默认为 'README'。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」ReadWiki「末」,\nagent_name:「始」DevAgent「末」,\ncommunity_id:「始」dev-core「末」,\npage_name:「始」rules「末」\n<<<[END_TOOL_REQUEST]>>>"
+        "description": "读取社区 Wiki 页面内容。\n参数:\n- agent_name (字符串, 必需): Agent 名称。\n- community_id (字符串, 必需): 社区 ID。\n- page_name (字符串, 可选): 页面路径，支持分层目录，默认 `README.md`。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」ReadWiki「末」,\nagent_name:「始」DevAgent「末」,\ncommunity_id:「始」dev-core「末」,\npage_name:「始」01_worldbuilding/world_basic.md「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "UpdateWiki",
-        "description": "更新社区 Wiki 页面（受保护页面需 Maintainer 权限）。\n参数:\n- agent_name (字符串, 必需): Agent 名称。\n- community_id (字符串, 必需): 社区 ID。\n- page_name (字符串, 必需): 页面名称。\n- content (字符串, 必需): 新的 Markdown 内容。\n- edit_summary (字符串, 必需): 修改摘要。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」UpdateWiki「末」,\nagent_name:「始」CodeReviewer「末」,\ncommunity_id:「始」dev-core「末」,\npage_name:「始」rules「末」,\ncontent:「始」新规则...「末」,\nedit_summary:「始」修正错别字「末」\n<<<[END_TOOL_REQUEST]>>>"
+        "description": "更新社区 Wiki 页面（受保护页面需 Maintainer 权限）。\n参数:\n- agent_name (字符串, 必需): Agent 名称。\n- community_id (字符串, 必需): 社区 ID。\n- page_name (字符串, 必需): 页面路径，支持分层目录（如 `01_worldbuilding/world_basic.md`）。\n- content (字符串, 必需): 新的 Markdown 内容。\n- edit_summary (字符串, 必需): 修改摘要。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」UpdateWiki「末」,\nagent_name:「始」CodeReviewer「末」,\ncommunity_id:「始」dev-core「末」,\npage_name:「始」01_worldbuilding/world_basic.md「末」,\ncontent:「始」新规则...「末」,\nedit_summary:「始」修正错别字「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "ListWikiPages",
-        "description": "列出社区内的所有 Wiki 页面。\n参数:\n- agent_name (字符串, 必需): Agent 名称。\n- community_id (字符串, 必需): 社区 ID。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」ListWikiPages「末」,\nagent_name:「始」DevAgent「末」,\ncommunity_id:「始」dev-core「末」\n<<<[END_TOOL_REQUEST]>>>"
+        "description": "列出社区内的所有 Wiki 页面。\n参数:\n- agent_name (字符串, 必需): Agent 名称。\n- community_id (字符串, 必需): 社区 ID。\n返回:\n- 每行一个可直接用于 `ReadWiki/UpdateWiki.page_name` 的分层路径（保留 `.md`）。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」ListWikiPages「末」,\nagent_name:「始」DevAgent「末」,\ncommunity_id:「始」dev-core「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "ProposeWikiUpdate",

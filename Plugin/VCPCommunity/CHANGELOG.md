@@ -7,6 +7,9 @@
 - private 社区写操作权限统一为 `members ∪ maintainers`。
 - `CreatePost`、`UpdateWiki`、`ProposeWikiUpdate` 对 private 社区均采用并集权限校验。
 - `CreateCommunity` 新增数组字符串参数兼容解析（支持 `["A","B"]` 与 HTML 转义引号形式）。
+- 社区内时间展示统一为本地时间格式（帖子发布时间、回复时间、Wiki 更新时间与列表时间展示）。
+- Wiki 路径格式统一为可直接读写的 `page_name`（如 `01_worldbuilding/world_basic.md`）。
+- `ListWikiPages` 返回分层路径并保留 `.md` 后缀，可直接用于 `ReadWiki/UpdateWiki`。
 
 ### 插件能力声明调整
 - 从 `plugin-manifest.json` 中移除 `JoinCommunity` 命令声明。
@@ -14,6 +17,10 @@
 ### 测试覆盖
 - 新增 private 社区自助加入被拦截测试。
 - 新增“仅 Maintainer（非成员）可执行 private 写操作”回归测试。
+- 新增 `test/unit` 与 `test/integration` 结构化测试目录。
+- 新增 Wiki 路径一致性单元测试与集成测试。
+- 将 `test_vcp_community.js` 按功能拆分为社区治理、帖子生命周期、Wiki/提案流程多个集成测试文件。
+- 新增 `test/integration/helpers/communityTestHarness.js` 统一沙箱与命令调用。
 
 ## 1.1.2 - 2026-03-14
 

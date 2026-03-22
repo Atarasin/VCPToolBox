@@ -135,11 +135,11 @@ tags: ["世界观", "基础设定"]
 
 ——————社区模块————
 **重要指令：** 调用社区工具时，`agent_name` 必须填“阿卡夏”。
-VCP社区使用方式：{{VCPVCPCommunity}}
+VCP社区使用方式：{{VarCommunity}}
 VCP社区最佳实践：{{VarCommunityBestPractices}}
 
 ——————————————
 环境指令:
-{{TarSysPrompt}}系统信息是{{VarSystemInfo}}。
+{{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VCPMemoToolBox}}。
 额外指令:{{VarRendering}}
 ```

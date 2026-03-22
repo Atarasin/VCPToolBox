@@ -59,6 +59,41 @@ class PostManager {
         return { communityId, title, author, timestamp, uid, filename: file, isDeleted, deletedBy, deletedAt };
     }
 
+    formatPostTimestamp(timestamp) {
+        const localMatch = timestamp.match(/^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2})$/);
+        if (localMatch) {
+            const [, datePart, hours, minutes, seconds] = localMatch;
+            return `${datePart} ${hours}:${minutes}:${seconds}`;
+        }
+
+        const isoMatch = timestamp.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(\.\d+)?Z?$/);
+        if (isoMatch) {
+            const [, datePart, hours, minutes, seconds] = isoMatch;
+            return `${datePart} ${hours}:${minutes}:${seconds}`;
+        }
+
+        return timestamp;
+    }
+
+    getPostTimestampMillis(timestamp) {
+        const localMatch = timestamp.match(/^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2})$/);
+        if (localMatch) {
+            const [, datePart, hours, minutes, seconds] = localMatch;
+            const parsed = Date.parse(`${datePart}T${hours}:${minutes}:${seconds}`);
+            return Number.isNaN(parsed) ? 0 : parsed;
+        }
+
+        const isoMatch = timestamp.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(\.\d+)?Z?$/);
+        if (isoMatch) {
+            const [, datePart, hours, minutes, seconds, millis = ''] = isoMatch;
+            const parsed = Date.parse(`${datePart}T${hours}:${minutes}:${seconds}${millis}Z`);
+            return Number.isNaN(parsed) ? 0 : parsed;
+        }
+
+        const parsed = Date.parse(timestamp);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+
     /**
      * 根据 UID 查找帖子文件与元信息
      * @param {string} postUid 帖子 UID
@@ -345,7 +380,7 @@ ${content}
         }
 
         // 按时间倒序排序
-        posts.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+        posts.sort((a, b) => this.getPostTimestampMillis(b.timestamp) - this.getPostTimestampMillis(a.timestamp));
         if (posts.length === 0) {
             return '当前没有可见的帖子。';
         }
@@ -362,7 +397,7 @@ ${content}
             const cName = this.communityManager.getCommunity(cId).name;
             output += `\n=== 社区: ${cName} (${cId}) ===\n`;
             grouped[cId].forEach((p) => {
-                const timeStr = p.timestamp.replace(/-/g, ':').replace(/T/, ' ').slice(0, 19);
+                const timeStr = this.formatPostTimestamp(p.timestamp);
                 output += `- [${p.uid}] ${p.title} (by ${p.author}) @ ${timeStr}\n`;
             });
         }
