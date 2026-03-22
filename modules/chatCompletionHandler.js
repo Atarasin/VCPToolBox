@@ -260,11 +260,11 @@ async function fetchWithRetry(
 
 const upstreamLinkState = new Map();
 // 熔断参数：连续失败达到阈值后，短时间内直接阻断请求，避免雪崩重试
-const CIRCUIT_FAILURE_THRESHOLD = 3;
-const CIRCUIT_OPEN_MS = 15000;
+const DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 3;
+const DEFAULT_CIRCUIT_OPEN_MS = 15000;
 // 健康探测参数：用于在熔断期间/请求前做轻量探活
-const HEALTH_PROBE_INTERVAL_MS = 15000;
-const HEALTH_PROBE_TIMEOUT_MS = 3000;
+const DEFAULT_HEALTH_PROBE_INTERVAL_MS = 15000;
+const DEFAULT_HEALTH_PROBE_TIMEOUT_MS = 3000;
 
 function resolveUpstreamOrigin(url) {
   try {
@@ -299,22 +299,22 @@ function getUpstreamState(origin) {
   return upstreamLinkState.get(origin);
 }
 
-function logCircuitFailure(origin, state, failure) {
+function logCircuitFailure(origin, state, failure, circuitFailureThreshold, circuitOpenMs) {
   const now = Date.now();
   state.consecutiveFailures += 1;
   state.lastFailureReason = failure.reason || failure.message || 'UNKNOWN';
   state.lastFailureAt = now;
 
   console.warn(
-    `[Upstream Circuit] ${origin} failure #${state.consecutiveFailures}/${CIRCUIT_FAILURE_THRESHOLD} ` +
+    `[Upstream Circuit] ${origin} failure #${state.consecutiveFailures}/${circuitFailureThreshold} ` +
     `(attempt=${failure.attempt || 'N/A'}, status=${failure.status || 'UNKNOWN'}, reason=${state.lastFailureReason})`
   );
 
-  if (state.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && state.circuitOpenUntil < now) {
+  if (state.consecutiveFailures >= circuitFailureThreshold && state.circuitOpenUntil < now) {
     // 达到阈值即打开熔断窗口，在窗口内优先拒绝新请求
-    state.circuitOpenUntil = now + CIRCUIT_OPEN_MS;
+    state.circuitOpenUntil = now + circuitOpenMs;
     console.error(
-      `[Upstream Circuit] OPEN ${origin} for ${CIRCUIT_OPEN_MS}ms after ${state.consecutiveFailures} consecutive failures.`
+      `[Upstream Circuit] OPEN ${origin} for ${circuitOpenMs}ms after ${state.consecutiveFailures} consecutive failures.`
     );
   }
 }
@@ -331,12 +331,12 @@ function logCircuitSuccess(origin, state, success) {
   state.lastFailureReason = '';
 }
 
-async function probeUpstream(origin, apiKey) {
+async function probeUpstream(origin, apiKey, healthProbeTimeoutMs) {
   // 使用 /v1/models 做轻量健康探测，避免额外消耗模型推理资源
   const { default: fetch } = await import('node-fetch');
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), healthProbeTimeoutMs);
   try {
     const response = await fetch(`${origin}/v1/models`, {
       method: 'GET',
@@ -498,7 +498,23 @@ class ChatCompletionHandler {
       roleDividerRemoveDisabledTags, // 新增
       chinaModel1, // 新增
       chinaModel1Cot, // 新增
+      upstreamCircuitFailureThreshold,
+      upstreamCircuitOpenMs,
+      upstreamHealthProbeIntervalMs,
+      upstreamHealthProbeTimeoutMs,
     } = this.config;
+    const circuitFailureThreshold = Number.isFinite(upstreamCircuitFailureThreshold) && upstreamCircuitFailureThreshold > 0
+      ? upstreamCircuitFailureThreshold
+      : DEFAULT_CIRCUIT_FAILURE_THRESHOLD;
+    const circuitOpenMs = Number.isFinite(upstreamCircuitOpenMs) && upstreamCircuitOpenMs > 0
+      ? upstreamCircuitOpenMs
+      : DEFAULT_CIRCUIT_OPEN_MS;
+    const healthProbeIntervalMs = Number.isFinite(upstreamHealthProbeIntervalMs) && upstreamHealthProbeIntervalMs >= 0
+      ? upstreamHealthProbeIntervalMs
+      : DEFAULT_HEALTH_PROBE_INTERVAL_MS;
+    const healthProbeTimeoutMs = Number.isFinite(upstreamHealthProbeTimeoutMs) && upstreamHealthProbeTimeoutMs > 0
+      ? upstreamHealthProbeTimeoutMs
+      : DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
 
     const shouldShowVCP = SHOW_VCP_OUTPUT || forceShowVCP;
 
@@ -776,9 +792,9 @@ class ChatCompletionHandler {
         const now = Date.now();
         // 熔断打开时先探活，探活成功立即恢复；失败则继续阻断，保护上游
         if (upstreamState.circuitOpenUntil > now) {
-          const shouldProbe = now - upstreamState.lastHealthCheckAt >= HEALTH_PROBE_INTERVAL_MS;
+          const shouldProbe = now - upstreamState.lastHealthCheckAt >= healthProbeIntervalMs;
           if (shouldProbe) {
-            const probe = await probeUpstream(upstreamOrigin, apiKey);
+            const probe = await probeUpstream(upstreamOrigin, apiKey, healthProbeTimeoutMs);
             upstreamState.lastHealthCheckAt = Date.now();
             upstreamState.lastHealthOk = probe.ok;
             if (probe.ok) {
@@ -797,9 +813,9 @@ class ChatCompletionHandler {
             );
             throw new Error(`Upstream circuit open: ${upstreamOrigin}, retry after ${retryAfterMs}ms`);
           }
-        } else if (now - upstreamState.lastHealthCheckAt >= HEALTH_PROBE_INTERVAL_MS) {
+        } else if (now - upstreamState.lastHealthCheckAt >= healthProbeIntervalMs) {
           // 非熔断状态下按间隔做背景健康检查，用于提前感知链路劣化
-          const probe = await probeUpstream(upstreamOrigin, apiKey);
+          const probe = await probeUpstream(upstreamOrigin, apiKey, healthProbeTimeoutMs);
           upstreamState.lastHealthCheckAt = Date.now();
           upstreamState.lastHealthOk = probe.ok;
           if (probe.ok) {
@@ -861,7 +877,7 @@ class ChatCompletionHandler {
                   attempt,
                   status: failure.status,
                   reason: failure.reason || failure.message,
-                });
+                }, circuitFailureThreshold, circuitOpenMs);
               }
             },
             onAttemptSuccess: async (attempt, success) => {

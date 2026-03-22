@@ -164,6 +164,10 @@ const ROLE_DIVIDER_SCAN_SYSTEM = (process.env.RoleDividerScanSystem || "true").t
 const ROLE_DIVIDER_SCAN_ASSISTANT = (process.env.RoleDividerScanAssistant || "true").toLowerCase() === "true"; // 新增：Assistant角色扫描开关
 const ROLE_DIVIDER_SCAN_USER = (process.env.RoleDividerScanUser || "true").toLowerCase() === "true"; // 新增：User角色扫描开关
 const ROLE_DIVIDER_REMOVE_DISABLED_TAGS = (process.env.RoleDividerRemoveDisabledTags || "true").toLowerCase() === "true"; // 新增：禁用标签清除开关
+const UPSTREAM_CIRCUIT_FAILURE_THRESHOLD = parseInt(process.env.UpstreamCircuitFailureThreshold) || 3;
+const UPSTREAM_CIRCUIT_OPEN_MS = parseInt(process.env.UpstreamCircuitOpenMs) || 15000;
+const UPSTREAM_HEALTH_PROBE_INTERVAL_MS = parseInt(process.env.UpstreamHealthProbeIntervalMs) || 15000;
+const UPSTREAM_HEALTH_PROBE_TIMEOUT_MS = parseInt(process.env.UpstreamHealthProbeTimeoutMs) || 3000;
 
 let ROLE_DIVIDER_IGNORE_LIST = [];
 try {
@@ -841,6 +845,10 @@ const chatCompletionHandler = new ChatCompletionHandler({
     maxVCPLoopNonStream: parseInt(process.env.MaxVCPLoopNonStream),
     apiRetries: parseInt(process.env.ApiRetries) || 3, // 新增：API重试次数
     apiRetryDelay: parseInt(process.env.ApiRetryDelay) || 1000, // 新增：API重试延迟
+    upstreamCircuitFailureThreshold: UPSTREAM_CIRCUIT_FAILURE_THRESHOLD,
+    upstreamCircuitOpenMs: UPSTREAM_CIRCUIT_OPEN_MS,
+    upstreamHealthProbeIntervalMs: UPSTREAM_HEALTH_PROBE_INTERVAL_MS,
+    upstreamHealthProbeTimeoutMs: UPSTREAM_HEALTH_PROBE_TIMEOUT_MS,
     cachedEmojiLists,
     detectors,
     superDetectors,
