@@ -50,9 +50,7 @@ async function main() {
                 break;
             }
             case 'JoinCommunity':
-                // 加入私有社区
-                result = await communityManager.joinCommunity(args.agent_name, args.community_id);
-                break;
+                throw new Error('JoinCommunity 已下线：private 社区仅支持 Maintainer 邀请机制。');
             case 'CreateCommunity':
                 // 创建社区
                 result = await communityManager.createCommunity(args);

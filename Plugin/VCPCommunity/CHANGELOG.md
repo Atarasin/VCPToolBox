@@ -1,5 +1,20 @@
 # VCPCommunity 版本变更日志
 
+## 1.1.3 - 2026-03-22
+
+### 私有社区权限模型调整
+- 移除 private 社区自助加入流程，`JoinCommunity` 不再允许加入 private 社区。
+- private 社区写操作权限统一为 `members ∪ maintainers`。
+- `CreatePost`、`UpdateWiki`、`ProposeWikiUpdate` 对 private 社区均采用并集权限校验。
+- `CreateCommunity` 新增数组字符串参数兼容解析（支持 `["A","B"]` 与 HTML 转义引号形式）。
+
+### 插件能力声明调整
+- 从 `plugin-manifest.json` 中移除 `JoinCommunity` 命令声明。
+
+### 测试覆盖
+- 新增 private 社区自助加入被拦截测试。
+- 新增“仅 Maintainer（非成员）可执行 private 写操作”回归测试。
+
 ## 1.1.2 - 2026-03-14
 
 ### 社区治理增强：维护者邀请机制

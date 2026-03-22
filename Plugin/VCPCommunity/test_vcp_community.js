@@ -94,20 +94,50 @@ async function runTests() {
         }
         log(colors.green, '✓ 成功列出社区');
 
-        // 验证 public 社区成员为空，且创建者自动成为维护者
+        // 验证 public 社区成员为空，且维护者列表按入参写入
         const configDataPublic = JSON.parse(await fs.readFile(COMMUNITIES_FILE, 'utf-8'));
         const createdCommunity = configDataPublic.communities.find((c) => c.id === communityId);
         if (!(createdCommunity && createdCommunity.type === 'public' && createdCommunity.members.length === 0)) {
             throw new Error('public 社区 members 应为空');
         }
         if (!createdCommunity.maintainers.includes('DevAgent')) {
-            throw new Error('创建者未自动成为维护者');
+            throw new Error('维护者列表未按入参写入');
         }
-        log(colors.green, '✓ public 社区创建者自动成为维护者');
+        log(colors.green, '✓ public 社区维护者列表写入成功');
         if (createdCommunity?.created_by !== 'DevAgent') {
             throw new Error('未记录社区创建者');
         }
         log(colors.green, '✓ communities.json 记录创建者');
+
+        log(colors.yellow, '\nTest 2.0: private 社区自助加入下线');
+        const joinPrivateResp = await runCommand('JoinCommunity', {
+            agent_name: 'WriterAgent',
+            community_id: 'dev-core'
+        });
+        if (!(joinPrivateResp.status === 'error' && joinPrivateResp.error.includes('JoinCommunity 已下线'))) {
+            throw new Error('private 社区自助加入未被正确拦截');
+        }
+        log(colors.green, '✓ private 社区自助加入已下线');
+
+        log(colors.yellow, '\nTest 2.0.1: CreateCommunity 支持字符串数组参数');
+        const stringArrayCommunityId = `string-array-${Date.now()}`;
+        const createByStringArrayResp = await runCommand('CreateCommunity', {
+            agent_name: '阿卡夏',
+            community_id: stringArrayCommunityId,
+            name: '字符串数组解析测试',
+            description: 'test string array parse',
+            type: 'private',
+            members: '[&quot;忒伊亚&quot;,&quot;阿卡夏&quot;,&quot;皮格马利翁&quot;,&quot;摩伊赖&quot;,&quot;塔罗&quot;,&quot;阿努比斯&quot;]',
+            maintainers: '[]'
+        });
+        if (createByStringArrayResp.status !== 'success') throw new Error(createByStringArrayResp.error);
+        const stringArrayConfig = JSON.parse(await fs.readFile(COMMUNITIES_FILE, 'utf-8'));
+        const stringArrayCommunity = stringArrayConfig.communities.find((c) => c.id === stringArrayCommunityId);
+        const expectedMembers = ['忒伊亚', '阿卡夏', '皮格马利翁', '摩伊赖', '塔罗', '阿努比斯'];
+        if (!stringArrayCommunity || expectedMembers.some((name) => !stringArrayCommunity.members.includes(name))) {
+            throw new Error('字符串数组参数未正确解析为成员列表');
+        }
+        log(colors.green, '✓ 字符串数组参数可正确解析为成员列表');
 
         log(colors.yellow, '\nTest 2.1: 维护者邀请机制');
         const inviteResp = await runCommand('InviteMaintainer', {
@@ -208,7 +238,7 @@ async function runTests() {
             description: 'test max maintainers',
             type: 'private',
             members: ['OwnerAgent', 'M2', 'M3', 'M4', 'M5'],
-            maintainers: ['M2', 'M3', 'M4', 'M5']
+            maintainers: ['OwnerAgent', 'M2', 'M3', 'M4']
         });
         if (limitCreateResp.status !== 'success') throw new Error(limitCreateResp.error);
 
@@ -221,6 +251,46 @@ async function runTests() {
             throw new Error('维护者数量上限未生效');
         }
         log(colors.green, '✓ 维护者数量上限生效');
+
+        log(colors.yellow, '\nTest 2.2: private 写权限 members ∪ maintainers');
+        const maintainerWriteCommunityId = `maintainer-write-${Date.now()}`;
+        const maintainerWriteCreate = await runCommand('CreateCommunity', {
+            agent_name: 'OwnerAgent',
+            community_id: maintainerWriteCommunityId,
+            name: '维护者写权限测试社区',
+            description: 'test private write union',
+            type: 'private',
+            members: ['MemberOnly'],
+            maintainers: ['MaintainerOnly']
+        });
+        if (maintainerWriteCreate.status !== 'success') throw new Error(maintainerWriteCreate.error);
+
+        const maintainerWritePost = await runCommand('CreatePost', {
+            agent_name: 'MaintainerOnly',
+            community_id: maintainerWriteCommunityId,
+            title: 'Maintainer Write Post',
+            content: 'maintainer write check'
+        });
+        if (maintainerWritePost.status !== 'success') throw new Error('Maintainer 非成员发帖应被允许');
+
+        const maintainerWriteWiki = await runCommand('UpdateWiki', {
+            agent_name: 'MaintainerOnly',
+            community_id: maintainerWriteCommunityId,
+            page_name: 'maintainer.policy',
+            content: '# Maintainer Policy\n\nv1',
+            edit_summary: 'maintainer write check'
+        });
+        if (maintainerWriteWiki.status !== 'success') throw new Error('Maintainer 非成员更新 Wiki 应被允许');
+
+        const maintainerWriteProposal = await runCommand('ProposeWikiUpdate', {
+            agent_name: 'MaintainerOnly',
+            community_id: maintainerWriteCommunityId,
+            page_name: 'maintainer.policy',
+            content: '# Maintainer Policy\n\nv2',
+            rationale: 'maintainer propose check'
+        });
+        if (maintainerWriteProposal.status !== 'success') throw new Error('Maintainer 非成员发起提案应被允许');
+        log(colors.green, '✓ private 写权限已采用 members ∪ maintainers');
 
         // Test 3: 发帖与 @提及
         log(colors.yellow, '\nTest 3: 发帖与 @提及 (CreatePost)');

@@ -101,8 +101,9 @@ class ProposalManager {
         // 1. 社区权限检查
         const community = this.communityManager.getCommunity(community_id);
         if (!community) throw new Error(`社区 '${community_id}' 不存在。`);
-        if (community.type === 'private' && agent_name !== 'System' && !community.members.includes(agent_name)) {
-            throw new Error('权限不足: 您不是社区成员。');
+        const privateWritable = new Set([...(community.members || []), ...(community.maintainers || [])]);
+        if (community.type === 'private' && agent_name !== 'System' && !privateWritable.has(agent_name)) {
+            throw new Error('权限不足: 您不是社区成员或 Maintainer。');
         }
 
         // 2. 读取旧内容（用于对比 Diff）

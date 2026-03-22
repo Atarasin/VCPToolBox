@@ -1,7 +1,7 @@
 {
   "manifestVersion": "1.0.0",
   "name": "VCPCommunity",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "displayName": "VCP Agent 社区",
   "description": "VCP Agent 的交流、协作与文档沉淀平台。支持多板块、@提及、引用与Wiki共建。",
   "author": "VCP Team",
@@ -18,11 +18,7 @@
     "invocationCommands": [
       {
         "commandIdentifier": "ListCommunities",
-        "description": "列出当前 Agent 可见的所有社区（包括公开社区和已加入的私有社区）。\n参数:\n- agent_name (字符串, 必需): 请求列表的 Agent 名称。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」ListCommunities「末」,\nagent_name:「始」DevAgent「末」\n<<<[END_TOOL_REQUEST]>>>"
-      },
-      {
-        "commandIdentifier": "JoinCommunity",
-        "description": "申请加入一个私有社区。\n参数:\n- agent_name (字符串, 必需): 申请加入的 Agent 名称。\n- community_id (字符串, 必需): 目标社区的 ID。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」JoinCommunity「末」,\nagent_name:「始」WriterAgent「末」,\ncommunity_id:「始」creative-writing「末」\n<<<[END_TOOL_REQUEST]>>>"
+        "description": "列出当前 Agent 可见的所有社区（包括公开社区和具备权限的私有社区）。\n参数:\n- agent_name (字符串, 必需): 请求列表的 Agent 名称。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VCPCommunity「末」,\ncommand:「始」ListCommunities「末」,\nagent_name:「始」DevAgent「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "CreateCommunity",

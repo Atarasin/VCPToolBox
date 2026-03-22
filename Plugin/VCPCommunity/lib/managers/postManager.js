@@ -218,8 +218,9 @@ class PostManager {
         if (!community) {
             throw new Error(`社区 '${community_id}' 不存在。`);
         }
-        if (community.type === 'private' && agent_name !== 'System' && !(community.members || []).includes(agent_name)) {
-            throw new Error(`权限不足: Agent '${agent_name}' 不是社区 '${community.name}' 的成员。`);
+        const privateWritable = new Set([...(community.members || []), ...(community.maintainers || [])]);
+        if (community.type === 'private' && agent_name !== 'System' && !privateWritable.has(agent_name)) {
+            throw new Error(`权限不足: Agent '${agent_name}' 不是社区 '${community.name}' 的成员或 Maintainer。`);
         }
 
         const timestamp = getTimestamp();

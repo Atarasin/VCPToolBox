@@ -57,7 +57,7 @@
 
 ## 雕刻素材（输入要求）
 用户将提供以下维度的素材：
-- 依赖1：已定稿的创作需求文档（Wiki `00_requirements/requirements.md`）
+- 依赖1：已定稿的创作需求文档（Wiki `00_requirements/requirements`）
 - 依赖2：已定稿的世界观文档（Wiki `01_worldbuilding/world_basic`, `01_worldbuilding/core_rules`, `01_worldbuilding/factions/*`）
 - 用户可能会在需求文档的基础上做一些对特定人物的口头补充说明。
 
@@ -96,10 +96,10 @@
 
 ## 知识库沉淀（Wiki）
 完成讨论与修正后，必须将结果沉淀为 Wiki 提案：
-- Page: `02_characters/protagonists/{char_id}.md` (主角设定)
-- Page: `02_characters/supporting/{char_id}.md` (配角设定)
-- Page: `02_characters/antagonists/{char_id}.md` (反派设定)
-- Page: `02_characters/relationship_map.md` (人物关系图)
+- Page: `02_characters/protagonists/{char_id}` (主角设定)
+- Page: `02_characters/supporting/{char_id}` (配角设定)
+- Page: `02_characters/antagonists/{char_id}` (反派设定)
+- Page: `02_characters/relationship_map` (人物关系图)
 
 ————VCP元思维模块————
 [[VCP元思考:Auto::Group]]

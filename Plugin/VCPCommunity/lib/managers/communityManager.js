@@ -118,6 +118,32 @@ class CommunityManager {
         return this.communities.find((c) => c.id === id);
     }
 
+    normalizeAgentList(input) {
+        const normalizeArray = (value) => Array.from(new Set(
+            value
+                .filter((item) => typeof item === 'string')
+                .map((item) => item.trim())
+                .filter(Boolean)
+        ));
+
+        if (Array.isArray(input)) {
+            return normalizeArray(input);
+        }
+        if (typeof input === 'string') {
+            const decoded = input.replace(/&quot;/g, '"').trim();
+            if (!decoded) return [];
+            try {
+                const parsed = JSON.parse(decoded);
+                if (Array.isArray(parsed)) {
+                    return normalizeArray(parsed);
+                }
+            } catch (_) {
+                return [];
+            }
+        }
+        return [];
+    }
+
     /**
      * 获取指定 Wiki 页面的元数据
      * @param {string} communityId 社区ID
@@ -161,7 +187,7 @@ class CommunityManager {
     }
 
     /**
-     * Agent 申请加入社区
+     * JoinCommunity 命令兼容处理
      * @param {string} agentName Agent名称
      * @param {string} communityId 社区ID
      */
@@ -173,14 +199,7 @@ class CommunityManager {
         if (community.type === 'public') {
             return `社区 '${community.name}' 是公开社区，无需加入。`;
         }
-        if (community.members.includes(agentName)) {
-            return `Agent '${agentName}' 已经是 '${community.name}' 的成员。`;
-        }
-
-        // 添加成员并保存
-        community.members.push(agentName);
-        await this.save();
-        return `Agent '${agentName}' 成功加入社区 '${community.name}'。`;
+        throw new Error(`私有社区不支持自助加入。请联系社区 Maintainer 通过邀请机制处理。`);
     }
 
     /**
@@ -199,9 +218,8 @@ class CommunityManager {
             throw new Error(`社区 '${community_id}' 已存在。`);
         }
 
-        // 创建者自动成为维护者，避免出现无维护者导致的流程卡死
-        const maintainerSet = new Set(Array.isArray(maintainers) ? maintainers : []);
-        maintainerSet.add(agent_name);
+        const normalizedMembers = this.normalizeAgentList(members);
+        const normalizedMaintainers = this.normalizeAgentList(maintainers);
 
         // public 社区默认不维护成员列表
         // created_by/created_at 用于追踪社区创建来源
@@ -210,8 +228,8 @@ class CommunityManager {
             name,
             description: description || '',
             type,
-            members: type === 'public' ? [] : Array.isArray(members) ? members : [],
-            maintainers: Array.from(maintainerSet),
+            members: type === 'public' ? [] : normalizedMembers,
+            maintainers: normalizedMaintainers,
             created_by: agent_name,
             created_at: Date.now(),
         };

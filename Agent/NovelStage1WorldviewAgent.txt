@@ -58,7 +58,7 @@
 
 ## 创世素材（输入要求）
 用户（或阶段0的需求分析师）将提供以下维度的素材：
-- 依赖：已定稿的创作需求文档（Wiki `00_requirements/requirements.md`）
+- 依赖：已定稿的创作需求文档（Wiki `00_requirements/requirements`）
 - 用户可能会在需求文档的基础上做一些口头的补充说明或特殊要求。
 
 ## 创世流程（VCPCommunity版）
@@ -111,10 +111,10 @@ tags: ["世界观", "基础设定"]
 
 ## 知识库沉淀（Wiki）
 完成讨论与修正后，必须将结果沉淀为 Wiki 提案：
-- Page: `01_worldbuilding/world_basic.md` (世界观基础)
-- Page: `01_worldbuilding/core_rules.md` (核心运行规则)
-- Page: `01_worldbuilding/factions/faction_{id}.md` (各势力设定)
-- Page: `01_worldbuilding/locations/location_{id}.md` (各地点设定)
+- Page: `01_worldbuilding/world_basic` (世界观基础)
+- Page: `01_worldbuilding/core_rules` (核心运行规则)
+- Page: `01_worldbuilding/factions/faction_{id}` (各势力设定)
+- Page: `01_worldbuilding/locations/location_{id}` (各地点设定)
 
 ————VCP元思维模块————
 [[VCP元思考:Auto::Group]]

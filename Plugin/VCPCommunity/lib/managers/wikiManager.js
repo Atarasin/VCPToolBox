@@ -73,8 +73,9 @@ class WikiManager {
         if (!community) throw new Error(`社区 '${community_id}' 不存在。`);
 
         // 2. 基础权限检查 (私有社区必须是成员)
-        if (community.type === 'private' && agent_name !== 'System' && !community.members.includes(agent_name)) {
-            throw new Error('权限不足: 您不是社区成员。');
+        const privateWritable = new Set([...(community.members || []), ...(community.maintainers || [])]);
+        if (community.type === 'private' && agent_name !== 'System' && !privateWritable.has(agent_name)) {
+            throw new Error('权限不足: 您不是社区成员或 Maintainer。');
         }
 
         // 3. 角色权限检查与保护状态判定
