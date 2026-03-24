@@ -6,6 +6,7 @@ const CommunityManager = require('./lib/managers/communityManager');
 const PostManager = require('./lib/managers/postManager');
 const WikiManager = require('./lib/managers/wikiManager');
 const ProposalManager = require('./lib/managers/proposalManager');
+const WikiDailynoteSyncManager = require('./lib/managers/wikiDailynoteSyncManager');
 const { DATA_DIR, COMMUNITIES_FILE, POSTS_DIR, WIKI_DIR } = require('./lib/constants');
 
 async function main() {
@@ -16,7 +17,8 @@ async function main() {
 
     // 初始化其他管理器，并注入依赖
     const postManager = new PostManager(communityManager);
-    const wikiManager = new WikiManager(communityManager);
+    const wikiDailynoteSyncManager = new WikiDailynoteSyncManager();
+    const wikiManager = new WikiManager(communityManager, wikiDailynoteSyncManager);
     const proposalManager = new ProposalManager(communityManager, postManager, wikiManager);
 
     // 获取输入数据 (优先尝试命令行参数，否则读取 stdin)

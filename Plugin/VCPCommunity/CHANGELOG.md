@@ -1,5 +1,38 @@
 # VCPCommunity 版本变更日志
 
+## 1.1.4 - 2026-03-23
+
+### Wiki 到日记目录映射同步
+- 新增独立管理器 `wikiDailynoteSyncManager`，统一管理 Wiki→DailyNote 映射解析与同步写入。
+- `WikiManager.updateWiki` 在成功写入 Wiki 后触发同步流程，提案合并路径同样生效。
+- 新增映射配置常量与文件路径：`WIKI_DAILYNOTE_MAPPINGS_FILE`。
+- 新增日记目录常量：`DAILYNOTE_DIR`。
+- 支持将命中前缀后的 Wiki 路径扁平化为单文件名（`/` 转 `_`）写入日记目录。
+- 支持 `wiki_prefix` 为空字符串，表示同步该社区下全部 Wiki 页面。
+- 限制 `dailynote` 下仅一层业务目录，自动创建缺失目录。
+
+### 初始化流程增强
+- `initStorage` 新增 `wiki_dailynote_mappings.json` 默认初始化，默认内容为 `{"enabled": false, "mappings": []}`。
+
+### 测试覆盖
+- 新增 `wikiDailynoteSyncManager` 单元测试，覆盖命中同步、覆盖更新、未命中、开关关闭、非法路径。
+- 新增 `WikiManager` 单元测试，覆盖更新 Wiki 后触发独立同步管理器并生成扁平化目标文件。
+
+### 提案链路 Tag 透传
+- `ProposeWikiUpdate` 新增可选 `tag` 参数，并在提案合并时透传到 `UpdateWiki`。
+- `ReviewProposal(Approve)` 合并路径支持将提案中的 `tag` 写入 Wiki 页面最后一行。
+- 新增 `ProposeWikiUpdate -> ReviewProposal -> UpdateWiki` 含 `tag` 端到端集成测试。
+
+### Wiki 元信息结构调整
+- `UpdateWiki` 改为在文档开头写入元信息块（`last updated / agent name / edit summary`）。
+- 保持 `Tag` 行仍位于文档最后一行，兼容 TagMemo 检索策略。
+- 当 `tag` 参数为空时，支持从 `content` 中提取 `Tag` 行（包括 `**Tag**:` 格式）并规范化到尾行。
+
+### Wiki→日记映射修复
+- 修复映射前缀为目录名时，页面名为 `前缀.md`（如 `00_requirements.md`）未命中同步的问题。
+- 新增 `ReviewProposal(Approve)` 场景集成测试，覆盖“提案合并后同步日记”的根页面路径。
+- 修复同步成功日志写入 stdout 导致插件 JSON 响应被污染的问题，改为写入 stderr。
+
 ## 1.1.3 - 2026-03-22
 
 ### 私有社区权限模型调整

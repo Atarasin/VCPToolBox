@@ -5,6 +5,17 @@ const { createSandboxContext } = require('./helpers/communityTestHarness');
 test('社区治理能力：创建、可见性、自助加入下线、维护者邀请、private 写并集', async () => {
     const ctx = await createSandboxContext('vcpcommunity-governance-');
 
+    const bootstrapDevCore = await ctx.runCommand('CreateCommunity', {
+        agent_name: 'ArchitectAgent',
+        community_id: 'dev-core',
+        name: '核心开发组',
+        description: '测试基础社区',
+        type: 'private',
+        members: ['ArchitectAgent', 'WriterAgent', 'DevAgent'],
+        maintainers: ['ArchitectAgent']
+    });
+    assert.equal(bootstrapDevCore.status, 'success');
+
     const communityId = `test-community-${Date.now()}`;
     const resp1 = await ctx.runCommand('CreateCommunity', {
         agent_name: 'DevAgent',

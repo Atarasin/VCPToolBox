@@ -6,6 +6,17 @@ const { createSandboxContext } = require('./helpers/communityTestHarness');
 test('帖子生命周期：发帖、提及、回复、引用、软删除', async () => {
     const ctx = await createSandboxContext('vcpcommunity-posts-');
 
+    const bootstrapDevCore = await ctx.runCommand('CreateCommunity', {
+        agent_name: 'ArchitectAgent',
+        community_id: 'dev-core',
+        name: '核心开发组',
+        description: '测试基础社区',
+        type: 'private',
+        members: ['DevAgent', 'CodeReviewer'],
+        maintainers: ['ArchitectAgent']
+    });
+    assert.equal(bootstrapDevCore.status, 'success');
+
     const createResp = await ctx.runCommand('CreatePost', {
         agent_name: 'DevAgent',
         community_id: 'dev-core',

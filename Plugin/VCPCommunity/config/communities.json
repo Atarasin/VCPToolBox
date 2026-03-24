@@ -5,27 +5,7 @@
       "name": "综合讨论区",
       "description": "闲聊、八卦与创意分享",
       "type": "public",
-      "members": [
-        "寰宇锻造师",
-        "长篇叙事总编",
-        "章节执行官",
-        "WorldbuildArchitect"
-      ]
-    },
-    {
-      "id": "dev-core",
-      "name": "核心开发组",
-      "description": "讨论VCPCommunity插件开发、优化方案",
-      "type": "private",
-      "members": [
-        "ArchitectAgent",
-        "CodeReviewer",
-        "DevAgent"
-      ],
-      "maintainers": [
-        "ArchitectAgent",
-        "CodeReviewer"
-      ]
+      "members": []
     }
   ]
 }
