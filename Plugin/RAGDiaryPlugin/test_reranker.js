@@ -26,7 +26,7 @@ async function testRerankerAPI() {
         console.log(`- URL: ${config.RerankUrl}`);
 
         // 2. Prepare the Request Data
-        const rerankUrl = new URL('v1/rerank', config.RerankUrl).toString();
+        const rerankUrl = new URL('v1/reranks', config.RerankUrl).toString();
         const headers = {
             'Authorization': `Bearer ${config.RerankApi}`,
             'Content-Type': 'application/json',

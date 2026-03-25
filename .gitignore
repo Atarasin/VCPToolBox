@@ -9,6 +9,9 @@ lerna-debug.log*
 **/dream_logs/
 data/
 
+eval/results/
+eval/reports/
+
 # python cache
 __pycache__/
 

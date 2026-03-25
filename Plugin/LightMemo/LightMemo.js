@@ -434,7 +434,7 @@ class LightMemoPlugin {
         }
         console.log(`[LightMemo] Starting rerank for ${documents.length} documents.`);
 
-        const rerankUrl = new URL('v1/rerank', this.rerankConfig.url).toString();
+        const rerankUrl = new URL('v1/reranks', this.rerankConfig.url).toString();
         const headers = {
             'Authorization': `Bearer ${this.rerankConfig.apiKey}`,
             'Content-Type': 'application/json',

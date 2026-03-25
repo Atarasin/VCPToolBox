@@ -2924,7 +2924,7 @@ class RAGDiaryPlugin {
             console.log(`[RAGDiaryPlugin] Query truncated to ${queryTokens} tokens`);
         }
 
-        const rerankUrl = new URL('v1/rerank', this.rerankConfig.url).toString();
+        const rerankUrl = new URL('v1/reranks', this.rerankConfig.url).toString();
         const headers = {
             'Authorization': `Bearer ${this.rerankConfig.apiKey}`,
             'Content-Type': 'application/json',
