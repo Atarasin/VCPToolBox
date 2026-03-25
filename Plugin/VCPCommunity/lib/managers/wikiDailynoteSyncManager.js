@@ -8,7 +8,11 @@
 
 const fs = require('fs').promises; // Node.js 原生 fs 模块的 Promise 版本，用于异步文件系统操作
 const path = require('path');      // Node.js 原生 path 模块，用于处理文件和目录路径
-const { DAILYNOTE_DIR, WIKI_DAILYNOTE_MAPPINGS_FILE } = require('../constants'); // 引入常量配置：日记本目录和映射配置文件路径
+const {
+    DAILYNOTE_DIR,
+    WIKI_DAILYNOTE_MAPPINGS_FILE,
+    WIKI_DAILYNOTE_SYNC_RESULTS_FILE,
+} = require('../constants'); // 引入常量配置：日记本目录和映射配置文件路径
 
 /**
  * WikiDailynoteSyncManager 类
@@ -195,7 +199,7 @@ class WikiDailynoteSyncManager {
             throw new Error('目标文件路径非法。');
         }
         
-        return { targetDir, targetPath, wikiPrefix };
+        return { targetDir, targetPath, wikiPrefix, dailynoteDir };
     }
 
     /**
@@ -225,6 +229,32 @@ class WikiDailynoteSyncManager {
         }
     }
 
+    async loadSyncResults() {
+        try {
+            const raw = await fs.readFile(WIKI_DAILYNOTE_SYNC_RESULTS_FILE, 'utf-8');
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                return [];
+            }
+            throw e;
+        }
+    }
+
+    async saveSyncResults(records) {
+        await fs.writeFile(WIKI_DAILYNOTE_SYNC_RESULTS_FILE, JSON.stringify(records, null, 2), 'utf-8');
+    }
+
+    async persistSyncResult(record) {
+        await fs.mkdir(path.dirname(WIKI_DAILYNOTE_SYNC_RESULTS_FILE), { recursive: true });
+        const records = await this.loadSyncResults();
+        records.push(record);
+        const maxRecords = 2000;
+        const trimmed = records.length > maxRecords ? records.slice(records.length - maxRecords) : records;
+        await this.saveSyncResults(trimmed);
+    }
+
     /**
      * 同步 Wiki 页面内容到 DailyNote
      * 
@@ -239,52 +269,64 @@ class WikiDailynoteSyncManager {
      * @param {string} args.content - 待同步的最新页面内容
      * @returns {Promise<Object>} 同步结果对象，包含 status (synced|skipped|failed) 以及附带的路径或原因信息
      */
-    async syncWikiPage({ communityId, pageName, content }) {
-        const config = await this.loadMappingsConfig();
-        // 如果映射功能全局禁用，直接跳过
-        if (!config.enabled) {
-            return { status: 'skipped', reason: 'mapping_disabled' };
-        }
-
-        let matchedCandidate = null;
-        let invalidReason = null;
-        
-        // 遍历所有的映射规则，寻找最符合的一条（最长前缀匹配原则）
-        for (const mapping of config.mappings) {
-            if (!mapping || typeof mapping !== 'object') continue;
-            // 确保配置的 community_id 与当前变更的社区匹配
-            if (mapping.community_id !== communityId) continue;
-            try {
-                const resolved = this.resolveTargetPath(mapping, pageName);
-                if (!resolved) continue;
-                
-                // 采用最长前缀匹配，确保如果存在嵌套的细粒度配置时优先使用细粒度配置
-                if (!matchedCandidate || resolved.wikiPrefix.length > matchedCandidate.wikiPrefix.length) {
-                    matchedCandidate = resolved;
-                }
-            } catch (e) {
-                // 如果解析某条规则发生异常，记录异常原因但继续尝试其他规则
-                invalidReason = e.message;
-            }
-        }
-
-        // 如果未找到任何匹配的映射规则
-        if (!matchedCandidate) {
-            if (invalidReason) {
-                return { status: 'failed', reason: invalidReason };
-            }
-            return { status: 'skipped', reason: 'mapping_not_matched' };
-        }
-
-        // 确保目标目录存在，如不存在则递归创建
-        await fs.mkdir(matchedCandidate.targetDir, { recursive: true });
-        // 将 Wiki 内容写入匹配出的 DailyNote 目标文件路径
-        await fs.writeFile(matchedCandidate.targetPath, content, 'utf-8');
-        
-        return {
-            status: 'synced',
-            target_path: matchedCandidate.targetPath,
+    async syncWikiPage({ communityId, pageName, content, agentName = '' }) {
+        const now = Date.now();
+        const recordBase = {
+            ts: now,
+            community_id: communityId,
+            page_name: pageName,
+            agent_name: agentName,
         };
+
+        let result;
+        try {
+            const config = await this.loadMappingsConfig();
+            if (!config.enabled) {
+                result = { status: 'skipped', reason: 'mapping_disabled' };
+            } else {
+                let matchedCandidate = null;
+                let invalidReason = null;
+                for (const mapping of config.mappings) {
+                    if (!mapping || typeof mapping !== 'object') continue;
+                    if (mapping.community_id !== communityId) continue;
+                    try {
+                        const resolved = this.resolveTargetPath(mapping, pageName);
+                        if (!resolved) continue;
+                        if (!matchedCandidate || resolved.wikiPrefix.length > matchedCandidate.wikiPrefix.length) {
+                            matchedCandidate = resolved;
+                        }
+                    } catch (e) {
+                        invalidReason = e.message;
+                    }
+                }
+
+                if (!matchedCandidate) {
+                    if (invalidReason) {
+                        result = { status: 'failed', reason: invalidReason };
+                    } else {
+                        result = { status: 'skipped', reason: 'mapping_not_matched' };
+                    }
+                } else {
+                    await fs.mkdir(matchedCandidate.targetDir, { recursive: true });
+                    await fs.writeFile(matchedCandidate.targetPath, content, 'utf-8');
+                    result = {
+                        status: 'synced',
+                        target_path: matchedCandidate.targetPath,
+                        wiki_prefix: matchedCandidate.wikiPrefix,
+                        dailynote_dir: matchedCandidate.dailynoteDir,
+                    };
+                }
+            }
+        } catch (e) {
+            result = { status: 'failed', reason: e.message || 'sync_unknown_error' };
+        }
+
+        try {
+            await this.persistSyncResult({ ...recordBase, ...result });
+        } catch (e) {
+            return { status: 'failed', reason: `persist_failed: ${e.message}` };
+        }
+        return result;
     }
 }
 

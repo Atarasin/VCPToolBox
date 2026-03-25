@@ -24,6 +24,12 @@ async function writeMappingsConfig(sandboxRoot, data) {
     );
 }
 
+async function readSyncResults(sandboxRoot) {
+    const filePath = path.join(sandboxRoot, 'data', 'VCPCommunity', 'config', 'wiki_dailynote_sync_results.json');
+    const raw = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(raw);
+}
+
 test('syncWikiPage 命中映射后创建目录并写入扁平化文件', async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'vcpcommunity-sync-unit-'));
     const WikiDailynoteSyncManager = loadSyncManagerWithSandbox(sandboxRoot);
@@ -49,6 +55,10 @@ test('syncWikiPage 命中映射后创建目录并写入扁平化文件', async (
     const targetFile = path.join(sandboxRoot, 'dailynote', '小说创作需求', 'story_outline.md');
     const fileContent = await fs.readFile(targetFile, 'utf8');
     assert.equal(fileContent, '# content v1');
+    const records = await readSyncResults(sandboxRoot);
+    assert.equal(Array.isArray(records), true);
+    assert.equal(records[records.length - 1].status, 'synced');
+    assert.equal(records[records.length - 1].page_name, '00_requirements/story/outline.md');
 });
 
 test('syncWikiPage 再次写入会覆盖同一目标文件', async () => {
@@ -158,6 +168,9 @@ test('syncWikiPage 未命中映射时返回 skipped', async () => {
     });
     assert.equal(result.status, 'skipped');
     assert.equal(result.reason, 'mapping_not_matched');
+    const records = await readSyncResults(sandboxRoot);
+    assert.equal(records[records.length - 1].status, 'skipped');
+    assert.equal(records[records.length - 1].reason, 'mapping_not_matched');
 });
 
 test('syncWikiPage 开关关闭时返回 skipped', async () => {

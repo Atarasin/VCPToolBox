@@ -8,6 +8,7 @@ const {
     PROPOSALS_FILE,
     MAINTAINER_INVITES_FILE,
     WIKI_DAILYNOTE_MAPPINGS_FILE,
+    WIKI_DAILYNOTE_SYNC_RESULTS_FILE,
 } = require('../constants'); // 引入常量配置：包括各类目录及文件路径
 
 /**
@@ -52,6 +53,7 @@ class CommunityManager {
         await this.ensureJsonFile(PROPOSALS_FILE, []);
         await this.ensureJsonFile(MAINTAINER_INVITES_FILE, []);
         await this.ensureJsonFile(WIKI_DAILYNOTE_MAPPINGS_FILE, { enabled: false, mappings: [] });
+        await this.ensureJsonFile(WIKI_DAILYNOTE_SYNC_RESULTS_FILE, []);
         
         // 加载邀请记录到内存
         await this.loadMaintainerInvites();

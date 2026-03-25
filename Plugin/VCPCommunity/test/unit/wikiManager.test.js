@@ -199,6 +199,10 @@ test('UpdateWiki 触发独立同步管理器并输出扁平化日记文件', asy
     const syncedContent = await fs.readFile(syncedPath, 'utf8');
     assert.equal(syncedContent.includes('# outline'), true);
     assert.equal(syncedContent.includes('agent name: DevAgent'), true);
+    const syncResultsPath = path.join(sandboxRoot, 'data', 'VCPCommunity', 'config', 'wiki_dailynote_sync_results.json');
+    const syncResults = JSON.parse(await fs.readFile(syncResultsPath, 'utf8'));
+    assert.equal(syncResults[syncResults.length - 1].status, 'synced');
+    assert.equal(syncResults[syncResults.length - 1].agent_name, 'DevAgent');
 });
 
 test('UpdateWiki 在 wiki_prefix 为空时同步社区任意 Wiki 页面', async () => {

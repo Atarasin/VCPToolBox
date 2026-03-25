@@ -17,6 +17,7 @@ const DEFAULT_COMMUNITIES_FILE = path.join(__dirname, '..', 'config', 'communiti
 const PROPOSALS_FILE = path.join(CONFIG_DIR, 'proposals.json');
 const MAINTAINER_INVITES_FILE = path.join(CONFIG_DIR, 'maintainer_invites.json');
 const WIKI_DAILYNOTE_MAPPINGS_FILE = path.join(CONFIG_DIR, 'wiki_dailynote_mappings.json');
+const WIKI_DAILYNOTE_SYNC_RESULTS_FILE = path.join(CONFIG_DIR, 'wiki_dailynote_sync_results.json');
 
 module.exports = {
   PROJECT_BASE_PATH,
@@ -30,4 +31,5 @@ module.exports = {
   PROPOSALS_FILE,
   MAINTAINER_INVITES_FILE,
   WIKI_DAILYNOTE_MAPPINGS_FILE,
+  WIKI_DAILYNOTE_SYNC_RESULTS_FILE,
 };

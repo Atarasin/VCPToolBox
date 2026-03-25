@@ -6,6 +6,7 @@
 - 新增独立管理器 `wikiDailynoteSyncManager`，统一管理 Wiki→DailyNote 映射解析与同步写入。
 - `WikiManager.updateWiki` 在成功写入 Wiki 后触发同步流程，提案合并路径同样生效。
 - 新增映射配置常量与文件路径：`WIKI_DAILYNOTE_MAPPINGS_FILE`。
+- 新增同步结果持久化文件路径：`WIKI_DAILYNOTE_SYNC_RESULTS_FILE`。
 - 新增日记目录常量：`DAILYNOTE_DIR`。
 - 支持将命中前缀后的 Wiki 路径扁平化为单文件名（`/` 转 `_`）写入日记目录。
 - 支持 `wiki_prefix` 为空字符串，表示同步该社区下全部 Wiki 页面。
@@ -13,6 +14,7 @@
 
 ### 初始化流程增强
 - `initStorage` 新增 `wiki_dailynote_mappings.json` 默认初始化，默认内容为 `{"enabled": false, "mappings": []}`。
+- `initStorage` 新增 `wiki_dailynote_sync_results.json` 默认初始化，默认内容为 `[]`。
 
 ### 测试覆盖
 - 新增 `wikiDailynoteSyncManager` 单元测试，覆盖命中同步、覆盖更新、未命中、开关关闭、非法路径。

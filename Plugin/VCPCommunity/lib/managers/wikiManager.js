@@ -357,6 +357,7 @@ class WikiManager {
                 communityId: community_id,
                 pageName: normalizedPageName,
                 content: fullContent,
+                agentName: agent_name,
             });
             // 根据同步返回结果记录对应日志，供开发者或运维排查
             if (syncResult?.status === 'failed') {
