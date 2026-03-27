@@ -9,11 +9,14 @@
     "eval:mock:candidate": "node eval/mock-run-eval.js candidate",
     "eval:real:baseline": "node eval/real-run-eval.js baseline",
     "eval:real:candidate": "node eval/real-run-eval.js candidate",
+    "eval:real:baseline:variant": "node eval/real-run-eval.js baseline --variant-config eval/embedding_variant_config.json",
+    "eval:real:candidate:variant": "node eval/real-run-eval.js candidate --variant-config eval/embedding_variant_config.json",
     "eval:rag-params": "node eval/score-rag-eval.js eval/rag_param_eval_set.jsonl eval/results/baseline.json eval/reports/rag_eval_baseline.json && node eval/score-rag-eval.js eval/rag_param_eval_set.jsonl eval/results/candidate.json eval/reports/rag_eval_candidate.json",
     "eval:compare": "node eval/compare-rag-eval.js eval/reports/rag_eval_baseline.json eval/reports/rag_eval_candidate.json eval/reports/rag_eval_diff.md",
     "eval:gate": "node eval/gate-rag-eval.js eval/reports/rag_eval_baseline.json eval/reports/rag_eval_candidate.json eval/reports/rag_eval_gate.json",
     "eval:all": "npm run eval:mock:baseline && npm run eval:mock:candidate && npm run eval:rag-params && npm run eval:compare && npm run eval:gate",
-    "eval:all:real": "npm run eval:real:baseline && npm run eval:real:candidate && npm run eval:rag-params && npm run eval:compare && npm run eval:gate"
+    "eval:all:real": "npm run eval:real:baseline && npm run eval:real:candidate && npm run eval:rag-params && npm run eval:compare && npm run eval:gate",
+    "eval:all:real:variant": "npm run eval:real:baseline:variant && npm run eval:real:candidate:variant && npm run eval:rag-params && npm run eval:compare && npm run eval:gate"
   },
   "keywords": [],
   "author": "",

@@ -11,6 +11,8 @@ data/
 
 eval/results/
 eval/reports/
+eval/VectorStore_baseline/
+eval/VectorStore_candidate/
 
 # python cache
 __pycache__/
