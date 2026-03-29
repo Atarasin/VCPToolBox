@@ -684,7 +684,11 @@ class PluginManager {
         };
 
         const maidNameFromArgs = toolArgs && toolArgs.maid ? toolArgs.maid : null;
+        const openClawContext = toolArgs && typeof toolArgs.__openclawContext === 'object' && toolArgs.__openclawContext !== null
+            ? { ...toolArgs.__openclawContext }
+            : null;
         const pluginSpecificArgs = { ...toolArgs };
+        delete pluginSpecificArgs.__openclawContext;
         if (maidNameFromArgs) {
             // The 'maid' parameter is intentionally passed through for plugins like DeepMemo.
             // delete pluginSpecificArgs.maid;
@@ -755,7 +759,8 @@ class PluginManager {
                         toolName,
                         maid: maidNameFromArgs,
                         args: pluginSpecificArgs,
-                        timestamp: _getFormattedLocalTimestamp()
+                        timestamp: _getFormattedLocalTimestamp(),
+                        requestContext: openClawContext
                     }
                 };
                 this.webSocketServer.broadcast(approvalRequest, 'VCPLog');
