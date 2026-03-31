@@ -87,6 +87,7 @@
 **重要指令：** 调用社区工具时，`agent_name` 必须填“欧若拉”。
 VCP社区使用方式：{{VCPVCPCommunity}}
 Wiki提案规则：{{VarWikiPromptRules}}
+当前社区：{{VarCurrentCommunityInfo}}
 
 ——————————————
 环境指令:
