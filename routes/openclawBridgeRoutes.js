@@ -1,14 +1,131 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
 const packageJson = require('../package.json');
 
-const OPENCLAW_BRIDGE_VERSION = 'v1';
-const OPENCLAW_AUDIT_LOG_PREFIX = '[OpenClawBridgeAudit]';
+// =============================================================================
+// OpenClaw 桥接常量配置
+// =============================================================================
 
+/** OpenClaw 桥接版本号 */
+const OPENCLAW_BRIDGE_VERSION = 'v1';
+/** 审计日志前缀 */
+const OPENCLAW_AUDIT_LOG_PREFIX = '[OpenClawBridgeAudit]';
+/** RAG 默认返回结果数量 */
+const OPENCLAW_DEFAULT_RAG_K = 5;
+/** RAG 最大返回结果数量 */
+const OPENCLAW_MAX_RAG_K = 20;
+/** 标签权重提升系数 */
+const OPENCLAW_TAG_BOOST = 0.15;
+/** 上下文构建默认最大块数 */
+const OPENCLAW_DEFAULT_CONTEXT_MAX_BLOCKS = 4;
+/** 上下文构建默认 Token 预算 */
+const OPENCLAW_DEFAULT_CONTEXT_TOKEN_BUDGET = 1200;
+/** 上下文构建最大 Token 预算 */
+const OPENCLAW_MAX_CONTEXT_TOKEN_BUDGET = 4000;
+/** 上下文构建默认最低相似度分数 */
+const OPENCLAW_DEFAULT_CONTEXT_MIN_SCORE = 0.7;
+/** 上下文构建默认 Token 比例上限 */
+const OPENCLAW_DEFAULT_CONTEXT_MAX_TOKEN_RATIO = 0.6;
+/** 最大上下文消息数量 */
+const OPENCLAW_MAX_CONTEXT_MESSAGES = 12;
+
+// =============================================================================
+// 缓存实例（延迟加载，避免循环依赖）
+// =============================================================================
+
+/** 知识库管理器缓存 */
+let cachedOpenClawKnowledgeBaseManager = null;
+/** RAG 插件缓存 */
+let cachedOpenClawRagPlugin = null;
+/** 嵌入向量工具缓存 */
+let cachedOpenClawEmbeddingUtils = null;
+
+// =============================================================================
+// 输入规范化工具函数
+// =============================================================================
+
+/**
+ * 规范化字符串值
+ * @param {any} value - 输入值
+ * @returns {string} 去除首尾空格的字符串，非字符串输入返回空字符串
+ */
 function normalizeOpenClawString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * 规范化字符串数组
+ * 支持数组输入或逗号分隔的字符串输入
+ * @param {any} value - 输入值（数组或逗号分隔字符串）
+ * @returns {string[]} 过滤后的字符串数组
+ */
+function normalizeOpenClawStringArray(value) {
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => normalizeOpenClawString(item))
+            .filter(Boolean);
+    }
+    if (typeof value === 'string') {
+        return value
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
+    }
+    return [];
+}
+
+/**
+ * 规范化请求中的 diary 约束
+ * 同时兼容单个 diary 与 diaries 数组两种输入形式
+ * @param {any} body - 请求体
+ * @returns {{diary: string, diaries: string[]}} 规范化后的单日记本与多日记本约束
+ */
+function resolveOpenClawDiarySelection(body) {
+    const diary = normalizeOpenClawString(body?.diary);
+    const diaries = normalizeOpenClawStringArray(body?.diaries);
+    if (diary && !diaries.includes(diary)) {
+        diaries.unshift(diary);
+    }
+    return {
+        diary,
+        diaries
+    };
+}
+
+/**
+ * 解析 JSON 对象，失败时返回默认值
+ * @param {any} value - 输入值
+ * @param {object} fallbackValue - 解析失败时的默认值
+ * @returns {object} 解析后的对象或默认值
+ */
+function parseOpenClawJsonObject(value, fallbackValue = {}) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return value;
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+        return fallbackValue;
+    }
+    try {
+        const parsedValue = JSON.parse(value);
+        return parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+            ? parsedValue
+            : fallbackValue;
+    } catch (error) {
+        return fallbackValue;
+    }
+}
+
+// =============================================================================
+// 请求 ID 与响应工具函数
+// =============================================================================
+
+/**
+ * 创建 OpenClaw 请求 ID
+ * 优先使用提供的 ID，否则生成新的 UUID
+ * @param {string} providedRequestId - 外部提供的请求 ID
+ * @returns {string} 规范化后的请求 ID
+ */
 function createOpenClawRequestId(providedRequestId) {
     const normalizedRequestId = normalizeOpenClawString(providedRequestId);
     if (normalizedRequestId) {
@@ -20,11 +137,22 @@ function createOpenClawRequestId(providedRequestId) {
     return `ocw_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * 设置 OpenClaw 桥接响应头
+ * @param {Response} res - Express 响应对象
+ * @param {string} requestId - 请求 ID
+ */
 function setOpenClawBridgeHeaders(res, requestId) {
     res.set('x-request-id', requestId);
     res.set('x-openclaw-bridge-version', OPENCLAW_BRIDGE_VERSION);
 }
 
+/**
+ * 创建响应元数据对象
+ * @param {string} requestId - 请求 ID
+ * @param {number} startedAt - 开始时间戳
+ * @returns {object} 包含请求 ID、桥接版本和执行时长的元数据对象
+ */
 function createOpenClawMeta(requestId, startedAt) {
     return {
         requestId,
@@ -33,6 +161,15 @@ function createOpenClawMeta(requestId, startedAt) {
     };
 }
 
+/**
+ * 发送 OpenClaw 成功响应
+ * @param {Response} res - Express 响应对象
+ * @param {object} params - 响应参数
+ * @param {number} params.status - HTTP 状态码
+ * @param {string} params.requestId - 请求 ID
+ * @param {number} params.startedAt - 开始时间戳
+ * @param {any} params.data - 响应数据
+ */
 function sendOpenClawSuccess(res, { status = 200, requestId, startedAt, data }) {
     setOpenClawBridgeHeaders(res, requestId);
     return res.status(status).json({
@@ -42,6 +179,17 @@ function sendOpenClawSuccess(res, { status = 200, requestId, startedAt, data }) 
     });
 }
 
+/**
+ * 发送 OpenClaw 错误响应
+ * @param {Response} res - Express 响应对象
+ * @param {object} params - 错误参数
+ * @param {number} params.status - HTTP 状态码
+ * @param {string} params.requestId - 请求 ID
+ * @param {number} params.startedAt - 开始时间戳
+ * @param {string} params.code - 错误代码
+ * @param {string} params.error - 错误信息
+ * @param {object} params.details - 错误详情
+ */
 function sendOpenClawError(res, { status, requestId, startedAt, code, error, details }) {
     setOpenClawBridgeHeaders(res, requestId);
     return res.status(status).json({
@@ -53,6 +201,17 @@ function sendOpenClawError(res, { status, requestId, startedAt, code, error, det
     });
 }
 
+// =============================================================================
+// 参数解析工具函数
+// =============================================================================
+
+/**
+ * 解析布尔查询参数
+ * 支持布尔值和字符串形式的 "true"/"false"
+ * @param {any} value - 输入值
+ * @param {boolean} defaultValue - 默认值
+ * @returns {boolean} 解析后的布尔值
+ */
 function parseOpenClawBooleanQuery(value, defaultValue = false) {
     if (value === undefined) {
         return defaultValue;
@@ -72,6 +231,32 @@ function parseOpenClawBooleanQuery(value, defaultValue = false) {
     return defaultValue;
 }
 
+/**
+ * 解析整数参数，并进行范围限制
+ * @param {any} value - 输入值
+ * @param {number} defaultValue - 默认值
+ * @param {number} minValue - 最小值（默认1）
+ * @param {number} maxValue - 最大值（默认 Number.MAX_SAFE_INTEGER）
+ * @returns {number} 解析后的整数值
+ */
+function parseOpenClawInteger(value, defaultValue, minValue = 1, maxValue = Number.MAX_SAFE_INTEGER) {
+    const parsedValue = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsedValue)) {
+        return defaultValue;
+    }
+    return Math.min(maxValue, Math.max(minValue, parsedValue));
+}
+
+// =============================================================================
+// 插件桥接能力检测
+// =============================================================================
+
+/**
+ * 检查插件是否支持 OpenClaw 桥接
+ * 支持的插件类型：分布式插件、hybridservice 直连插件、stdio 协议的同步/异步插件
+ * @param {object} plugin - 插件对象
+ * @returns {boolean} 是否支持桥接
+ */
 function isOpenClawBridgeablePlugin(plugin) {
     if (!plugin || typeof plugin !== 'object') {
         return false;
@@ -88,11 +273,27 @@ function isOpenClawBridgeablePlugin(plugin) {
     );
 }
 
+/**
+ * 获取工具执行超时时间（毫秒）
+ * @param {object} plugin - 插件对象
+ * @returns {number} 超时时间毫秒数，0表示无超时
+ */
 function getOpenClawToolTimeoutMs(plugin) {
     const timeoutMs = plugin?.communication?.timeout ?? plugin?.entryPoint?.timeout ?? 0;
     return Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : 0;
 }
 
+// =============================================================================
+// 工具输入模式（Schema）构建
+// 从 invocationCommand 描述和示例中提取参数定义
+// =============================================================================
+
+/**
+ * 从调用命令示例文本中提取参数名
+ * 匹配格式：参数名: 「始」值「末」
+ * @param {string} text - 示例文本
+ * @returns {string[]} 提取的参数名数组
+ */
 function parseInvocationCommandExample(text) {
     if (typeof text !== 'string' || !text.trim()) {
         return [];
@@ -109,6 +310,12 @@ function parseInvocationCommandExample(text) {
     return Array.from(params);
 }
 
+/**
+ * 从参数描述文本中提取参数提示信息
+ * 解析参数类型、是否必需、固定值等元数据
+ * @param {string} text - 参数描述文本
+ * @returns {Map<string, object>} 参数名到提示信息的映射
+ */
 function extractInvocationParameterHints(text) {
     if (typeof text !== 'string' || !text.trim()) {
         return new Map();
@@ -123,13 +330,16 @@ function extractInvocationParameterHints(text) {
             continue;
         }
         const hint = hints.get(key) || { type: 'string', required: false };
+        // 检测是否必需
         if (/固定为|必需|必须|required/i.test(descriptor)) {
             hint.required = true;
         }
+        // 提取固定值
         const fixedValueMatch = descriptor.match(/固定为\s*`([^`]+)`/);
         if (fixedValueMatch) {
             hint.const = fixedValueMatch[1];
         }
+        // 检测参数类型
         if (/布尔|boolean/i.test(descriptor)) {
             hint.type = 'boolean';
         } else if (/数组|array/i.test(descriptor)) {
@@ -142,6 +352,12 @@ function extractInvocationParameterHints(text) {
     return hints;
 }
 
+/**
+ * 从调用命令构建 JSON Schema 变体
+ * 支持多命令变体（oneOf），每个变体有不同的必需参数
+ * @param {object} invocationCommand - 调用命令定义
+ * @returns {object|null} JSON Schema 对象或 null
+ */
 function buildOpenClawInvocationVariantSchema(invocationCommand) {
     if (!invocationCommand || typeof invocationCommand !== 'object') {
         return null;
@@ -152,11 +368,13 @@ function buildOpenClawInvocationVariantSchema(invocationCommand) {
     const properties = {};
     const required = new Set();
 
+    // 从示例中提取参数
     for (const parameterName of exampleParams) {
         properties[parameterName] = { type: 'string' };
         required.add(parameterName);
     }
 
+    // 应用参数提示信息（类型、固定值、必需性）
     for (const [parameterName, hint] of parameterHints.entries()) {
         const property = properties[parameterName] || {};
         property.type = hint.type || property.type || 'string';
@@ -169,6 +387,7 @@ function buildOpenClawInvocationVariantSchema(invocationCommand) {
         }
     }
 
+    // 添加固定的 command 参数
     if (typeof invocationCommand.command === 'string' && invocationCommand.command.trim()) {
         properties.command = {
             type: 'string',
@@ -177,8 +396,7 @@ function buildOpenClawInvocationVariantSchema(invocationCommand) {
         required.add('command');
     }
 
-    const propertyNames = Object.keys(properties);
-    if (propertyNames.length === 0) {
+    if (Object.keys(properties).length === 0) {
         return null;
     }
 
@@ -193,6 +411,12 @@ function buildOpenClawInvocationVariantSchema(invocationCommand) {
     return schema;
 }
 
+/**
+ * 获取工具的完整输入 Schema
+ * 如果有多个 invocationCommand，返回 oneOf 结构
+ * @param {object} plugin - 插件对象
+ * @returns {object} JSON Schema 对象
+ */
 function getOpenClawToolInputSchema(plugin) {
     const invocationCommands = Array.isArray(plugin?.capabilities?.invocationCommands)
         ? plugin.capabilities.invocationCommands
@@ -215,6 +439,12 @@ function getOpenClawToolInputSchema(plugin) {
     };
 }
 
+/**
+ * 汇总工具描述信息
+ * 优先使用插件描述，其次使用第一个 invocationCommand 的第一行
+ * @param {object} plugin - 插件对象
+ * @returns {string} 工具描述
+ */
 function summarizeOpenClawToolDescription(plugin) {
     const description = normalizeOpenClawString(plugin?.description);
     if (description) {
@@ -232,6 +462,13 @@ function summarizeOpenClawToolDescription(plugin) {
     return `${plugin?.displayName || plugin?.name || 'Unknown tool'} bridge`;
 }
 
+/**
+ * 创建 OpenClaw 工具描述符
+ * 包含工具的基本信息、类型、超时、描述和输入模式
+ * @param {object} plugin - 插件对象
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object} 工具描述符对象
+ */
 function createOpenClawToolDescriptor(plugin, pluginManager) {
     return {
         name: plugin.name,
@@ -245,23 +482,746 @@ function createOpenClawToolDescriptor(plugin, pluginManager) {
     };
 }
 
-function createOpenClawMemoryDescriptor(includeTargets) {
+// =============================================================================
+// 配置与组件获取
+// 支持多种配置来源和延迟加载
+// =============================================================================
+
+/**
+ * 获取 OpenClaw 桥接配置
+ * 按优先级从 pluginManager 中查找配置对象
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object} 桥接配置对象
+ */
+function getOpenClawBridgeConfig(pluginManager) {
+    return pluginManager?.openClawBridgeConfig ||
+        pluginManager?.openClawBridge?.config ||
+        pluginManager?.openClawBridge ||
+        {};
+}
+
+/**
+ * 获取 RAG 配置
+ * 合并配置对象和环境变量中的 RAG 设置
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object} RAG 配置对象
+ */
+function getOpenClawRagConfig(pluginManager) {
+    const bridgeConfig = getOpenClawBridgeConfig(pluginManager);
+    const ragConfig = parseOpenClawJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
+    const configuredAgentDiaryMap = parseOpenClawJsonObject(ragConfig.agentDiaryMap, {});
+    const envAgentDiaryMap = parseOpenClawJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
+    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
+        ? ragConfig.allowCrossRoleAccess
+        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
+    const defaultDiaries = normalizeOpenClawStringArray(
+        ragConfig.defaultDiaries !== undefined
+            ? ragConfig.defaultDiaries
+            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
+    );
+    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
+        ? configuredAgentDiaryMap
+        : envAgentDiaryMap;
+
     return {
-        targets: includeTargets ? [] : [],
+        agentDiaryMap,
+        defaultDiaries,
+        allowCrossRoleAccess: parseOpenClawBooleanQuery(rawAllowCrossRoleAccess, false),
+        hasExplicitPolicy: (
+            Object.keys(agentDiaryMap).length > 0 ||
+            defaultDiaries.length > 0 ||
+            rawAllowCrossRoleAccess !== undefined
+        )
+    };
+}
+
+/**
+ * 获取知识库管理器实例
+ * 支持从 pluginManager 获取或延迟加载默认实例
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object} 知识库管理器实例
+ */
+function getOpenClawKnowledgeBaseManager(pluginManager) {
+    if (pluginManager?.vectorDBManager) {
+        return pluginManager.vectorDBManager;
+    }
+    if (pluginManager?.knowledgeBaseManager) {
+        return pluginManager.knowledgeBaseManager;
+    }
+    if (pluginManager?.openClawBridge?.knowledgeBaseManager) {
+        return pluginManager.openClawBridge.knowledgeBaseManager;
+    }
+    if (!cachedOpenClawKnowledgeBaseManager) {
+        cachedOpenClawKnowledgeBaseManager = require('../KnowledgeBaseManager');
+    }
+    return cachedOpenClawKnowledgeBaseManager;
+}
+
+/**
+ * 获取 RAG 插件实例
+ * 支持从 pluginManager 获取或延迟加载默认实例
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object|null} RAG 插件实例或 null
+ */
+function getOpenClawRagPlugin(pluginManager) {
+    const pluginManagerRagPlugin = pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
+    if (pluginManagerRagPlugin) {
+        return pluginManagerRagPlugin;
+    }
+    if (pluginManager?.openClawBridge?.ragPlugin) {
+        return pluginManager.openClawBridge.ragPlugin;
+    }
+    if (!cachedOpenClawRagPlugin) {
+        try {
+            cachedOpenClawRagPlugin = require('../Plugin/RAGDiaryPlugin/RAGDiaryPlugin');
+        } catch (error) {
+            cachedOpenClawRagPlugin = null;
+        }
+    }
+    return cachedOpenClawRagPlugin;
+}
+
+/**
+ * 获取嵌入向量工具实例（延迟加载）
+ * @returns {object} 嵌入向量工具模块
+ */
+function getOpenClawEmbeddingUtils() {
+    if (!cachedOpenClawEmbeddingUtils) {
+        cachedOpenClawEmbeddingUtils = require('../EmbeddingUtils');
+    }
+    return cachedOpenClawEmbeddingUtils;
+}
+
+// =============================================================================
+// RAG 目标（日记本）解析与管理
+// =============================================================================
+
+/**
+ * 构建 Agent 别名集合
+ * 从 agentId 和 maid 中提取所有可能的别名（包括分段形式）
+ * @param {string} agentId - Agent ID
+ * @param {string} maid - MAID 标识
+ * @returns {Set<string>} 别名集合
+ */
+function buildOpenClawAgentAliases(agentId, maid) {
+    const aliases = new Set();
+    const addAlias = (value) => {
+        const normalizedValue = normalizeOpenClawString(value);
+        if (!normalizedValue) {
+            return;
+        }
+        aliases.add(normalizedValue);
+        // 按路径分隔符分割，添加每个分段作为别名
+        normalizedValue
+            .split(/[./:\\]/)
+            .map((segment) => segment.trim())
+            .filter(Boolean)
+            .forEach((segment) => aliases.add(segment));
+    };
+
+    addAlias(agentId);
+    addAlias(maid);
+
+    return aliases;
+}
+
+/**
+ * 列出所有可用的日记本目标
+ * @param {object} knowledgeBaseManager - 知识库管理器
+ * @returns {Promise<string[]>} 日记本名称数组
+ */
+async function listOpenClawDiaryTargets(knowledgeBaseManager) {
+    if (typeof knowledgeBaseManager?.listDiaryNames === 'function') {
+        const diaryNames = await Promise.resolve(knowledgeBaseManager.listDiaryNames());
+        return normalizeOpenClawStringArray(diaryNames);
+    }
+    if (!knowledgeBaseManager?.db?.prepare) {
+        return [];
+    }
+    const rows = knowledgeBaseManager.db
+        .prepare('SELECT DISTINCT diary_name FROM files ORDER BY diary_name COLLATE NOCASE')
+        .all();
+
+    return rows
+        .map((row) => normalizeOpenClawString(row.diary_name))
+        .filter(Boolean);
+}
+
+/**
+ * 解析 Agent 允许访问的日记本列表
+ * 根据 agentDiaryMap 配置和跨角色访问策略进行过滤
+ * @param {object} params - 参数对象
+ * @param {string} params.agentId - Agent ID
+ * @param {string} params.maid - MAID 标识
+ * @param {string[]} params.availableDiaries - 可用的日记本列表
+ * @param {object} params.ragConfig - RAG 配置
+ * @returns {string[]} 允许的日记本名称数组
+ */
+function resolveOpenClawAllowedDiaries({ agentId, maid, availableDiaries, ragConfig }) {
+    const normalizedDiaries = normalizeOpenClawStringArray(availableDiaries);
+    if (normalizedDiaries.length === 0) {
+        return [];
+    }
+    // 如果允许跨角色访问，返回所有可用日记本
+    if (ragConfig.allowCrossRoleAccess) {
+        return normalizedDiaries;
+    }
+
+    const agentAliases = buildOpenClawAgentAliases(agentId, maid);
+    const configuredDiaries = new Set();
+
+    // 从 agentDiaryMap 中查找匹配的日记本配置
+    for (const alias of agentAliases) {
+        normalizeOpenClawStringArray(ragConfig.agentDiaryMap?.[alias]).forEach((diaryName) => configuredDiaries.add(diaryName));
+    }
+    // 通配符配置（* 表示所有 Agent）
+    normalizeOpenClawStringArray(ragConfig.agentDiaryMap?.['*']).forEach((diaryName) => configuredDiaries.add(diaryName));
+    // 默认日记本配置
+    normalizeOpenClawStringArray(ragConfig.defaultDiaries).forEach((diaryName) => configuredDiaries.add(diaryName));
+
+    // 如果有明确配置，按配置过滤
+    if (configuredDiaries.size > 0) {
+        return normalizedDiaries.filter((diaryName) => configuredDiaries.has(diaryName));
+    }
+
+    // 无明确配置时，按别名匹配
+    const aliasMatchedDiaries = normalizedDiaries.filter((diaryName) => agentAliases.has(diaryName));
+    if (ragConfig.hasExplicitPolicy) {
+        return aliasMatchedDiaries;
+    }
+
+    return normalizedDiaries;
+}
+
+/**
+ * 创建 RAG 目标描述符
+ * @param {string} diaryName - 日记本名称
+ * @returns {object} 目标描述符对象
+ */
+function createOpenClawRagTargetDescriptor(diaryName) {
+    return {
+        id: diaryName,
+        displayName: `${diaryName}日记本`,
+        type: 'diary',
+        allowed: true
+    };
+}
+
+/**
+ * 解析记忆目标列表
+ * @param {object} pluginManager - 插件管理器
+ * @param {string} agentId - Agent ID
+ * @param {string} maid - MAID 标识
+ * @returns {Promise<object[]>} 记忆目标描述符数组
+ */
+async function resolveOpenClawMemoryTargets(pluginManager, agentId, maid) {
+    const knowledgeBaseManager = getOpenClawKnowledgeBaseManager(pluginManager);
+    const availableDiaries = await listOpenClawDiaryTargets(knowledgeBaseManager);
+    const ragConfig = getOpenClawRagConfig(pluginManager);
+    const allowedDiaries = resolveOpenClawAllowedDiaries({
+        agentId,
+        maid,
+        availableDiaries,
+        ragConfig
+    });
+
+    return allowedDiaries
+        .slice()
+        .sort((left, right) => left.localeCompare(right))
+        .map((diaryName) => createOpenClawRagTargetDescriptor(diaryName));
+}
+
+// =============================================================================
+// RAG 查询与检索处理
+// =============================================================================
+
+/**
+ * 创建记忆能力描述符
+ * 描述 RAG 系统支持的特性（时间感知、分组感知、重排序等）
+ * @param {object} params - 参数对象
+ * @param {boolean} params.includeTargets - 是否包含目标列表
+ * @param {object[]} params.targets - 记忆目标数组
+ * @param {object} params.ragPlugin - RAG 插件实例
+ * @param {object} params.knowledgeBaseManager - 知识库管理器
+ * @returns {object} 记忆能力描述符
+ */
+function createOpenClawMemoryDescriptor({ includeTargets, targets, ragPlugin, knowledgeBaseManager }) {
+    return {
+        targets: includeTargets ? targets : [],
         features: {
-            timeAware: false,
-            groupAware: false,
-            rerank: false,
-            tagMemo: false,
+            timeAware: Boolean(ragPlugin?.timeParser?.parse),
+            groupAware: Boolean(ragPlugin?.semanticGroups?.getEnhancedVector),
+            rerank: Boolean(ragPlugin?._rerankDocuments),
+            tagMemo: Boolean(knowledgeBaseManager?.applyTagBoost),
             writeBack: false
         }
     };
 }
 
+/**
+ * 规范化 RAG 模式参数
+ * 支持：rag（纯向量检索）、hybrid（混合检索）、auto（自动选择）
+ * @param {string} mode - 模式字符串
+ * @returns {string|null} 规范化的模式名或 null
+ */
+function normalizeOpenClawRagMode(mode) {
+    const normalizedMode = normalizeOpenClawString(mode).toLowerCase();
+    if (!normalizedMode) {
+        return 'rag';
+    }
+    if (['rag', 'hybrid', 'auto'].includes(normalizedMode)) {
+        return normalizedMode;
+    }
+    return null;
+}
+
+/**
+ * 提取 RAG 查询选项
+ * 合并请求参数和默认值，hybrid 模式默认启用更多特性
+ * @param {object} body - 请求体
+ * @returns {object} RAG 选项对象
+ */
+function extractOpenClawRagOptions(body) {
+    const mode = normalizeOpenClawRagMode(body?.mode);
+    const bodyOptions = body?.options && typeof body.options === 'object' && !Array.isArray(body.options)
+        ? body.options
+        : {};
+    // hybrid 模式默认启用更多特性
+    const defaults = mode === 'hybrid'
+        ? { timeAware: true, groupAware: true, rerank: false, tagMemo: true }
+        : { timeAware: false, groupAware: false, rerank: false, tagMemo: false };
+
+    return {
+        mode,
+        k: parseOpenClawInteger(body?.k, OPENCLAW_DEFAULT_RAG_K, 1, OPENCLAW_MAX_RAG_K),
+        timeAware: parseOpenClawBooleanQuery(body?.timeAware ?? bodyOptions.timeAware, defaults.timeAware),
+        groupAware: parseOpenClawBooleanQuery(body?.groupAware ?? bodyOptions.groupAware, defaults.groupAware),
+        rerank: parseOpenClawBooleanQuery(body?.rerank ?? bodyOptions.rerank, defaults.rerank),
+        tagMemo: parseOpenClawBooleanQuery(body?.tagMemo ?? bodyOptions.tagMemo, defaults.tagMemo)
+    };
+}
+
+/**
+ * 计算两个向量间的余弦相似度
+ * @param {number[]} vectorA - 向量 A
+ * @param {number[]} vectorB - 向量 B
+ * @returns {number} 余弦相似度（-1 到 1）
+ */
+function computeOpenClawCosineSimilarity(vectorA, vectorB) {
+    if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length || vectorA.length === 0) {
+        return 0;
+    }
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let index = 0; index < vectorA.length; index += 1) {
+        dotProduct += vectorA[index] * vectorB[index];
+        normA += vectorA[index] * vectorA[index];
+        normB += vectorB[index] * vectorB[index];
+    }
+    if (normA === 0 || normB === 0) {
+        return 0;
+    }
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/**
+ * 获取查询文本的嵌入向量
+ * 优先使用 RAG 插件的缓存方法，否则使用 EmbeddingUtils
+ * @param {string} query - 查询文本
+ * @param {object} ragPlugin - RAG 插件实例
+ * @param {object} knowledgeBaseManager - 知识库管理器
+ * @returns {Promise<number[]|null>} 嵌入向量或 null
+ */
+async function getOpenClawQueryVector(query, ragPlugin, knowledgeBaseManager) {
+    if (ragPlugin?.getSingleEmbeddingCached) {
+        return await ragPlugin.getSingleEmbeddingCached(query);
+    }
+    const { getEmbeddingsBatch } = getOpenClawEmbeddingUtils();
+    const [vector] = await getEmbeddingsBatch([query], {
+        apiKey: knowledgeBaseManager?.config?.apiKey,
+        apiUrl: knowledgeBaseManager?.config?.apiUrl,
+        model: knowledgeBaseManager?.config?.model
+    });
+    return vector || null;
+}
+
+// =============================================================================
+// 元数据提取与结果处理
+// =============================================================================
+
+/**
+ * 从标签提升信息中提取核心标签
+ * @param {object} boostInfo - 标签提升信息
+ * @returns {string[]} 核心标签数组
+ */
+function extractOpenClawCoreTags(boostInfo) {
+    const matchedTags = Array.isArray(boostInfo?.matchedTags) ? boostInfo.matchedTags : [];
+    return matchedTags
+        .map((tag) => {
+            if (typeof tag === 'string') {
+                return tag;
+            }
+            if (tag && typeof tag === 'object') {
+                return normalizeOpenClawString(tag.name);
+            }
+            return '';
+        })
+        .filter(Boolean);
+}
+
+/**
+ * 规范化时间戳值
+ * 支持 ISO 字符串和 Unix 时间戳
+ * @param {any} value - 输入值
+ * @returns {string|null} ISO 格式时间戳或 null
+ */
+function normalizeOpenClawTimestampValue(value) {
+    if (typeof value === 'string' && value.trim()) {
+        const timestamp = Date.parse(value);
+        if (!Number.isNaN(timestamp)) {
+            return new Date(timestamp).toISOString();
+        }
+    }
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return new Date(value).toISOString();
+    }
+    return null;
+}
+
+/**
+ * 从文件路径中提取日期时间戳
+ * 匹配文件名中的 YYYY-MM-DD 或 YYYY.MM.DD 格式
+ * @param {string} sourcePath - 文件路径
+ * @returns {string|null} ISO 格式时间戳或 null
+ */
+function deriveOpenClawTimestampFromPath(sourcePath) {
+    const normalizedPath = normalizeOpenClawString(sourcePath);
+    if (!normalizedPath) {
+        return null;
+    }
+    const match = path.basename(normalizedPath).match(/(\d{4}[-.]\d{2}[-.]\d{2})/);
+    if (!match) {
+        return null;
+    }
+    const normalizedDate = match[1].replace(/\./g, '-');
+    const timestamp = Date.parse(`${normalizedDate}T00:00:00.000Z`);
+    return Number.isNaN(timestamp) ? null : new Date(timestamp).toISOString();
+}
+
+/**
+ * 获取文件的元数据信息
+ * @param {object} knowledgeBaseManager - 知识库管理器
+ * @param {string} sourcePath - 文件路径
+ * @returns {Promise<object|null>} 文件元数据或 null
+ */
+async function getOpenClawFileMetadata(knowledgeBaseManager, sourcePath) {
+    if (!sourcePath) {
+        return null;
+    }
+    if (typeof knowledgeBaseManager?.getOpenClawFileMetadata === 'function') {
+        return await Promise.resolve(knowledgeBaseManager.getOpenClawFileMetadata(sourcePath));
+    }
+    if (!knowledgeBaseManager?.db?.prepare) {
+        return null;
+    }
+    const row = knowledgeBaseManager.db.prepare(`
+        SELECT
+            f.diary_name AS sourceDiary,
+            f.path AS sourcePath,
+            f.updated_at AS updatedAt,
+            GROUP_CONCAT(t.name, '||') AS tags
+        FROM files f
+        LEFT JOIN file_tags ft ON ft.file_id = f.id
+        LEFT JOIN tags t ON t.id = ft.tag_id
+        WHERE f.path = ?
+        GROUP BY f.id
+    `).get(sourcePath);
+
+    if (!row) {
+        return null;
+    }
+
+    return {
+        sourceDiary: normalizeOpenClawString(row.sourceDiary),
+        sourcePath: normalizeOpenClawString(row.sourcePath),
+        updatedAt: row.updatedAt,
+        tags: row.tags ? row.tags.split('||').filter(Boolean) : []
+    };
+}
+
+/**
+ * 获取缓存的文件元数据
+ * 使用 Map 缓存避免重复查询
+ * @param {Map} metadataCache - 元数据缓存 Map
+ * @param {object} knowledgeBaseManager - 知识库管理器
+ * @param {string} sourcePath - 文件路径
+ * @returns {Promise<object|null>} 文件元数据或 null
+ */
+async function getCachedOpenClawFileMetadata(metadataCache, knowledgeBaseManager, sourcePath) {
+    const cacheKey = normalizeOpenClawString(sourcePath);
+    if (!cacheKey) {
+        return null;
+    }
+    if (metadataCache.has(cacheKey)) {
+        return metadataCache.get(cacheKey);
+    }
+    const metadata = await getOpenClawFileMetadata(knowledgeBaseManager, cacheKey);
+    metadataCache.set(cacheKey, metadata);
+    return metadata;
+}
+
+/**
+ * 规范化 RAG 检索结果项
+ * 统一字段名、提取元数据、格式化时间戳
+ * @param {object} result - 原始检索结果
+ * @param {string} fallbackDiary - 默认日记本名称
+ * @param {object} knowledgeBaseManager - 知识库管理器
+ * @param {Map} metadataCache - 元数据缓存
+ * @returns {Promise<object>} 规范化的 RAG 项目
+ */
+async function normalizeOpenClawRagItem(result, fallbackDiary, knowledgeBaseManager, metadataCache) {
+    const sourcePath = normalizeOpenClawString(
+        result?.fullPath ||
+        result?.sourcePath ||
+        result?.source_file ||
+        result?.sourceFile
+    );
+    const metadata = sourcePath
+        ? await getCachedOpenClawFileMetadata(metadataCache, knowledgeBaseManager, sourcePath)
+        : null;
+    const timestamp = normalizeOpenClawTimestampValue(
+        result?.timestamp ||
+        result?.updatedAt ||
+        result?.updated_at ||
+        metadata?.timestamp ||
+        metadata?.updatedAt
+    ) || deriveOpenClawTimestampFromPath(sourcePath);
+
+    return {
+        text: normalizeOpenClawString(result?.text),
+        score: typeof result?.score === 'number' && Number.isFinite(result.score) ? result.score : 0,
+        sourceDiary: normalizeOpenClawString(result?.sourceDiary || metadata?.sourceDiary || fallbackDiary),
+        sourceFile: normalizeOpenClawString(result?.sourceFile ? path.basename(result.sourceFile) : (sourcePath ? path.basename(sourcePath) : '')),
+        timestamp,
+        tags: normalizeOpenClawStringArray(result?.tags || result?.matchedTags || metadata?.tags)
+    };
+}
+
+/**
+ * 对 RAG 候选结果进行去重
+ * 基于 sourceDiary、sourcePath 和 text 的组合键去重，保留最高分
+ * @param {object[]} candidates - 候选结果数组
+ * @returns {object[]} 去重后的候选结果
+ */
+function deduplicateOpenClawRagCandidates(candidates) {
+    const deduplicatedCandidates = new Map();
+    for (const candidate of candidates) {
+        const key = [
+            normalizeOpenClawString(candidate?.sourceDiary),
+            normalizeOpenClawString(candidate?.fullPath || candidate?.sourcePath || candidate?.sourceFile),
+            normalizeOpenClawString(candidate?.text)
+        ].join('::');
+        const existingCandidate = deduplicatedCandidates.get(key);
+        if (!existingCandidate || (candidate?.score || 0) > (existingCandidate?.score || 0)) {
+            deduplicatedCandidates.set(key, candidate);
+        }
+    }
+    return Array.from(deduplicatedCandidates.values());
+}
+
+// =============================================================================
+// 查询构建与 Token 估算
+// =============================================================================
+
+/**
+ * 规范化内容文本
+ * 支持字符串、数组和对象形式的输入
+ * @param {any} content - 内容值
+ * @returns {string} 规范化后的文本
+ */
+function normalizeOpenClawContentText(content) {
+    if (typeof content === 'string') {
+        return content.trim();
+    }
+    if (Array.isArray(content)) {
+        return content
+            .map((entry) => {
+                if (typeof entry === 'string') {
+                    return entry.trim();
+                }
+                if (entry && typeof entry === 'object') {
+                    return normalizeOpenClawString(entry.text || entry.content || entry.value);
+                }
+                return '';
+            })
+            .filter(Boolean)
+            .join('\n');
+    }
+    if (content && typeof content === 'object') {
+        return normalizeOpenClawString(content.text || content.content || content.value);
+    }
+    return '';
+}
+
+/**
+ * 规范化对话消息数组
+ * 提取最近的消息，限制数量并格式化
+ * @param {any[]} messages - 消息数组
+ * @returns {object[]} 规范化的消息对象数组（包含 role 和 text）
+ */
+function normalizeOpenClawConversationMessages(messages) {
+    if (!Array.isArray(messages)) {
+        return [];
+    }
+    return messages
+        .map((message) => {
+            if (!message || typeof message !== 'object') {
+                return null;
+            }
+            const role = normalizeOpenClawString(message.role || message.author || message.type || 'user') || 'user';
+            const text = normalizeOpenClawContentText(message.content || message.text || message.message);
+            if (!text) {
+                return null;
+            }
+            return { role, text };
+        })
+        .filter(Boolean)
+        .slice(-OPENCLAW_MAX_CONTEXT_MESSAGES);
+}
+
+/**
+ * 构建回忆查询文本
+ * 优先使用显式查询，否则从对话消息中构建
+ * @param {object} body - 请求体
+ * @returns {string} 查询文本
+ */
+function buildOpenClawRecallQuery(body) {
+    const explicitQuery = normalizeOpenClawString(body?.query);
+    if (explicitQuery) {
+        return explicitQuery;
+    }
+
+    const messages = normalizeOpenClawConversationMessages(
+        body?.recentMessages ||
+        body?.messages ||
+        body?.conversation ||
+        body?.conversationMessages
+    );
+
+    if (messages.length === 0) {
+        return '';
+    }
+
+    return messages
+        .map((message) => `${message.role}: ${message.text}`)
+        .join('\n')
+        .slice(0, 4000);
+}
+
+/**
+ * 估算文本的 Token 数量
+ * 使用简单启发式：CJK 字符计为 1 个 Token，其他字符每 4 个计为 1 个 Token
+ * @param {string} text - 输入文本
+ * @returns {number} 估算的 Token 数量
+ */
+function estimateOpenClawTokenCount(text) {
+    const normalizedText = normalizeOpenClawString(text);
+    if (!normalizedText) {
+        return 0;
+    }
+    const cjkCount = (normalizedText.match(/[\u3400-\u9fff]/g) || []).length;
+    const nonCjkCount = normalizedText.length - cjkCount;
+    return Math.max(1, cjkCount + Math.ceil(nonCjkCount / 4));
+}
+
+/**
+ * 按 Token 数量截断文本
+ * @param {string} text - 输入文本
+ * @param {number} maxTokens - 最大 Token 数
+ * @returns {string} 截断后的文本
+ */
+function truncateOpenClawTextByTokens(text, maxTokens) {
+    const normalizedText = normalizeOpenClawString(text);
+    if (!normalizedText || maxTokens <= 0) {
+        return '';
+    }
+    let candidate = normalizedText;
+    while (candidate && estimateOpenClawTokenCount(candidate) > maxTokens) {
+        candidate = candidate.slice(0, -1).trimEnd();
+    }
+    return candidate;
+}
+
+// =============================================================================
+// 上下文块构建与去重
+// =============================================================================
+
+/**
+ * 创建回忆上下文块
+ * 包含文本内容和元数据（分数、来源、时间戳、标签、Token 估算）
+ * @param {object} item - RAG 结果项
+ * @returns {object} 上下文块对象
+ */
+function createOpenClawRecallBlock(item) {
+    const text = normalizeOpenClawString(item?.text);
+    const sourceDiary = normalizeOpenClawString(item?.sourceDiary);
+    const sourceFile = normalizeOpenClawString(item?.sourceFile);
+    const tags = normalizeOpenClawStringArray(item?.tags);
+    const estimatedTokens = estimateOpenClawTokenCount(text);
+
+    return {
+        text,
+        metadata: {
+            score: typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+            sourceDiary,
+            sourceFile,
+            timestamp: item?.timestamp || null,
+            tags,
+            estimatedTokens
+        }
+    };
+}
+
+/**
+ * 对回忆上下文块进行去重
+ * 基于 sourceDiary、sourceFile 和 text 的组合键去重，保留最高分
+ * @param {object[]} blocks - 上下文块数组
+ * @returns {object[]} 去重后的上下文块数组
+ */
+function deduplicateOpenClawRecallBlocks(blocks) {
+    const deduplicatedBlocks = new Map();
+    for (const block of blocks) {
+        const key = [
+            normalizeOpenClawString(block?.metadata?.sourceDiary),
+            normalizeOpenClawString(block?.metadata?.sourceFile),
+            normalizeOpenClawString(block?.text)
+        ].join('::');
+        const existingBlock = deduplicatedBlocks.get(key);
+        if (!existingBlock || (block?.metadata?.score || 0) > (existingBlock?.metadata?.score || 0)) {
+            deduplicatedBlocks.set(key, block);
+        }
+    }
+    return Array.from(deduplicatedBlocks.values());
+}
+
+// =============================================================================
+// Schema 验证与错误处理
+// =============================================================================
+
+/**
+ * 验证值是否符合 JSON Schema
+ * 支持 oneOf、const、object、string、number、boolean、array 类型
+ * @param {object} schema - JSON Schema 对象
+ * @param {any} value - 待验证的值
+ * @param {string} pathName - 当前路径名（用于错误信息）
+ * @returns {string[]} 错误信息数组，空数组表示验证通过
+ */
 function validateOpenClawSchemaValue(schema, value, pathName = 'args') {
     if (!schema || typeof schema !== 'object') {
         return [];
     }
+    // 处理 oneOf（多选一）
     if (Array.isArray(schema.oneOf)) {
         const variantErrors = schema.oneOf
             .map((candidate) => validateOpenClawSchemaValue(candidate, value, pathName));
@@ -270,9 +1230,11 @@ function validateOpenClawSchemaValue(schema, value, pathName = 'args') {
         }
         return variantErrors[0] || [`${pathName} does not match any supported input shape`];
     }
+    // 处理常量值
     if (schema.const !== undefined && value !== schema.const) {
         return [`${pathName} must equal ${JSON.stringify(schema.const)}`];
     }
+    // 处理对象类型
     if (schema.type === 'object') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
             return [`${pathName} must be an object`];
@@ -292,6 +1254,7 @@ function validateOpenClawSchemaValue(schema, value, pathName = 'args') {
         }
         return errors;
     }
+    // 处理基本类型
     if (schema.type === 'string' && typeof value !== 'string') {
         return [`${pathName} must be a string`];
     }
@@ -307,6 +1270,12 @@ function validateOpenClawSchemaValue(schema, value, pathName = 'args') {
     return [];
 }
 
+/**
+ * 解析插件错误信息
+ * 尝试将错误消息解析为 JSON 对象
+ * @param {Error} error - 错误对象
+ * @returns {object} 解析后的错误对象
+ */
 function parseOpenClawPluginError(error) {
     const rawMessage = error?.message || 'Unknown tool execution error';
     try {
@@ -321,6 +1290,13 @@ function parseOpenClawPluginError(error) {
     };
 }
 
+/**
+ * 将工具执行错误映射为 HTTP 错误响应
+ * 根据错误内容识别特定错误类型：工具不存在、需要审批、超时等
+ * @param {string} toolName - 工具名称
+ * @param {Error} error - 错误对象
+ * @returns {object} HTTP 错误信息对象
+ */
 function mapOpenClawToolExecutionError(toolName, error) {
     const parsedError = parseOpenClawPluginError(error);
     const pluginError = normalizeOpenClawString(
@@ -330,6 +1306,7 @@ function mapOpenClawToolExecutionError(toolName, error) {
         error?.message ||
         'Unknown tool execution error'
     );
+    // 工具不存在
     if (/not found/i.test(pluginError)) {
         return {
             status: 404,
@@ -338,6 +1315,7 @@ function mapOpenClawToolExecutionError(toolName, error) {
             details: { toolName, pluginError }
         };
     }
+    // 需要审批
     if (/approval/i.test(pluginError) && /reject|required|cannot/i.test(pluginError)) {
         return {
             status: 403,
@@ -346,6 +1324,7 @@ function mapOpenClawToolExecutionError(toolName, error) {
             details: { toolName, pluginError }
         };
     }
+    // 执行超时
     if (/timed out|timeout/i.test(pluginError)) {
         return {
             status: 504,
@@ -354,6 +1333,7 @@ function mapOpenClawToolExecutionError(toolName, error) {
             details: { toolName, pluginError }
         };
     }
+    // 通用执行错误
     return {
         status: 500,
         code: 'OCW_TOOL_EXECUTION_ERROR',
@@ -362,10 +1342,45 @@ function mapOpenClawToolExecutionError(toolName, error) {
     };
 }
 
+/**
+ * 记录 OpenClaw 审计日志
+ * @param {string} event - 事件名称
+ * @param {object} payload - 事件载荷
+ */
 function logOpenClawAudit(event, payload) {
     console.log(`${OPENCLAW_AUDIT_LOG_PREFIX} ${JSON.stringify({ event, ...payload })}`);
 }
 
+function summarizeOpenClawScoreStats(values) {
+    const scores = Array.isArray(values)
+        ? values.filter((value) => typeof value === 'number' && Number.isFinite(value))
+        : [];
+    if (scores.length === 0) {
+        return {
+            count: 0,
+            max: null,
+            min: null,
+            avg: null
+        };
+    }
+    const total = scores.reduce((sum, score) => sum + score, 0);
+    return {
+        count: scores.length,
+        max: Math.max(...scores),
+        min: Math.min(...scores),
+        avg: total / scores.length
+    };
+}
+
+// =============================================================================
+// OpenClaw 桥接路由定义
+// =============================================================================
+
+/**
+ * 创建 OpenClaw 桥接路由
+ * @param {object} pluginManager - 插件管理器实例
+ * @returns {Router} Express 路由实例
+ */
 module.exports = function createOpenClawBridgeRoutes(pluginManager) {
     if (!pluginManager) {
         throw new Error('[OpenClawBridgeRoutes] pluginManager is required');
@@ -373,12 +1388,18 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
 
     const router = express.Router();
 
+    // -------------------------------------------------------------------------
+    // GET /openclaw/capabilities
+    // 获取 OpenClaw 能力清单：可用工具列表和记忆系统特性
+    // -------------------------------------------------------------------------
     router.get('/openclaw/capabilities', async (req, res) => {
         const startedAt = Date.now();
         const agentId = normalizeOpenClawString(req.query.agentId);
+        const maid = normalizeOpenClawString(req.query.maid);
         const requestId = createOpenClawRequestId(req.query.requestId);
         const includeMemoryTargets = parseOpenClawBooleanQuery(req.query.includeMemoryTargets, true);
 
+        // 验证必需参数
         if (!agentId) {
             return sendOpenClawError(res, {
                 status: 400,
@@ -391,10 +1412,16 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
         }
 
         try {
+            // 收集可桥接的工具列表
             const tools = Array.from(pluginManager.plugins.values())
                 .filter((plugin) => isOpenClawBridgeablePlugin(plugin))
                 .sort((left, right) => left.name.localeCompare(right.name))
                 .map((plugin) => createOpenClawToolDescriptor(plugin, pluginManager));
+            const ragPlugin = getOpenClawRagPlugin(pluginManager);
+            const knowledgeBaseManager = getOpenClawKnowledgeBaseManager(pluginManager);
+            const memoryTargets = includeMemoryTargets
+                ? await resolveOpenClawMemoryTargets(pluginManager, agentId, maid)
+                : [];
 
             return sendOpenClawSuccess(res, {
                 requestId,
@@ -406,7 +1433,12 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
                         bridgeVersion: OPENCLAW_BRIDGE_VERSION
                     },
                     tools,
-                    memory: createOpenClawMemoryDescriptor(includeMemoryTargets)
+                    memory: createOpenClawMemoryDescriptor({
+                        includeTargets: includeMemoryTargets,
+                        targets: memoryTargets,
+                        ragPlugin,
+                        knowledgeBaseManager
+                    })
                 }
             });
         } catch (error) {
@@ -422,6 +1454,719 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
         }
     });
 
+    // -------------------------------------------------------------------------
+    // GET /openclaw/rag/targets
+    // 获取当前 Agent 可访问的 RAG 目标（日记本）列表
+    // -------------------------------------------------------------------------
+    router.get('/openclaw/rag/targets', async (req, res) => {
+        const startedAt = Date.now();
+        const agentId = normalizeOpenClawString(req.query.agentId);
+        const maid = normalizeOpenClawString(req.query.maid);
+        const requestId = createOpenClawRequestId(req.query.requestId);
+
+        // 验证必需参数
+        if (!agentId) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_INVALID_REQUEST',
+                error: 'agentId is required',
+                details: { field: 'agentId' }
+            });
+        }
+
+        try {
+            const targets = await resolveOpenClawMemoryTargets(pluginManager, agentId, maid);
+            return sendOpenClawSuccess(res, {
+                requestId,
+                startedAt,
+                data: {
+                    targets
+                }
+            });
+        } catch (error) {
+            console.error('[OpenClawBridgeRoutes] Error resolving OpenClaw RAG targets:', error);
+            return sendOpenClawError(res, {
+                status: 500,
+                requestId,
+                startedAt,
+                code: 'OCW_INTERNAL_ERROR',
+                error: 'Failed to load RAG targets',
+                details: { message: error.message }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------------------
+    // POST /openclaw/rag/search
+    // 执行 RAG 语义检索，支持多种检索模式（rag/hybrid/auto）
+    // 可选特性：时间感知、分组感知、标签增强、重排序
+    // -------------------------------------------------------------------------
+    router.post('/openclaw/rag/search', async (req, res) => {
+        const startedAt = Date.now();
+        const query = normalizeOpenClawString(req.body?.query);
+        const { diary, diaries: requestedDiaries } = resolveOpenClawDiarySelection(req.body);
+        const maid = normalizeOpenClawString(req.body?.maid);
+        const requestContext = req.body?.requestContext;
+        const requestId = createOpenClawRequestId(requestContext?.requestId);
+        const agentId = normalizeOpenClawString(requestContext?.agentId);
+        const sessionId = normalizeOpenClawString(requestContext?.sessionId);
+        const source = normalizeOpenClawString(requestContext?.source) || 'openclaw';
+        const ragOptions = extractOpenClawRagOptions(req.body);
+
+        // 验证必需参数
+        if (!query) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_RAG_INVALID_QUERY',
+                error: 'query is required',
+                details: { field: 'query' }
+            });
+        }
+        if (!agentId || !sessionId) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_INVALID_REQUEST',
+                error: 'requestContext.agentId and requestContext.sessionId are required',
+                details: { field: 'requestContext' }
+            });
+        }
+        if (!ragOptions.mode) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_RAG_INVALID_QUERY',
+                error: 'mode must be one of rag, hybrid, auto',
+                details: { field: 'mode' }
+            });
+        }
+
+        // 记录审计日志
+        logOpenClawAudit('rag.search.started', {
+            requestId,
+            source,
+            agentId,
+            sessionId,
+            diary,
+            diaries: requestedDiaries,
+            mode: ragOptions.mode
+        });
+
+        try {
+            const knowledgeBaseManager = getOpenClawKnowledgeBaseManager(pluginManager);
+            const ragPlugin = getOpenClawRagPlugin(pluginManager);
+            const availableDiaries = await listOpenClawDiaryTargets(knowledgeBaseManager);
+            const allowedDiaries = resolveOpenClawAllowedDiaries({
+                agentId,
+                maid,
+                availableDiaries,
+                ragConfig: getOpenClawRagConfig(pluginManager)
+            });
+
+            // 验证日记本访问权限
+            const missingDiaries = requestedDiaries.filter((requestedDiary) => !availableDiaries.includes(requestedDiary));
+            if (missingDiaries.length > 0) {
+                return sendOpenClawError(res, {
+                    status: 404,
+                    requestId,
+                    startedAt,
+                    code: 'OCW_RAG_TARGET_NOT_FOUND',
+                    error: 'Requested diary target was not found',
+                    details: {
+                        diary: missingDiaries[0],
+                        diaries: missingDiaries
+                    }
+                });
+            }
+            const forbiddenDiaries = requestedDiaries.filter((requestedDiary) => !allowedDiaries.includes(requestedDiary));
+            if (forbiddenDiaries.length > 0) {
+                return sendOpenClawError(res, {
+                    status: 403,
+                    requestId,
+                    startedAt,
+                    code: 'OCW_RAG_TARGET_FORBIDDEN',
+                    error: 'Requested diary target is not allowed for this agent',
+                    details: {
+                        diary: forbiddenDiaries[0],
+                        diaries: forbiddenDiaries,
+                        agentId
+                    }
+                });
+            }
+
+            const targetDiaries = requestedDiaries.length > 0 ? requestedDiaries : allowedDiaries;
+            if (targetDiaries.length === 0) {
+                return sendOpenClawError(res, {
+                    status: 403,
+                    requestId,
+                    startedAt,
+                    code: 'OCW_RAG_TARGET_FORBIDDEN',
+                    error: 'No accessible diary targets are configured for this agent',
+                    details: { agentId }
+                });
+            }
+
+            // 生成查询嵌入向量
+            const queryVector = await getOpenClawQueryVector(query, ragPlugin, knowledgeBaseManager);
+            if (!Array.isArray(queryVector) || queryVector.length === 0) {
+                throw new Error('Failed to build query embedding');
+            }
+
+            // 分组感知增强（可选）
+            let finalQueryVector = queryVector;
+            let activatedGroups = new Map();
+            if (
+                ragOptions.groupAware &&
+                ragPlugin?.semanticGroups?.detectAndActivateGroups &&
+                ragPlugin?.semanticGroups?.getEnhancedVector
+            ) {
+                activatedGroups = ragPlugin.semanticGroups.detectAndActivateGroups(query);
+                const enhancedVector = await ragPlugin.semanticGroups.getEnhancedVector(query, activatedGroups, queryVector);
+                if (Array.isArray(enhancedVector) && enhancedVector.length > 0) {
+                    finalQueryVector = enhancedVector;
+                }
+            }
+
+            // 标签增强（可选）
+            let scoringVector = finalQueryVector;
+            let coreTags = [];
+            if (ragOptions.tagMemo && typeof knowledgeBaseManager?.applyTagBoost === 'function') {
+                const boostResult = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), OPENCLAW_TAG_BOOST);
+                if (boostResult?.vector) {
+                    scoringVector = Array.from(boostResult.vector);
+                }
+                coreTags = extractOpenClawCoreTags(boostResult?.info);
+            }
+
+            // 语义检索（向量搜索）
+            const semanticSearchK = ragOptions.rerank
+                ? Math.max(ragOptions.k * 2, 10)
+                : Math.max(ragOptions.k, OPENCLAW_DEFAULT_RAG_K);
+            const semanticResults = await Promise.all(
+                targetDiaries.map(async (targetDiary) => {
+                    const results = await Promise.resolve(
+                        knowledgeBaseManager.search(
+                            targetDiary,
+                            finalQueryVector,
+                            semanticSearchK,
+                            ragOptions.tagMemo ? OPENCLAW_TAG_BOOST : 0,
+                            coreTags
+                        )
+                    );
+                    return Array.isArray(results)
+                        ? results.map((result) => ({
+                            ...result,
+                            sourceDiary: normalizeOpenClawString(result.sourceDiary || targetDiary),
+                            source: 'rag'
+                        }))
+                        : [];
+                })
+            );
+
+            // 时间范围解析（可选）
+            let timeRanges = [];
+            if (ragOptions.timeAware && ragPlugin?.timeParser?.parse) {
+                timeRanges = ragPlugin.timeParser.parse(query);
+            }
+
+            // 时间范围检索（可选）
+            let timeResults = [];
+            if (
+                timeRanges.length > 0 &&
+                ragPlugin?._getTimeRangeFilePaths &&
+                typeof knowledgeBaseManager?.getChunksByFilePaths === 'function'
+            ) {
+                const targetFilePathGroups = await Promise.all(
+                    targetDiaries.map(async (targetDiary) => {
+                        const filePaths = await Promise.all(
+                            timeRanges.map((timeRange) => Promise.resolve(ragPlugin._getTimeRangeFilePaths(targetDiary, timeRange)))
+                        );
+                        return filePaths.flat();
+                    })
+                );
+                const timeFilePaths = [...new Set(targetFilePathGroups.flat())];
+                const timeChunks = timeFilePaths.length > 0
+                    ? await Promise.resolve(knowledgeBaseManager.getChunksByFilePaths(timeFilePaths))
+                    : [];
+                timeResults = Array.isArray(timeChunks)
+                    ? timeChunks.map((chunk) => ({
+                        ...chunk,
+                        score: ragPlugin?.cosineSimilarity
+                            ? ragPlugin.cosineSimilarity(scoringVector, Array.from(chunk.vector || []))
+                            : computeOpenClawCosineSimilarity(scoringVector, Array.from(chunk.vector || [])),
+                        sourceDiary: normalizeOpenClawString(chunk.sourceDiary || normalizeOpenClawString(chunk.sourceFile).split('/')[0]),
+                        source: 'time'
+                    }))
+                    : [];
+            }
+
+            // 合并并去重结果
+            let candidates = deduplicateOpenClawRagCandidates([...semanticResults.flat(), ...timeResults]);
+            if (typeof knowledgeBaseManager?.deduplicateResults === 'function' && candidates.length > 1) {
+                candidates = await Promise.resolve(knowledgeBaseManager.deduplicateResults(candidates, finalQueryVector));
+            }
+            const scoredCandidates = candidates.filter((candidate) => typeof candidate?.score === 'number' && Number.isFinite(candidate.score));
+
+            // 重排序（可选）
+            let rerankApplied = false;
+            if (ragOptions.rerank && candidates.length > 0 && ragPlugin?._rerankDocuments) {
+                candidates = await Promise.resolve(ragPlugin._rerankDocuments(query, candidates, ragOptions.k));
+                rerankApplied = true;
+            } else {
+                candidates.sort((left, right) => (right.score || 0) - (left.score || 0));
+                candidates = candidates.slice(0, ragOptions.k);
+            }
+
+            // 规范化结果项
+            const metadataCache = new Map();
+            const items = await Promise.all(
+                candidates
+                    .filter((candidate) => normalizeOpenClawString(candidate?.text))
+                    .slice(0, ragOptions.k)
+                    .map((candidate) => normalizeOpenClawRagItem(
+                        candidate,
+                        normalizeOpenClawString(candidate?.sourceDiary),
+                        knowledgeBaseManager,
+                        metadataCache
+                    ))
+            );
+            const scoredItems = items.filter((item) => typeof item.score === 'number' && Number.isFinite(item.score));
+
+            // 记录成功审计日志
+            logOpenClawAudit('rag.search.completed', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary,
+                diaries: requestedDiaries,
+                resultCount: items.length,
+                filteredByResultWindow: Math.max(0, scoredCandidates.length - scoredItems.length),
+                scoreStats: {
+                    candidates: summarizeOpenClawScoreStats(scoredCandidates.map((candidate) => candidate.score)),
+                    returned: summarizeOpenClawScoreStats(scoredItems.map((item) => item.score))
+                },
+                durationMs: Math.max(0, Date.now() - startedAt)
+            });
+
+            return sendOpenClawSuccess(res, {
+                requestId,
+                startedAt,
+                data: {
+                    items,
+                    diagnostics: {
+                        mode: ragOptions.mode,
+                        targetDiaries,
+                        resultCount: items.length,
+                        timeAwareApplied: ragOptions.timeAware && timeRanges.length > 0,
+                        groupAwareApplied: ragOptions.groupAware && activatedGroups.size > 0,
+                        rerankApplied,
+                        tagMemoApplied: ragOptions.tagMemo && coreTags.length > 0,
+                        coreTags,
+                        durationMs: Math.max(0, Date.now() - startedAt)
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('[OpenClawBridgeRoutes] Error searching OpenClaw RAG:', error);
+            logOpenClawAudit('rag.search.failed', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary,
+                diaries: requestedDiaries,
+                durationMs: Math.max(0, Date.now() - startedAt),
+                code: 'OCW_RAG_SEARCH_ERROR'
+            });
+            return sendOpenClawError(res, {
+                status: 500,
+                requestId,
+                startedAt,
+                code: 'OCW_RAG_SEARCH_ERROR',
+                error: 'Failed to execute RAG search',
+                details: { message: error.message }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------------------
+    // POST /openclaw/rag/context
+    // 构建 RAG 回忆上下文，返回结构化的上下文块供 LLM 使用
+    // 支持 Token 预算控制、块数限制、分数阈值等策略
+    // -------------------------------------------------------------------------
+    router.post('/openclaw/rag/context', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = req.body?.requestContext;
+        const requestId = createOpenClawRequestId(requestContext?.requestId);
+        const agentId = normalizeOpenClawString(req.body?.agentId || requestContext?.agentId);
+        const sessionId = normalizeOpenClawString(req.body?.sessionId || requestContext?.sessionId);
+        const source = normalizeOpenClawString(requestContext?.source) || 'openclaw-context';
+        const maid = normalizeOpenClawString(req.body?.maid);
+        const { diary, diaries: requestedDiaries } = resolveOpenClawDiarySelection(req.body);
+        const query = buildOpenClawRecallQuery(req.body);
+        // 解析上下文构建参数
+        const maxBlocks = parseOpenClawInteger(
+            req.body?.maxBlocks,
+            OPENCLAW_DEFAULT_CONTEXT_MAX_BLOCKS,
+            1,
+            OPENCLAW_MAX_RAG_K
+        );
+        const tokenBudget = parseOpenClawInteger(
+            req.body?.tokenBudget,
+            OPENCLAW_DEFAULT_CONTEXT_TOKEN_BUDGET,
+            1,
+            OPENCLAW_MAX_CONTEXT_TOKEN_BUDGET
+        );
+        const maxTokenRatio = Math.min(
+            1,
+            Math.max(
+                0.1,
+                typeof req.body?.maxTokenRatio === 'number' && Number.isFinite(req.body.maxTokenRatio)
+                    ? req.body.maxTokenRatio
+                    : OPENCLAW_DEFAULT_CONTEXT_MAX_TOKEN_RATIO
+            )
+        );
+        const minScore = typeof req.body?.minScore === 'number' && Number.isFinite(req.body.minScore)
+            ? req.body.minScore
+            : OPENCLAW_DEFAULT_CONTEXT_MIN_SCORE;
+        const ragOptions = {
+            ...extractOpenClawRagOptions({
+                ...req.body,
+                k: Math.max(maxBlocks * 2, OPENCLAW_DEFAULT_RAG_K),
+                mode: req.body?.mode || 'hybrid'
+            }),
+            timeAware: parseOpenClawBooleanQuery(req.body?.timeAware, true),
+            groupAware: parseOpenClawBooleanQuery(req.body?.groupAware, true),
+            rerank: parseOpenClawBooleanQuery(req.body?.rerank, true),
+            tagMemo: parseOpenClawBooleanQuery(req.body?.tagMemo, true)
+        };
+
+        // 验证必需参数
+        if (!agentId || !sessionId) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_INVALID_REQUEST',
+                error: 'agentId and sessionId are required',
+                details: { field: 'agentId/sessionId' }
+            });
+        }
+        if (!query) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_RAG_INVALID_QUERY',
+                error: 'query or recentMessages is required',
+                details: { field: 'query/recentMessages' }
+            });
+        }
+
+        // 记录审计日志
+        logOpenClawAudit('rag.context.started', {
+            requestId,
+            source,
+            agentId,
+            sessionId,
+            diary,
+            diaries: requestedDiaries
+        });
+
+        try {
+            const knowledgeBaseManager = getOpenClawKnowledgeBaseManager(pluginManager);
+            const ragPlugin = getOpenClawRagPlugin(pluginManager);
+            const availableDiaries = await listOpenClawDiaryTargets(knowledgeBaseManager);
+            const allowedDiaries = resolveOpenClawAllowedDiaries({
+                agentId,
+                maid,
+                availableDiaries,
+                ragConfig: getOpenClawRagConfig(pluginManager)
+            });
+
+            // 验证日记本访问权限
+            const missingDiaries = requestedDiaries.filter((requestedDiary) => !availableDiaries.includes(requestedDiary));
+            if (missingDiaries.length > 0) {
+                return sendOpenClawError(res, {
+                    status: 404,
+                    requestId,
+                    startedAt,
+                    code: 'OCW_RAG_TARGET_NOT_FOUND',
+                    error: 'Requested diary target was not found',
+                    details: {
+                        diary: missingDiaries[0],
+                        diaries: missingDiaries
+                    }
+                });
+            }
+            const forbiddenDiaries = requestedDiaries.filter((requestedDiary) => !allowedDiaries.includes(requestedDiary));
+            if (forbiddenDiaries.length > 0) {
+                return sendOpenClawError(res, {
+                    status: 403,
+                    requestId,
+                    startedAt,
+                    code: 'OCW_RAG_TARGET_FORBIDDEN',
+                    error: 'Requested diary target is not allowed for this agent',
+                    details: {
+                        diary: forbiddenDiaries[0],
+                        diaries: forbiddenDiaries,
+                        agentId
+                    }
+                });
+            }
+
+            const targetDiaries = requestedDiaries.length > 0 ? requestedDiaries : allowedDiaries;
+            if (targetDiaries.length === 0) {
+                return sendOpenClawError(res, {
+                    status: 403,
+                    requestId,
+                    startedAt,
+                    code: 'OCW_RAG_TARGET_FORBIDDEN',
+                    error: 'No accessible diary targets are configured for this agent',
+                    details: { agentId }
+                });
+            }
+
+            // 生成查询嵌入向量
+            const queryVector = await getOpenClawQueryVector(query, ragPlugin, knowledgeBaseManager);
+            if (!Array.isArray(queryVector) || queryVector.length === 0) {
+                throw new Error('Failed to build query embedding');
+            }
+
+            // 分组感知增强（可选）
+            let finalQueryVector = queryVector;
+            let activatedGroups = new Map();
+            if (
+                ragOptions.groupAware &&
+                ragPlugin?.semanticGroups?.detectAndActivateGroups &&
+                ragPlugin?.semanticGroups?.getEnhancedVector
+            ) {
+                activatedGroups = ragPlugin.semanticGroups.detectAndActivateGroups(query);
+                const enhancedVector = await ragPlugin.semanticGroups.getEnhancedVector(query, activatedGroups, queryVector);
+                if (Array.isArray(enhancedVector) && enhancedVector.length > 0) {
+                    finalQueryVector = enhancedVector;
+                }
+            }
+
+            // 标签增强（可选）
+            let scoringVector = finalQueryVector;
+            let coreTags = [];
+            if (ragOptions.tagMemo && typeof knowledgeBaseManager?.applyTagBoost === 'function') {
+                const boostResult = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), OPENCLAW_TAG_BOOST);
+                if (boostResult?.vector) {
+                    scoringVector = Array.from(boostResult.vector);
+                }
+                coreTags = extractOpenClawCoreTags(boostResult?.info);
+            }
+
+            // 语义检索
+            const semanticResults = await Promise.all(
+                targetDiaries.map(async (targetDiary) => {
+                    const results = await Promise.resolve(
+                        knowledgeBaseManager.search(
+                            targetDiary,
+                            finalQueryVector,
+                            ragOptions.k,
+                            ragOptions.tagMemo ? OPENCLAW_TAG_BOOST : 0,
+                            coreTags
+                        )
+                    );
+                    return Array.isArray(results)
+                        ? results.map((result) => ({
+                            ...result,
+                            sourceDiary: normalizeOpenClawString(result.sourceDiary || targetDiary),
+                            source: 'rag'
+                        }))
+                        : [];
+                })
+            );
+
+            // 时间范围解析（可选）
+            let timeRanges = [];
+            if (ragOptions.timeAware && ragPlugin?.timeParser?.parse) {
+                timeRanges = ragPlugin.timeParser.parse(query);
+            }
+
+            // 时间范围检索（可选）
+            let timeResults = [];
+            if (
+                timeRanges.length > 0 &&
+                ragPlugin?._getTimeRangeFilePaths &&
+                typeof knowledgeBaseManager?.getChunksByFilePaths === 'function'
+            ) {
+                const targetFilePathGroups = await Promise.all(
+                    targetDiaries.map(async (targetDiary) => {
+                        const filePaths = await Promise.all(
+                            timeRanges.map((timeRange) => Promise.resolve(ragPlugin._getTimeRangeFilePaths(targetDiary, timeRange)))
+                        );
+                        return filePaths.flat();
+                    })
+                );
+                const timeFilePaths = [...new Set(targetFilePathGroups.flat())];
+                const timeChunks = timeFilePaths.length > 0
+                    ? await Promise.resolve(knowledgeBaseManager.getChunksByFilePaths(timeFilePaths))
+                    : [];
+                timeResults = Array.isArray(timeChunks)
+                    ? timeChunks.map((chunk) => ({
+                        ...chunk,
+                        score: ragPlugin?.cosineSimilarity
+                            ? ragPlugin.cosineSimilarity(scoringVector, Array.from(chunk.vector || []))
+                            : computeOpenClawCosineSimilarity(scoringVector, Array.from(chunk.vector || [])),
+                        sourceDiary: normalizeOpenClawString(chunk.sourceDiary || normalizeOpenClawString(chunk.sourceFile).split('/')[0]),
+                        source: 'time'
+                    }))
+                    : [];
+            }
+
+            // 合并、去重、排序结果
+            let candidates = deduplicateOpenClawRagCandidates([...semanticResults.flat(), ...timeResults]);
+            if (typeof knowledgeBaseManager?.deduplicateResults === 'function' && candidates.length > 1) {
+                candidates = await Promise.resolve(knowledgeBaseManager.deduplicateResults(candidates, finalQueryVector));
+            }
+
+            // 重排序（可选）
+            if (ragOptions.rerank && candidates.length > 0 && ragPlugin?._rerankDocuments) {
+                candidates = await Promise.resolve(ragPlugin._rerankDocuments(query, candidates, ragOptions.k));
+            } else {
+                candidates.sort((left, right) => (right.score || 0) - (left.score || 0));
+                candidates = candidates.slice(0, ragOptions.k);
+            }
+
+            // 规范化结果项
+            const metadataCache = new Map();
+            const items = await Promise.all(
+                candidates
+                    .filter((candidate) => normalizeOpenClawString(candidate?.text))
+                    .slice(0, ragOptions.k)
+                    .map((candidate) => normalizeOpenClawRagItem(
+                        candidate,
+                        normalizeOpenClawString(candidate?.sourceDiary),
+                        knowledgeBaseManager,
+                        metadataCache
+                    ))
+            );
+
+            // 构建上下文块，应用 Token 预算和块数限制
+            const maxInjectedTokens = Math.max(1, Math.floor(tokenBudget * maxTokenRatio));
+            const recallBlocks = [];
+            let consumedTokens = 0;
+            const scoredItems = items.filter((item) => typeof item.score === 'number' && Number.isFinite(item.score));
+            const eligibleItems = scoredItems.filter((item) => item.score >= minScore);
+            const deduplicatedBlocks = deduplicateOpenClawRecallBlocks(
+                eligibleItems
+                    .map((item) => createOpenClawRecallBlock(item))
+            );
+
+            // 按策略选择上下文块
+            for (const block of deduplicatedBlocks) {
+                if (recallBlocks.length >= maxBlocks) {
+                    break;
+                }
+                const blockTokens = block.metadata.estimatedTokens || estimateOpenClawTokenCount(block.text);
+                if (consumedTokens > 0 && consumedTokens + blockTokens > maxInjectedTokens) {
+                    continue;
+                }
+                // 超大块截断处理
+                if (blockTokens > maxInjectedTokens) {
+                    const truncatedText = truncateOpenClawTextByTokens(
+                        block.text,
+                        Math.max(1, maxInjectedTokens - consumedTokens)
+                    );
+                    if (!truncatedText) {
+                        continue;
+                    }
+                    const truncatedTokens = estimateOpenClawTokenCount(truncatedText);
+                    recallBlocks.push({
+                        text: truncatedText,
+                        metadata: {
+                            ...block.metadata,
+                            estimatedTokens: truncatedTokens,
+                            truncated: true
+                        }
+                    });
+                    consumedTokens += truncatedTokens;
+                    break;
+                }
+                recallBlocks.push(block);
+                consumedTokens += blockTokens;
+            }
+
+            // 记录成功审计日志
+            logOpenClawAudit('rag.context.completed', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary,
+                diaries: requestedDiaries,
+                resultCount: recallBlocks.length,
+                filteredByMinScore: Math.max(0, scoredItems.length - eligibleItems.length),
+                scoreStats: {
+                    candidates: summarizeOpenClawScoreStats(scoredItems.map((item) => item.score)),
+                    eligible: summarizeOpenClawScoreStats(eligibleItems.map((item) => item.score)),
+                    recalled: summarizeOpenClawScoreStats(
+                        recallBlocks.map((block) => block?.metadata?.score)
+                    )
+                },
+                durationMs: Math.max(0, Date.now() - startedAt)
+            });
+
+            return sendOpenClawSuccess(res, {
+                requestId,
+                startedAt,
+                data: {
+                    recallBlocks,
+                    estimatedTokens: consumedTokens,
+                    appliedPolicy: {
+                        tokenBudget,
+                        maxTokenRatio,
+                        maxInjectedTokens,
+                        maxBlocks,
+                        minScore,
+                        mode: ragOptions.mode,
+                        timeAware: ragOptions.timeAware,
+                        groupAware: ragOptions.groupAware,
+                        rerank: ragOptions.rerank,
+                        tagMemo: ragOptions.tagMemo,
+                        targetDiaries
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('[OpenClawBridgeRoutes] Error building OpenClaw recall context:', error);
+            logOpenClawAudit('rag.context.failed', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary,
+                diaries: requestedDiaries,
+                durationMs: Math.max(0, Date.now() - startedAt),
+                code: 'OCW_RAG_CONTEXT_ERROR'
+            });
+            return sendOpenClawError(res, {
+                status: 500,
+                requestId,
+                startedAt,
+                code: 'OCW_RAG_CONTEXT_ERROR',
+                error: 'Failed to build recall context',
+                details: { message: error.message }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------------------
+    // POST /openclaw/tools/:toolName
+    // 调用指定工具，执行插件功能
+    // 支持参数验证、审批检查、审计日志记录
+    // -------------------------------------------------------------------------
     router.post('/openclaw/tools/:toolName', async (req, res) => {
         const startedAt = Date.now();
         const toolName = normalizeOpenClawString(req.params.toolName);
@@ -433,6 +2178,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
         const source = normalizeOpenClawString(requestContext?.source) || 'openclaw';
         const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
 
+        // 验证必需参数
         if (!toolName) {
             return sendOpenClawError(res, {
                 status: 400,
@@ -464,6 +2210,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
             });
         }
 
+        // 查找并验证工具
         const plugin = pluginManager.getPlugin(toolName);
         if (!plugin || !isOpenClawBridgeablePlugin(plugin)) {
             return sendOpenClawError(res, {
@@ -476,6 +2223,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
             });
         }
 
+        // 检查是否需要审批
         if (pluginManager.toolApprovalManager?.shouldApprove?.(toolName)) {
             logOpenClawAudit('tool.approval_required', {
                 requestId,
@@ -494,6 +2242,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
             });
         }
 
+        // 验证参数符合输入模式
         const inputSchema = getOpenClawToolInputSchema(plugin);
         const validationErrors = validateOpenClawSchemaValue(inputSchema, args);
         if (validationErrors.length > 0) {
@@ -510,6 +2259,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
             });
         }
 
+        // 记录调用开始审计日志
         logOpenClawAudit('tool.invoke.started', {
             requestId,
             toolName,
@@ -520,6 +2270,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
         });
 
         try {
+            // 执行工具调用
             const result = await pluginManager.processToolCall(toolName, {
                 ...args,
                 __openclawContext: {
@@ -530,6 +2281,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
                 }
             }, clientIp);
 
+            // 记录成功审计日志
             logOpenClawAudit('tool.invoke.completed', {
                 requestId,
                 toolName,
@@ -553,6 +2305,7 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
                 }
             });
         } catch (error) {
+            // 映射错误并记录失败审计日志
             const mappedError = mapOpenClawToolExecutionError(toolName, error);
             logOpenClawAudit('tool.invoke.failed', {
                 requestId,
