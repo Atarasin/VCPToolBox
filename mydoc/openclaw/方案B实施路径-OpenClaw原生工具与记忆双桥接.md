@@ -261,7 +261,8 @@
 
 1. 新增 `POST /admin_api/openclaw/memory/write`
    - 入参：memory text、tags、target diary、source metadata
-2. 与 `DailyNoteWrite` / `DailyNoteEdit` 对齐
+2. 与 `DailyNote` 对齐
+   - 插件路径：`Plugin/DailyNote`
 3. 写回幂等控制
    - 指纹哈希去重
    - 幂等键支持

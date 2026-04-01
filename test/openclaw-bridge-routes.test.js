@@ -1027,6 +1027,631 @@ test('POST /admin_api/openclaw/rag/context validates query input', async () => {
     }
 });
 
+test('GET /admin_api/openclaw/capabilities marks writeBack as available when DailyNote exists', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记系统',
+        description: '支持创建和更新日记。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    commandIdentifier: 'create',
+                    description: '创建日记。\n- `command`: 固定为 `create`。\n- `maid`: 必需。\n- `Date`: 必需。\n- `Content`: 必需。\n- `Tag`: 必需。\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DailyNote「末」,\ncommand:「始」create「末」,\nmaid:「始」[Nova]Nova「末」,\nDate:「始」2026-04-01「末」,\nContent:「始」示例内容「末」,\nTag:「始」阶段总结, durable-memory「末」\n<<<[END_TOOL_REQUEST]>>>',
+                    parameters: [
+                        { name: 'command', type: 'string', required: true },
+                        { name: 'maid', type: 'string', required: true },
+                        { name: 'Date', type: 'string', required: true },
+                        { name: 'Content', type: 'string', required: true },
+                        { name: 'Tag', type: 'string', required: true }
+                    ]
+                }
+            ]
+        }
+    });
+    const pluginManager = createPluginManager({ plugins });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/admin_api/openclaw/capabilities?agentId=agent.default`);
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.data.memory.features.writeBack, true);
+        const dailyNoteTool = payload.data.tools.find((tool) => tool.name === 'DailyNote');
+        assert.ok(dailyNoteTool);
+        assert.deepEqual(
+            dailyNoteTool.inputSchema.required.sort(),
+            ['Content', 'Date', 'Tag', 'command', 'maid'].sort()
+        );
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/memory/write writes durable memory through DailyNote create flow', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记系统',
+        description: '支持创建和更新日记。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    commandIdentifier: 'create',
+                    description: '创建日记。'
+                }
+            ]
+        }
+    });
+
+    let capturedCall = null;
+    const pluginManager = createPluginManager({
+        plugins,
+        async processToolCall(toolName, args) {
+            capturedCall = { toolName, args };
+            return {
+                status: 'success',
+                message: 'Diary saved to /tmp/Nova/2026-04-01-09_30_00.md'
+            };
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '需要在 Phase 4 中把 durable memory 写回 VCP 日记系统。',
+                    tags: ['Phase4', 'memory-write'],
+                    timestamp: '2026-04-01T09:30:00.000Z',
+                    metadata: {
+                        sourceEvent: 'memory.flush',
+                        importance: 0.92
+                    }
+                },
+                options: {
+                    idempotencyKey: 'mem-write-001',
+                    deduplicate: true
+                },
+                requestContext: {
+                    source: 'openclaw-memory',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-write-001',
+                    requestId: 'req-memory-write-001'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.data.writeStatus, 'created');
+        assert.equal(payload.data.diary, 'Nova');
+        assert.equal(payload.data.deduplicated, false);
+        assert.equal(payload.data.filePath, '/tmp/Nova/2026-04-01-09_30_00.md');
+        assert.equal(typeof payload.data.entryId, 'string');
+        assert.equal(payload.data.entryId.length, 24);
+
+        assert.equal(capturedCall.toolName, 'DailyNote');
+        assert.equal(capturedCall.args.command, 'create');
+        assert.equal(capturedCall.args.maid, '[Nova]agent.nova');
+        assert.equal(capturedCall.args.Date, '2026-04-01');
+        assert.equal(capturedCall.args.Tag, 'Tag: Phase4, memory-write');
+        assert.match(
+            capturedCall.args.Content,
+            /^\[\d{2}:\d{2}\] 需要在 Phase 4 中把 durable memory 写回 VCP 日记系统。\nMeta-sourceEvent: memory\.flush\nMeta-importance: 0\.92$/
+        );
+        assert.deepEqual(capturedCall.args.__openclawContext, {
+            source: 'openclaw-memory',
+            agentId: 'agent.nova',
+            sessionId: 'sess-memory-write-001',
+            requestId: 'req-memory-write-001'
+        });
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/memory/write skips duplicate writes by idempotency key', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记系统',
+        description: '支持创建和更新日记。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    commandIdentifier: 'create',
+                    description: '创建日记。'
+                }
+            ]
+        }
+    });
+
+    let invocationCount = 0;
+    const pluginManager = createPluginManager({
+        plugins,
+        async processToolCall() {
+            invocationCount += 1;
+            return {
+                status: 'success',
+                message: 'Diary saved to /tmp/Nova/2026-04-01-09_31_00.md'
+            };
+        }
+    });
+    const server = await createServer(pluginManager);
+    const requestBody = {
+        target: {
+            diary: 'Nova'
+        },
+        memory: {
+            text: '同一批 durable memory 只应被写入一次。',
+            tags: ['去重', '幂等'],
+            timestamp: '2026-04-01T09:31:00.000Z'
+        },
+        options: {
+            idempotencyKey: 'mem-write-duplicate-001',
+            deduplicate: true
+        },
+        requestContext: {
+            source: 'openclaw-memory',
+            agentId: 'agent.nova',
+            sessionId: 'sess-memory-write-002',
+            requestId: 'req-memory-write-002'
+        }
+    };
+
+    try {
+        const firstResponse = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+        });
+        const firstPayload = await firstResponse.json();
+        const secondResponse = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+        });
+        const secondPayload = await secondResponse.json();
+
+        assert.equal(firstResponse.status, 200);
+        assert.equal(firstPayload.data.writeStatus, 'created');
+        assert.equal(secondResponse.status, 200);
+        assert.equal(secondPayload.data.writeStatus, 'skipped_duplicate');
+        assert.equal(secondPayload.data.deduplicated, true);
+        assert.equal(secondPayload.data.entryId, firstPayload.data.entryId);
+        assert.equal(invocationCount, 1);
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/memory/write rejects forbidden target diaries', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记系统',
+        description: '支持创建和更新日记。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    commandIdentifier: 'create',
+                    description: '创建日记。'
+                }
+            ]
+        }
+    });
+
+    let invocationCount = 0;
+    const pluginManager = createPluginManager({
+        plugins,
+        openClawBridgeConfig: {
+            rag: {
+                agentDiaryMap: {
+                    'agent.nova': ['Nova']
+                },
+                allowCrossRoleAccess: false
+            }
+        },
+        async processToolCall() {
+            invocationCount += 1;
+            return { status: 'success' };
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'ProjectAlpha'
+                },
+                memory: {
+                    text: '越权写回应被拒绝。',
+                    tags: ['forbidden', 'security']
+                },
+                requestContext: {
+                    source: 'openclaw-memory',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-write-003',
+                    requestId: 'req-memory-write-003'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 403);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'OCW_MEMORY_TARGET_FORBIDDEN');
+        assert.equal(invocationCount, 0);
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/memory/write requires memory.tags and no longer falls back to generated tags', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记系统',
+        description: '支持创建和更新日记。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    commandIdentifier: 'create',
+                    description: '创建日记。'
+                }
+            ]
+        }
+    });
+
+    let invocationCount = 0;
+    const pluginManager = createPluginManager({
+        plugins,
+        async processToolCall() {
+            invocationCount += 1;
+            return { status: 'success' };
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '缺少 tags 的 durable memory 不应被写入。'
+                },
+                requestContext: {
+                    source: 'openclaw-memory',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-write-004',
+                    requestId: 'req-memory-write-004'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 400);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'OCW_MEMORY_INVALID_PAYLOAD');
+        assert.equal(payload.error, 'memory.tags is required');
+        assert.equal(invocationCount, 0);
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/memory/write requires DailyNote and does not fall back to DailyNoteWrite', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.delete('DailyNote');
+    plugins.set('DailyNoteWrite', {
+        name: 'DailyNoteWrite',
+        displayName: '日记写入器',
+        description: '旧写入插件。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        }
+    });
+    const pluginManager = createPluginManager({
+        plugins,
+        async executePlugin() {
+            throw new Error('DailyNoteWrite should not be used');
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '仅存在 DailyNoteWrite 时应直接报错。',
+                    tags: ['phase4', 'daily-note-only']
+                },
+                requestContext: {
+                    source: 'openclaw-memory',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-write-005',
+                    requestId: 'req-memory-write-005'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 500);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'OCW_MEMORY_WRITE_ERROR');
+        assert.equal(payload.error, 'DailyNote is required for diary memory write');
+        assert.deepEqual(payload.details.supportedPlugins, ['DailyNote']);
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/memory/write makes persisted memory searchable and recallable', async () => {
+    const basePluginManager = createPluginManager();
+    const plugins = new Map(basePluginManager.plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记系统',
+        description: '支持创建和更新日记。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    commandIdentifier: 'create',
+                    description: '创建日记。'
+                }
+            ]
+        }
+    });
+
+    const persistedEntries = [];
+    const vectorDBManager = createKnowledgeBaseManager({
+        diaries: ['Nova'],
+        async search(diaryName, queryVector, k) {
+            void queryVector;
+            if (diaryName !== 'Nova') {
+                return [];
+            }
+            return persistedEntries.slice(0, k).map((entry) => ({
+                text: entry.text,
+                score: entry.score,
+                sourceFile: entry.sourceFile,
+                fullPath: entry.fullPath
+            }));
+        },
+        async getOpenClawFileMetadata(sourcePath) {
+            const matchedEntry = persistedEntries.find((entry) => entry.fullPath === sourcePath);
+            return matchedEntry
+                ? {
+                    sourceDiary: 'Nova',
+                    sourcePath: matchedEntry.fullPath,
+                    updatedAt: matchedEntry.updatedAt,
+                    tags: matchedEntry.tags
+                }
+                : null;
+        },
+        async getChunksByFilePaths(filePaths) {
+            return filePaths
+                .map((filePath) => persistedEntries.find((entry) => entry.fullPath === filePath))
+                .filter(Boolean)
+                .map((entry) => ({
+                    text: entry.text,
+                    sourceFile: entry.fullPath,
+                    sourceDiary: 'Nova',
+                    vector: [0.9, 0.1, 0.4]
+                }));
+        }
+    });
+
+    const pluginManager = createPluginManager({
+        plugins,
+        vectorDBManager,
+        openClawBridgeConfig: {
+            rag: {
+                agentDiaryMap: {
+                    'agent.nova': ['Nova']
+                },
+                allowCrossRoleAccess: false
+            }
+        },
+        async processToolCall(toolName, args) {
+            assert.equal(toolName, 'DailyNote');
+            const contentLines = String(args.Content || '').split('\n');
+            const firstLine = contentLines[0] || '';
+            const matchedTime = firstLine.match(/^\[(\d{2}:\d{2})\]\s*(.+)$/);
+            const text = matchedTime ? matchedTime[2] : firstLine;
+            const sourceFile = `${args.Date}.md`;
+            const fullPath = `Nova/${sourceFile}`;
+            const updatedAt = Date.parse(`${args.Date}T${matchedTime ? matchedTime[1] : '00:00'}:00.000Z`);
+            const tags = String(args.Tag || '')
+                .replace(/^Tag:\s*/u, '')
+                .split(',')
+                .map((tag) => tag.trim())
+                .filter(Boolean);
+
+            persistedEntries.push({
+                text,
+                score: 0.97,
+                sourceFile,
+                fullPath,
+                updatedAt,
+                tags
+            });
+
+            return {
+                status: 'success',
+                message: `Diary saved to /tmp/${fullPath.replace('/', '_')}`
+            };
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const writeResponse = await fetch(`${server.baseUrl}/admin_api/openclaw/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: 'OpenClaw durable memory 写回完成后，下一轮需要能检索并注入召回。',
+                    tags: ['phase4', 'writeback', 'recall'],
+                    timestamp: '2026-04-02T10:15:00.000Z',
+                    metadata: {
+                        sourceEvent: 'memory.flush'
+                    }
+                },
+                options: {
+                    idempotencyKey: 'mem-write-linked-001',
+                    deduplicate: true
+                },
+                requestContext: {
+                    source: 'openclaw-memory',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-linked-001',
+                    requestId: 'req-memory-linked-001'
+                }
+            })
+        });
+        const writePayload = await writeResponse.json();
+
+        const searchResponse = await fetch(`${server.baseUrl}/admin_api/openclaw/rag/search`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: '回忆 durable memory 写回完成后的下一步',
+                diary: 'Nova',
+                k: 3,
+                mode: 'hybrid',
+                requestContext: {
+                    source: 'openclaw-memory',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-linked-002',
+                    requestId: 'req-memory-linked-002'
+                }
+            })
+        });
+        const searchPayload = await searchResponse.json();
+
+        const contextResponse = await fetch(`${server.baseUrl}/admin_api/openclaw/rag/context`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: 'OpenClaw durable memory 写回后应该召回什么',
+                maxBlocks: 2,
+                tokenBudget: 160,
+                maxTokenRatio: 0.5,
+                minScore: 0.7,
+                requestContext: {
+                    source: 'openclaw-context',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-memory-linked-003',
+                    requestId: 'req-memory-linked-003'
+                }
+            })
+        });
+        const contextPayload = await contextResponse.json();
+
+        assert.equal(writeResponse.status, 200);
+        assert.equal(writePayload.success, true);
+        assert.equal(writePayload.data.writeStatus, 'created');
+        assert.equal(persistedEntries.length, 1);
+
+        assert.equal(searchResponse.status, 200);
+        assert.equal(searchPayload.success, true);
+        assert.equal(searchPayload.data.items.length, 1);
+        assert.equal(searchPayload.data.items[0].sourceDiary, 'Nova');
+        assert.equal(searchPayload.data.items[0].sourceFile, '2026-04-02.md');
+        assert.match(searchPayload.data.items[0].text, /写回完成后，下一轮需要能检索并注入召回/u);
+
+        assert.equal(contextResponse.status, 200);
+        assert.equal(contextPayload.success, true);
+        assert.equal(contextPayload.data.recallBlocks.length, 1);
+        assert.equal(contextPayload.data.recallBlocks[0].metadata.sourceDiary, 'Nova');
+        assert.equal(contextPayload.data.recallBlocks[0].metadata.sourceFile, '2026-04-02.md');
+        assert.match(contextPayload.data.recallBlocks[0].text, /写回完成后，下一轮需要能检索并注入召回/u);
+    } finally {
+        await server.close();
+    }
+});
+
 test('POST /admin_api/openclaw/tools/:toolName forwards args with OpenClaw requestContext', async () => {
     let capturedCall = null;
     const pluginManager = createPluginManager({

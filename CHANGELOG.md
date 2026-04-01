@@ -2,6 +2,15 @@
 
 ## 7.1.2 - 2026-03-29
 
+### OpenClaw Bridge Phase 4
+- 在 `routes/openclawBridgeRoutes.js` 新增 `POST /admin_api/openclaw/memory/write`，将 OpenClaw durable memory 写回 VCP 日记体系。
+- 将 OpenClaw durable memory 写回链路收敛为仅调用 `DailyNote` 工具，不再回退到 `DailyNoteWrite`。
+- 调整 `DailyNote` create 参数契约，将 `Tag` 标记为必需参数，并同步收紧 OpenClaw memory write 请求为必须提供 tags。
+- 为记忆写回补充基于 `idempotencyKey` 与内容指纹的去重逻辑，避免同批 durable memory 重复落盘。
+- 为记忆写回补充 diary 权限校验、错误码映射与 `memory.write.*` 审计日志，便于灰度观察与问题追踪。
+- 更新 capabilities 的 memory feature 描述，在存在可用日记写入插件时对外暴露 `writeBack: true`。
+- 扩展 `test/openclaw-bridge-routes.test.js`，覆盖写回能力发现、成功写入、幂等去重与越权拒绝场景。
+
 ### OpenClaw Bridge Phase 3
 - 在 `routes/openclawBridgeRoutes.js` 新增 `POST /admin_api/openclaw/rag/context`，支持将最近对话片段转换为自动召回查询并输出 recall blocks。
 - 为上下文召回增加注入预算控制、最小分数阈值、去重、块数量限制与超预算截断逻辑。

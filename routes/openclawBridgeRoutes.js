@@ -352,6 +352,34 @@ function extractInvocationParameterHints(text) {
     return hints;
 }
 
+function applyOpenClawInvocationParameters(parameterHints, invocationCommand) {
+    if (!Array.isArray(invocationCommand?.parameters)) {
+        return parameterHints;
+    }
+    for (const parameter of invocationCommand.parameters) {
+        const parameterName = normalizeOpenClawString(parameter?.name);
+        if (!parameterName) {
+            continue;
+        }
+        const hint = parameterHints.get(parameterName) || { type: 'string', required: false };
+        const parameterType = normalizeOpenClawString(parameter?.type).toLowerCase();
+        if (parameterType === 'boolean') {
+            hint.type = 'boolean';
+        } else if (parameterType === 'array') {
+            hint.type = 'array';
+        } else if (parameterType === 'number' || parameterType === 'integer' || parameterType === 'float' || parameterType === 'int') {
+            hint.type = 'number';
+        } else if (parameterType) {
+            hint.type = parameterType;
+        }
+        if (parameter?.required === true) {
+            hint.required = true;
+        }
+        parameterHints.set(parameterName, hint);
+    }
+    return parameterHints;
+}
+
 /**
  * 从调用命令构建 JSON Schema 变体
  * 支持多命令变体（oneOf），每个变体有不同的必需参数
@@ -364,7 +392,7 @@ function buildOpenClawInvocationVariantSchema(invocationCommand) {
     }
     const combinedText = [invocationCommand.description, invocationCommand.example].filter(Boolean).join('\n');
     const exampleParams = parseInvocationCommandExample(combinedText);
-    const parameterHints = extractInvocationParameterHints(combinedText);
+    const parameterHints = applyOpenClawInvocationParameters(extractInvocationParameterHints(combinedText), invocationCommand);
     const properties = {};
     const required = new Set();
 
@@ -657,40 +685,101 @@ async function listOpenClawDiaryTargets(knowledgeBaseManager) {
  * @param {object} params.ragConfig - RAG 配置
  * @returns {string[]} 允许的日记本名称数组
  */
+/**
+ * 收集 Agent 配置的日记本列表
+ * 根据 agentDiaryMap 中的别名映射和默认日记本配置，汇总所有允许的日记本
+ * @param {string} agentId - Agent ID
+ * @param {string} maid - MAID 标识
+ * @param {object} ragConfig - RAG 配置对象
+ * @returns {object} 包含 agentAliases（别名集合）和 configuredDiaries（配置日记本集合）的对象
+ */
+function collectOpenClawConfiguredDiaries(agentId, maid, ragConfig) {
+    const agentAliases = buildOpenClawAgentAliases(agentId, maid);
+    const configuredDiaries = new Set();
+
+    // 遍历所有别名，从 agentDiaryMap 中查找对应的日记本
+    for (const alias of agentAliases) {
+        normalizeOpenClawStringArray(ragConfig.agentDiaryMap?.[alias]).forEach((diaryName) => configuredDiaries.add(diaryName));
+    }
+    // 添加通配符 '*' 配置的默认日记本（适用于所有 Agent）
+    normalizeOpenClawStringArray(ragConfig.agentDiaryMap?.['*']).forEach((diaryName) => configuredDiaries.add(diaryName));
+    // 添加全局默认日记本
+    normalizeOpenClawStringArray(ragConfig.defaultDiaries).forEach((diaryName) => configuredDiaries.add(diaryName));
+
+    return {
+        agentAliases,
+        configuredDiaries
+    };
+}
+
+/**
+ * 解析 Agent 允许访问的日记本列表
+ * 根据 agentDiaryMap 配置和跨角色访问策略进行过滤
+ * @param {object} params - 参数对象
+ * @param {string} params.agentId - Agent ID
+ * @param {string} params.maid - MAID 标识
+ * @param {string[]} params.availableDiaries - 可用的日记本列表
+ * @param {object} params.ragConfig - RAG 配置
+ * @returns {string[]} 允许的日记本名称数组
+ */
 function resolveOpenClawAllowedDiaries({ agentId, maid, availableDiaries, ragConfig }) {
     const normalizedDiaries = normalizeOpenClawStringArray(availableDiaries);
     if (normalizedDiaries.length === 0) {
         return [];
     }
-    // 如果允许跨角色访问，返回所有可用日记本
+    // 如果允许跨角色访问，直接返回所有可用日记本
     if (ragConfig.allowCrossRoleAccess) {
         return normalizedDiaries;
     }
 
-    const agentAliases = buildOpenClawAgentAliases(agentId, maid);
-    const configuredDiaries = new Set();
+    const { agentAliases, configuredDiaries } = collectOpenClawConfiguredDiaries(agentId, maid, ragConfig);
 
-    // 从 agentDiaryMap 中查找匹配的日记本配置
-    for (const alias of agentAliases) {
-        normalizeOpenClawStringArray(ragConfig.agentDiaryMap?.[alias]).forEach((diaryName) => configuredDiaries.add(diaryName));
-    }
-    // 通配符配置（* 表示所有 Agent）
-    normalizeOpenClawStringArray(ragConfig.agentDiaryMap?.['*']).forEach((diaryName) => configuredDiaries.add(diaryName));
-    // 默认日记本配置
-    normalizeOpenClawStringArray(ragConfig.defaultDiaries).forEach((diaryName) => configuredDiaries.add(diaryName));
-
-    // 如果有明确配置，按配置过滤
+    // 如果配置了明确的日记本映射，使用配置中的日记本
     if (configuredDiaries.size > 0) {
         return normalizedDiaries.filter((diaryName) => configuredDiaries.has(diaryName));
     }
 
-    // 无明确配置时，按别名匹配
+    // 如果没有配置但存在显式策略，返回与别名匹配的日记本
     const aliasMatchedDiaries = normalizedDiaries.filter((diaryName) => agentAliases.has(diaryName));
     if (ragConfig.hasExplicitPolicy) {
         return aliasMatchedDiaries;
     }
 
+    // 默认情况下返回所有可用日记本
     return normalizedDiaries;
+}
+
+/**
+ * 检查指定日记本是否允许 Agent 访问
+ * 根据跨角色访问策略和日记本配置进行权限检查
+ * @param {object} params - 参数对象
+ * @param {string} params.diaryName - 日记本名称
+ * @param {string} params.agentId - Agent ID
+ * @param {string} params.maid - MAID 标识
+ * @param {object} params.ragConfig - RAG 配置
+ * @returns {boolean} 是否允许访问
+ */
+function isOpenClawDiaryAllowed({ diaryName, agentId, maid, ragConfig }) {
+    const normalizedDiaryName = normalizeOpenClawString(diaryName);
+    if (!normalizedDiaryName) {
+        return false;
+    }
+    // 如果允许跨角色访问，直接放行
+    if (ragConfig.allowCrossRoleAccess) {
+        return true;
+    }
+
+    const { agentAliases, configuredDiaries } = collectOpenClawConfiguredDiaries(agentId, maid, ragConfig);
+    // 如果配置了明确的日记本映射，检查是否在配置中
+    if (configuredDiaries.size > 0) {
+        return configuredDiaries.has(normalizedDiaryName);
+    }
+    // 如果存在显式策略，检查是否匹配别名
+    if (ragConfig.hasExplicitPolicy) {
+        return agentAliases.has(normalizedDiaryName);
+    }
+    // 默认情况下允许访问
+    return true;
 }
 
 /**
@@ -745,15 +834,341 @@ async function resolveOpenClawMemoryTargets(pluginManager, agentId, maid) {
  * @param {object} params.knowledgeBaseManager - 知识库管理器
  * @returns {object} 记忆能力描述符
  */
-function createOpenClawMemoryDescriptor({ includeTargets, targets, ragPlugin, knowledgeBaseManager }) {
+/**
+ * 获取记忆写入插件信息
+ * 检查是否存在可用的 DailyNote 写入工具
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object|null} 插件信息对象（包含 name 和 executionMode）或 null
+ */
+function getOpenClawMemoryWritePluginInfo(pluginManager) {
+    // 辅助函数：按名称查找插件
+    const resolvePlugin = (pluginName) => pluginManager?.getPlugin?.(pluginName) || pluginManager?.plugins?.get?.(pluginName) || null;
+
+    // 优先使用 DailyNote 工具（推荐方式）
+    const dailyNotePlugin = resolvePlugin('DailyNote');
+    if (dailyNotePlugin) {
+        return {
+            name: 'DailyNote',
+            executionMode: 'tool'
+        };
+    }
+
+    return null;
+}
+
+/**
+ * 获取记忆写入存储
+ * 用于幂等键和内容指纹去重的内存存储
+ * @param {object} pluginManager - 插件管理器
+ * @returns {object} 存储对象（包含 entriesByIdempotencyKey 和 entriesByFingerprint 两个 Map）
+ */
+function getOpenClawMemoryWriteStore(pluginManager) {
+    // 延迟初始化存储，避免在模块加载时创建
+    if (!pluginManager.__openClawMemoryWriteStore) {
+        pluginManager.__openClawMemoryWriteStore = {
+            entriesByIdempotencyKey: new Map(),  // 按幂等键索引
+            entriesByFingerprint: new Map()      // 按内容指纹索引
+        };
+    }
+    return pluginManager.__openClawMemoryWriteStore;
+}
+
+/**
+ * 规范化记忆标签
+ * 去重并截断，供必填 tags 校验与写回使用
+ * @param {string[]} tags - 原始标签数组
+ * @returns {string[]} 规范化后的标签数组，最多 16 个
+ */
+function normalizeOpenClawMemoryTags(tags) {
+    const normalizedTags = [...new Set(normalizeOpenClawStringArray(tags))];
+    return normalizedTags.slice(0, 16);
+}
+
+/**
+ * 解析记忆时间戳，生成日期字符串和时间标签
+ * @param {any} timestampValue - 时间戳值（支持 ISO 字符串或 Unix 时间戳）
+ * @returns {object} 包含 timestamp（ISO 格式）、dateString（YYYY-MM-DD）和 timeLabel（HH:mm）的对象
+ */
+function resolveOpenClawMemoryDateParts(timestampValue) {
+    const normalizedTimestamp = normalizeOpenClawTimestampValue(timestampValue);
+    const resolvedDate = normalizedTimestamp ? new Date(normalizedTimestamp) : new Date();
+    const pad = (value) => value.toString().padStart(2, '0');
+    return {
+        timestamp: resolvedDate.toISOString(),
+        dateString: `${resolvedDate.getFullYear()}-${pad(resolvedDate.getMonth() + 1)}-${pad(resolvedDate.getDate())}`,
+        timeLabel: `${pad(resolvedDate.getHours())}:${pad(resolvedDate.getMinutes())}`
+    };
+}
+
+/**
+ * 构建记忆写入的 MAID（作者标识）
+ * 格式：[日记本名]作者名，移除作者名中已有的方括号前缀
+ * @param {object} params - 参数对象
+ * @param {string} params.diaryName - 日记本名称
+ * @param {object} params.target - 目标对象（包含 maid/author/agent）
+ * @param {object} params.requestContext - 请求上下文
+ * @returns {string} MAID 字符串
+ */
+function buildOpenClawMemoryWriteMaid({ diaryName, target, requestContext }) {
+    // 按优先级获取作者：target.maid > target.author > target.agent > requestContext.agentId > requestContext.source > 'OpenClaw'
+    const requestedAuthor = normalizeOpenClawString(
+        target?.maid ||
+        target?.author ||
+        target?.agent ||
+        requestContext?.agentId ||
+        requestContext?.source
+    ) || 'OpenClaw';
+    // 移除已有的方括号前缀（如 [其他日记本]作者名）
+    const normalizedAuthor = requestedAuthor.replace(/^\[[^\]]*\]/, '').trim() || 'OpenClaw';
+    return `[${diaryName}]${normalizedAuthor}`;
+}
+
+/**
+ * 规范化记忆元数据
+ * 过滤无效键值，序列化复杂类型，截断长字符串（最多 500 字符）
+ * @param {object} metadata - 原始元数据对象
+ * @returns {object} 规范化后的元数据对象
+ */
+function normalizeOpenClawMemoryMetadata(metadata) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        return {};
+    }
+    const normalizedMetadata = {};
+    for (const [rawKey, rawValue] of Object.entries(metadata)) {
+        const key = normalizeOpenClawString(rawKey);
+        if (!key || rawValue === undefined || rawValue === null) {
+            continue;
+        }
+        // 字符串类型：规范化并截断
+        if (typeof rawValue === 'string') {
+            const value = normalizeOpenClawString(rawValue);
+            if (value) {
+                normalizedMetadata[key] = value.slice(0, 500);
+            }
+            continue;
+        }
+        // 数字和布尔类型：直接使用
+        if (typeof rawValue === 'number' || typeof rawValue === 'boolean') {
+            normalizedMetadata[key] = rawValue;
+            continue;
+        }
+        // 其他类型：尝试 JSON 序列化并截断
+        try {
+            const serializedValue = JSON.stringify(rawValue);
+            if (serializedValue) {
+                normalizedMetadata[key] = serializedValue.slice(0, 500);
+            }
+        } catch (error) {
+            // 序列化失败，跳过该键
+        }
+    }
+    return normalizedMetadata;
+}
+
+/**
+ * 构建记忆写入内容
+ * 添加时间标签前缀，并将元数据追加为 Meta- 开头的行
+ * @param {object} params - 参数对象
+ * @param {string} params.text - 记忆文本内容
+ * @param {string} params.timeLabel - 时间标签（HH:mm 格式）
+ * @param {object} params.metadata - 元数据对象
+ * @returns {string} 格式化后的内容字符串
+ */
+function buildOpenClawMemoryWriteContent({ text, timeLabel, metadata }) {
+    const normalizedText = normalizeOpenClawContentText(text);
+    if (!normalizedText) {
+        return '';
+    }
+
+    const lines = [];
+    // 如果文本已有时间标签前缀，直接使用；否则添加当前时间标签
+    const textWithTime = /^\[\d{2}:\d{2}(?::\d{2})?\]/.test(normalizedText)
+        ? normalizedText
+        : `[${timeLabel}] ${normalizedText}`;
+    lines.push(textWithTime);
+
+    // 追加元数据行（格式：Meta-键名: 值）
+    const normalizedMetadata = normalizeOpenClawMemoryMetadata(metadata);
+    for (const [key, value] of Object.entries(normalizedMetadata)) {
+        const renderedValue = typeof value === 'string' ? value : JSON.stringify(value);
+        lines.push(`Meta-${key}: ${renderedValue}`);
+    }
+
+    return lines.join('\n');
+}
+
+/**
+ * 创建记忆内容指纹（SHA256 哈希）
+ * 用于去重检测，相同内容会生成相同的指纹
+ * @param {object} params - 参数对象
+ * @param {string} params.diaryName - 日记本名称
+ * @param {string} params.text - 记忆文本
+ * @param {string[]} params.tags - 标签数组
+ * @param {string} params.agentId - Agent ID
+ * @param {string} params.source - 来源标识
+ * @param {object} params.metadata - 元数据对象
+ * @returns {string} SHA256 指纹字符串
+ */
+function createOpenClawMemoryFingerprint({ diaryName, text, tags, agentId, source, metadata }) {
+    const fingerprintPayload = JSON.stringify({
+        diaryName: normalizeOpenClawString(diaryName),
+        text: normalizeOpenClawContentText(text),
+        tags: normalizeOpenClawMemoryTags(tags),
+        agentId: normalizeOpenClawString(agentId),
+        source: normalizeOpenClawString(source),
+        metadata: normalizeOpenClawMemoryMetadata(metadata)
+    });
+    return crypto.createHash('sha256').update(fingerprintPayload).digest('hex');
+}
+
+/**
+ * 检查是否存在重复的记忆写入记录
+ * 优先检查幂等键，其次检查内容指纹
+ * @param {object} store - 记忆写入存储对象
+ * @param {object} params - 参数对象
+ * @param {string} params.idempotencyKey - 幂等键
+ * @param {string} params.fingerprint - 内容指纹
+ * @param {boolean} params.deduplicate - 是否启用内容去重
+ * @returns {object|null} 重复的记录对象或 null
+ */
+function resolveOpenClawMemoryDuplicate(store, { idempotencyKey, fingerprint, deduplicate }) {
+    const normalizedIdempotencyKey = normalizeOpenClawString(idempotencyKey);
+    // 优先检查幂等键（外部提供的业务唯一标识）
+    if (normalizedIdempotencyKey && store.entriesByIdempotencyKey.has(normalizedIdempotencyKey)) {
+        return store.entriesByIdempotencyKey.get(normalizedIdempotencyKey);
+    }
+    // 其次检查内容指纹（基于内容哈希的去重）
+    if (deduplicate && fingerprint && store.entriesByFingerprint.has(fingerprint)) {
+        return store.entriesByFingerprint.get(fingerprint);
+    }
+    return null;
+}
+
+/**
+ * 记录已写入的记忆
+ * 将记录同时存入幂等键索引和指纹索引
+ * @param {object} store - 记忆写入存储对象
+ * @param {object} record - 记忆记录对象
+ */
+function rememberOpenClawMemoryWrite(store, record) {
+    // 按幂等键索引
+    if (record?.idempotencyKey) {
+        store.entriesByIdempotencyKey.set(record.idempotencyKey, record);
+    }
+    // 按内容指纹索引
+    if (record?.fingerprint) {
+        store.entriesByFingerprint.set(record.fingerprint, record);
+    }
+}
+
+/**
+ * 从写入结果中提取文件路径
+ * 支持多种结果格式：直接返回的 path/filePath、嵌套在 result 中的路径、消息文本中的路径
+ * @param {object} result - 写入操作返回的结果对象
+ * @returns {string} 提取的文件路径，未找到时返回空字符串
+ */
+function extractOpenClawMemoryWritePath(result) {
+    // 按优先级尝试多个可能的路径来源
+    const pathCandidates = [
+        result?.filePath,
+        result?.path,
+        result?.result?.filePath,
+        result?.result?.path,
+        result?.message
+    ];
+    for (const candidate of pathCandidates) {
+        const normalizedCandidate = normalizeOpenClawString(candidate);
+        if (!normalizedCandidate) {
+            continue;
+        }
+        // 匹配 "Diary saved to /path/to/file" 格式的消息
+        const savedPathMatch = normalizedCandidate.match(/Diary saved to\s+(.+)$/i);
+        if (savedPathMatch?.[1]) {
+            return savedPathMatch[1].trim();
+        }
+        // 包含路径分隔符或有文件扩展名的视为有效路径
+        if (normalizedCandidate.includes(path.sep) || /\.[A-Za-z0-9]+$/.test(normalizedCandidate)) {
+            return normalizedCandidate;
+        }
+    }
+    return '';
+}
+
+/**
+ * 创建记忆条目唯一 ID（SHA256 哈希，取前 24 位）
+ * 基于日记本名称、文件路径、内容指纹和时间戳生成
+ * @param {object} params - 参数对象
+ * @param {string} params.diaryName - 日记本名称
+ * @param {string} params.filePath - 文件路径
+ * @param {string} params.fingerprint - 内容指纹
+ * @param {string} params.timestamp - 时间戳
+ * @returns {string} 24 字符的条目 ID
+ */
+function createOpenClawMemoryEntryId({ diaryName, filePath, fingerprint, timestamp }) {
+    return crypto.createHash('sha256')
+        .update([
+            normalizeOpenClawString(diaryName),
+            normalizeOpenClawString(filePath),
+            normalizeOpenClawString(fingerprint),
+            normalizeOpenClawString(timestamp)
+        ].join('::'))
+        .digest('hex')
+        .slice(0, 24);
+}
+
+/**
+ * 将记忆写入错误映射为 HTTP 错误响应
+ * 根据错误内容识别特定错误类型：无效载荷（400）或写入失败（500）
+ * @param {Error} error - 错误对象
+ * @returns {object} HTTP 错误信息对象（包含 status、code、error、details）
+ */
+function mapOpenClawMemoryWriteError(error) {
+    const parsedError = parseOpenClawPluginError(error);
+    const pluginError = normalizeOpenClawString(
+        parsedError.plugin_error ||
+        parsedError.plugin_execution_error ||
+        parsedError.error ||
+        error?.message ||
+        'Unknown memory write error'
+    );
+    // 识别参数缺失、必填项、格式无效等客户端错误
+    if (/missing|required|invalid|must be|security/i.test(pluginError)) {
+        return {
+            status: 400,
+            code: 'OCW_MEMORY_INVALID_PAYLOAD',
+            error: 'Memory payload is invalid',
+            details: { pluginError }
+        };
+    }
+    // 其他视为服务端错误
+    return {
+        status: 500,
+        code: 'OCW_MEMORY_WRITE_ERROR',
+        error: 'Failed to persist memory',
+        details: { pluginError }
+    };
+}
+
+/**
+ * 创建 OpenClaw 记忆能力描述符
+ * 描述 RAG 系统支持的特性（时间感知、分组感知、重排序、标签增强、回写等）
+ * @param {object} params - 参数对象
+ * @param {boolean} params.includeTargets - 是否包含目标列表
+ * @param {object[]} params.targets - 记忆目标数组
+ * @param {object} params.ragPlugin - RAG 插件实例
+ * @param {object} params.knowledgeBaseManager - 知识库管理器
+ * @param {object} params.pluginManager - 插件管理器
+ * @returns {object} 记忆能力描述符对象
+ */
+function createOpenClawMemoryDescriptor({ includeTargets, targets, ragPlugin, knowledgeBaseManager, pluginManager }) {
     return {
         targets: includeTargets ? targets : [],
         features: {
-            timeAware: Boolean(ragPlugin?.timeParser?.parse),
-            groupAware: Boolean(ragPlugin?.semanticGroups?.getEnhancedVector),
-            rerank: Boolean(ragPlugin?._rerankDocuments),
-            tagMemo: Boolean(knowledgeBaseManager?.applyTagBoost),
-            writeBack: false
+            timeAware: Boolean(ragPlugin?.timeParser?.parse),              // 是否支持时间范围解析
+            groupAware: Boolean(ragPlugin?.semanticGroups?.getEnhancedVector), // 是否支持语义分组增强
+            rerank: Boolean(ragPlugin?._rerankDocuments),                   // 是否支持重排序
+            tagMemo: Boolean(knowledgeBaseManager?.applyTagBoost),         // 是否支持标签增强
+            writeBack: Boolean(getOpenClawMemoryWritePluginInfo(pluginManager)) // 是否支持记忆回写
         }
     };
 }
@@ -1351,6 +1766,12 @@ function logOpenClawAudit(event, payload) {
     console.log(`${OPENCLAW_AUDIT_LOG_PREFIX} ${JSON.stringify({ event, ...payload })}`);
 }
 
+/**
+ * 汇总分数统计信息
+ * 计算分数数组的计数、最大值、最小值和平均值
+ * @param {number[]} values - 分数数组
+ * @returns {object} 统计结果对象，包含 count、max、min、avg；无有效分数时返回 null 值
+ */
 function summarizeOpenClawScoreStats(values) {
     const scores = Array.isArray(values)
         ? values.filter((value) => typeof value === 'number' && Number.isFinite(value))
@@ -1437,7 +1858,8 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
                         includeTargets: includeMemoryTargets,
                         targets: memoryTargets,
                         ragPlugin,
-                        knowledgeBaseManager
+                        knowledgeBaseManager,
+                        pluginManager
                     })
                 }
             });
@@ -2158,6 +2580,237 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
                 code: 'OCW_RAG_CONTEXT_ERROR',
                 error: 'Failed to build recall context',
                 details: { message: error.message }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------------------
+    // POST /openclaw/memory/write
+    // 将 OpenClaw durable memory 写回 VCP 日记体系
+    // 支持幂等键与内容指纹去重，默认优先复用 DailyNote 创建链路
+    // -------------------------------------------------------------------------
+    router.post('/openclaw/memory/write', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = req.body?.requestContext;
+        const requestId = createOpenClawRequestId(requestContext?.requestId);
+        const agentId = normalizeOpenClawString(requestContext?.agentId);
+        const sessionId = normalizeOpenClawString(requestContext?.sessionId);
+        const source = normalizeOpenClawString(requestContext?.source) || 'openclaw-memory';
+        const target = req.body?.target && typeof req.body.target === 'object' ? req.body.target : {};
+        const memory = req.body?.memory && typeof req.body.memory === 'object' ? req.body.memory : {};
+        const options = req.body?.options && typeof req.body.options === 'object' ? req.body.options : {};
+        const targetDiary = normalizeOpenClawString(target.diary || req.body?.diary);
+        const memoryText = normalizeOpenClawContentText(memory.text || req.body?.text || req.body?.memoryText);
+        const deduplicate = parseOpenClawBooleanQuery(options.deduplicate, true);
+        const idempotencyKey = normalizeOpenClawString(options.idempotencyKey || req.body?.idempotencyKey);
+        const tags = normalizeOpenClawMemoryTags(memory.tags || req.body?.tags);
+        const metadata = memory.metadata || req.body?.metadata || req.body?.sourceMetadata;
+        const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
+
+        if (!agentId || !sessionId) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_INVALID_REQUEST',
+                error: 'requestContext.agentId and requestContext.sessionId are required',
+                details: { field: 'requestContext' }
+            });
+        }
+        if (!targetDiary) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_MEMORY_INVALID_PAYLOAD',
+                error: 'target.diary is required',
+                details: { field: 'target.diary' }
+            });
+        }
+        if (!memoryText) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_MEMORY_INVALID_PAYLOAD',
+                error: 'memory.text is required',
+                details: { field: 'memory.text' }
+            });
+        }
+        if (tags.length === 0) {
+            return sendOpenClawError(res, {
+                status: 400,
+                requestId,
+                startedAt,
+                code: 'OCW_MEMORY_INVALID_PAYLOAD',
+                error: 'memory.tags is required',
+                details: { field: 'memory.tags' }
+            });
+        }
+
+        const ragConfig = getOpenClawRagConfig(pluginManager);
+        if (!isOpenClawDiaryAllowed({ diaryName: targetDiary, agentId, maid: target.maid, ragConfig })) {
+            return sendOpenClawError(res, {
+                status: 403,
+                requestId,
+                startedAt,
+                code: 'OCW_MEMORY_TARGET_FORBIDDEN',
+                error: 'Requested diary target is not allowed for this agent',
+                details: {
+                    diary: targetDiary,
+                    agentId
+                }
+            });
+        }
+
+        const memoryWriter = getOpenClawMemoryWritePluginInfo(pluginManager);
+        if (!memoryWriter) {
+            return sendOpenClawError(res, {
+                status: 500,
+                requestId,
+                startedAt,
+                code: 'OCW_MEMORY_WRITE_ERROR',
+                error: 'DailyNote is required for diary memory write',
+                details: { supportedPlugins: ['DailyNote'] }
+            });
+        }
+
+        const { timestamp, dateString, timeLabel } = resolveOpenClawMemoryDateParts(memory.timestamp || req.body?.timestamp);
+        const fingerprint = createOpenClawMemoryFingerprint({
+            diaryName: targetDiary,
+            text: memoryText,
+            tags,
+            agentId,
+            source,
+            metadata
+        });
+        const memoryStore = getOpenClawMemoryWriteStore(pluginManager);
+        const duplicateRecord = resolveOpenClawMemoryDuplicate(memoryStore, {
+            idempotencyKey,
+            fingerprint,
+            deduplicate
+        });
+
+        logOpenClawAudit('memory.write.started', {
+            requestId,
+            source,
+            agentId,
+            sessionId,
+            diary: targetDiary,
+            deduplicate,
+            hasIdempotencyKey: Boolean(idempotencyKey)
+        });
+
+        if (duplicateRecord) {
+            logOpenClawAudit('memory.write.duplicate', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary: targetDiary,
+                entryId: duplicateRecord.entryId,
+                durationMs: Math.max(0, Date.now() - startedAt)
+            });
+            return sendOpenClawSuccess(res, {
+                requestId,
+                startedAt,
+                data: {
+                    writeStatus: 'skipped_duplicate',
+                    diary: duplicateRecord.diary,
+                    entryId: duplicateRecord.entryId,
+                    deduplicated: true,
+                    filePath: duplicateRecord.filePath || '',
+                    timestamp: duplicateRecord.timestamp || timestamp
+                }
+            });
+        }
+
+        try {
+            const maid = buildOpenClawMemoryWriteMaid({
+                diaryName: targetDiary,
+                target,
+                requestContext
+            });
+            const content = buildOpenClawMemoryWriteContent({
+                text: memoryText,
+                timeLabel,
+                metadata
+            });
+            const tagLine = `Tag: ${tags.join(', ')}`;
+
+            const writeResult = await pluginManager.processToolCall('DailyNote', {
+                command: 'create',
+                maid,
+                Date: dateString,
+                Content: content,
+                Tag: tagLine,
+                __openclawContext: {
+                    source,
+                    agentId,
+                    sessionId,
+                    requestId
+                }
+            }, clientIp);
+
+            const filePath = extractOpenClawMemoryWritePath(writeResult);
+            const entryId = createOpenClawMemoryEntryId({
+                diaryName: targetDiary,
+                filePath,
+                fingerprint,
+                timestamp
+            });
+            const persistedRecord = {
+                idempotencyKey,
+                fingerprint,
+                diary: targetDiary,
+                entryId,
+                filePath,
+                timestamp
+            };
+            rememberOpenClawMemoryWrite(memoryStore, persistedRecord);
+
+            logOpenClawAudit('memory.write.completed', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary: targetDiary,
+                entryId,
+                writer: memoryWriter.name,
+                durationMs: Math.max(0, Date.now() - startedAt)
+            });
+
+            return sendOpenClawSuccess(res, {
+                requestId,
+                startedAt,
+                data: {
+                    writeStatus: 'created',
+                    diary: targetDiary,
+                    entryId,
+                    deduplicated: false,
+                    filePath,
+                    timestamp
+                }
+            });
+        } catch (error) {
+            console.error('[OpenClawBridgeRoutes] Error writing OpenClaw memory:', error);
+            const mappedError = mapOpenClawMemoryWriteError(error);
+            logOpenClawAudit('memory.write.failed', {
+                requestId,
+                source,
+                agentId,
+                sessionId,
+                diary: targetDiary,
+                durationMs: Math.max(0, Date.now() - startedAt),
+                code: mappedError.code
+            });
+            return sendOpenClawError(res, {
+                status: mappedError.status,
+                requestId,
+                startedAt,
+                code: mappedError.code,
+                error: mappedError.error,
+                details: mappedError.details
             });
         }
     });

@@ -1,0 +1,1681 @@
+openapi: 3.0.3
+info:
+  title: VCP ToolBox API
+  description: |
+    VCPToolBox 是一个功能强大的工具箱平台，提供以下核心能力：
+    - **日记管理**：文件夹管理、笔记CRUD、搜索、联想追溯
+    - **论坛系统**：帖子管理、回复、编辑、删除
+    - **OpenClaw桥接**：RAG检索、记忆写入、工具调用
+    - **管理面板**：系统监控、插件管理、配置管理、Agent管理
+    - **AI模型代理**：支持特殊模型（图像、Embedding）的转发
+  version: 7.1.2
+  contact:
+    name: VCP Team
+servers:
+  - url: http://localhost:3000
+    description: 本地开发服务器
+  - url: http://localhost:8080
+    description: 替代端口
+
+# ==================== 安全定义 ====================
+security:
+  - bearerAuth: []
+  - basicAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OpenAI API 兼容的 Bearer Token 认证
+    basicAuth:
+      type: http
+      scheme: basic
+      description: 管理面板 Basic Auth 认证
+    adminSession:
+      type: apiKey
+      in: header
+      name: X-Admin-Session
+      description: 管理面板会话认证
+
+  schemas:
+    # ==================== 通用响应 ====================
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+        details:
+          type: string
+
+    # ==================== 日记相关 ====================
+    Folder:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 文件夹名称
+
+    Note:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 文件名
+        lastModified:
+          type: string
+          format: date-time
+          description: 最后修改时间
+        preview:
+          type: string
+          description: 内容预览（前100字符）
+
+    NoteContent:
+      type: object
+      properties:
+        content:
+          type: string
+          description: 笔记完整内容
+
+    SearchResult:
+      type: object
+      properties:
+        name:
+          type: string
+        folderName:
+          type: string
+        lastModified:
+          type: string
+          format: date-time
+        preview:
+          type: string
+
+    SearchResponse:
+      type: object
+      properties:
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        total:
+          type: integer
+          description: 匹配总数
+        limited:
+          type: boolean
+          description: 是否被限制返回数量
+
+    MoveRequest:
+      type: object
+      required:
+        - sourceNotes
+        - targetFolder
+      properties:
+        sourceNotes:
+          type: array
+          items:
+            type: object
+            properties:
+              folder:
+                type: string
+              file:
+                type: string
+        targetFolder:
+          type: string
+
+    DeleteBatchRequest:
+      type: object
+      required:
+        - notesToDelete
+      properties:
+        notesToDelete:
+          type: array
+          items:
+            type: object
+            properties:
+              folder:
+                type: string
+              file:
+                type: string
+
+    AssociativeDiscoveryRequest:
+      type: object
+      required:
+        - sourceFilePath
+      properties:
+        sourceFilePath:
+          type: string
+          description: 源文件路径（相对日记根目录）
+        k:
+          type: integer
+          default: 10
+          description: 返回结果数量
+        range:
+          type: array
+          items:
+            type: string
+          description: 限定搜索范围（文件夹列表）
+        tagBoost:
+          type: number
+          default: 0.15
+          description: 标签匹配加权系数
+
+    # ==================== 论坛相关 ====================
+    Post:
+      type: object
+      properties:
+        board:
+          type: string
+          description: 板块名称
+        title:
+          type: string
+          description: 帖子标题
+        author:
+          type: string
+          description: 作者
+        timestamp:
+          type: string
+          description: 创建时间
+        uid:
+          type: string
+          description: 唯一标识
+        filename:
+          type: string
+        lastReplyBy:
+          type: string
+          description: 最后回复者
+        lastReplyAt:
+          type: string
+          description: 最后回复时间
+
+    ReplyRequest:
+      type: object
+      required:
+        - maid
+        - content
+      properties:
+        maid:
+          type: string
+          maxLength: 50
+          description: 回复者名称
+        content:
+          type: string
+          maxLength: 50000
+          description: 回复内容
+
+    EditRequest:
+      type: object
+      properties:
+        floor:
+          type: integer
+          description: 楼层号（不传则编辑主帖）
+        content:
+          type: string
+          maxLength: 50000
+          description: 新内容
+
+    DeleteRequest:
+      type: object
+      properties:
+        floor:
+          type: integer
+          description: 要删除的楼层号（不传则删除整个帖子）
+
+    LockStatus:
+      type: object
+      properties:
+        activeWrites:
+          type: integer
+        maxConcurrent:
+          type: integer
+        locks:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              queueLength:
+                type: integer
+              acquiredAt:
+                type: string
+                format: date-time
+
+    # ==================== OpenClaw 相关 ====================
+    Capabilities:
+      type: object
+      properties:
+        version:
+          type: string
+        availableTools:
+          type: array
+          items:
+            type: string
+        memoryBridge:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            availableVariables:
+              type: array
+              items:
+                type: string
+
+    RagSearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: 搜索查询
+        target:
+          type: string
+          description: 目标集合名称
+        topK:
+          type: integer
+          default: 5
+          description: 返回结果数量
+        minScore:
+          type: number
+          default: 0.7
+          description: 最小相似度分数
+        rerank:
+          type: boolean
+          default: false
+          description: 是否启用重排序
+
+    RagContextRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        target:
+          type: string
+        maxTokens:
+          type: integer
+          default: 2000
+        contextStrategy:
+          type: string
+          enum: [default, diversity, recent]
+
+    MemoryWriteRequest:
+      type: object
+      required:
+        - requestContext
+        - target
+        - memory
+      properties:
+        requestContext:
+          type: object
+          required:
+            - agentId
+            - sessionId
+          properties:
+            requestId:
+              type: string
+              description: 可选的客户端请求ID，用于追踪
+            agentId:
+              type: string
+              description: Agent唯一标识（必需）
+            sessionId:
+              type: string
+              description: 会话唯一标识（必需）
+            source:
+              type: string
+              default: openclaw-memory
+              description: 请求来源标识
+        target:
+          type: object
+          required:
+            - diary
+          properties:
+            diary:
+              type: string
+              description: 目标日记名称（必需）
+            maid:
+              type: string
+              description: 可选的Maid名称，用于指定写入身份
+        memory:
+          type: object
+          required:
+            - text
+            - tags
+          properties:
+            text:
+              type: string
+              description: 要写入的记忆内容（必需）
+            tags:
+              type: array
+              items:
+                type: string
+              description: 标签数组（必需），用于分类和检索
+            metadata:
+              type: object
+              additionalProperties: true
+              description: 附加元数据对象
+            timestamp:
+              type: string
+              description: 可选的时间戳，默认为当前时间
+        options:
+          type: object
+          properties:
+            deduplicate:
+              type: boolean
+              default: true
+              description: 是否启用内容去重检测
+            idempotencyKey:
+              type: string
+              description: 幂等键，用于防止重复写入
+      description: |
+        写入记忆到日记系统。支持嵌套对象格式（推荐）和平铺格式（向后兼容）。
+        嵌套格式：使用 requestContext/target/memory/options 结构。
+        平铺格式：可直接使用 diary, text, tags, metadata 等字段。
+
+    MemoryWriteResponse:
+      type: object
+      required:
+        - success
+        - requestId
+        - startedAt
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        requestId:
+          type: string
+          example: ocmw_1756xxxxxxxx
+        startedAt:
+          type: integer
+          example: 1704067200000
+        data:
+          type: object
+          required:
+            - writeStatus
+            - diary
+            - entryId
+            - deduplicated
+            - filePath
+            - timestamp
+          properties:
+            writeStatus:
+              type: string
+              enum: [created, skipped_duplicate]
+              example: created
+            diary:
+              type: string
+              example: alice_memories
+            entryId:
+              type: string
+              example: alice_memories_abc123_1704067200000
+            deduplicated:
+              type: boolean
+              example: false
+            filePath:
+              type: string
+              example: /data/dailynote/alice_memories/2024-01-01.md
+            timestamp:
+              type: string
+              example: '2024-01-01T12:00:00.000Z'
+
+    MemoryWriteError:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        requestId:
+          type: string
+        startedAt:
+          type: integer
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - OCW_INVALID_REQUEST
+                - OCW_MEMORY_INVALID_PAYLOAD
+                - OCW_MEMORY_TARGET_FORBIDDEN
+                - OCW_MEMORY_WRITE_ERROR
+                - OCW_MEMORY_WRITE_FAILED
+            message:
+              type: string
+            details:
+              type: object
+
+    ToolCallRequest:
+      type: object
+      required:
+        - arguments
+      properties:
+        arguments:
+          type: object
+          description: 工具参数
+
+    # ==================== 管理面板相关 ====================
+    SystemResources:
+      type: object
+      properties:
+        cpu:
+          type: object
+          properties:
+            usage:
+              type: number
+            count:
+              type: integer
+        memory:
+          type: object
+          properties:
+            total:
+              type: integer
+            used:
+              type: integer
+            free:
+              type: integer
+            percentage:
+              type: number
+        disk:
+          type: object
+          properties:
+            total:
+              type: integer
+            used:
+              type: integer
+            free:
+              type: integer
+            percentage:
+              type: number
+
+    PM2Process:
+      type: object
+      properties:
+        name:
+          type: string
+        pid:
+          type: integer
+        status:
+          type: string
+        uptime:
+          type: integer
+        restarts:
+          type: integer
+        cpu:
+          type: number
+        memory:
+          type: integer
+
+    Plugin:
+      type: object
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+        description:
+          type: string
+        commands:
+          type: array
+          items:
+            type: object
+
+    Config:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+
+    Schedule:
+      type: object
+      properties:
+        id:
+          type: string
+        cron:
+          type: string
+        command:
+          type: string
+        enabled:
+          type: boolean
+
+    Agent:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        prompt:
+          type: string
+
+    Placeholder:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+        description:
+          type: string
+
+    # ==================== 聊天/模型相关 ====================
+    ChatCompletionRequest:
+      type: object
+      required:
+        - model
+        - messages
+      properties:
+        model:
+          type: string
+          description: 模型名称
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                enum: [system, user, assistant]
+              content:
+                type: string
+        stream:
+          type: boolean
+          default: false
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+        generationConfig:
+          type: object
+          properties:
+            responseModalities:
+              type: array
+              items:
+                type: string
+                enum: [TEXT, IMAGE]
+            responseMimeType:
+              type: string
+
+    EmbeddingRequest:
+      type: object
+      required:
+        - model
+        - input
+      properties:
+        model:
+          type: string
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        dimensions:
+          type: integer
+
+    EmbeddingResponse:
+      type: object
+      properties:
+        object:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object:
+                type: string
+              embedding:
+                type: array
+                items:
+                  type: number
+              index:
+                type: integer
+        model:
+          type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+# ==================== 路径定义 ====================
+paths:
+  # ==================== 日记管理 API ====================
+  /admin_api/daily-notes/folders:
+    get:
+      tags:
+        - 日记管理
+      summary: 获取所有文件夹
+      description: 返回日记根目录下的所有文件夹列表
+      responses:
+        '200':
+          description: 成功获取文件夹列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: string
+        '500':
+          description: 服务器错误
+
+  /admin_api/daily-notes/folder/{folderName}:
+    get:
+      tags:
+        - 日记管理
+      summary: 获取文件夹内的笔记
+      description: 返回指定文件夹内的所有笔记文件列表，包含预览信息
+      parameters:
+        - name: folderName
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 文件夹名称
+      responses:
+        '200':
+          description: 成功获取笔记列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Note'
+        '403':
+          description: 非法路径
+        '404':
+          description: 文件夹不存在
+
+  /admin_api/daily-notes/note/{folderName}/{fileName}:
+    get:
+      tags:
+        - 日记管理
+      summary: 获取笔记内容
+      description: 读取指定笔记文件的完整内容
+      parameters:
+        - name: folderName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fileName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功获取笔记内容
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteContent'
+        '403':
+          description: 非法路径或符号链接
+        '404':
+          description: 文件不存在
+
+    post:
+      tags:
+        - 日记管理
+      summary: 保存笔记
+      description: 创建或更新笔记文件
+      parameters:
+        - name: folderName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fileName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - content
+              properties:
+                content:
+                  type: string
+      responses:
+        '200':
+          description: 保存成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /admin_api/daily-notes/search:
+    get:
+      tags:
+        - 日记管理
+      summary: 搜索笔记
+      description: |
+        全文搜索笔记内容，支持多关键词（空格分隔）。
+        使用 Worker Thread 并行处理，支持超时和取消。
+      parameters:
+        - name: term
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 100
+          description: 搜索关键词（最多5个词，空格分隔）
+        - name: folder
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 限定搜索文件夹
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+          description: 最大返回数量
+      responses:
+        '200':
+          description: 搜索成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: 搜索词无效
+        '499':
+          description: 搜索被取消
+        '503':
+          description: 并发搜索过多
+        '504':
+          description: 搜索超时
+
+  /admin_api/daily-notes/move:
+    post:
+      tags:
+        - 日记管理
+      summary: 移动笔记
+      description: 批量移动笔记到目标文件夹
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveRequest'
+      responses:
+        '200':
+          description: 移动完成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  moved:
+                    type: array
+                    items:
+                      type: string
+                  errors:
+                    type: array
+                    items:
+                      type: object
+
+  /admin_api/daily-notes/delete-batch:
+    post:
+      tags:
+        - 日记管理
+      summary: 批量删除笔记
+      description: 批量删除指定的笔记文件
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteBatchRequest'
+      responses:
+        '200':
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: array
+                    items:
+                      type: string
+                  errors:
+                    type: array
+                    items:
+                      type: object
+
+  /admin_api/daily-notes/folder/delete:
+    post:
+      tags:
+        - 日记管理
+      summary: 删除空文件夹
+      description: 仅可删除空文件夹，非空文件夹会被拒绝
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - folderName
+              properties:
+                folderName:
+                  type: string
+      responses:
+        '200':
+          description: 删除成功
+        '400':
+          description: 文件夹非空
+        '404':
+          description: 文件夹不存在
+
+  /admin_api/daily-notes/associative-discovery:
+    post:
+      tags:
+        - 日记管理
+      summary: 联想追溯
+      description: 基于语义相似性发现与源文件相关的其他笔记
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssociativeDiscoveryRequest'
+      responses:
+        '200':
+          description: 联想追溯成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relatedNotes:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: 参数错误
+        '500':
+          description: 处理失败
+
+  /admin_api/daily-notes/admin/queue-status:
+    get:
+      tags:
+        - 日记管理
+        - 管理
+      summary: 获取搜索队列状态
+      description: 返回当前搜索并发状态和等待队列信息
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active:
+                    type: integer
+                  waiting:
+                    type: integer
+                  max:
+                    type: integer
+                  inflight:
+                    type: integer
+
+  # ==================== 论坛 API ====================
+  /admin_api/forum/posts:
+    get:
+      tags:
+        - 论坛
+      summary: 获取所有帖子
+      description: 返回论坛中的所有帖子列表，按最后回复时间排序
+      responses:
+        '200':
+          description: 成功获取帖子列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  posts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Post'
+        '500':
+          description: 服务器错误
+
+  /admin_api/forum/post/{uid}:
+    get:
+      tags:
+        - 论坛
+      summary: 获取帖子内容
+      description: 获取指定UID的帖子完整内容
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9_-]+$'
+          description: 帖子唯一标识
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  content:
+                    type: string
+        '400':
+          description: UID格式无效
+        '404':
+          description: 帖子不存在
+        '413':
+          description: 文件过大
+
+    delete:
+      tags:
+        - 论坛
+      summary: 删除帖子或楼层
+      description: 删除整个帖子或指定楼层
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteRequest'
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: 参数错误
+        '404':
+          description: 帖子不存在
+
+    patch:
+      tags:
+        - 论坛
+      summary: 编辑帖子或楼层
+      description: 编辑主帖内容或指定楼层
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditRequest'
+      responses:
+        '200':
+          description: 编辑成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: 参数错误
+        '404':
+          description: 帖子不存在
+
+  /admin_api/forum/reply/{uid}:
+    post:
+      tags:
+        - 论坛
+      summary: 回复帖子
+      description: 在指定帖子下添加新回复
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplyRequest'
+      responses:
+        '200':
+          description: 回复成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: 参数错误或帖子已达最大楼层数
+        '404':
+          description: 帖子不存在
+        '503':
+          description: 服务器繁忙
+
+  /admin_api/forum/admin/lock-status:
+    get:
+      tags:
+        - 论坛
+        - 管理
+      summary: 获取文件锁状态
+      description: 查看当前文件锁状态和等待队列
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LockStatus'
+
+  # ==================== OpenClaw 桥接 API ====================
+  /admin_api/openclaw/capabilities:
+    get:
+      tags:
+        - OpenClaw
+      summary: 获取能力清单
+      description: 返回OpenClaw桥接支持的所有能力和工具列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+
+  /admin_api/openclaw/rag/targets:
+    get:
+      tags:
+        - OpenClaw
+      summary: 获取RAG目标集合
+      description: 返回可用的RAG检索目标集合列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  targets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        description:
+                          type: string
+                        documentCount:
+                          type: integer
+
+  /admin_api/openclaw/rag/search:
+    post:
+      tags:
+        - OpenClaw
+      summary: RAG语义搜索
+      description: 在向量数据库中执行语义搜索
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagSearchRequest'
+      responses:
+        '200':
+          description: 搜索成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        content:
+                          type: string
+                        score:
+                          type: number
+                        metadata:
+                          type: object
+
+  /admin_api/openclaw/rag/context:
+    post:
+      tags:
+        - OpenClaw
+      summary: 获取RAG上下文
+      description: 获取用于LLM上下文的检索结果，自动处理token限制
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagContextRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  context:
+                    type: string
+                  sources:
+                    type: array
+                    items:
+                      type: object
+
+  /admin_api/openclaw/memory/write:
+    post:
+      tags:
+        - OpenClaw
+      summary: 写入记忆
+      description: |
+        将OpenClaw durable memory写回VCP日记体系。
+        支持幂等键与内容指纹去重，默认优先复用DailyNote创建链路。
+        需要requestContext.agentId和requestContext.sessionId进行认证。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryWriteRequest'
+      responses:
+        '200':
+          description: 写入成功（或跳过重复）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryWriteResponse'
+        '400':
+          description: 请求参数错误（缺少agentId/sessionId/diary/text等必填字段）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryWriteError'
+        '403':
+          description: 目标日记不允许访问（agent无权限写入该日记）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryWriteError'
+        '500':
+          description: 服务器错误或无可用的日记写入插件
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryWriteError'
+
+  /admin_api/openclaw/tools/{toolName}:
+    post:
+      tags:
+        - OpenClaw
+      summary: 调用工具
+      description: 调用OpenClaw桥接的指定工具
+      parameters:
+        - name: toolName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolCallRequest'
+      responses:
+        '200':
+          description: 调用成功
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ==================== 管理面板 API ====================
+  /admin_api/system-monitor/pm2/processes:
+    get:
+      tags:
+        - 系统监控
+      summary: 获取PM2进程列表
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PM2Process'
+
+  /admin_api/system-monitor/system/resources:
+    get:
+      tags:
+        - 系统监控
+      summary: 获取系统资源使用情况
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemResources'
+
+  /admin_api/server-log:
+    get:
+      tags:
+        - 系统监控
+      summary: 获取服务器日志
+      security:
+        - basicAuth: []
+      parameters:
+        - name: lines
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: since
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      type: string
+
+  /admin_api/plugins:
+    get:
+      tags:
+        - 插件管理
+      summary: 获取所有插件
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Plugin'
+
+  /admin_api/plugins/{pluginName}/toggle:
+    post:
+      tags:
+        - 插件管理
+      summary: 切换插件启用状态
+      security:
+        - basicAuth: []
+      parameters:
+        - name: pluginName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+
+  /admin_api/config/main:
+    get:
+      tags:
+        - 配置管理
+      summary: 获取主配置
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+
+    post:
+      tags:
+        - 配置管理
+      summary: 更新主配置
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 成功
+
+  /admin_api/agents:
+    get:
+      tags:
+        - Agent管理
+      summary: 获取所有Agent
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+
+  /admin_api/agents/{fileName}:
+    get:
+      tags:
+        - Agent管理
+      summary: 获取Agent详情
+      security:
+        - basicAuth: []
+      parameters:
+        - name: fileName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+
+    post:
+      tags:
+        - Agent管理
+      summary: 保存Agent
+      security:
+        - basicAuth: []
+      parameters:
+        - name: fileName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Agent'
+      responses:
+        '200':
+          description: 成功
+
+  /admin_api/placeholders:
+    get:
+      tags:
+        - 占位符管理
+      summary: 获取所有占位符
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Placeholder'
+
+  /admin_api/schedules:
+    get:
+      tags:
+        - 定时任务
+      summary: 获取所有定时任务
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Schedule'
+
+    post:
+      tags:
+        - 定时任务
+      summary: 创建定时任务
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Schedule'
+      responses:
+        '200':
+          description: 成功
+
+  /admin_api/schedules/{id}:
+    delete:
+      tags:
+        - 定时任务
+      summary: 删除定时任务
+      security:
+        - basicAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+
+  /admin_api/server/restart:
+    post:
+      tags:
+        - 系统管理
+      summary: 重启服务器
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: 重启指令已发送
+
+  /admin_api/verify-login:
+    post:
+      tags:
+        - 认证
+      summary: 验证登录凭据
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  token:
+                    type: string
+        '401':
+          description: 登录失败
+
+  /admin_api/logout:
+    post:
+      tags:
+        - 认证
+      summary: 登出
+      responses:
+        '200':
+          description: 登出成功
+
+  # ==================== AI 模型代理 API ====================
+  /v1/chat/completions:
+    post:
+      tags:
+        - AI模型
+      summary: 聊天补全（支持特殊模型）
+      description: |
+        OpenAI API 兼容的聊天补全接口。
+        特殊处理白名单中的图像模型，自动添加 generationConfig。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: 请求错误
+
+  /v1/embeddings:
+    post:
+      tags:
+        - AI模型
+      summary: Embedding 向量化
+      description: |
+        向量化接口，支持白名单中的 embedding 模型。
+        自动注入配置的 dimensions 参数。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+
+  # ==================== 工具调用 API ====================
+  /v1/tools/call:
+    post:
+      tags:
+        - 工具调用
+      summary: 调用VCP工具
+      description: 调用VCP插件系统中的指定工具
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tool_name
+                - arguments
+              properties:
+                tool_name:
+                  type: string
+                  description: 工具名称
+                arguments:
+                  type: object
+                  description: 工具参数
+      responses:
+        '200':
+          description: 调用成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                  status:
+                    type: string
