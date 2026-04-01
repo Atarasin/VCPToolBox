@@ -318,6 +318,10 @@ test('GET /admin_api/openclaw/capabilities returns bridgeable tools and memory m
         assert.equal(chromeBridge.distributed, false);
         assert.equal(Array.isArray(chromeBridge.inputSchema.oneOf), true);
         assert.equal(chromeBridge.inputSchema.oneOf.length, 2);
+        assert.equal(Array.isArray(chromeBridge.invocationCommands), true);
+        assert.equal(chromeBridge.invocationCommands.length, 2);
+        assert.equal(chromeBridge.invocationCommands[0].command, 'click');
+        assert.equal(Array.isArray(chromeBridge.invocationCommands[0].parameters), true);
         assert.deepEqual(payload.data.memory.targets.map((target) => target.id), ['Nova', 'SharedMemory']);
         assert.deepEqual(payload.data.memory.features, {
             timeAware: true,
@@ -1699,6 +1703,91 @@ test('POST /admin_api/openclaw/tools/:toolName forwards args with OpenClaw reque
                     requestId: 'req-001'
                 }
             }
+        });
+    } finally {
+        await server.close();
+    }
+});
+
+test('POST /admin_api/openclaw/tools/vcp_memory_write bridges durable memory writes without exposing DailyNote directly', async () => {
+    let capturedCall = null;
+    const plugins = new Map(createPluginManager().plugins);
+    plugins.set('DailyNote', {
+        name: 'DailyNote',
+        displayName: '日记插件',
+        description: '用于创建日记。',
+        pluginType: 'hybridservice',
+        communication: {
+            protocol: 'direct',
+            timeout: 30000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    command: 'create',
+                    description: '创建日记。\n- `command`: 固定为 `create`。\n- `maid`: 必需。\n- `Date`: 必需。\n- `Content`: 必需。\n- `Tag`: 必需。\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DailyNote「末」,\ncommand:「始」create「末」,\nmaid:「始」[Nova]Nova「末」,\nDate:「始」2026-04-03「末」,\nContent:「始」示例内容「末」,\nTag:「始」durable-memory, bridge-tool「末」\n<<<[END_TOOL_REQUEST]>>>',
+                    parameters: [
+                        { name: 'command', required: true, type: 'string' },
+                        { name: 'maid', required: true, type: 'string' },
+                        { name: 'Date', required: true, type: 'string' },
+                        { name: 'Content', required: true, type: 'string' },
+                        { name: 'Tag', required: true, type: 'string' }
+                    ]
+                }
+            ]
+        }
+    });
+    const pluginManager = createPluginManager({
+        plugins,
+        async processToolCall(toolName, args) {
+            capturedCall = { toolName, args };
+            return {
+                filePath: '/tmp/Nova/2026-04-03.md'
+            };
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/admin_api/openclaw/tools/vcp_memory_write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                args: {
+                    diary: 'Nova',
+                    text: '通过内部桥接工具写回 durable memory。',
+                    tags: ['durable-memory', 'bridge-tool'],
+                    timestamp: '2026-04-03T08:30:00.000Z',
+                    idempotencyKey: 'tool-memory-bridge-001'
+                },
+                requestContext: {
+                    source: 'openclaw-memory-write',
+                    agentId: 'agent.nova',
+                    sessionId: 'sess-tool-memory-001',
+                    requestId: 'req-tool-memory-001'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.data.toolName, 'vcp_memory_write');
+        assert.equal(payload.data.result.writeStatus, 'created');
+        assert.deepEqual(payload.data.audit, {
+            approvalUsed: false,
+            distributed: false
+        });
+        assert.equal(capturedCall.toolName, 'DailyNote');
+        assert.equal(capturedCall.args.command, 'create');
+        assert.equal(capturedCall.args.Tag, 'Tag: durable-memory, bridge-tool');
+        assert.deepEqual(capturedCall.args.__openclawContext, {
+            source: 'openclaw-memory-write',
+            agentId: 'agent.nova',
+            sessionId: 'sess-tool-memory-001',
+            requestId: 'req-tool-memory-001'
         });
     } finally {
         await server.close();

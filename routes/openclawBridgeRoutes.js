@@ -29,6 +29,8 @@ const OPENCLAW_DEFAULT_CONTEXT_MIN_SCORE = 0.7;
 const OPENCLAW_DEFAULT_CONTEXT_MAX_TOKEN_RATIO = 0.6;
 /** 最大上下文消息数量 */
 const OPENCLAW_MAX_CONTEXT_MESSAGES = 12;
+/** OpenClaw durable memory 内部桥接工具名 */
+const OPENCLAW_MEMORY_WRITE_TOOL_NAME = 'vcp_memory_write';
 
 // =============================================================================
 // 缓存实例（延迟加载，避免循环依赖）
@@ -491,6 +493,53 @@ function summarizeOpenClawToolDescription(plugin) {
 }
 
 /**
+ * 提取并规范化 invocationCommands
+ * 保留供 OpenClaw skill 生成使用的描述、参数与示例信息
+ * @param {object} plugin - 插件对象
+ * @returns {object[]} 规范化后的 invocationCommands 数组
+ */
+function getOpenClawInvocationCommands(plugin) {
+    const invocationCommands = Array.isArray(plugin?.capabilities?.invocationCommands)
+        ? plugin.capabilities.invocationCommands
+        : [];
+    return invocationCommands
+        .map((invocationCommand) => {
+            const parameters = Array.isArray(invocationCommand?.parameters)
+                ? invocationCommand.parameters
+                    .map((parameter) => {
+                        const parameterName = normalizeOpenClawString(parameter?.name);
+                        if (!parameterName) {
+                            return null;
+                        }
+                        return {
+                            name: parameterName,
+                            description: normalizeOpenClawString(parameter?.description),
+                            required: parameter?.required === true,
+                            type: normalizeOpenClawString(parameter?.type) || 'string'
+                        };
+                    })
+                    .filter(Boolean)
+                : [];
+            const normalizedCommand = {
+                commandIdentifier: normalizeOpenClawString(invocationCommand?.commandIdentifier),
+                command: normalizeOpenClawString(invocationCommand?.command),
+                description: normalizeOpenClawString(invocationCommand?.description),
+                example: normalizeOpenClawString(invocationCommand?.example),
+                parameters
+            };
+            if (!normalizedCommand.commandIdentifier &&
+                !normalizedCommand.command &&
+                !normalizedCommand.description &&
+                !normalizedCommand.example &&
+                normalizedCommand.parameters.length === 0) {
+                return null;
+            }
+            return normalizedCommand;
+        })
+        .filter(Boolean);
+}
+
+/**
  * 创建 OpenClaw 工具描述符
  * 包含工具的基本信息、类型、超时、描述和输入模式
  * @param {object} plugin - 插件对象
@@ -506,7 +555,8 @@ function createOpenClawToolDescriptor(plugin, pluginManager) {
         approvalRequired: Boolean(pluginManager?.toolApprovalManager?.shouldApprove?.(plugin.name)),
         timeoutMs: getOpenClawToolTimeoutMs(plugin),
         description: summarizeOpenClawToolDescription(plugin),
-        inputSchema: getOpenClawToolInputSchema(plugin)
+        inputSchema: getOpenClawToolInputSchema(plugin),
+        invocationCommands: getOpenClawInvocationCommands(plugin)
     };
 }
 
@@ -1147,6 +1197,251 @@ function mapOpenClawMemoryWriteError(error) {
         error: 'Failed to persist memory',
         details: { pluginError }
     };
+}
+
+/**
+ * 执行 OpenClaw durable memory 写回
+ * 同时供专用 memory/write 路由与内部工具桥接复用
+ * @param {object} pluginManager - 插件管理器
+ * @param {object} params - 写回参数
+ * @param {object} params.body - 请求体
+ * @param {number} params.startedAt - 请求开始时间
+ * @param {string} params.clientIp - 客户端 IP
+ * @param {string} params.defaultSource - 默认来源标识
+ * @returns {Promise<object>} 统一结果对象
+ */
+async function performOpenClawMemoryWrite(pluginManager, { body, startedAt, clientIp, defaultSource }) {
+    const requestContext = body?.requestContext;
+    const requestId = createOpenClawRequestId(requestContext?.requestId);
+    const agentId = normalizeOpenClawString(requestContext?.agentId);
+    const sessionId = normalizeOpenClawString(requestContext?.sessionId);
+    const source = normalizeOpenClawString(requestContext?.source) || normalizeOpenClawString(defaultSource) || 'openclaw-memory';
+    const target = body?.target && typeof body.target === 'object' ? body.target : {};
+    const memory = body?.memory && typeof body.memory === 'object' ? body.memory : {};
+    const options = body?.options && typeof body.options === 'object' ? body.options : {};
+    const targetDiary = normalizeOpenClawString(target.diary || body?.diary);
+    const memoryText = normalizeOpenClawContentText(memory.text || body?.text || body?.memoryText);
+    const deduplicate = parseOpenClawBooleanQuery(options.deduplicate, true);
+    const idempotencyKey = normalizeOpenClawString(options.idempotencyKey || body?.idempotencyKey);
+    const tags = normalizeOpenClawMemoryTags(memory.tags || body?.tags);
+    const metadata = memory.metadata || body?.metadata || body?.sourceMetadata;
+
+    if (!agentId || !sessionId) {
+        return {
+            success: false,
+            requestId,
+            status: 400,
+            code: 'OCW_INVALID_REQUEST',
+            error: 'requestContext.agentId and requestContext.sessionId are required',
+            details: { field: 'requestContext' }
+        };
+    }
+    if (!targetDiary) {
+        return {
+            success: false,
+            requestId,
+            status: 400,
+            code: 'OCW_MEMORY_INVALID_PAYLOAD',
+            error: 'target.diary is required',
+            details: { field: 'target.diary' }
+        };
+    }
+    if (!memoryText) {
+        return {
+            success: false,
+            requestId,
+            status: 400,
+            code: 'OCW_MEMORY_INVALID_PAYLOAD',
+            error: 'memory.text is required',
+            details: { field: 'memory.text' }
+        };
+    }
+    if (tags.length === 0) {
+        return {
+            success: false,
+            requestId,
+            status: 400,
+            code: 'OCW_MEMORY_INVALID_PAYLOAD',
+            error: 'memory.tags is required',
+            details: { field: 'memory.tags' }
+        };
+    }
+
+    const ragConfig = getOpenClawRagConfig(pluginManager);
+    if (!isOpenClawDiaryAllowed({ diaryName: targetDiary, agentId, maid: target.maid, ragConfig })) {
+        return {
+            success: false,
+            requestId,
+            status: 403,
+            code: 'OCW_MEMORY_TARGET_FORBIDDEN',
+            error: 'Requested diary target is not allowed for this agent',
+            details: {
+                diary: targetDiary,
+                agentId
+            }
+        };
+    }
+
+    const memoryWriter = getOpenClawMemoryWritePluginInfo(pluginManager);
+    if (!memoryWriter) {
+        return {
+            success: false,
+            requestId,
+            status: 500,
+            code: 'OCW_MEMORY_WRITE_ERROR',
+            error: 'DailyNote is required for diary memory write',
+            details: { supportedPlugins: ['DailyNote'] }
+        };
+    }
+
+    const { timestamp, dateString, timeLabel } = resolveOpenClawMemoryDateParts(memory.timestamp || body?.timestamp);
+    const fingerprint = createOpenClawMemoryFingerprint({
+        diaryName: targetDiary,
+        text: memoryText,
+        tags,
+        agentId,
+        source,
+        metadata
+    });
+    const memoryStore = getOpenClawMemoryWriteStore(pluginManager);
+    const duplicateRecord = resolveOpenClawMemoryDuplicate(memoryStore, {
+        idempotencyKey,
+        fingerprint,
+        deduplicate
+    });
+
+    logOpenClawAudit('memory.write.started', {
+        requestId,
+        source,
+        agentId,
+        sessionId,
+        diary: targetDiary,
+        deduplicate,
+        hasIdempotencyKey: Boolean(idempotencyKey)
+    });
+
+    if (duplicateRecord) {
+        logOpenClawAudit('memory.write.duplicate', {
+            requestId,
+            source,
+            agentId,
+            sessionId,
+            diary: targetDiary,
+            entryId: duplicateRecord.entryId,
+            durationMs: Math.max(0, Date.now() - startedAt)
+        });
+        return {
+            success: true,
+            requestId,
+            data: {
+                writeStatus: 'skipped_duplicate',
+                diary: duplicateRecord.diary,
+                entryId: duplicateRecord.entryId,
+                deduplicated: true,
+                filePath: duplicateRecord.filePath || '',
+                timestamp: duplicateRecord.timestamp || timestamp
+            },
+            audit: {
+                writer: memoryWriter.name,
+                source,
+                agentId,
+                sessionId
+            }
+        };
+    }
+
+    try {
+        const maid = buildOpenClawMemoryWriteMaid({
+            diaryName: targetDiary,
+            target,
+            requestContext
+        });
+        const content = buildOpenClawMemoryWriteContent({
+            text: memoryText,
+            timeLabel,
+            metadata
+        });
+        const tagLine = `Tag: ${tags.join(', ')}`;
+        const writeResult = await pluginManager.processToolCall('DailyNote', {
+            command: 'create',
+            maid,
+            Date: dateString,
+            Content: content,
+            Tag: tagLine,
+            __openclawContext: {
+                source,
+                agentId,
+                sessionId,
+                requestId
+            }
+        }, clientIp);
+        const filePath = extractOpenClawMemoryWritePath(writeResult);
+        const entryId = createOpenClawMemoryEntryId({
+            diaryName: targetDiary,
+            filePath,
+            fingerprint,
+            timestamp
+        });
+        const persistedRecord = {
+            idempotencyKey,
+            fingerprint,
+            diary: targetDiary,
+            entryId,
+            filePath,
+            timestamp
+        };
+        rememberOpenClawMemoryWrite(memoryStore, persistedRecord);
+
+        logOpenClawAudit('memory.write.completed', {
+            requestId,
+            source,
+            agentId,
+            sessionId,
+            diary: targetDiary,
+            entryId,
+            writer: memoryWriter.name,
+            durationMs: Math.max(0, Date.now() - startedAt)
+        });
+
+        return {
+            success: true,
+            requestId,
+            data: {
+                writeStatus: 'created',
+                diary: targetDiary,
+                entryId,
+                deduplicated: false,
+                filePath,
+                timestamp
+            },
+            audit: {
+                writer: memoryWriter.name,
+                source,
+                agentId,
+                sessionId
+            }
+        };
+    } catch (error) {
+        console.error('[OpenClawBridgeRoutes] Error writing OpenClaw memory:', error);
+        const mappedError = mapOpenClawMemoryWriteError(error);
+        logOpenClawAudit('memory.write.failed', {
+            requestId,
+            source,
+            agentId,
+            sessionId,
+            diary: targetDiary,
+            durationMs: Math.max(0, Date.now() - startedAt),
+            code: mappedError.code
+        });
+        return {
+            success: false,
+            requestId,
+            status: mappedError.status,
+            code: mappedError.code,
+            error: mappedError.error,
+            details: mappedError.details
+        };
+    }
 }
 
 /**
@@ -2591,228 +2886,30 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
     // -------------------------------------------------------------------------
     router.post('/openclaw/memory/write', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = req.body?.requestContext;
-        const requestId = createOpenClawRequestId(requestContext?.requestId);
-        const agentId = normalizeOpenClawString(requestContext?.agentId);
-        const sessionId = normalizeOpenClawString(requestContext?.sessionId);
-        const source = normalizeOpenClawString(requestContext?.source) || 'openclaw-memory';
-        const target = req.body?.target && typeof req.body.target === 'object' ? req.body.target : {};
-        const memory = req.body?.memory && typeof req.body.memory === 'object' ? req.body.memory : {};
-        const options = req.body?.options && typeof req.body.options === 'object' ? req.body.options : {};
-        const targetDiary = normalizeOpenClawString(target.diary || req.body?.diary);
-        const memoryText = normalizeOpenClawContentText(memory.text || req.body?.text || req.body?.memoryText);
-        const deduplicate = parseOpenClawBooleanQuery(options.deduplicate, true);
-        const idempotencyKey = normalizeOpenClawString(options.idempotencyKey || req.body?.idempotencyKey);
-        const tags = normalizeOpenClawMemoryTags(memory.tags || req.body?.tags);
-        const metadata = memory.metadata || req.body?.metadata || req.body?.sourceMetadata;
         const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
-
-        if (!agentId || !sessionId) {
-            return sendOpenClawError(res, {
-                status: 400,
-                requestId,
-                startedAt,
-                code: 'OCW_INVALID_REQUEST',
-                error: 'requestContext.agentId and requestContext.sessionId are required',
-                details: { field: 'requestContext' }
-            });
-        }
-        if (!targetDiary) {
-            return sendOpenClawError(res, {
-                status: 400,
-                requestId,
-                startedAt,
-                code: 'OCW_MEMORY_INVALID_PAYLOAD',
-                error: 'target.diary is required',
-                details: { field: 'target.diary' }
-            });
-        }
-        if (!memoryText) {
-            return sendOpenClawError(res, {
-                status: 400,
-                requestId,
-                startedAt,
-                code: 'OCW_MEMORY_INVALID_PAYLOAD',
-                error: 'memory.text is required',
-                details: { field: 'memory.text' }
-            });
-        }
-        if (tags.length === 0) {
-            return sendOpenClawError(res, {
-                status: 400,
-                requestId,
-                startedAt,
-                code: 'OCW_MEMORY_INVALID_PAYLOAD',
-                error: 'memory.tags is required',
-                details: { field: 'memory.tags' }
-            });
-        }
-
-        const ragConfig = getOpenClawRagConfig(pluginManager);
-        if (!isOpenClawDiaryAllowed({ diaryName: targetDiary, agentId, maid: target.maid, ragConfig })) {
-            return sendOpenClawError(res, {
-                status: 403,
-                requestId,
-                startedAt,
-                code: 'OCW_MEMORY_TARGET_FORBIDDEN',
-                error: 'Requested diary target is not allowed for this agent',
-                details: {
-                    diary: targetDiary,
-                    agentId
-                }
-            });
-        }
-
-        const memoryWriter = getOpenClawMemoryWritePluginInfo(pluginManager);
-        if (!memoryWriter) {
-            return sendOpenClawError(res, {
-                status: 500,
-                requestId,
-                startedAt,
-                code: 'OCW_MEMORY_WRITE_ERROR',
-                error: 'DailyNote is required for diary memory write',
-                details: { supportedPlugins: ['DailyNote'] }
-            });
-        }
-
-        const { timestamp, dateString, timeLabel } = resolveOpenClawMemoryDateParts(memory.timestamp || req.body?.timestamp);
-        const fingerprint = createOpenClawMemoryFingerprint({
-            diaryName: targetDiary,
-            text: memoryText,
-            tags,
-            agentId,
-            source,
-            metadata
-        });
-        const memoryStore = getOpenClawMemoryWriteStore(pluginManager);
-        const duplicateRecord = resolveOpenClawMemoryDuplicate(memoryStore, {
-            idempotencyKey,
-            fingerprint,
-            deduplicate
+        const result = await performOpenClawMemoryWrite(pluginManager, {
+            body: req.body,
+            startedAt,
+            clientIp,
+            defaultSource: 'openclaw-memory'
         });
 
-        logOpenClawAudit('memory.write.started', {
-            requestId,
-            source,
-            agentId,
-            sessionId,
-            diary: targetDiary,
-            deduplicate,
-            hasIdempotencyKey: Boolean(idempotencyKey)
-        });
-
-        if (duplicateRecord) {
-            logOpenClawAudit('memory.write.duplicate', {
-                requestId,
-                source,
-                agentId,
-                sessionId,
-                diary: targetDiary,
-                entryId: duplicateRecord.entryId,
-                durationMs: Math.max(0, Date.now() - startedAt)
-            });
-            return sendOpenClawSuccess(res, {
-                requestId,
-                startedAt,
-                data: {
-                    writeStatus: 'skipped_duplicate',
-                    diary: duplicateRecord.diary,
-                    entryId: duplicateRecord.entryId,
-                    deduplicated: true,
-                    filePath: duplicateRecord.filePath || '',
-                    timestamp: duplicateRecord.timestamp || timestamp
-                }
-            });
-        }
-
-        try {
-            const maid = buildOpenClawMemoryWriteMaid({
-                diaryName: targetDiary,
-                target,
-                requestContext
-            });
-            const content = buildOpenClawMemoryWriteContent({
-                text: memoryText,
-                timeLabel,
-                metadata
-            });
-            const tagLine = `Tag: ${tags.join(', ')}`;
-
-            const writeResult = await pluginManager.processToolCall('DailyNote', {
-                command: 'create',
-                maid,
-                Date: dateString,
-                Content: content,
-                Tag: tagLine,
-                __openclawContext: {
-                    source,
-                    agentId,
-                    sessionId,
-                    requestId
-                }
-            }, clientIp);
-
-            const filePath = extractOpenClawMemoryWritePath(writeResult);
-            const entryId = createOpenClawMemoryEntryId({
-                diaryName: targetDiary,
-                filePath,
-                fingerprint,
-                timestamp
-            });
-            const persistedRecord = {
-                idempotencyKey,
-                fingerprint,
-                diary: targetDiary,
-                entryId,
-                filePath,
-                timestamp
-            };
-            rememberOpenClawMemoryWrite(memoryStore, persistedRecord);
-
-            logOpenClawAudit('memory.write.completed', {
-                requestId,
-                source,
-                agentId,
-                sessionId,
-                diary: targetDiary,
-                entryId,
-                writer: memoryWriter.name,
-                durationMs: Math.max(0, Date.now() - startedAt)
-            });
-
-            return sendOpenClawSuccess(res, {
-                requestId,
-                startedAt,
-                data: {
-                    writeStatus: 'created',
-                    diary: targetDiary,
-                    entryId,
-                    deduplicated: false,
-                    filePath,
-                    timestamp
-                }
-            });
-        } catch (error) {
-            console.error('[OpenClawBridgeRoutes] Error writing OpenClaw memory:', error);
-            const mappedError = mapOpenClawMemoryWriteError(error);
-            logOpenClawAudit('memory.write.failed', {
-                requestId,
-                source,
-                agentId,
-                sessionId,
-                diary: targetDiary,
-                durationMs: Math.max(0, Date.now() - startedAt),
-                code: mappedError.code
-            });
+        if (!result.success) {
             return sendOpenClawError(res, {
-                status: mappedError.status,
-                requestId,
+                status: result.status,
+                requestId: result.requestId,
                 startedAt,
-                code: mappedError.code,
-                error: mappedError.error,
-                details: mappedError.details
+                code: result.code,
+                error: result.error,
+                details: result.details
             });
         }
+
+        return sendOpenClawSuccess(res, {
+            requestId: result.requestId,
+            startedAt,
+            data: result.data
+        });
     });
 
     // -------------------------------------------------------------------------
@@ -2860,6 +2957,55 @@ module.exports = function createOpenClawBridgeRoutes(pluginManager) {
                 code: 'OCW_INVALID_REQUEST',
                 error: 'requestContext.agentId and requestContext.sessionId are required',
                 details: { toolName }
+            });
+        }
+
+        if (toolName === OPENCLAW_MEMORY_WRITE_TOOL_NAME) {
+            const result = await performOpenClawMemoryWrite(pluginManager, {
+                body: {
+                    target: {
+                        diary: args.diary,
+                        maid: args.maid
+                    },
+                    memory: {
+                        text: args.text,
+                        tags: args.tags,
+                        timestamp: args.timestamp,
+                        metadata: args.metadata
+                    },
+                    options: {
+                        idempotencyKey: args.idempotencyKey,
+                        deduplicate: args.deduplicate
+                    },
+                    requestContext
+                },
+                startedAt,
+                clientIp,
+                defaultSource: 'openclaw-memory-write'
+            });
+
+            if (!result.success) {
+                return sendOpenClawError(res, {
+                    status: result.status,
+                    requestId: result.requestId,
+                    startedAt,
+                    code: result.code,
+                    error: result.error,
+                    details: result.details
+                });
+            }
+
+            return sendOpenClawSuccess(res, {
+                requestId: result.requestId,
+                startedAt,
+                data: {
+                    toolName,
+                    result: result.data,
+                    audit: {
+                        approvalUsed: false,
+                        distributed: false
+                    }
+                }
             });
         }
 

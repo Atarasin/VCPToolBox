@@ -4,6 +4,8 @@
 
 ### OpenClaw Bridge Phase 4
 - 在 `routes/openclawBridgeRoutes.js` 新增 `POST /admin_api/openclaw/memory/write`，将 OpenClaw durable memory 写回 VCP 日记体系。
+- 为 `POST /admin_api/openclaw/tools/vcp_memory_write` 增加内部 durable memory 桥接，使 OpenClaw 可以统一经由插件工具调用链完成写回，而不必感知专用 memory write API 细节。
+- 扩展 `GET /admin_api/openclaw/capabilities`，对外补充每个工具的 `invocationCommands` 原始说明、参数与示例，供 OpenClaw 插件生成更贴近 manifest 的 Skill 文档。
 - 将 OpenClaw durable memory 写回链路收敛为仅调用 `DailyNote` 工具，不再回退到 `DailyNoteWrite`。
 - 调整 `DailyNote` create 参数契约，将 `Tag` 标记为必需参数，并同步收紧 OpenClaw memory write 请求为必须提供 tags。
 - 为记忆写回补充基于 `idempotencyKey` 与内容指纹的去重逻辑，避免同批 durable memory 重复落盘。
