@@ -1,0 +1,189 @@
+{
+  "version": "1.1.0",
+  "description": "社区 Wiki 到 DailyNote 同步预设配置，支持变量替换",
+  "usage": {
+    "variables": "在 dailynote_dir 中可使用 {{VariableName}} 语法定义变量占位符",
+    "example": {
+      "preset": "novel_writing_template",
+      "description": "使用变量的小说创作模板示例",
+      "mappings": [
+        {
+          "wiki_prefix": "00_meta",
+          "dailynote_dir": "{{ProjectName}}创作需求",
+          "description": "{{ProjectName}}的创作需求文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/world",
+          "dailynote_dir": "{{ProjectName}}世界观设定",
+          "description": "{{ProjectName}}的世界观设定"
+        }
+      ]
+    },
+    "preset_variables_format": {
+      "json": "{\"ProjectName\": \"宝可梦\"}",
+      "key_value": "ProjectName=宝可梦,Author=张三"
+    }
+  },
+  "presets": {
+    "novel_writing": {
+      "name": "小说创作",
+      "description": "适用于小说创作类社区，包含需求、世界观、角色、剧情等 wiki 同步目录",
+      "mappings": [
+        {
+          "wiki_prefix": "00_meta",
+          "dailynote_dir": "创作需求",
+          "description": "创作需求文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/world",
+          "dailynote_dir": "世界观骨架设定",
+          "description": "世界观设定文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/factions",
+          "dailynote_dir": "世界观骨架设定",
+          "description": "势力设定文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/characters",
+          "dailynote_dir": "人物骨架设定",
+          "description": "人物设定文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/plot",
+          "dailynote_dir": "全书大纲",
+          "description": "剧情大纲和章节规划"
+        },
+        {
+          "wiki_prefix": "30_content/volumes",
+          "dailynote_dir": "分卷大纲",
+          "description": "分卷大纲文档和章节规划"
+        }
+      ]
+    },
+    "project_management": {
+      "name": "项目管理",
+      "description": "适用于项目协作类社区，包含需求、设计、进度、文档等 wiki 同步目录",
+      "mappings": [
+        {
+          "wiki_prefix": "01_requirements",
+          "dailynote_dir": "项目需求",
+          "description": "项目需求文档"
+        },
+        {
+          "wiki_prefix": "02_design",
+          "dailynote_dir": "项目设计",
+          "description": "设计文档"
+        },
+        {
+          "wiki_prefix": "03_progress",
+          "dailynote_dir": "项目进度",
+          "description": "进度跟踪文档"
+        },
+        {
+          "wiki_prefix": "04_docs",
+          "dailynote_dir": "项目文档",
+          "description": "技术文档和说明"
+        }
+      ]
+    },
+    "knowledge_base": {
+      "name": "知识库",
+      "description": "适用于知识沉淀类社区，包含概念、教程、案例、FAQ 等 wiki 同步目录",
+      "mappings": [
+        {
+          "wiki_prefix": "01_concepts",
+          "dailynote_dir": "知识概念",
+          "description": "核心概念和术语"
+        },
+        {
+          "wiki_prefix": "02_tutorials",
+          "dailynote_dir": "知识教程",
+          "description": "教程和指南"
+        },
+        {
+          "wiki_prefix": "03_cases",
+          "dailynote_dir": "知识案例",
+          "description": "案例和实践"
+        },
+        {
+          "wiki_prefix": "04_faq",
+          "dailynote_dir": "知识问答",
+          "description": "常见问题解答"
+        }
+      ]
+    },
+    "research_team": {
+      "name": "研究团队",
+      "description": "适用于学术研究类社区，包含论文、实验、数据、报告等 wiki 同步目录",
+      "mappings": [
+        {
+          "wiki_prefix": "01_papers",
+          "dailynote_dir": "研究论文",
+          "description": "论文和文献"
+        },
+        {
+          "wiki_prefix": "02_experiments",
+          "dailynote_dir": "研究实验",
+          "description": "实验设计和记录"
+        },
+        {
+          "wiki_prefix": "03_data",
+          "dailynote_dir": "研究数据",
+          "description": "数据和分析"
+        },
+        {
+          "wiki_prefix": "04_reports",
+          "dailynote_dir": "研究报告",
+          "description": "研究报告和总结"
+        }
+      ]
+    },
+    "custom": {
+      "name": "自定义",
+      "description": "自定义配置，不自动添加任何预设映射，需要手动配置",
+      "mappings": []
+    },
+    "none": {
+      "name": "无",
+      "description": "不启用 Wiki 到 DailyNote 同步",
+      "mappings": []
+    },
+    "novel_writing_template": {
+      "name": "小说创作（带变量模板）",
+      "description": "使用 {{ProjectName}} 变量的小说创作模板，创建社区时通过 preset_variables 传入具体值",
+      "mappings": [
+        {
+          "wiki_prefix": "00_meta",
+          "dailynote_dir": "{{ProjectName}}创作需求",
+          "description": "{{ProjectName}}的创作需求文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/world",
+          "dailynote_dir": "{{ProjectName}}世界观骨架设定",
+          "description": "{{ProjectName}}的世界观设定文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/factions",
+          "dailynote_dir": "{{ProjectName}}世界观骨架设定",
+          "description": "{{ProjectName}}的势力设定文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/characters",
+          "dailynote_dir": "{{ProjectName}}人物骨架设定",
+          "description": "{{ProjectName}}的人物设定文档"
+        },
+        {
+          "wiki_prefix": "10_skeleton/plot",
+          "dailynote_dir": "{{ProjectName}}全书大纲",
+          "description": "{{ProjectName}}的全书大纲"
+        },
+        {
+          "wiki_prefix": "30_content/volumes",
+          "dailynote_dir": "{{ProjectName}}分卷大纲",
+          "description": "{{ProjectName}}的分卷大纲"
+        }
+      ]
+    }
+  }
+}

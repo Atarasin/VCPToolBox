@@ -164,6 +164,13 @@ async function main() {
                 };
                 break;
             }
+            case 'ListWikiSyncPresets': {
+                // 列出可用的 Wiki 同步预设
+                const presets = await communityManager.listWikiSyncPresets();
+                result = presets.map((p) => `- ${p.key}: ${p.name} (${p.mappings_count} 个映射) - ${p.description}`).join('\n');
+                if (!result) result = '暂无可用预设。';
+                break;
+            }
             default:
                 throw new Error(`未知的指令: ${command}`);
         }

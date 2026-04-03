@@ -2,16 +2,6 @@
     "enabled": true,
     "mappings": [
         {
-            "community_id": "jue-ji-xian-tu",
-            "wiki_prefix": "00_requirements",
-            "dailynote_dir": "小说创作需求"
-        },
-        {
-            "community_id": "jue-ji-xian-tu",
-            "wiki_prefix": "01_worldbuilding",
-            "dailynote_dir": "小说世界观设定"
-        },
-        {
             "community_id": "general",
             "wiki_prefix": "",
             "dailynote_dir": "综合讨论区"

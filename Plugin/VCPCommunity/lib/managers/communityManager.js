@@ -1,4 +1,5 @@
 const fs = require('fs').promises; // 引入 fs 的 promise 版本，用于异步文件读写
+const path = require('path');
 const {
     CONFIG_DIR,
     COMMUNITIES_FILE,
@@ -9,6 +10,7 @@ const {
     MAINTAINER_INVITES_FILE,
     WIKI_DAILYNOTE_MAPPINGS_FILE,
     WIKI_DAILYNOTE_SYNC_RESULTS_FILE,
+    WIKI_SYNC_PRESETS_FILE,
 } = require('../constants'); // 引入常量配置：包括各类目录及文件路径
 
 /**
@@ -281,6 +283,240 @@ class CommunityManager {
     }
 
     /**
+     * 加载 Wiki 同步预设配置
+     * 
+     * 从预设配置文件中读取可用的预设列表。
+     * 
+     * @returns {Promise<Object>} 预设配置对象
+     */
+    async loadWikiSyncPresets() {
+        try {
+            const raw = await fs.readFile(WIKI_SYNC_PRESETS_FILE, 'utf-8');
+            const parsed = JSON.parse(raw);
+            return parsed.presets || {};
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                return {};
+            }
+            console.warn(`[VCPCommunity] 加载预设配置失败: ${e.message}`);
+            return {};
+        }
+    }
+
+    /**
+     * 加载 Wiki 同步映射配置
+     * 
+     * @returns {Promise<Object>} 映射配置对象
+     */
+    async loadWikiMappingsConfig() {
+        try {
+            const raw = await fs.readFile(WIKI_DAILYNOTE_MAPPINGS_FILE, 'utf-8');
+            const parsed = JSON.parse(raw);
+            return {
+                enabled: parsed.enabled === true,
+                mappings: Array.isArray(parsed.mappings) ? parsed.mappings : []
+            };
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                return { enabled: false, mappings: [] };
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * 保存 Wiki 同步映射配置
+     * 
+     * @param {Object} config - 映射配置对象
+     * @returns {Promise<void>}
+     */
+    async saveWikiMappingsConfig(config) {
+        await fs.writeFile(
+            WIKI_DAILYNOTE_MAPPINGS_FILE,
+            JSON.stringify(config, null, 2),
+            'utf-8'
+        );
+    }
+
+    /**
+     * 替换字符串中的变量占位符
+     * 
+     * 支持 {{VariableName}} 语法，将占位符替换为实际值。
+     * 
+     * @param {string} text - 包含占位符的字符串
+     * @param {Object} variables - 变量字典，键为变量名（不含{{}}），值为替换内容
+     * @returns {string} 替换后的字符串
+     * @example
+     * replaceVariables('{{NovelName}}创作需求', { NovelName: '宝可梦' })
+     * // 返回: '宝可梦创作需求'
+     */
+    replaceVariables(text, variables) {
+        if (typeof text !== 'string') return text;
+        if (!variables || typeof variables !== 'object') return text;
+
+        // 匹配 {{VariableName}} 格式，支持中英文、数字和下划线
+        const placeholderRegex = /\{\{([a-zA-Z0-9_\u2e80-\u2fff\u3040-\u9fff]+)\}\}/g;
+
+        return text.replace(placeholderRegex, (match, varName) => {
+            const trimmedVarName = varName.trim();
+            if (variables.hasOwnProperty(trimmedVarName)) {
+                return String(variables[trimmedVarName]);
+            }
+            // 变量未定义时保留原样
+            return match;
+        });
+    }
+
+    /**
+     * 应用 Wiki 同步预设到社区
+     * 
+     * 根据预设名称为社区自动添加对应的 Wiki 同步映射配置。
+     * 支持通过 variables 参数对 dailynote_dir 进行变量替换。
+     * 
+     * @param {string} communityId - 社区 ID
+     * @param {string} presetName - 预设名称
+     * @param {Object} [variables] - 可选的变量字典，用于替换 dailynote_dir 中的 {{VariableName}} 占位符
+     * @returns {Promise<Object>} 应用结果 { success: boolean, mappingsAdded: number, message: string }
+     */
+    async applyWikiSyncPreset(communityId, presetName, variables = {}) {
+        if (!presetName || presetName === 'none' || presetName === 'custom') {
+            return { success: true, mappingsAdded: 0, message: '已跳过预设应用（选择无预设或自定义）' };
+        }
+
+        const presets = await this.loadWikiSyncPresets();
+        const preset = presets[presetName];
+
+        if (!preset) {
+            const availablePresets = Object.keys(presets).filter(k => k !== 'none' && k !== 'custom').join(', ');
+            return {
+                success: false,
+                mappingsAdded: 0,
+                message: `预设 '${presetName}' 不存在。可用预设: ${availablePresets || '无'}`
+            };
+        }
+
+        if (!Array.isArray(preset.mappings) || preset.mappings.length === 0) {
+            return { success: true, mappingsAdded: 0, message: `预设 '${preset.name || presetName}' 不包含映射配置` };
+        }
+
+        try {
+            const config = await this.loadWikiMappingsConfig();
+            let addedCount = 0;
+            const replacedDirs = [];
+
+            for (const mapping of preset.mappings) {
+                // 检查是否已存在相同配置
+                const exists = config.mappings.some(m =>
+                    m.community_id === communityId &&
+                    m.wiki_prefix === mapping.wiki_prefix
+                );
+
+                if (!exists) {
+                    // 对 dailynote_dir 进行变量替换
+                    const originalDir = mapping.dailynote_dir;
+                    const replacedDir = this.replaceVariables(originalDir, variables);
+
+                    config.mappings.push({
+                        community_id: communityId,
+                        wiki_prefix: mapping.wiki_prefix,
+                        dailynote_dir: replacedDir
+                    });
+                    addedCount++;
+
+                    // 记录替换信息（用于日志）
+                    if (originalDir !== replacedDir) {
+                        replacedDirs.push(`${originalDir} -> ${replacedDir}`);
+                    }
+                }
+            }
+
+            // 自动启用同步功能
+            if (addedCount > 0) {
+                config.enabled = true;
+                await this.saveWikiMappingsConfig(config);
+            }
+
+            let message = `成功应用预设 '${preset.name || presetName}'，添加了 ${addedCount} 个映射配置`;
+            if (replacedDirs.length > 0) {
+                message += `\n变量替换: ${replacedDirs.join(', ')}`;
+            }
+
+            return {
+                success: true,
+                mappingsAdded: addedCount,
+                message
+            };
+        } catch (e) {
+            return {
+                success: false,
+                mappingsAdded: 0,
+                message: `应用预设失败: ${e.message}`
+            };
+        }
+    }
+
+    /**
+     * 获取可用的 Wiki 同步预设列表
+     * 
+     * @returns {Promise<Array>} 预设列表，包含 name, key, description, mappings 数量
+     */
+    async listWikiSyncPresets() {
+        const presets = await this.loadWikiSyncPresets();
+        return Object.entries(presets).map(([key, preset]) => ({
+            key,
+            name: preset.name || key,
+            description: preset.description || '',
+            mappings_count: Array.isArray(preset.mappings) ? preset.mappings.length : 0
+        }));
+    }
+
+    /**
+     * 解析 preset_variables 参数
+     * 
+     * 支持两种格式：
+     * 1. JSON 对象字符串: '{"NovelName": "宝可梦", "Author": "张三"}'
+     * 2. 键值对字符串: 'NovelName=宝可梦,Author=张三'
+     * 
+     * @param {string|Object} input - 输入的变量参数
+     * @returns {Object} 解析后的变量字典
+     */
+    parsePresetVariables(input) {
+        if (!input) return {};
+        if (typeof input === 'object' && !Array.isArray(input)) return input;
+        if (typeof input !== 'string') return {};
+
+        const trimmed = input.trim();
+        if (!trimmed) return {};
+
+        // 尝试解析为 JSON
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    return parsed;
+                }
+            } catch (e) {
+                // JSON 解析失败，继续尝试键值对格式
+            }
+        }
+
+        // 解析键值对格式: Key1=Value1,Key2=Value2
+        const result = {};
+        const pairs = trimmed.split(',');
+        for (const pair of pairs) {
+            const equalIndex = pair.indexOf('=');
+            if (equalIndex > 0) {
+                const key = pair.substring(0, equalIndex).trim();
+                const value = pair.substring(equalIndex + 1).trim();
+                if (key) {
+                    result[key] = value;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * 创建新社区
      * 
      * 业务流程：
@@ -288,6 +524,7 @@ class CommunityManager {
      * 2. 校验 ID 是否已存在以防止冲突。
      * 3. 规范化传入的成员和维护者列表。
      * 4. 构造新的社区对象推入内存并保存至文件。
+     * 5. 如果指定了 wiki_sync_preset，自动应用对应的同步配置。
      * 
      * @param {Object} args - 调用参数对象
      * @param {string} args.agent_name - 触发创建动作的 Agent 名称
@@ -297,11 +534,13 @@ class CommunityManager {
      * @param {string} args.type - 社区类型 ('public' 或 'private')
      * @param {Array|string} [args.members] - 初始成员列表
      * @param {Array|string} [args.maintainers] - 初始维护者列表
+     * @param {string} [args.wiki_sync_preset] - Wiki 同步预设名称 ('novel_writing', 'project_management', 'knowledge_base', 'research_team', 'custom', 'none')
+     * @param {string|Object} [args.preset_variables] - 预设变量，用于替换 dailynote_dir 中的占位符，支持 JSON 对象或键值对字符串
      * @returns {Promise<string>} 创建成功提示信息
      * @throws {Error} 参数缺失、类型错误或 ID 冲突时抛出异常
      */
     async createCommunity(args) {
-        const { agent_name, community_id, name, description, type, members, maintainers } = args;
+        const { agent_name, community_id, name, description, type, members, maintainers, wiki_sync_preset, preset_variables } = args;
         
         if (!agent_name || !community_id || !name || !type) {
             throw new Error('参数缺失: 需要 agent_name, community_id, name, type');
@@ -315,6 +554,9 @@ class CommunityManager {
 
         const normalizedMembers = this.normalizeAgentList(members);
         const normalizedMaintainers = this.normalizeAgentList(maintainers);
+
+        // 解析预设变量
+        const parsedVariables = this.parsePresetVariables(preset_variables);
 
         // 构造新社区对象。public 社区默认不维护成员列表（任何人可见）
         // created_by 和 created_at 用于追踪审计记录
@@ -331,8 +573,19 @@ class CommunityManager {
 
         this.communities.push(newCommunity);
         await this.save();
+
+        // 如果指定了 wiki_sync_preset，自动应用对应的同步配置
+        let presetMessage = '';
+        if (wiki_sync_preset) {
+            const presetResult = await this.applyWikiSyncPreset(community_id, wiki_sync_preset, parsedVariables);
+            if (presetResult.success && presetResult.mappingsAdded > 0) {
+                presetMessage = `\n${presetResult.message}`;
+            } else if (!presetResult.success) {
+                presetMessage = `\n[警告] ${presetResult.message}`;
+            }
+        }
         
-        return `社区 '${name}' 创建成功。`;
+        return `社区 '${name}' 创建成功。${presetMessage}`;
     }
 
     /**
