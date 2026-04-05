@@ -2,19 +2,33 @@
  * StoryOrchestrator - Quick Start Example
  * 
  * Minimal example demonstrating how to:
- * 1. Start a story project
- * 2. Query status
- * 3. Handle checkpoint approval
- * 4. Export completed story
+ * 1. Initialize StoryOrchestrator
+ * 2. Start a story project
+ * 3. Query status
+ * 4. Handle checkpoint approval
+ * 5. Export completed story
+ * 
+ * NOTE: This example uses MOCK agent configurations (mock-model IDs).
+ * In production, replace AGENT_*_MODEL_ID values with real model IDs
+ * that are configured in your VCP config.env.
+ * 
+ * The mockDependencies pattern shown here is ILLUSTRATIVE ONLY -
+ * StoryOrchestrator.initialize() does NOT use the dependencies parameter.
+ * It creates its own internal dependencies from the config.
  * 
  * Run: node examples/quick-start.js
+ * 
+ * EXPECTED BEHAVIOR:
+ * - This example will fail on actual API calls (using mock model IDs)
+ * - It demonstrates the correct API call pattern
+ * - To run fully, configure real Agent model IDs in config.env
  */
 
 const StoryOrchestrator = require('../core/StoryOrchestrator');
 
 /**
- * Mock VCP Config for development/testing
- * In production, these come from config.env
+ * Configuration for StoryOrchestrator
+ * In production, these come from config.env - this example shows the structure
  */
 const mockConfig = {
   ORCHESTRATOR_DEBUG_MODE: true,
@@ -23,7 +37,9 @@ const mockConfig = {
   DEFAULT_TARGET_WORD_COUNT_MAX: 3500,
   USER_CHECKPOINT_TIMEOUT_MS: 86400000,
   STORY_STATE_RETENTION_DAYS: 30,
-  // Mock agent configurations
+  
+  // IMPORTANT: These are MOCK values for example purposes
+  // In production, set these to real model IDs from your AI provider
   AGENT_ORCHESTRATOR_MODEL_ID: 'mock-model',
   AGENT_WORLD_BUILDER_MODEL_ID: 'mock-model',
   AGENT_CHARACTER_DESIGNER_MODEL_ID: 'mock-model',
@@ -35,85 +51,16 @@ const mockConfig = {
   AGENT_FINAL_EDITOR_MODEL_ID: 'mock-model',
 };
 
-/**
- * Mock dependencies that would normally come from VCP core
- */
-const mockDependencies = {
-  // Mock agent dispatcher that simulates agent responses
-  agentDispatcher: {
-    async dispatch(agentName, prompt, options) {
-      console.log(`[MockAgent] Dispatching: ${agentName}`);
-      // Simulate agent processing time
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Return mock responses based on agent type
-      if (agentName.includes('WorldBuilder')) {
-        return {
-          content: JSON.stringify({
-            setting: 'A futuristic city where AI and humans coexist',
-            rules: ['AI cannot harm humans', 'All AI have a designated human overseer'],
-            factions: ['The Syndicate', 'The Resistance', 'The Council']
-          }),
-          metrics: { tokens: 500 }
-        };
-      }
-      if (agentName.includes('Character')) {
-        return {
-          content: JSON.stringify({
-            protagonist: {
-              name: 'Elena',
-              age: 28,
-              role: 'AI liaison officer',
-              motivation: 'Find her missing brother'
-            }
-          }),
-          metrics: { tokens: 300 }
-        };
-      }
-      if (agentName.includes('Plot')) {
-        return {
-          content: JSON.stringify({
-            chapters: [
-              { number: 1, title: 'The Discovery', summary: 'Elena discovers a conspiracy' },
-              { number: 2, title: 'The Chase', summary: 'Elena races against time' },
-              { number: 3, title: 'The Truth', summary: 'The revelation changes everything' }
-            ]
-          }),
-          metrics: { tokens: 400 }
-        };
-      }
-      if (agentName.includes('ChapterWriter')) {
-        return {
-          content: 'Chapter content placeholder...',
-          metrics: { tokens: 1000, wordCount: 2500 }
-        };
-      }
-      return { content: 'Mock response', metrics: { tokens: 100 } };
-    }
-  },
-  
-  // Mock state storage (in-memory for demo)
-  stateStorage: new Map(),
-  
-  // Mock WebSocket pusher
-  webSocketPusher: {
-    async push(storyId, notification) {
-      console.log(`[WebSocket] Event: ${notification.eventType} for story: ${storyId}`);
-    }
-  }
-};
-
-/**
- * Initialize the orchestrator with mock dependencies
- */
 async function initializeOrchestrator() {
   console.log('='.repeat(60));
   console.log('StoryOrchestrator Quick Start Example');
   console.log('='.repeat(60));
   console.log();
+  console.log('NOTE: Using mock model IDs - will fail on real API calls');
+  console.log('      Configure real model IDs in config.env for production');
+  console.log();
   
-  // Initialize the orchestrator
-  await StoryOrchestrator.initialize(mockConfig, mockDependencies);
+  await StoryOrchestrator.initialize(mockConfig);
   console.log('[Init] StoryOrchestrator initialized');
   console.log();
 }
@@ -139,6 +86,7 @@ async function startStoryProject() {
   console.log();
   
   try {
+    // CORRECT: Use processToolCall with command as first parameter
     const result = await StoryOrchestrator.processToolCall({
       command: 'StartStoryProject',
       ...storyArgs
@@ -179,8 +127,10 @@ async function queryStoryStatus(storyId) {
 }
 
 /**
- * Step 3: Handle checkpoint approval (simulated)
- * In real usage, this would be called when user confirms the checkpoint
+ * Step 3: Handle checkpoint approval
+ * 
+ * In real usage, this is called when the workflow reaches a checkpoint
+ * and needs user confirmation to proceed.
  */
 async function handleCheckpointApproval(storyId, checkpointId) {
   console.log();
@@ -249,34 +199,37 @@ async function exportStory(storyId) {
  */
 async function main() {
   try {
-    // Initialize
+    // Step 1: Initialize (just config, dependencies are ignored)
     await initializeOrchestrator();
     
-    // Step 1: Start project
+    // Step 2: Start project
     const storyId = await startStoryProject();
     if (!storyId) {
       console.error('[Fatal] Could not start story project');
+      console.log('NOTE: This is expected if using mock model IDs');
       process.exit(1);
     }
     
-    // Step 2: Query initial status
+    // Step 3: Query initial status
     let status = await queryStoryStatus(storyId);
     
-    // Simulate workflow progression (in real usage, this happens asynchronously)
-    // The workflow runs in background, so we poll for status changes
+    // The workflow runs asynchronously in background
+    // In production, you would receive WebSocket notifications
     console.log();
-    console.log('[Info] Waiting for workflow to progress...');
-    console.log('[Info] In production, you would receive WebSocket notifications');
+    console.log('[Info] In production, the workflow runs asynchronously');
+    console.log('[Info] WebSocket notifications would alert you to checkpoint changes');
     console.log();
     
-    // Simulate a few status queries
+    // Simulate polling for status changes
+    // NOTE: In a real scenario, don't poll like this - use WebSocket events
+    console.log('[Demo] Simulating workflow progression...');
     for (let i = 0; i < 3; i++) {
       await new Promise(resolve => setTimeout(resolve, 500));
       status = await queryStoryStatus(storyId);
       
       if (status?.checkpoint_pending) {
         console.log('[Info] Checkpoint reached:', status.checkpoint_id);
-        // Step 3: Approve checkpoint
+        // In production, this would be triggered by user confirmation
         await handleCheckpointApproval(storyId, status.checkpoint_id);
       }
       
@@ -293,6 +246,11 @@ async function main() {
     console.log('='.repeat(60));
     console.log('Quick Start Example Complete!');
     console.log('='.repeat(60));
+    console.log();
+    console.log('To run this example fully:');
+    console.log('1. Copy config.env.example to config.env');
+    console.log('2. Configure real AGENT_*_MODEL_ID values');
+    console.log('3. Ensure VCP AgentAssistant is running');
     
   } catch (error) {
     console.error('[Fatal Error]', error);

@@ -30,21 +30,11 @@ const mockConfig = {
   AGENT_FINAL_EDITOR_MODEL_ID: 'mock-model',
 };
 
+// mockDependencies shown for documentation - NOT used by initialize()
 const mockDependencies = {
-  agentDispatcher: {
-    dispatch(agentName, prompt, options) {
-      return Promise.resolve({
-        content: `Response from ${agentName}`,
-        metrics: { tokens: 500 }
-      });
-    }
-  },
+  agentDispatcher: { dispatch() {} },
   stateStorage: new Map(),
-  webSocketPusher: {
-    push(storyId, notification) {
-      console.log(`[WS:${storyId.substring(0,8)}] ${notification.eventType}`);
-    }
-  }
+  webSocketPusher: { push() {} }
 };
 
 const storyTemplates = [
@@ -128,7 +118,8 @@ async function initializeOrchestrator() {
   console.log('='.repeat(60));
   console.log('BATCH PROCESSING EXAMPLE');
   console.log('='.repeat(60));
-  await StoryOrchestrator.initialize(mockConfig, mockDependencies);
+  
+  await StoryOrchestrator.initialize(mockConfig);
 }
 
 async function startMultipleStories(templates) {

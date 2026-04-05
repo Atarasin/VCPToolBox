@@ -150,7 +150,13 @@ class AgentDispatcher {
         }
 
         if (result.status === 'failed') {
-          throw new Error(`Delegation failed: ${result.error}`);
+          return {
+            content: '',
+            status: 'failed',
+            error: result.error || 'Delegation failed',
+            markers: { isComplete: false, isFailed: true, hasHeartbeat: false },
+            raw: result
+          };
         }
 
         await this._sleep(pollInterval);

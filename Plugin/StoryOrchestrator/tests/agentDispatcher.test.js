@@ -471,7 +471,7 @@ describe('AgentDispatcher', () => {
       assert.strictEqual(count, 3);
     });
 
-    test('should throw on failed status', async () => {
+    test('should return immediately on failed status without retry', async () => {
       let count = 0;
       const { AgentDispatcher } = loadFresh(async () => {
         count++;
@@ -479,11 +479,10 @@ describe('AgentDispatcher', () => {
       });
       const d = new AgentDispatcher(defaultConfig, {});
       d._sleep = async () => {};
-      await assert.rejects(
-        () => d.pollDelegation('del-123', 10000),
-        /Delegation timeout/
-      );
-      assert.ok(count > 1);
+      const r = await d.pollDelegation('del-123', 10000);
+      assert.strictEqual(r.status, 'failed');
+      assert.strictEqual(r.error, 'agent failed');
+      assert.strictEqual(count, 1);
     });
 
     test('should throw on 404', async () => {

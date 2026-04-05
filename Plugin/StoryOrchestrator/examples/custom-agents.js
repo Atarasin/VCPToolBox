@@ -16,18 +16,16 @@ const StoryOrchestrator = require('../core/StoryOrchestrator');
  * Each agent can have its own model, temperature, and system prompt
  */
 const customAgentConfigs = {
-  // Orchestrator - uses GPT-4 for high-level coordination
   AGENT_ORCHESTRATOR_MODEL_ID: 'gpt-4-turbo',
   AGENT_ORCHESTRATOR_TEMPERATURE: 0.3,
   AGENT_ORCHESTRATOR_MAX_OUTPUT_TOKENS: 4000,
   AGENT_ORCHESTRATOR_SYSTEM_PROMPT: 'You are a meticulous story coordinator...',
 
-  // Creative agents - higher temperature for creativity
   AGENT_WORLD_BUILDER_MODEL_ID: 'gpt-4-turbo',
   AGENT_WORLD_BUILDER_TEMPERATURE: 0.85,
   AGENT_WORLD_BUILDER_MAX_OUTPUT_TOKENS: 3500,
 
-  AGENT_CHARACTER_DESIGNER_MODEL_ID: 'gpt-4-turbo', 
+  AGENT_CHARACTER_DESIGNER_MODEL_ID: 'gpt-4-turbo',
   AGENT_CHARACTER_DESIGNER_TEMPERATURE: 0.8,
   AGENT_CHARACTER_DESIGNER_MAX_OUTPUT_TOKENS: 3000,
 
@@ -35,7 +33,6 @@ const customAgentConfigs = {
   AGENT_PLOT_ARCHITECT_TEMPERATURE: 0.75,
   AGENT_PLOT_ARCHITECT_MAX_OUTPUT_TOKENS: 4000,
 
-  // Writing agents - moderate temperature for balanced output
   AGENT_CHAPTER_WRITER_MODEL_ID: 'gpt-4',
   AGENT_CHAPTER_WRITER_TEMPERATURE: 0.7,
   AGENT_CHAPTER_WRITER_MAX_OUTPUT_TOKENS: 8000,
@@ -44,7 +41,6 @@ const customAgentConfigs = {
   AGENT_DETAIL_FILLER_TEMPERATURE: 0.65,
   AGENT_DETAIL_FILLER_MAX_OUTPUT_TOKENS: 5000,
 
-  // Quality agents - lower temperature for consistency
   AGENT_LOGIC_VALIDATOR_MODEL_ID: 'gpt-4-turbo',
   AGENT_LOGIC_VALIDATOR_TEMPERATURE: 0.2,
   AGENT_LOGIC_VALIDATOR_MAX_OUTPUT_TOKENS: 2500,
@@ -57,7 +53,6 @@ const customAgentConfigs = {
   AGENT_FINAL_EDITOR_TEMPERATURE: 0.25,
   AGENT_FINAL_EDITOR_MAX_OUTPUT_TOKENS: 4000,
 
-  // Global settings
   ORCHESTRATOR_DEBUG_MODE: true,
   MAX_PHASE_ITERATIONS: 5,
   QUALITY_THRESHOLD: 8.5,
@@ -65,27 +60,19 @@ const customAgentConfigs = {
   DEFAULT_TARGET_WORD_COUNT_MAX: 5000,
 };
 
-/**
- * Custom agent behaviors that override defaults
- */
 const customAgentBehaviors = {
-  // Make WorldBuilder focus on hard sci-fi elements
   worldBuilderOverrides: {
     style: 'hard_sci-fi',
     includeScience: true,
     includeTechnology: true,
     worldComplexity: 'high'
   },
-
-  // Make CharacterDesigner focus on psychological depth
   characterDesignerOverrides: {
     focus: 'psychological',
     includeBackstory: true,
     includeMotivations: true,
     complexityLevel: 'deep'
   },
-
-  // Make ChapterWriter focus on pacing
   chapterWriterOverrides: {
     pacingControl: true,
     sceneBreakdown: true,
@@ -93,8 +80,6 @@ const customAgentBehaviors = {
     descriptionRatio: 0.4,
     actionRatio: 0.3
   },
-
-  // Make StylePolisher prefer concise prose
   stylePolisherOverrides: {
     proseStyle: 'concise',
     sentenceVariation: 'moderate',
@@ -114,32 +99,11 @@ const temperaturePresets = {
   exact: { temperature: 0.1, description: 'Near-deterministic output' }
 };
 
+// mockDependencies shown for documentation - NOT used by initialize()
 const mockDependencies = {
-  agentDispatcher: {
-    async dispatch(agentName, prompt, options = {}) {
-      console.log(`[CustomAgent:${agentName}]`);
-      console.log(`  Model: ${options.modelId || 'default'}`);
-      console.log(`  Temperature: ${options.temperature || 'default'}`);
-      console.log(`  MaxTokens: ${options.maxOutputTokens || 'default'}`);
-      
-      await new Promise(r => setTimeout(r, 50));
-      
-      return {
-        content: `Custom response from ${agentName} with ${options.temperature || 0.7} temperature`,
-        metrics: { 
-          tokens: 500, 
-          model: options.modelId || 'default',
-          temperatureUsed: options.temperature || 0.7
-        }
-      };
-    }
-  },
+  agentDispatcher: { async dispatch() {} },
   stateStorage: new Map(),
-  webSocketPusher: {
-    push(storyId, notification) {
-      console.log(`[WS] ${notification.eventType}`);
-    }
-  }
+  webSocketPusher: { push() {} }
 };
 
 async function initializeWithCustomAgents() {
@@ -166,7 +130,8 @@ async function initializeWithCustomAgents() {
   console.log('  Polish (StylePolisher): 0.6');
   
   const mergedConfig = { ...customAgentConfigs };
-  await StoryOrchestrator.initialize(mergedConfig, mockDependencies);
+  
+  await StoryOrchestrator.initialize(mergedConfig);
 }
 
 async function demonstrateCustomAgentDispatch() {
@@ -178,7 +143,7 @@ async function demonstrateCustomAgentDispatch() {
   const storyId = await startStory();
   
   console.log();
-  console.log('Simulating agent calls with custom settings:');
+  console.log('Custom agent settings would be used in production via AgentDispatcher:');
   
   const agentConfigs = [
     { agent: 'WorldBuilder', temp: 0.85, model: 'gpt-4-turbo' },
@@ -188,15 +153,7 @@ async function demonstrateCustomAgentDispatch() {
   ];
   
   for (const config of agentConfigs) {
-    await mockDependencies.agentDispatcher.dispatch(
-      config.agent,
-      'Sample prompt',
-      {
-        temperature: config.temp,
-        modelId: config.model,
-        maxOutputTokens: 3000
-      }
-    );
+    console.log(`  ${config.agent}: model=${config.model}, temp=${config.temp}`);
   }
   
   return storyId;

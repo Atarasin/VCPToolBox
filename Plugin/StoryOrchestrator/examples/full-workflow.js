@@ -7,6 +7,9 @@
  * 3. Show error handling
  * 4. Demonstrate recovery from saved state
  * 
+ * NOTE: Uses mock model IDs. Configure real AGENT_*_MODEL_ID in config.env for production.
+ * The dependencies parameter passed to initialize() is IGNORED - only config is used.
+ * 
  * Run: node examples/full-workflow.js
  */
 
@@ -21,6 +24,7 @@ const mockConfig = {
   USER_CHECKPOINT_TIMEOUT_MS: 86400000,
   STORY_STATE_RETENTION_DAYS: 30,
   MAX_PHASE_RETRY_ATTEMPTS: 3,
+  // MOCK - replace with real model IDs
   AGENT_ORCHESTRATOR_MODEL_ID: 'mock-model',
   AGENT_WORLD_BUILDER_MODEL_ID: 'mock-model',
   AGENT_CHARACTER_DESIGNER_MODEL_ID: 'mock-model',
@@ -31,31 +35,15 @@ const mockConfig = {
   AGENT_STYLE_POLISHER_MODEL_ID: 'mock-model',
   AGENT_FINAL_EDITOR_MODEL_ID: 'mock-model',
 };
-
 const mockDependencies = {
-  agentDispatcher: {
-    dispatch(agentName, prompt, options) {
-      console.log(`[MockAgent] ${agentName} processing...`);
-      return Promise.resolve({
-        content: `Mock response from ${agentName}`,
-        metrics: { tokens: 500, duration: 100 }
-      });
-    }
-  },
+  agentDispatcher: { dispatch() {} },
   stateStorage: new Map(),
-  webSocketPusher: {
-    push(storyId, notification) {
-      console.log(`[WS] ${notification.eventType}:`, JSON.stringify(notification.payload).substring(0, 100));
-    }
-  }
+  webSocketPusher: { push() {} }
 };
 
 class InteractiveSimulator {
   constructor() {
     this.approvedCheckpoints = new Set();
-    this.rejectCount = 0;
-    this.simulateErrors = false;
-    this.crashAfterPhase = null;
   }
 
   async simulateCheckpoint(storyId, checkpointId, phase) {
@@ -63,35 +51,9 @@ class InteractiveSimulator {
     console.log('='.repeat(60));
     console.log(`CHECKPOINT ${phase}: ${checkpointId}`);
     console.log('='.repeat(60));
-    console.log('Would you like to:');
-    console.log('  1. Approve and continue');
-    console.log('  2. Reject with feedback');
-    console.log('  3. Simulate error');
-    console.log();
     
-    const choice = 1;
-    
-    if (choice === 1) {
-      this.approvedCheckpoints.add(checkpointId);
-      return { approval: true, feedback: 'Approved - content looks good' };
-    } else if (choice === 2) {
-      this.rejectCount++;
-      return { 
-        approval: false, 
-        feedback: `Please improve: ${this.getRejectionFeedback(phase)}` 
-      };
-    } else {
-      throw new Error('Simulated checkpoint error');
-    }
-  }
-
-  getRejectionFeedback(phase) {
-    const feedback = {
-      phase1: 'World building needs more detail about the AI rules',
-      phase2: 'Outline pacing seems off - Chapter 2 is too short',
-      phase3: 'Writing style feels inconsistent in Chapter 3'
-    };
-    return feedback[phase] || 'General improvement needed';
+    this.approvedCheckpoints.add(checkpointId);
+    return { approval: true, feedback: 'Approved - content looks good' };
   }
 }
 
@@ -99,7 +61,7 @@ async function initializeOrchestrator() {
   console.log('='.repeat(60));
   console.log('FULL WORKFLOW EXAMPLE');
   console.log('='.repeat(60));
-  await StoryOrchestrator.initialize(mockConfig, mockDependencies);
+  await StoryOrchestrator.initialize(mockConfig);
 }
 
 async function startStoryWithFullConfig() {
@@ -135,7 +97,6 @@ async function startStoryWithFullConfig() {
 
 async function handleAllCheckpoints(storyId) {
   const simulator = new InteractiveSimulator();
-  const checkpoints = [];
   
   console.log();
   console.log('-'.repeat(60));
@@ -156,15 +117,10 @@ async function handleAllCheckpoints(storyId) {
       const phase = currentStatus.phase || 1;
       
       const decision = await simulator.simulateCheckpoint(
-        storyId, 
-        checkpointId, 
-        `phase${phase}`
+        storyId, checkpointId, `phase${phase}`
       );
       
       console.log(`Decision: ${decision.approval ? 'APPROVE' : 'REJECT'}`);
-      if (decision.feedback) {
-        console.log(`Feedback: ${decision.feedback}`);
-      }
       
       const result = await StoryOrchestrator.processToolCall({
         command: 'UserConfirmCheckpoint',
@@ -201,7 +157,7 @@ async function demonstrateErrorHandling(storyId) {
     },
     {
       name: 'Invalid checkpoint',
-      args: { 
+      args: {
         command: 'UserConfirmCheckpoint',
         story_id: storyId,
         checkpoint_id: 'invalid-checkpoint',
@@ -218,17 +174,14 @@ async function demonstrateErrorHandling(storyId) {
   }
 }
 
-async function demonstrateRecovery() {
+async function demonstrateRecovery(storyId) {
   console.log();
   console.log('-'.repeat(60));
   console.log('DEMONSTRATING RECOVERY FROM SAVED STATE');
   console.log('-'.repeat(60));
   
-  const storyId = await startStoryWithFullConfig();
-  if (!storyId) return;
-  
   console.log();
-  console.log(`Created story: ${storyId}`);
+  console.log(`Story: ${storyId}`);
   console.log('In production, state is persisted to: Plugin/StoryOrchestrator/state/');
   console.log('If the process crashes, call RecoverStoryWorkflow to resume');
   
@@ -284,7 +237,7 @@ async function main() {
     
     await handleAllCheckpoints(storyId);
     await demonstrateErrorHandling(storyId);
-    await demonstrateRecovery();
+    await demonstrateRecovery(storyId);
     
     const finalStatus = await queryStatus(storyId);
     if (finalStatus?.status === 'completed') {

@@ -211,7 +211,55 @@ class WorkflowEngine {
       };
     }
 
-    // 3. 获取当前 phase
+    // 3. 检查检查点是否超时并自动批准
+    if (activeCheckpoint?.expiresAt && activeCheckpoint?.autoContinueOnTimeout) {
+      const now = Date.now();
+      const expiresAt = new Date(activeCheckpoint.expiresAt).getTime();
+      if (now > expiresAt) {
+        console.log(`[WorkflowEngine] Checkpoint ${checkpointId} expired, auto-approving`);
+        console.log(`[WorkflowEngine] Expired at: ${activeCheckpoint.expiresAt}, Now: ${new Date().toISOString()}`);
+        
+        // 记录到历史
+        await this.stateManager.appendWorkflowHistory(storyId, {
+          type: 'checkpoint_auto_approved',
+          phase: activeCheckpoint.phase,
+          detail: {
+            checkpointId: activeCheckpoint.id,
+            expiredAt: activeCheckpoint.expiresAt,
+            autoApprovedAt: new Date().toISOString(),
+            reason: 'timeout'
+          }
+        });
+
+        // 发送超时自动批准通知
+        await this._notify(storyId, 'checkpoint_auto_approved', {
+          storyId,
+          checkpointId: activeCheckpoint.id,
+          phase: activeCheckpoint.phase,
+          expiredAt: activeCheckpoint.expiresAt,
+          autoApprovedAt: new Date().toISOString()
+        });
+
+        // 清除活跃检查点
+        await this.stateManager.clearActiveCheckpoint(storyId);
+
+        // 继续下一阶段
+        const currentPhase = activeCheckpoint.phase;
+        if (currentPhase === 'phase1') {
+          await this.stateManager.updateWorkflow(storyId, { state: 'running' });
+          return await this._runPhase2(storyId);
+        }
+        if (currentPhase === 'phase2') {
+          await this.stateManager.updateWorkflow(storyId, { state: 'running' });
+          return await this._runPhase3(storyId);
+        }
+        if (currentPhase === 'phase3') {
+          return await this._markCompleted(storyId);
+        }
+      }
+    }
+
+    // 4. 获取当前 phase
     const currentPhase = story.workflow?.currentPhase;
     if (!currentPhase) {
       return {
@@ -220,7 +268,7 @@ class WorkflowEngine {
       };
     }
 
-    // 4. 发送恢复开始通知
+    // 5. 发送恢复开始通知
     await this._notify(storyId, 'workflow_resuming', {
       storyId,
       checkpointId,
@@ -228,7 +276,7 @@ class WorkflowEngine {
       currentPhase
     });
 
-    // 5. 根据 approval 处理
+    // 6. 根据 approval 处理
     if (approval) {
       return await this._handleApproval(storyId, currentPhase, checkpointId, feedback);
     } else {
@@ -239,10 +287,18 @@ class WorkflowEngine {
   /**
    * 崩溃恢复
    * @param {string} storyId - 故事ID
+   * @param {Object} options - 恢复选项
+   * @param {string} options.recoveryAction - 恢复动作: continue, restart_phase, rollback
+   * @param {string} options.targetPhase - 目标阶段 (phase1, phase2, phase3)
+   * @param {string} options.targetCheckpoint - 目标检查点ID
+   * @param {string} options.feedback - 反馈信息
    * @returns {Object} 恢复结果
    */
-  async recover(storyId) {
+  async recover(storyId, options = {}) {
     console.log(`[WorkflowEngine] Attempting recovery for story: ${storyId}`);
+    console.log(`[WorkflowEngine] Recovery options:`, options);
+
+    const { recoveryAction = 'continue', targetPhase, targetCheckpoint, feedback } = options;
 
     // 1. 加载故事
     const story = await this.stateManager.getStory(storyId);
@@ -256,7 +312,25 @@ class WorkflowEngine {
     const workflow = story.workflow || {};
     const currentPhase = workflow.currentPhase;
 
-    // 2. 如果已完成或 idle，无需恢复
+    // 2. 处理不同恢复动作
+    if (recoveryAction === 'restart_phase') {
+      return await this._handleRestartPhase(storyId, targetPhase, story);
+    }
+
+    if (recoveryAction === 'rollback') {
+      return await this._handleRollback(storyId, targetCheckpoint, story);
+    }
+
+    // 3. continue - 从当前状态继续 (默认行为)
+    return await this._handleContinue(storyId, story, workflow, currentPhase, feedback);
+  }
+
+  /**
+   * 处理 continue 恢复动作 - 从当前状态继续
+   * @private
+   */
+  async _handleContinue(storyId, story, workflow, currentPhase, feedback) {
+    // 如果已完成或 idle
     if (workflow.state === 'completed') {
       return {
         status: 'success',
@@ -275,51 +349,51 @@ class WorkflowEngine {
       };
     }
 
-    // 3. 生成新的 runToken 表示恢复操作
+    // 生成新的 runToken
     const recoveryRunToken = uuidv4();
 
-    // 4. 发送恢复开始通知
+    // 发送恢复开始通知
     await this._notify(storyId, 'workflow_recovery_started', {
       storyId,
       previousState: workflow.state,
       currentPhase,
-      recoveryRunToken
+      recoveryRunToken,
+      recoveryAction: 'continue'
     });
 
-    // 5. 恢复重试上下文
+    // 恢复重试上下文
     await this.stateManager.updateWorkflow(storyId, {
       state: 'running',
       runToken: recoveryRunToken,
       retryContext: {
         ...workflow.retryContext,
-        attempt: 0, // 重置尝试次数
+        attempt: 0,
         lastError: 'Recovered from crash'
       }
     });
 
-    // 6. 根据当前 phase 继续执行
+    // 记录反馈如果有的话
+    if (feedback) {
+      await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback);
+    }
+
+    // 根据当前 phase 继续执行
     if (currentPhase === 'phase1') {
-      // Phase1 需要检查是否已完成
       if (story.phase1?.userConfirmed || story.phase1?.status === 'pending_confirmation') {
-        // 跳过 Phase1，继续 Phase2
         return await this._runPhase2(storyId);
       }
       return await this._runPhase1(storyId);
     }
 
     if (currentPhase === 'phase2') {
-      // Phase2 需要检查状态
       if (story.phase2?.userConfirmed || story.phase2?.status === 'completed') {
-        // 跳过 Phase2，继续 Phase3
         return await this._runPhase3(storyId);
       }
       return await this._runPhase2(storyId);
     }
 
     if (currentPhase === 'phase3') {
-      // Phase3 需要检查状态
       if (story.phase3?.userConfirmed || story.phase3?.status === 'completed') {
-        // 跳过 Phase3，标记完成
         await this._markCompleted(storyId);
         return {
           status: 'completed',
@@ -331,6 +405,286 @@ class WorkflowEngine {
     }
 
     // 未知 phase，尝试从 Phase1 重新开始
+    return await this._runPhase1(storyId);
+  }
+
+  /**
+   * 处理 restart_phase 恢复动作 - 重新运行指定阶段
+   * @private
+   */
+  async _handleRestartPhase(storyId, targetPhase, story) {
+    // 验证 targetPhase
+    if (!targetPhase || !['phase1', 'phase2', 'phase3'].includes(targetPhase)) {
+      return {
+        status: 'error',
+        error: 'Invalid or missing target_phase. Must be phase1, phase2, or phase3'
+      };
+    }
+
+    console.log(`[WorkflowEngine] Restarting phase ${targetPhase} for story: ${storyId}`);
+
+    // 清除后续阶段的完成标记，以便重新执行
+    if (targetPhase === 'phase1') {
+      // 重启 phase1 需要清除 phase1 和后续阶段的数据
+      await this.stateManager.updatePhase1(storyId, {
+        worldview: null,
+        characters: [],
+        validation: null,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'running'
+      });
+      await this.stateManager.updatePhase2(storyId, {
+        outline: null,
+        chapters: [],
+        currentChapter: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+      await this.stateManager.updatePhase3(storyId, {
+        polishedChapters: [],
+        finalValidation: null,
+        iterationCount: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+    } else if (targetPhase === 'phase2') {
+      // 重启 phase2 需要清除 phase2 和后续阶段的数据，保留 phase1
+      await this.stateManager.updatePhase2(storyId, {
+        chapters: [],
+        currentChapter: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+      await this.stateManager.updatePhase3(storyId, {
+        polishedChapters: [],
+        finalValidation: null,
+        iterationCount: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+    } else if (targetPhase === 'phase3') {
+      // 重启 phase3 只清除 phase3 的数据，保留 phase1 和 phase2
+      await this.stateManager.updatePhase3(storyId, {
+        polishedChapters: [],
+        finalValidation: null,
+        iterationCount: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+    }
+
+    // 生成新的 runToken
+    const recoveryRunToken = uuidv4();
+
+    // 发送恢复开始通知
+    await this._notify(storyId, 'workflow_recovery_started', {
+      storyId,
+      previousState: story.workflow?.state,
+      currentPhase: targetPhase,
+      recoveryRunToken,
+      recoveryAction: 'restart_phase',
+      targetPhase
+    });
+
+    // 更新 workflow 状态
+    await this.stateManager.updateWorkflow(storyId, {
+      state: 'running',
+      currentPhase: targetPhase,
+      runToken: recoveryRunToken,
+      retryContext: {
+        phase: targetPhase,
+        step: 'restart',
+        attempt: 0,
+        maxAttempts: this.retryConfig.maxAttempts,
+        lastError: 'Manual restart requested'
+      }
+    });
+
+    // 更新故事状态
+    await this.stateManager.updateStory(storyId, {
+      status: `${targetPhase}_running`
+    });
+
+    // 记录到历史
+    await this.stateManager.appendWorkflowHistory(storyId, {
+      type: 'phase_restart',
+      phase: targetPhase,
+      detail: { reason: 'Manual restart via recovery_action=restart_phase' }
+    });
+
+    // 执行对应阶段
+    if (targetPhase === 'phase1') {
+      return await this._runPhase1(storyId);
+    }
+    if (targetPhase === 'phase2') {
+      return await this._runPhase2(storyId);
+    }
+    if (targetPhase === 'phase3') {
+      return await this._runPhase3(storyId);
+    }
+
+    return {
+      status: 'error',
+      error: `Unknown phase: ${targetPhase}`
+    };
+  }
+
+  /**
+   * 处理 rollback 恢复动作 - 回滚到指定检查点
+   * @private
+   */
+  async _handleRollback(storyId, targetCheckpoint, story) {
+    console.log(`[WorkflowEngine] Rolling back story: ${storyId} to checkpoint: ${targetCheckpoint}`);
+
+    // 确定目标检查点
+    let targetPhase = null;
+    let checkpointId = targetCheckpoint;
+
+    // 如果没有指定检查点，查找最近的有效检查点
+    if (!checkpointId) {
+      // 优先查找已批准的检查点
+      if (story.phase3?.checkpointId && story.phase3?.userConfirmed) {
+        targetPhase = 'phase3';
+        checkpointId = story.phase3.checkpointId;
+      } else if (story.phase2?.checkpointId && story.phase2?.userConfirmed) {
+        targetPhase = 'phase2';
+        checkpointId = story.phase2.checkpointId;
+      } else if (story.phase1?.checkpointId && story.phase1?.userConfirmed) {
+        targetPhase = 'phase1';
+        checkpointId = story.phase1.checkpointId;
+      } else {
+        return {
+          status: 'error',
+          error: 'No valid checkpoint found to rollback to'
+        };
+      }
+    } else {
+      // 根据检查点 ID 确定阶段
+      if (checkpointId.includes('cp-1') || checkpointId.includes('worldview')) {
+        targetPhase = 'phase1';
+      } else if (checkpointId.includes('cp-2') || checkpointId.includes('outline')) {
+        targetPhase = 'phase2';
+      } else if (checkpointId.includes('cp-3') || checkpointId.includes('final')) {
+        targetPhase = 'phase3';
+      }
+    }
+
+    console.log(`[WorkflowEngine] Rollback target: phase=${targetPhase}, checkpoint=${checkpointId}`);
+
+    // 清除活跃检查点
+    await this.stateManager.clearActiveCheckpoint(storyId);
+
+    // 回滚状态 - 清除指定阶段及其后续阶段的数据
+    if (targetPhase === 'phase1' || !targetPhase) {
+      // 回滚到 phase1 开始
+      await this.stateManager.updatePhase1(storyId, {
+        worldview: null,
+        characters: [],
+        validation: null,
+        userConfirmed: false,
+        checkpointId: checkpointId,
+        status: 'running'
+      });
+      await this.stateManager.updatePhase2(storyId, {
+        outline: null,
+        chapters: [],
+        currentChapter: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+      await this.stateManager.updatePhase3(storyId, {
+        polishedChapters: [],
+        finalValidation: null,
+        iterationCount: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+    } else if (targetPhase === 'phase2') {
+      // 回滚到 phase2 开始
+      await this.stateManager.updatePhase2(storyId, {
+        chapters: [],
+        currentChapter: 0,
+        userConfirmed: false,
+        checkpointId: checkpointId,
+        status: 'pending'
+      });
+      await this.stateManager.updatePhase3(storyId, {
+        polishedChapters: [],
+        finalValidation: null,
+        iterationCount: 0,
+        userConfirmed: false,
+        checkpointId: null,
+        status: 'pending'
+      });
+    } else if (targetPhase === 'phase3') {
+      // 回滚到 phase3 开始
+      await this.stateManager.updatePhase3(storyId, {
+        polishedChapters: [],
+        finalValidation: null,
+        iterationCount: 0,
+        userConfirmed: false,
+        checkpointId: checkpointId,
+        status: 'pending'
+      });
+    }
+
+    // 生成新的 runToken
+    const recoveryRunToken = uuidv4();
+
+    // 发送回滚通知
+    await this._notify(storyId, 'workflow_rollback', {
+      storyId,
+      previousState: story.workflow?.state,
+      targetPhase,
+      checkpointId,
+      recoveryRunToken
+    });
+
+    // 更新 workflow 状态
+    await this.stateManager.updateWorkflow(storyId, {
+      state: 'running',
+      currentPhase: targetPhase || 'phase1',
+      runToken: recoveryRunToken,
+      retryContext: {
+        phase: targetPhase || 'phase1',
+        step: 'rollback',
+        attempt: 0,
+        maxAttempts: this.retryConfig.maxAttempts,
+        lastError: 'Rollback to checkpoint'
+      }
+    });
+
+    // 更新故事状态
+    await this.stateManager.updateStory(storyId, {
+      status: `${targetPhase || 'phase1'}_rollback`
+    });
+
+    // 记录到历史
+    await this.stateManager.appendWorkflowHistory(storyId, {
+      type: 'rollback',
+      phase: targetPhase,
+      detail: { checkpointId, reason: 'Manual rollback via recovery_action=rollback' }
+    });
+
+    // 执行对应阶段
+    if (targetPhase === 'phase1') {
+      return await this._runPhase1(storyId);
+    }
+    if (targetPhase === 'phase2') {
+      return await this._runPhase2(storyId);
+    }
+    if (targetPhase === 'phase3') {
+      return await this._runPhase3(storyId);
+    }
+
     return await this._runPhase1(storyId);
   }
 
@@ -590,6 +944,10 @@ class WorkflowEngine {
   async _handleWaitingCheckpoint(storyId, phaseName, result) {
     console.log(`[WorkflowEngine] ${phaseName} waiting for checkpoint: ${result.checkpointId}`);
 
+    // 计算超时时间
+    const timeoutMs = this.config.USER_CHECKPOINT_TIMEOUT_MS || 86400000; // 默认 24 小时
+    const expiresAt = new Date(Date.now() + timeoutMs).toISOString();
+
     // 设置活跃检查点
     await this.stateManager.setActiveCheckpoint(storyId, {
       id: result.checkpointId,
@@ -597,6 +955,7 @@ class WorkflowEngine {
       type: `${phaseName}_checkpoint`,
       status: 'pending',
       createdAt: new Date().toISOString(),
+      expiresAt,
       autoContinueOnTimeout: true
     });
 

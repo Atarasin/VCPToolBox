@@ -368,7 +368,7 @@ class StoryOrchestrator {
   }
 
   async recoverStoryWorkflow(args) {
-    const validation = validateInput('queryStoryStatus', args);
+    const validation = validateInput('recoverStoryWorkflow', args);
     if (!validation.valid) {
       return { status: 'error', error: validation.errors.join(', ') };
     }
@@ -378,7 +378,14 @@ class StoryOrchestrator {
       return { status: 'error', error: 'Story not found' };
     }
 
-    const result = await this.workflowEngine.recover(args.story_id);
+    const recoveryOptions = {
+      recoveryAction: args.recovery_action || 'continue',
+      targetPhase: args.target_phase,
+      targetCheckpoint: args.target_checkpoint,
+      feedback: args.feedback
+    };
+
+    const result = await this.workflowEngine.recover(args.story_id, recoveryOptions);
 
     return {
       status: result.status === 'error' ? 'error' : 'success',

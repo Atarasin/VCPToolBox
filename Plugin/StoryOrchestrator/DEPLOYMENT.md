@@ -592,19 +592,13 @@ CMD ["pm2-runtime", "server.js"]
 
 ```
 Plugin/StoryOrchestrator/state/
-├── story-abc123/              # 按 story_id 分目录
-│   ├── workflow_state.json    # 工作流状态机状态
-│   ├── phase1_context.json    # Phase1 执行上下文
-│   ├── phase2_context.json    # Phase2 执行上下文
-│   ├── phase3_context.json    # Phase3 执行上下文
-│   ├── chapters/              # 章节内容
-│   │   ├── chapter_1.json
-│   │   └── chapter_2.json
-│   ├── checkpoints/           # 检查点历史
-│   │   └── cp-1-worldview.json
-│   └── agent_calls/            # Agent 调用记录
-└── index.json                 # 故事索引
+└── stories/                     # 故事状态文件目录
+    ├── story-abc123.json         # 按 story_id 存储的单个 JSON 文件
+    ├── story-def456.json
+    └── index.json                # 故事索引（可选）
 ```
+
+**注意**：状态存储为扁平文件结构（`state/stories/*.json`），而非子目录结构。
 
 ### 清理程序
 
@@ -618,10 +612,10 @@ Plugin/StoryOrchestrator/state/
 "
 
 # 手动清理特定故事
-rm -rf Plugin/StoryOrchestrator/state/story-xxx/
+rm -rf Plugin/StoryOrchestrator/state/stories/story-xxx/
 
-# 清理所有状态（重置）
-rm -rf Plugin/StoryOrchestrator/state/*
+# 清理所有故事状态（重置）
+rm -rf Plugin/StoryOrchestrator/state/stories/*
 ```
 
 ### 备份建议
@@ -756,13 +750,10 @@ cat Plugin/StoryOrchestrator/state/<story_id>/workflow_state.json | python3 -m j
 tool_name:「始」StoryOrchestrator「末」,
 command:「始」RecoverStoryWorkflow「末」,
 story_id:「始」your-story-id「末」,
-recovery_action:「始」rollback「末」,
-target_checkpoint:「始」cp-1-worldview「末」
+recovery_action:「始」rollback「末」
 <<<[END_TOOL_REQUEST]>>>
-
-# 或完全重置（最后手段）
-rm -rf Plugin/StoryOrchestrator/state/<story_id>/
 ```
+注意：`rollback` 操作会自动回滚到上一个有效的检查点。
 
 #### 5. 质量问题（字数不达标）
 
@@ -830,10 +821,10 @@ async function recover() {
   const stories = await sm.listActiveStories();
   console.log('Active stories:', stories);
   
-  // 恢复指定故事
+  // 恢复指定故事（自动恢复到上一个检查点）
   const storyId = 'your-story-id';
-  await sm.restoreFromCheckpoint(storyId, 'cp-1-worldview');
-  console.log('Restored:', storyId);
+  await sm.recoverStory(storyId);
+  console.log('Recovered:', storyId);
 }
 
 recover().catch(console.error);

@@ -90,6 +90,33 @@ const ValidationSchemas = {
   exportStory: {
     story_id: { type: 'string', required: true },
     format: { type: 'string', required: false, enum: ['markdown', 'txt', 'json'] }
+  },
+
+  /**
+   * 恢复故事工作流参数验证
+   */
+  recoverStoryWorkflow: {
+    story_id: { type: 'string', required: true, pattern: /^story-[a-zA-Z0-9]+$/ },
+    recovery_action: { 
+      type: 'string', 
+      required: false, 
+      enum: ['continue', 'restart_phase', 'rollback'],
+      default: 'continue'
+    },
+    target_phase: { 
+      type: 'string', 
+      required: false, 
+      enum: ['phase1', 'phase2', 'phase3']
+    },
+    target_checkpoint: { 
+      type: 'string', 
+      required: false
+    },
+    feedback: {
+      type: 'string',
+      required: false,
+      maxLength: 2000
+    }
   }
 };
 

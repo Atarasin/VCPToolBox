@@ -19,6 +19,7 @@
   },
   "configSchema": {
     "ORCHESTRATOR_DEBUG_MODE": "boolean",
+    "QUALITY_THRESHOLD": "number",
     "MAX_PHASE_ITERATIONS": "integer",
     "DEFAULT_TARGET_WORD_COUNT_MIN": "integer",
     "DEFAULT_TARGET_WORD_COUNT_MAX": "integer",
@@ -75,6 +76,14 @@
       {
         "commandIdentifier": "ExportStory",
         "description": "导出完成的故事为指定格式\n参数:\n- story_id (字符串, 必需)\n- format (字符串, 可选): markdown/txt/json，默认markdown\n返回: 完整故事内容"
+      },
+      {
+        "commandIdentifier": "RecoverStoryWorkflow",
+        "description": "手动恢复卡住的工作流，从崩溃或错误状态继续执行\n参数:\n- story_id (字符串, 必需): 故事项目ID\n返回: 恢复操作结果及当前工作流状态"
+      },
+      {
+        "commandIdentifier": "RetryPhase",
+        "description": "手动重试指定阶段，适用于某阶段执行失败需要重新执行\n参数:\n- story_id (字符串, 必需): 故事项目ID\n- phase_name (字符串, 必需): 阶段名称(phase1/phase2/phase3)\n- reason (字符串, 可选): 重试原因\n返回: 重试操作结果"
       }
     ],
     "systemPromptPlaceholders": [
