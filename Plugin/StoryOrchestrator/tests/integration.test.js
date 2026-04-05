@@ -999,7 +999,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           history: []
         }
       };
-      mockStateManager.cache.set(storyId, story);
+      testStories.set(storyId, story);
       
       const expired = await orchestrator.workflowEngine._findExpiredCheckpoints();
       
@@ -1038,7 +1038,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           history: []
         }
       };
-      mockStateManager.cache.set(storyId, story);
+      testStories.set(storyId, story);
       
       const expired = await orchestrator.workflowEngine._findExpiredCheckpoints();
       
@@ -1076,114 +1076,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           history: []
         }
       };
-      mockStateManager.cache.set(storyId, story);
-      
-      const result = await orchestrator.workflowEngine.checkExpiredCheckpoints();
-      
-      assert.strictEqual(result.processed, 0);
-      assert.strictEqual(result.autoApproved, 0);
-    });
-  });
-});
-      await orchestrator.workflowEngine.initialize();
-      
-      // Directly add story with expired checkpoint to the mock state
-      const storyId = 'expired-checkpoint-story';
-      const story = {
-        id: storyId,
-        status: 'phase1_waiting_checkpoint',
-        workflow: {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1',
-          activeCheckpoint: {
-            id: 'cp-expired-test',
-            phase: 'phase1',
-            type: 'worldview_confirmation',
-            status: 'pending',
-            expiresAt: new Date(Date.now() - 100).toISOString(),
-            autoContinueOnTimeout: true
-          },
-          history: []
-        }
-      };
-      mockStateManager.stories.set(storyId, story);
-      
-      const expired = await orchestrator.workflowEngine._findExpiredCheckpoints();
-      
-      assert.strictEqual(expired.length, 1);
-      assert.strictEqual(expired[0].checkpoint.id, 'cp-expired-test');
-    });
-
-    it('should not detect non-expired checkpoints', async () => {
-      const orchestrator = createTestableStoryOrchestrator();
-      const mockStateManager = orchestrator.stateManager;
-      
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 5000 }
-      });
-      await orchestrator.workflowEngine.initialize();
-      
-      const storyId = 'valid-checkpoint-story';
-      const story = {
-        id: storyId,
-        status: 'phase1_waiting_checkpoint',
-        workflow: {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1',
-          activeCheckpoint: {
-            id: 'cp-valid',
-            phase: 'phase1',
-            type: 'worldview_confirmation',
-            status: 'pending',
-            expiresAt: new Date(Date.now() + 5000).toISOString(),
-            autoContinueOnTimeout: true
-          },
-          history: []
-        }
-      };
-      mockStateManager.stories.set(storyId, story);
-      
-      const expired = await orchestrator.workflowEngine._findExpiredCheckpoints();
-      
-      assert.strictEqual(expired.length, 0);
-    });
-
-    it('should not auto-approve if autoContinueOnTimeout is false', async () => {
-      const orchestrator = createTestableStoryOrchestrator();
-      const mockStateManager = orchestrator.stateManager;
-      
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 50 }
-      });
-      await orchestrator.workflowEngine.initialize();
-      
-      const storyId = 'no-auto-story';
-      const story = {
-        id: storyId,
-        status: 'phase1_waiting_checkpoint',
-        workflow: {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1',
-          activeCheckpoint: {
-            id: 'cp-no-auto',
-            phase: 'phase1',
-            type: 'worldview_confirmation',
-            status: 'pending',
-            expiresAt: new Date(Date.now() - 100).toISOString(),
-            autoContinueOnTimeout: false
-          },
-          history: []
-        }
-      };
-      mockStateManager.stories.set(storyId, story);
+      testStories.set(storyId, story);
       
       const result = await orchestrator.workflowEngine.checkExpiredCheckpoints();
       

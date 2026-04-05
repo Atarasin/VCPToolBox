@@ -1,10 +1,10 @@
 /**
  * StoryOrchestrator - Custom Agents Configuration Example
  * 
- * Demonstrates:
- * 1. Configuring custom agents with different settings
- * 2. Different temperature/settings per agent
- * 3. Overriding default behaviors
+ * ⚠️  DEMONSTRATION FILE - WILL NOT RUN WITHOUT REAL API KEYS ⚠️
+ * 
+ * Demonstrates configuring custom agents but uses mock model IDs.
+ * See quick-start.js header for production setup instructions.
  * 
  * Run: node examples/custom-agents.js
  */

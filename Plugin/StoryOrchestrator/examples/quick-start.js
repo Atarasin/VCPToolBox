@@ -1,20 +1,15 @@
 /**
  * StoryOrchestrator - Quick Start Example
  * 
- * Minimal example demonstrating how to:
- * 1. Initialize StoryOrchestrator
- * 2. Start a story project
- * 3. Query status
- * 4. Handle checkpoint approval
- * 5. Export completed story
+ * ⚠️  DEMONSTRATION FILE - WILL NOT RUN WITHOUT REAL API KEYS ⚠️
  * 
- * NOTE: This example uses MOCK agent configurations (mock-model IDs).
- * In production, replace AGENT_*_MODEL_ID values with real model IDs
- * that are configured in your VCP config.env.
+ * This file demonstrates the StoryOrchestrator API patterns.
+ * It uses mock model IDs which will fail on actual API calls.
  * 
- * The mockDependencies pattern shown here is ILLUSTRATIVE ONLY -
- * StoryOrchestrator.initialize() does NOT use the dependencies parameter.
- * It creates its own internal dependencies from the config.
+ * To run this plugin in production:
+ * 1. Configure real AGENT_*_MODEL_ID values in config.env
+ * 2. Ensure VCP AgentAssistant plugin is running
+ * 3. Use proper VCP tool call syntax (<<<[TOOL_REQUEST]>>>)
  * 
  * Run: node examples/quick-start.js
  * 

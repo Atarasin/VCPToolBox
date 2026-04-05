@@ -1,10 +1,10 @@
 /**
  * StoryOrchestrator - Batch Processing Example
  * 
- * Demonstrates handling multiple stories concurrently:
- * 1. Start multiple stories at once
- * 2. Track progress of all stories
- * 3. Handle different phases simultaneously
+ * ⚠️  DEMONSTRATION FILE - WILL NOT RUN WITHOUT REAL API KEYS ⚠️
+ * 
+ * Demonstrates handling multiple stories concurrently but uses mock model IDs.
+ * See quick-start.js header for production setup instructions.
  * 
  * Run: node examples/batch-processing.js
  */

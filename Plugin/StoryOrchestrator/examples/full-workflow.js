@@ -1,14 +1,10 @@
 /**
  * StoryOrchestrator - Full Workflow Example
  * 
- * Complete workflow demonstrating:
- * 1. Start project with full configuration
- * 2. Handle all 3 checkpoints interactively
- * 3. Show error handling
- * 4. Demonstrate recovery from saved state
+ * ⚠️  DEMONSTRATION FILE - WILL NOT RUN WITHOUT REAL API KEYS ⚠️
  * 
- * NOTE: Uses mock model IDs. Configure real AGENT_*_MODEL_ID in config.env for production.
- * The dependencies parameter passed to initialize() is IGNORED - only config is used.
+ * Demonstrates complete workflow but uses mock model IDs.
+ * See quick-start.js header for production setup instructions.
  * 
  * Run: node examples/full-workflow.js
  */
