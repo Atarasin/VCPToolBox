@@ -414,6 +414,14 @@ class StoryOrchestrator {
       args.reason || 'Manual retry requested'
     );
 
+    if (result.status === 'failed') {
+      return {
+        status: 'error',
+        error: result.error || 'Retry failed',
+        result
+      };
+    }
+
     return {
       status: result.status === 'error' ? 'error' : 'success',
       result
@@ -514,6 +522,11 @@ class StoryOrchestrator {
   }
 
   _isCheckpointPending(story) {
+    // First check workflow's activeCheckpoint
+    if (story.workflow?.activeCheckpoint) {
+      return story.workflow.activeCheckpoint.status === 'pending';
+    }
+    // Fall back to legacy phase-based check
     if (!story.phase1?.userConfirmed) return story.phase1?.status === 'pending_confirmation';
     if (!story.phase2?.userConfirmed) return story.phase2?.status === 'pending_confirmation';
     if (!story.phase3?.userConfirmed) return story.phase3?.status === 'pending_confirmation';
@@ -521,6 +534,11 @@ class StoryOrchestrator {
   }
 
   _getCurrentCheckpointId(story) {
+    // First check workflow's activeCheckpoint
+    if (story.workflow?.activeCheckpoint) {
+      return story.workflow.activeCheckpoint.id;
+    }
+    // Fall back to legacy phase-based check
     if (!story.phase1?.userConfirmed) return story.phase1?.checkpointId;
     if (!story.phase2?.userConfirmed) return story.phase2?.checkpointId;
     if (!story.phase3?.userConfirmed) return story.phase3?.checkpointId;

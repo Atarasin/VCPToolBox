@@ -47,6 +47,10 @@ class WorkflowEngine {
 
     // 初始化标志
     this.initialized = false;
+
+    // 定期检查定时器
+    this._expiryCheckTimer = null;
+    this._expiryCheckIntervalMs = this.config.CHECKPOINT_EXPIRY_CHECK_INTERVAL_MS || 60000; // 默认 60 秒
   }
 
   /**
@@ -95,6 +99,9 @@ class WorkflowEngine {
 
     this.initialized = true;
     console.log('[WorkflowEngine] Initialized successfully');
+
+    // 启动检查点过期定期检查
+    this._startExpiryCheckTimer();
   }
 
   /**
@@ -103,6 +110,155 @@ class WorkflowEngine {
    */
   setWebSocketPusher(pusher) {
     this.webSocketPusher = pusher;
+  }
+
+  /**
+   * 启动检查点过期定期检查定时器
+   * @private
+   */
+  _startExpiryCheckTimer() {
+    if (this._expiryCheckTimer) {
+      clearInterval(this._expiryCheckTimer);
+    }
+    this._expiryCheckTimer = setInterval(async () => {
+      await this.checkExpiredCheckpoints();
+    }, this._expiryCheckIntervalMs);
+    console.log(`[WorkflowEngine] Expiry check timer started (interval: ${this._expiryCheckIntervalMs}ms)`);
+  }
+
+  /**
+   * 停止检查点过期定期检查定时器
+   * @private
+   */
+  _stopExpiryCheckTimer() {
+    if (this._expiryCheckTimer) {
+      clearInterval(this._expiryCheckTimer);
+      this._expiryCheckTimer = null;
+      console.log('[WorkflowEngine] Expiry check timer stopped');
+    }
+  }
+
+  /**
+   * 检查并自动批准所有过期的检查点
+   * @returns {Object} 检查结果
+   */
+  async checkExpiredCheckpoints() {
+    console.log('[WorkflowEngine] Running scheduled checkpoint expiry check...');
+
+    try {
+      const expiredCheckpoints = await this._findExpiredCheckpoints();
+
+      if (expiredCheckpoints.length === 0) {
+        console.log('[WorkflowEngine] No expired checkpoints found');
+        return { processed: 0, autoApproved: 0 };
+      }
+
+      console.log(`[WorkflowEngine] Found ${expiredCheckpoints.length} expired checkpoint(s)`);
+
+      let autoApprovedCount = 0;
+      for (const item of expiredCheckpoints) {
+        const { storyId, checkpoint } = item;
+        const result = await this._autoApproveExpiredCheckpoint(storyId, checkpoint);
+        if (result.success) {
+          autoApprovedCount++;
+        }
+      }
+
+      console.log(`[WorkflowEngine] Checkpoint expiry check complete: ${autoApprovedCount} auto-approved`);
+      return { processed: expiredCheckpoints.length, autoApproved: autoApprovedCount };
+    } catch (error) {
+      console.error('[WorkflowEngine] Error during checkpoint expiry check:', error);
+      return { processed: 0, autoApproved: 0, error: error.message };
+    }
+  }
+
+  /**
+   * 查找所有过期的检查点
+   * @private
+   * @returns {Array} 过期检查点列表 [{storyId, checkpoint}]
+   */
+  async _findExpiredCheckpoints() {
+    const expiredCheckpoints = [];
+    const stories = await this.stateManager.listStories();
+
+    if (!stories || stories.length === 0) {
+      return expiredCheckpoints;
+    }
+
+    const now = Date.now();
+
+    for (const storyId of stories) {
+      try {
+        const story = await this.stateManager.getStory(storyId);
+        if (!story || !story.workflow) continue;
+
+        const activeCheckpoint = story.workflow.activeCheckpoint;
+        if (!activeCheckpoint) continue;
+
+        if (activeCheckpoint.autoContinueOnTimeout && activeCheckpoint.expiresAt) {
+          const expiresAt = new Date(activeCheckpoint.expiresAt).getTime();
+          if (now > expiresAt) {
+            expiredCheckpoints.push({ storyId, checkpoint: activeCheckpoint });
+          }
+        }
+      } catch (err) {
+        console.warn(`[WorkflowEngine] Error checking story ${storyId}:`, err.message);
+      }
+    }
+
+    return expiredCheckpoints;
+  }
+
+  /**
+   * 自动批准过期的检查点
+   * @private
+   * @param {string} storyId - 故事ID
+   * @param {Object} checkpoint - 检查点对象
+   * @returns {Object} 处理结果
+   */
+  async _autoApproveExpiredCheckpoint(storyId, checkpoint) {
+    console.log(`[WorkflowEngine] Auto-approving expired checkpoint ${checkpoint.id} for story ${storyId}`);
+    console.log(`[WorkflowEngine] Expired at: ${checkpoint.expiresAt}, Now: ${new Date().toISOString()}`);
+
+    try {
+      await this.stateManager.appendWorkflowHistory(storyId, {
+        type: 'checkpoint_auto_approved',
+        phase: checkpoint.phase,
+        detail: {
+          checkpointId: checkpoint.id,
+          expiredAt: checkpoint.expiresAt,
+          autoApprovedAt: new Date().toISOString(),
+          reason: 'timeout'
+        }
+      });
+
+      await this._notify(storyId, 'checkpoint_auto_approved', {
+        storyId,
+        checkpointId: checkpoint.id,
+        phase: checkpoint.phase,
+        expiredAt: checkpoint.expiresAt,
+        autoApprovedAt: new Date().toISOString()
+      });
+
+      await this.stateManager.clearActiveCheckpoint(storyId);
+
+      const currentPhase = checkpoint.phase;
+      if (currentPhase === 'phase1') {
+        await this.stateManager.updateWorkflow(storyId, { state: 'running' });
+        await this._runPhase2(storyId);
+      } else if (currentPhase === 'phase2') {
+        await this.stateManager.updateWorkflow(storyId, { state: 'running' });
+        await this._runPhase3(storyId);
+      } else if (currentPhase === 'phase3') {
+        await this._markCompleted(storyId);
+      }
+
+      console.log(`[WorkflowEngine] Successfully auto-approved checkpoint ${checkpoint.id}`);
+      return { success: true, checkpointId: checkpoint.id };
+    } catch (error) {
+      console.error(`[WorkflowEngine] Failed to auto-approve checkpoint ${checkpoint.id}:`, error);
+      return { success: false, checkpointId: checkpoint.id, error: error.message };
+    }
   }
 
   /**

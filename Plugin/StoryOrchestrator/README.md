@@ -447,18 +447,13 @@ StoryOrchestrator 内置自动恢复机制：
 **状态文件结构**：
 ```
 Plugin/StoryOrchestrator/state/
-├── story-abc123/
-│   ├── workflow_state.json    # 工作流状态机状态
-│   ├── phase1_context.json    # Phase1 执行上下文
-│   ├── phase2_context.json    # Phase2 执行上下文
-│   ├── phase3_context.json    # Phase3 执行上下文
-│   ├── chapters/             # 各章节内容
-│   │   ├── chapter_1.json
-│   │   └── chapter_2.json
-│   └── checkpoints/          # 检查点历史
-│       ├── cp-1-worldview.json
-│       └── cp-2-outline.json
+└── stories/                        # 故事状态文件目录
+    ├── story-abc123.json          # 单个 JSON 文件，包含完整状态
+    ├── story-def456.json
+    └── index.json                 # 故事索引（可选）
 ```
+
+**注意**：状态存储为扁平文件结构（`state/stories/*.json`），各阶段上下文、章节内容和检查点历史均包含在单个 JSON 文件中，而非子目录结构。
 
 ### 手动恢复命令
 

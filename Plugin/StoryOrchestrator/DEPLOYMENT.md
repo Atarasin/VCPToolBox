@@ -585,8 +585,8 @@ CMD ["pm2-runtime", "server.js"]
 |---------|------|------|
 | 主服务器日志 | PM2 logs | `pm2 logs server` |
 | StoryOrchestrator 日志 | 内置 console | 通过 PM2 捕获 |
-| 状态变更日志 | `state/<story_id>/logs/` | 各故事项目独立 |
-| Agent 调用日志 | `state/<story_id>/agent_calls/` | 调试模式开启时 |
+| 状态变更日志 | `state/stories/<story_id>.json` | 各故事项目独立 |
+| Agent 调用日志 | `state/stories/<story_id>.json` | 调试模式开启时 |
 
 ### 状态文件管理
 
@@ -612,7 +612,7 @@ Plugin/StoryOrchestrator/state/
 "
 
 # 手动清理特定故事
-rm -rf Plugin/StoryOrchestrator/state/stories/story-xxx/
+rm Plugin/StoryOrchestrator/state/stories/story-xxx.json
 
 # 清理所有故事状态（重置）
 rm -rf Plugin/StoryOrchestrator/state/stories/*
@@ -740,7 +740,7 @@ recovery_action:「始」continue「末」
 ls -la Plugin/StoryOrchestrator/state/
 
 # 验证 JSON 格式
-cat Plugin/StoryOrchestrator/state/<story_id>/workflow_state.json | python3 -m json.tool
+cat Plugin/StoryOrchestrator/state/stories/<story_id>.json | python3 -m json.tool
 ```
 
 **解决方案**：
