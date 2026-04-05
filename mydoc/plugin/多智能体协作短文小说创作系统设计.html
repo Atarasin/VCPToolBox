@@ -1,0 +1,2030 @@
+<!DOCTYPE html><html lang="zh-CN"><head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>多智能体协作短文小说创作系统设计方案</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.5.0/mermaid.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&amp;family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'serif': ['Playfair Display', 'serif'],
+                        'sans': ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: '#1e293b',
+                        secondary: '#64748b',
+                        accent: '#3b82f6',
+                        neutral: '#f8fafc',
+                        'base-100': '#ffffff',
+                        'base-200': '#f1f5f9',
+                        'base-300': '#e2e8f0',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .toc-fixed {
+            position: fixed;
+            left: 2rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 280px;
+            max-height: 70vh;
+            overflow-y: auto;
+            z-index: 50;
+            background: rgba(248, 250, 252, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .main-content {
+            margin-left: 320px;
+            max-width: calc(100vw - 360px);
+        }
+        
+        .hero-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            align-items: center;
+            min-height: 60vh;
+        }
+        
+        .citation-link {
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 500;
+            border-bottom: 1px dotted #3b82f6;
+        }
+        
+        .citation-link:hover {
+            background-color: #eff6ff;
+            border-bottom: 1px solid #3b82f6;
+        }
+        
+        .agent-card {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border: 1px solid #cbd5e1;
+            transition: all 0.3s ease;
+        }
+        
+        .agent-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .workflow-phase {
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            color: white;
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .quality-gate {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            color: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        
+        @media (max-width: 1280px) {
+            .toc-fixed {
+                display: none;
+            }
+            .main-content {
+                margin-left: 0;
+                max-width: 100%;
+            }
+        }
+
+        @media (max-width: 1024px) {
+            .mermaid-control-btn:not(.reset-zoom) {
+                display: none;
+            }
+            .mermaid-controls {
+                top: auto;
+                bottom: 15px;
+                right: 15px;
+            }
+        }
+        
+        body {
+            overflow-x: hidden;
+        }
+        
+        .mermaid-container {
+            display: flex;
+            justify-content: center;
+            min-height: 300px;
+            max-height: 800px;
+            background: #ffffff;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 15px;
+            margin: 30px 0;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mermaid-container .mermaid {
+            width: 100%;
+            max-width: 100%;
+            height: 100%;
+            cursor: grab;
+            transition: transform 0.3s ease;
+            transform-origin: center center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            touch-action: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        .mermaid-container .mermaid svg {
+            max-width: 100%;
+            height: 100%;
+            display: block;
+            margin: 0 auto;
+        }
+
+        .mermaid-container .mermaid:active {
+            cursor: grabbing;
+        }
+
+        .mermaid-container.zoomed .mermaid {
+            height: 100%;
+            width: 100%;
+            cursor: grab;
+        }
+
+        .mermaid-controls {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            gap: 10px;
+            z-index: 20;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 8px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .mermaid-control-btn {
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #374151;
+            font-size: 14px;
+            min-width: 36px;
+            height: 36px;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mermaid-control-btn:hover {
+            background: #f8fafc;
+            border-color: #3b82f6;
+            color: #3b82f6;
+            transform: translateY(-1px);
+        }
+
+        .mermaid-control-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Enhanced mermaid styling for better contrast and unified design */
+        .mermaid {
+            font-family: 'Inter', sans-serif !important;
+        }
+        
+        .mermaid .node rect,
+        .mermaid .node circle,
+        .mermaid .node ellipse,
+        .mermaid .node polygon {
+            stroke-width: 2px !important;
+        }
+        
+        .mermaid .node .label {
+            font-weight: 500 !important;
+            font-size: 13px !important;
+            fill: #1e293b !important;
+        }
+        
+        .mermaid .edgePath .path {
+            stroke-width: 2px !important;
+            stroke: #64748b !important;
+        }
+        
+    .mermaid .edgeLabel {
+        background-color: rgba(255, 255, 255, 0.9) !important;
+        border-radius: 4px !important;
+        padding: 2px 6px !important;
+        font-size: 11px !important;
+        font-weight: 500 !important;
+        color: #374151 !important;
+    }
+    
+    @media (max-width: 768px) {
+        .hero-grid {
+            grid-template-columns: 1fr;
+            min-height: auto;
+        }
+        
+        .main-content {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        
+        .relative.z-10 h1 {
+            font-size: 2.25rem;
+            line-height: 1.2;
+        }
+        
+        .relative.z-10 p {
+            font-size: 1rem;
+        }
+    }
+</style>
+  <base target="_blank">
+</head>
+
+  <body class="bg-neutral font-sans text-primary leading-relaxed">
+    <!-- Fixed Table of Contents -->
+    <nav class="toc-fixed">
+      <h3 class="font-serif font-bold text-lg mb-4 text-primary">目录导航</h3>
+      <ul class="space-y-2 text-sm">
+        <li>
+          <a href="#hero" class="citation-link">概述与架构</a>
+        </li>
+        <li>
+          <a href="#principles" class="citation-link">核心设计原则</a>
+        </li>
+        <li>
+          <a href="#architecture" class="citation-link">技术架构</a>
+        </li>
+        <li>
+          <a href="#agents" class="citation-link">智能体角色矩阵</a>
+        </li>
+        <li>
+          <a href="#workflow" class="citation-link">三阶段工作流</a>
+        </li>
+        <li>
+          <a href="#collaboration" class="citation-link">协作模式</a>
+        </li>
+        <li>
+          <a href="#memory" class="citation-link">状态管理架构</a>
+        </li>
+        <li>
+          <a href="#interaction" class="citation-link">用户交互设计</a>
+        </li>
+        <li>
+          <a href="#quality" class="citation-link">质量保障体系</a>
+        </li>
+        <li>
+          <a href="#scalability" class="citation-link">扩展性设计</a>
+        </li>
+      </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Hero Section -->
+      <section id="hero" class="bg-gradient-to-br from-slate-50 to-blue-50 py-16">
+        <div class="hero-grid max-w-6xl mx-auto px-8">
+          <div class="space-y-6">
+            <div class="inline-block bg-accent/10 text-accent px-4 py-2 rounded-full text-sm font-medium">
+              <i class="fas fa-robot mr-2"></i>多智能体协作系统
+            </div>
+            <h1 class="font-serif text-5xl font-bold leading-tight text-primary">
+              <em class="text-accent">九智能体专业化分工</em>
+              <br/>
+              构建1-5万字小说创作新范式
+            </h1>
+            <p class="text-xl text-secondary leading-relaxed">
+              基于三阶段工作流与闭环校验机制的创新设计方案，通过专业化分工与智能化协作，实现效率与质量的完美平衡
+            </p>
+            <div class="flex space-x-4">
+              <div class="bg-white px-4 py-2 rounded-lg shadow-sm">
+                <span class="text-2xl font-bold text-accent">9</span>
+                <span class="text-secondary">类智能体</span>
+              </div>
+              <div class="bg-white px-4 py-2 rounded-lg shadow-sm">
+                <span class="text-2xl font-bold text-accent">3</span>
+                <span class="text-secondary">阶段工作流</span>
+              </div>
+              <div class="bg-white px-4 py-2 rounded-lg shadow-sm">
+                <span class="text-2xl font-bold text-accent">1-5</span>
+                <span class="text-secondary">万字适配</span>
+              </div>
+            </div>
+          </div>
+          <div class="relative">
+            <img src="https://kimi-web-img.moonshot.cn/img/image.woshipm.com/dc19049b3abba266b9a08ec43b1c7bb94cc195ed.png" alt="AI协作写作概念图" class="rounded-2xl shadow-2xl w-full h-96 object-cover" size="large" aspect="wide" style="photo" query="AI写作协作" referrerpolicy="no-referrer" data-modified="1" data-score="0.00"/>
+            <div class="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent rounded-2xl"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Core Design Principles -->
+      <section id="principles" class="py-16 bg-white">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">核心设计原则</h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Specialized Division -->
+            <div class="agent-card p-8 rounded-2xl">
+              <div class="flex items-center mb-6">
+                <div class="bg-accent/10 p-3 rounded-xl mr-4">
+                  <i class="fas fa-users-cog text-accent text-2xl"></i>
+                </div>
+                <h3 class="font-serif text-2xl font-bold">专业化分工</h3>
+              </div>
+              <p class="text-secondary mb-4">
+                借鉴人类编辑部的高效运作模式，九类智能体各司其职，避免能力混杂与自我审核偏差<a href="https://cloud.tencent.com/developer/article/2650227" class="citation-link">[27]</a>
+                <a href="https://notes.muthu.co/2026/02/role-specialization-and-crew-based-multi-agent-architectures/" class="citation-link">[31]</a>。
+              </p>
+              <ul class="space-y-2 text-sm">
+                <li class="flex items-center"><i class="fas fa-check text-accent mr-2"></i>总控调度Agent统筹全局</li>
+                <li class="flex items-center"><i class="fas fa-check text-accent mr-2"></i>创意生成层专注构思</li>
+                <li class="flex items-center"><i class="fas fa-check text-accent mr-2"></i>内容生产层高效执行</li>
+                <li class="flex items-center"><i class="fas fa-check text-accent mr-2"></i>质量保障层严格把关</li>
+              </ul>
+            </div>
+
+            <!-- Closed-loop Verification -->
+            <div class="agent-card p-8 rounded-2xl">
+              <div class="flex items-center mb-6">
+                <div class="bg-red-100 p-3 rounded-xl mr-4">
+                  <i class="fas fa-shield-alt text-red-600 text-2xl"></i>
+                </div>
+                <h3 class="font-serif text-2xl font-bold">闭环校验机制</h3>
+              </div>
+              <p class="text-secondary mb-4">
+                逻辑校验Agent贯穿全程，拥有修改否决权，构建&#34;生成-评估-优化&#34;的进化飞轮<a href="https://blog.csdn.net/yuntongliangda/article/details/150364542" class="citation-link">[28]</a>
+                <a href="https://aidevedge.com/posts/multi-agent-ai-content-workflows.html" class="citation-link">[30]</a>。
+              </p>
+              <div class="space-y-2 text-sm">
+                <div class="flex justify-between items-center">
+                  <span>设定一致性核查</span>
+                  <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">CRITICAL</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span>情节逻辑验证</span>
+                  <span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">MAJOR</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span>人设符合度审查</span>
+                  <span class="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs">MINOR</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- User Interaction Design -->
+          <div class="mt-12">
+            <div class="quality-gate">
+              <h3 class="font-serif text-2xl font-bold mb-4 flex items-center">
+                <i class="fas fa-user-check mr-3"></i>用户关键节点介入
+              </h3>
+              <p class="mb-6">
+                采用&#34;三处强制确认节点&#34;设计，平衡用户自主性与AI辅助性，遵循&#34;human-in-control, AI-in-the-loop&#34;框架<a href="https://dl.acm.org/doi/full/10.1145/3672277" class="citation-link">[33]</a>。
+              </p>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold mb-2">世界观人物方案确认</h4>
+                  <p class="text-sm">防止&#34;地基偏差&#34;，修正成本最低阶段</p>
+                </div>
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold mb-2">分章大纲确认</h4>
+                  <p class="text-sm">把控故事走向与节奏预期</p>
+                </div>
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold mb-2">终稿验收确认</h4>
+                  <p class="text-sm">交付前的最终质量把关</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Technical Architecture -->
+      <section id="architecture" class="py-16 bg-slate-50">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">技术架构参考</h2>
+
+          <!-- Architecture Diagram -->
+          <div class="bg-white p-8 rounded-2xl shadow-lg mb-12">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">四层架构模型</h3>
+            <div class="mermaid-container">
+              <div class="mermaid-controls">
+                <button class="mermaid-control-btn zoom-in" title="放大">
+                  <i class="fas fa-search-plus"></i>
+                </button>
+                <button class="mermaid-control-btn zoom-out" title="缩小">
+                  <i class="fas fa-search-minus"></i>
+                </button>
+                <button class="mermaid-control-btn reset-zoom" title="重置">
+                  <i class="fas fa-expand-arrows-alt"></i>
+                </button>
+                <button class="mermaid-control-btn fullscreen" title="全屏查看">
+                  <i class="fas fa-expand"></i>
+                </button>
+              </div>
+              <div class="mermaid">
+                graph TD
+                A[&#34;用户输入
+                <br/>故事梗概/开头&#34;] --&gt; B[&#34;总控调度Agent
+                <br/>决策协调层&#34;]
+                B --&gt; C[&#34;世界观设定Agent
+                <br/>创意生成层&#34;]
+                B --&gt; D[&#34;人物塑造Agent
+                <br/>创意生成层&#34;]
+                B --&gt; E[&#34;情节架构Agent
+                <br/>创意生成层&#34;]
+                B --&gt; F[&#34;章节执笔Agent
+                <br/>内容生产层&#34;]
+                B --&gt; G[&#34;细节填充Agent
+                <br/>内容生产层&#34;]
+                B --&gt; H[&#34;逻辑校验Agent
+                <br/>质量保障层&#34;]
+                B --&gt; I[&#34;文笔润色Agent
+                <br/>质量保障层&#34;]
+                B --&gt; J[&#34;终校定稿Agent
+                <br/>质量保障层&#34;]
+
+                C --&gt; K[&#34;世界观文档&#34;]
+                D --&gt; L[&#34;人物档案&#34;]
+                E --&gt; M[&#34;分章大纲&#34;]
+                F --&gt; N[&#34;章节正文&#34;]
+                G --&gt; O[&#34;细节描写&#34;]
+                H --&gt; P[&#34;校验报告&#34;]
+                I --&gt; Q[&#34;润色文本&#34;]
+                J --&gt; R[&#34;终稿输出&#34;]
+
+                style A fill:#e3f2fd
+                style B fill:#1e293b,color:#fff
+                style C fill:#bbdefb
+                style D fill:#bbdefb
+                style E fill:#bbdefb
+                style F fill:#c8e6c9
+                style G fill:#c8e6c9
+                style H fill:#ffcdd2
+                style I fill:#ffcdd2
+                style J fill:#ffcdd2
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Message Passing -->
+            <div class="bg-white p-6 rounded-xl shadow-lg">
+              <div class="bg-accent/10 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                <i class="fas fa-comments text-accent text-xl"></i>
+              </div>
+              <h3 class="font-serif text-xl font-bold mb-3">消息传递机制</h3>
+              <p class="text-secondary text-sm mb-4">
+                智能体间通过结构化任务消息与状态报告通信，支持异步消息驱动<a href="https://cloud.tencent.com/developer/article/2650227" class="citation-link">[27]</a>。
+              </p>
+              <ul class="text-xs space-y-1">
+                <li>• 任务分配消息</li>
+                <li>• 状态报告消息</li>
+                <li>• 校验反馈消息</li>
+                <li>• 用户指令消息</li>
+              </ul>
+            </div>
+
+            <!-- Memory Management -->
+            <div class="bg-white p-6 rounded-xl shadow-lg">
+              <div class="bg-green-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                <i class="fas fa-brain text-green-600 text-xl"></i>
+              </div>
+              <h3 class="font-serif text-xl font-bold mb-3">记忆管理架构</h3>
+              <p class="text-secondary text-sm mb-4">
+                区分短期工作记忆与长期故事记忆，支持跨章节信息检索<a href="https://blog.csdn.net/yuntongliangda/article/details/150364542" class="citation-link">[28]</a>。
+              </p>
+              <div class="space-y-2 text-xs">
+                <div class="flex justify-between">
+                  <span>故事圣经</span>
+                  <span class="text-green-600">权威版本</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>章节状态</span>
+                  <span class="text-blue-600">实时追踪</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>伏笔登记</span>
+                  <span class="text-red-600">闭环管理</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Hierarchical Control -->
+            <div class="bg-white p-6 rounded-xl shadow-lg">
+              <div class="bg-purple-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                <i class="fas fa-sitemap text-purple-600 text-xl"></i>
+              </div>
+              <h3 class="font-serif text-xl font-bold mb-3">分层控制模型</h3>
+              <p class="text-secondary text-sm mb-4">
+                总控调度Agent作为中央协调层，下层智能体按功能集群组织。
+              </p>
+              <div class="space-y-1 text-xs">
+                <div class="font-semibold">决策协调层</div>
+                <div class="pl-2 text-gray-600">任务分解与分配</div>
+                <div class="pl-2 text-gray-600">进度监控与冲突仲裁</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Agent Role Matrix -->
+      <section id="agents" class="py-16 bg-white">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">智能体角色与职能矩阵</h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+            <!-- Decision Coordination Layer -->
+            <div class="workflow-phase">
+              <h3 class="font-serif text-2xl font-bold mb-6">决策协调层</h3>
+              <div class="space-y-6">
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold text-lg mb-2">总控调度Agent</h4>
+                  <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="bg-white/10 p-2 rounded">
+                      <div class="font-semibold">任务分解</div>
+                      <div class="text-xs opacity-90">项目任务图谱</div>
+                    </div>
+                    <div class="bg-white/10 p-2 rounded">
+                      <div class="font-semibold">进度监控</div>
+                      <div class="text-xs opacity-90">实时状态追踪</div>
+                    </div>
+                    <div class="bg-white/10 p-2 rounded">
+                      <div class="font-semibold">冲突仲裁</div>
+                      <div class="text-xs opacity-90">分歧处理机制</div>
+                    </div>
+                    <div class="bg-white/10 p-2 rounded">
+                      <div class="font-semibold">用户接口</div>
+                      <div class="text-xs opacity-90">三处确认节点</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Creative Generation Layer -->
+            <div class="workflow-phase">
+              <h3 class="font-serif text-2xl font-bold mb-6">创意生成层</h3>
+              <div class="space-y-4">
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold mb-2">世界观设定Agent</h4>
+                  <ul class="text-sm space-y-1 opacity-90">
+                    <li>• 背景架构与势力体系</li>
+                    <li>• 物理规则与历史脉络</li>
+                    <li>• 场景规范与细节模板</li>
+                  </ul>
+                </div>
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold mb-2">人物塑造Agent</h4>
+                  <ul class="text-sm space-y-1 opacity-90">
+                    <li>• 核心人设与关系网络</li>
+                    <li>• 成长弧线与行为动机</li>
+                    <li>• OOC防护机制设计</li>
+                  </ul>
+                </div>
+                <div class="bg-white/20 p-4 rounded-lg">
+                  <h4 class="font-bold mb-2">情节架构Agent</h4>
+                  <ul class="text-sm space-y-1 opacity-90">
+                    <li>• 主线设计与支线编织</li>
+                    <li>• 章节划分与节奏卡点</li>
+                    <li>• 悬念布局与结构优化</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Content Production &amp; Quality Assurance -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Content Production Layer -->
+            <div class="bg-gradient-to-br from-green-50 to-emerald-50 p-8 rounded-2xl border border-green-200">
+              <h3 class="font-serif text-2xl font-bold mb-6 text-green-800">内容生产层</h3>
+              <div class="space-y-6">
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                  <h4 class="font-bold text-green-700 mb-2 flex items-center">
+                    <i class="fas fa-pen-fancy mr-2"></i>章节执笔Agent
+                  </h4>
+                  <ul class="text-sm space-y-1 text-gray-600">
+                    <li>• 按大纲逐章撰写正文</li>
+                    <li>• 视角控制与对话设计</li>
+                    <li>• 情节推进与章节衔接</li>
+                  </ul>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                  <h4 class="font-bold text-green-700 mb-2 flex items-center">
+                    <i class="fas fa-palette mr-2"></i>细节填充Agent
+                  </h4>
+                  <ul class="text-sm space-y-1 text-gray-600">
+                    <li>• 场景描写与氛围渲染</li>
+                    <li>• 感官细节与环境互动</li>
+                    <li>• 情绪铺垫与节奏配合</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quality Assurance Layer -->
+            <div class="bg-gradient-to-br from-red-50 to-pink-50 p-8 rounded-2xl border border-red-200">
+              <h3 class="font-serif text-2xl font-bold mb-6 text-red-800">质量保障层</h3>
+              <div class="space-y-6">
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                  <h4 class="font-bold text-red-700 mb-2 flex items-center">
+                    <i class="fas fa-search mr-2"></i>逻辑校验Agent
+                  </h4>
+                  <ul class="text-sm space-y-1 text-gray-600">
+                    <li>• 设定一致性与情节逻辑</li>
+                    <li>• 伏笔追踪与人设符合度</li>
+                    <li>• 否决权执行与质量闭环</li>
+                  </ul>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                  <h4 class="font-bold text-red-700 mb-2 flex items-center">
+                    <i class="fas fa-magic mr-2"></i>文笔润色Agent
+                  </h4>
+                  <ul class="text-sm space-y-1 text-gray-600">
+                    <li>• 文风统一与句式优化</li>
+                    <li>• 叙事节奏与修辞提升</li>
+                    <li>• 跨章节语调协调</li>
+                  </ul>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                  <h4 class="font-bold text-red-700 mb-2 flex items-center">
+                    <i class="fas fa-check-double mr-2"></i>终校定稿Agent
+                  </h4>
+                  <ul class="text-sm space-y-1 text-gray-600">
+                    <li>• 错别字修正与标点规范</li>
+                    <li>• 格式标准化与排版优化</li>
+                    <li>• 多格式输出交付</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Three-Stage Workflow -->
+      <section id="workflow" class="py-16 bg-slate-50">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">三阶段工作流设计</h2>
+
+          <!-- Workflow Overview -->
+          <div class="bg-white p-8 rounded-2xl shadow-lg mb-12">
+            <img src="https://kimi-web-img.moonshot.cn/img/moonlight-paper-snapshot.s3.ap-northeast-2.amazonaws.com/fd67121e38a8ae1380cff75ade2fda1abf09f315.png" alt="三阶段文学创作工作流程示意图" class="w-full h-64 object-cover rounded-xl mb-6" size="medium" aspect="wide" query="文学创作工作流程" referrerpolicy="no-referrer" data-modified="1" data-score="0.00"/>
+            <div class="text-center">
+              <p class="text-lg text-secondary">
+                基于并行-串行-循环的混合协作模式，实现效率与质量的动态平衡
+              </p>
+            </div>
+          </div>
+
+          <!-- Phase 1: Pre-production -->
+          <div class="workflow-phase mb-12">
+            <div class="flex items-center mb-6">
+              <div class="bg-white w-12 h-12 rounded-full flex items-center justify-center mr-4">
+                <span class="font-bold text-2xl text-primary">1</span>
+              </div>
+              <h3 class="font-serif text-3xl font-bold">第一阶段：世界观与人设并行搭建</h3>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+              <div class="bg-white/20 p-4 rounded-lg">
+                <h4 class="font-bold mb-2">触发条件</h4>
+                <p class="text-sm opacity-90">用户提交故事梗概或开头片段</p>
+              </div>
+              <div class="bg-white/20 p-4 rounded-lg">
+                <h4 class="font-bold mb-2">并行任务</h4>
+                <p class="text-sm opacity-90">世界观设定Agent与人物塑造Agent同步启动</p>
+              </div>
+              <div class="bg-white/20 p-4 rounded-lg">
+                <h4 class="font-bold mb-2">中间成果</h4>
+                <p class="text-sm opacity-90">世界观文档 + 人物档案</p>
+              </div>
+            </div>
+
+            <div class="bg-white/20 p-6 rounded-lg">
+              <h4 class="font-bold mb-4">校验关卡与用户确认</h4>
+              <div class="flex items-center space-x-4">
+                <div class="flex-1">
+                  <div class="flex items-center mb-2">
+                    <i class="fas fa-search mr-2"></i>
+                    <span class="font-semibold">逻辑校验Agent审查</span>
+                  </div>
+                  <p class="text-sm opacity-90">设定自洽性审查，未通过则返回修订</p>
+                </div>
+                <i class="fas fa-arrow-right text-2xl"></i>
+                <div class="flex-1">
+                  <div class="flex items-center mb-2">
+                    <i class="fas fa-user-check mr-2"></i>
+                    <span class="font-semibold">用户确认节点</span>
+                  </div>
+                  <p class="text-sm opacity-90">世界观与人物方案定稿签字</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Phase 2: Production -->
+          <div class="workflow-phase mb-12">
+            <div class="flex items-center mb-6">
+              <div class="bg-white w-12 h-12 rounded-full flex items-center justify-center mr-4">
+                <span class="font-bold text-2xl text-primary">2</span>
+              </div>
+              <h3 class="font-serif text-3xl font-bold">第二阶段：大纲串行生成与正文逐章生产</h3>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              <div class="bg-white/20 p-6 rounded-lg">
+                <h4 class="font-bold mb-4">大纲生成流程</h4>
+                <div class="space-y-3">
+                  <div class="flex items-center">
+                    <i class="fas fa-drafting-compass mr-3"></i>
+                    <span class="text-sm">情节架构Agent串行工作</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-search mr-3"></i>
+                    <span class="text-sm">逻辑校验Agent核查</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-user-check mr-3"></i>
+                    <span class="text-sm">用户确认分章大纲</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white/20 p-6 rounded-lg">
+                <h4 class="font-bold mb-4">正文生产模式</h4>
+                <div class="space-y-3">
+                  <div class="flex items-center">
+                    <i class="fas fa-pen-fancy mr-3"></i>
+                    <span class="text-sm">章节执笔Agent逐章撰写</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-palette mr-3"></i>
+                    <span class="text-sm">细节填充Agent并行补充</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-search mr-3"></i>
+                    <span class="text-sm">逻辑校验Agent实时跟进</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-white/20 p-6 rounded-lg">
+              <h4 class="font-bold mb-4">可配置用户介入模式</h4>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-white/10 p-3 rounded">
+                  <div class="font-semibold text-sm mb-1">全自动模式</div>
+                  <div class="text-xs opacity-90">无介入，仅终稿确认</div>
+                </div>
+                <div class="bg-white/10 p-3 rounded">
+                  <div class="font-semibold text-sm mb-1">关键章节模式</div>
+                  <div class="text-xs opacity-90">转折点、高潮、结局确认</div>
+                </div>
+                <div class="bg-white/10 p-3 rounded">
+                  <div class="font-semibold text-sm mb-1">全审阅模式</div>
+                  <div class="text-xs opacity-90">每章完成后均确认</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Phase 3: Post-production -->
+          <div class="workflow-phase">
+            <div class="flex items-center mb-6">
+              <div class="bg-white w-12 h-12 rounded-full flex items-center justify-center mr-4">
+                <span class="font-bold text-2xl text-primary">3</span>
+              </div>
+              <h3 class="font-serif text-3xl font-bold">第三阶段：润色校验迭代与终校定稿</h3>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              <div class="bg-white/20 p-6 rounded-lg">
+                <h4 class="font-bold mb-4">润色-校验循环</h4>
+                <div class="space-y-4">
+                  <div class="bg-white/10 p-3 rounded">
+                    <div class="font-semibold text-sm mb-1">文笔润色Agent优化</div>
+                    <div class="text-xs opacity-90">文风统一与表达优化</div>
+                  </div>
+                  <div class="text-center">
+                    <i class="fas fa-sync-alt text-2xl animate-spin"></i>
+                  </div>
+                  <div class="bg-white/10 p-3 rounded">
+                    <div class="font-semibold text-sm mb-1">逻辑校验Agent复核</div>
+                    <div class="text-xs opacity-90">检验润色后一致性</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white/20 p-6 rounded-lg">
+                <h4 class="font-bold mb-4">迭代终止条件</h4>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between bg-white/10 p-3 rounded">
+                    <span class="text-sm">质量评分达标</span>
+                    <span class="bg-green-500 text-white px-2 py-1 rounded text-xs">优先</span>
+                  </div>
+                  <div class="flex items-center justify-between bg-white/10 p-3 rounded">
+                    <span class="text-sm">最大迭代次数</span>
+                    <span class="bg-orange-500 text-white px-2 py-1 rounded text-xs">兜底</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-white/20 p-6 rounded-lg">
+              <h4 class="font-bold mb-4">终校流程与交付</h4>
+              <div class="flex items-center space-x-6">
+                <div class="text-center">
+                  <i class="fas fa-spell-check text-2xl mb-2"></i>
+                  <div class="text-sm font-semibold">文字纠错</div>
+                </div>
+                <i class="fas fa-arrow-right text-xl"></i>
+                <div class="text-center">
+                  <i class="fas fa-ruler-combined text-2xl mb-2"></i>
+                  <div class="text-sm font-semibold">格式规范</div>
+                </div>
+                <i class="fas fa-arrow-right text-xl"></i>
+                <div class="text-center">
+                  <i class="fas fa-file-export text-2xl mb-2"></i>
+                  <div class="text-sm font-semibold">多格式输出</div>
+                </div>
+                <i class="fas fa-arrow-right text-xl"></i>
+                <div class="text-center">
+                  <i class="fas fa-check-circle text-2xl mb-2 text-green-300"></i>
+                  <div class="text-sm font-semibold">用户验收</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Collaboration Patterns -->
+      <section id="collaboration" class="py-16 bg-white">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">协作模式与交互机制</h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
+            <!-- Parallel Collaboration -->
+            <div class="bg-gradient-to-br from-blue-50 to-indigo-50 p-8 rounded-2xl border border-blue-200">
+              <div class="bg-blue-100 w-16 h-16 rounded-xl flex items-center justify-center mb-6">
+                <i class="fas fa-project-diagram text-blue-600 text-2xl"></i>
+              </div>
+              <h3 class="font-serif text-2xl font-bold mb-4 text-blue-800">并行协作模式</h3>
+              <div class="space-y-4">
+                <div class="bg-white/50 p-4 rounded-lg">
+                  <h4 class="font-bold text-blue-700 mb-2">世界观-人设并行</h4>
+                  <p class="text-sm text-gray-600 mb-2">两Agent独立工作，成果汇总后统一校验</p>
+                  <div class="text-xs text-blue-600">效率提升：并行执行仅需T时间</div>
+                </div>
+                <div class="bg-white/50 p-4 rounded-lg">
+                  <h4 class="font-bold text-blue-700 mb-2">正文-细节并行</h4>
+                  <p class="text-sm text-gray-600 mb-2">章节执笔Agent生成主干，细节填充Agent同步渲染氛围</p>
+                  <div class="text-xs text-blue-600">场景级合并，避免阻塞等待</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Serial Collaboration -->
+            <div class="bg-gradient-to-br from-orange-50 to-red-50 p-8 rounded-2xl border border-orange-200">
+              <div class="bg-orange-100 w-16 h-16 rounded-xl flex items-center justify-center mb-6">
+                <i class="fas fa-stream text-orange-600 text-2xl"></i>
+              </div>
+              <h3 class="font-serif text-2xl font-bold mb-4 text-orange-800">串行协作模式</h3>
+              <div class="space-y-4">
+                <div class="bg-white/50 p-4 rounded-lg">
+                  <h4 class="font-bold text-orange-700 mb-2">设定→大纲串行</h4>
+                  <p class="text-sm text-gray-600 mb-2">世界观人物确认后方可启动情节架构</p>
+                  <div class="text-xs text-orange-600">保障结构完整性</div>
+                </div>
+                <div class="bg-white/50 p-4 rounded-lg">
+                  <h4 class="font-bold text-orange-700 mb-2">章节串行撰写</h4>
+                  <p class="text-sm text-gray-600 mb-2">第N章定稿后方可启动第N+1章</p>
+                  <div class="text-xs text-orange-600">保障因果连贯性</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Iterative Mode -->
+            <div class="bg-gradient-to-br from-green-50 to-emerald-50 p-8 rounded-2xl border border-green-200">
+              <div class="bg-green-100 w-16 h-16 rounded-xl flex items-center justify-center mb-6">
+                <i class="fas fa-sync-alt text-green-600 text-2xl"></i>
+              </div>
+              <h3 class="font-serif text-2xl font-bold mb-4 text-green-800">循环迭代模式</h3>
+              <div class="space-y-4">
+                <div class="bg-white/50 p-4 rounded-lg">
+                  <h4 class="font-bold text-green-700 mb-2">生成-评估-优化飞轮</h4>
+                  <p class="text-sm text-gray-600 mb-2">执笔/润色Agent产出 → 校验Agent评估 → 反馈修正</p>
+                  <div class="text-xs text-green-600">逐步逼近质量目标</div>
+                </div>
+                <div class="bg-white/50 p-4 rounded-lg">
+                  <h4 class="font-bold text-green-700 mb-2">多轮优化终止策略</h4>
+                  <p class="text-sm text-gray-600 mb-2">质量阈值优先，次数上限兜底</p>
+                  <div class="text-xs text-green-600">平衡质量与资源</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Conflict Resolution -->
+          <div class="bg-slate-50 p-8 rounded-2xl">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">冲突解决机制</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div class="bg-white p-6 rounded-xl shadow-sm">
+                <div class="bg-red-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-balance-scale text-red-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">设定冲突</h4>
+                <p class="text-sm text-gray-600 mb-3">逻辑校验Agent裁决，必要时提交总控调度Agent仲裁</p>
+                <div class="text-xs text-red-600">依据：设定硬度优先级</div>
+              </div>
+
+              <div class="bg-white p-6 rounded-xl shadow-sm">
+                <div class="bg-blue-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-palette text-blue-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">风格冲突</h4>
+                <p class="text-sm text-gray-600 mb-3">文笔润色Agent主导统一，总控调度Agent最终裁定</p>
+                <div class="text-xs text-blue-600">依据：文风指纹匹配</div>
+              </div>
+
+              <div class="bg-white p-6 rounded-xl shadow-sm">
+                <div class="bg-green-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-tachometer-alt text-green-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">进度冲突</h4>
+                <p class="text-sm text-gray-600 mb-3">总控调度Agent重新分配资源与调整优先级</p>
+                <div class="text-xs text-green-600">依据：关键路径分析</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Memory Architecture -->
+      <section id="memory" class="py-16 bg-slate-50">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">状态管理与记忆架构</h2>
+
+          <!-- Memory Architecture Diagram -->
+          <div class="bg-white p-8 rounded-2xl shadow-lg mb-12">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">双层记忆架构</h3>
+            <div class="mermaid-container">
+              <div class="mermaid-controls">
+                <button class="mermaid-control-btn zoom-in" title="放大">
+                  <i class="fas fa-search-plus"></i>
+                </button>
+                <button class="mermaid-control-btn zoom-out" title="缩小">
+                  <i class="fas fa-search-minus"></i>
+                </button>
+                <button class="mermaid-control-btn reset-zoom" title="重置">
+                  <i class="fas fa-expand-arrows-alt"></i>
+                </button>
+                <button class="mermaid-control-btn fullscreen" title="全屏查看">
+                  <i class="fas fa-expand"></i>
+                </button>
+              </div>
+              <div class="mermaid">
+                graph TB
+                A[&#34;全局状态管理&#34;] --&gt; B[&#34;故事圣经
+                <br/>Story Bible&#34;]
+                A --&gt; C[&#34;章节状态追踪&#34;]
+                A --&gt; D[&#34;伏笔登记簿&#34;]
+
+                B --&gt; E[&#34;世界观核心
+                <br/>硬规则/势力体系&#34;]
+                B --&gt; F[&#34;人物档案
+                <br/>核心人设/关系网络&#34;]
+                B --&gt; G[&#34;情节摘要
+                <br/>关键事件/人物状态&#34;]
+
+                C --&gt; H[&#34;状态机
+                <br/>等待→撰写→校验→确认&#34;]
+                C --&gt; I[&#34;进度可视化
+                <br/>瓶颈识别/风险预警&#34;]
+
+                D --&gt; J[&#34;伏笔生命周期
+                <br/>埋设→回收/废弃&#34;]
+                D --&gt; K[&#34;遗忘风险预警
+                <br/>临近回收点监控&#34;]
+
+                L[&#34;智能体记忆策略&#34;] --&gt; M[&#34;长期记忆
+                <br/>跨章节持久化&#34;]
+                L --&gt; N[&#34;短期记忆
+                <br/>当前任务上下文&#34;]
+
+                M --&gt; O[&#34;向量数据库
+                <br/>语义检索&#34;]
+                M --&gt; P[&#34;关系型数据库
+                <br/>结构化关系&#34;]
+
+                N --&gt; Q[&#34;上下文窗口
+                <br/>即时工作空间&#34;]
+                N --&gt; R[&#34;分层加载
+                <br/>核心/扩展/参考&#34;]
+
+                style A fill:#1e293b,color:#fff
+                style B fill:#3b82f6,color:#fff
+                style C fill:#10b981,color:#fff
+                style D fill:#f59e0b,color:#fff
+                style L fill:#8b5cf6,color:#fff
+              </div>
+            </div>
+          </div>
+
+          <!-- Story Bible -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+              <h3 class="font-serif text-2xl font-bold mb-6 flex items-center">
+                <i class="fas fa-book mr-3 text-blue-600"></i>故事圣经
+              </h3>
+              <p class="text-secondary mb-6">世界观、人物、关键情节的权威版本，所有Agent均可读取但仅特定Agent可修改</p>
+
+              <div class="space-y-4">
+                <div class="border-l-4 border-blue-500 pl-4">
+                  <h4 class="font-bold text-blue-700">世界观核心</h4>
+                  <p class="text-sm text-gray-600">硬规则、势力体系、关键历史</p>
+                  <div class="text-xs text-blue-600 mt-1">更新权限：世界观设定Agent（预生产阶段）</div>
+                </div>
+                <div class="border-l-4 border-green-500 pl-4">
+                  <h4 class="font-bold text-green-700">人物档案</h4>
+                  <p class="text-sm text-gray-600">核心人设、关系网络、成长状态</p>
+                  <div class="text-xs text-green-600 mt-1">更新权限：人物塑造Agent、章节执笔Agent</div>
+                </div>
+                <div class="border-l-4 border-orange-500 pl-4">
+                  <h4 class="font-bold text-orange-700">情节摘要</h4>
+                  <p class="text-sm text-gray-600">已确认章节的关键事件、人物状态</p>
+                  <div class="text-xs text-orange-600 mt-1">更新权限：总控调度Agent（章节定稿后）</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chapter State Tracking -->
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+              <h3 class="font-serif text-2xl font-bold mb-6 flex items-center">
+                <i class="fas fa-tasks mr-3 text-green-600"></i>章节状态追踪
+              </h3>
+              <p class="text-secondary mb-6">每章的草稿、修订、校验、定稿状态实时管理</p>
+
+              <div class="bg-gray-50 p-4 rounded-lg mb-4">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-sm font-semibold">状态流转</span>
+                  <span class="text-xs text-gray-500">状态机管理</span>
+                </div>
+                <div class="text-xs space-y-1">
+                  <div>等待中 → 撰写中 → 待校验 → 校验中 → 待确认 → 已确认 → 已归档</div>
+                  <div class="text-red-600">↑___________|（修订循环） ↑_____|（用户驳回）</div>
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <div class="flex items-center justify-between p-3 bg-green-50 rounded">
+                  <span class="text-sm">第3章</span>
+                  <div class="flex items-center space-x-2">
+                    <div class="w-3 h-3 bg-green-500 rounded-full"></div>
+                    <span class="text-xs text-green-600">已确认</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between p-3 bg-yellow-50 rounded">
+                  <span class="text-sm">第4章</span>
+                  <div class="flex items-center space-x-2">
+                    <div class="w-3 h-3 bg-yellow-500 rounded-full"></div>
+                    <span class="text-xs text-yellow-600">待校验</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between p-3 bg-blue-50 rounded">
+                  <span class="text-sm">第5章</span>
+                  <div class="flex items-center space-x-2">
+                    <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
+                    <span class="text-xs text-blue-600">撰写中</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Retrieval Mechanism -->
+          <div class="bg-white p-8 rounded-xl shadow-lg">
+            <h3 class="font-serif text-2xl font-bold mb-6 flex items-center">
+              <i class="fas fa-search mr-3 text-purple-600"></i>多维度检索机制
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                <h4 class="font-bold text-purple-700 mb-2">关键词检索</h4>
+                <p class="text-sm text-gray-600 mb-2">如&#34;心灵感应&#34;</p>
+                <div class="text-xs text-purple-600">应用场景：核查设定使用</div>
+              </div>
+
+              <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+                <h4 class="font-bold text-green-700 mb-2">章节检索</h4>
+                <p class="text-sm text-gray-600 mb-2">如&#34;第5-8章&#34;</p>
+                <div class="text-xs text-green-600">应用场景：梳理情节脉络</div>
+              </div>
+
+              <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <h4 class="font-bold text-blue-700 mb-2">人物检索</h4>
+                <p class="text-sm text-gray-600 mb-2">如&#34;张三&#34;</p>
+                <div class="text-xs text-blue-600">应用场景：撰写人物出场</div>
+              </div>
+
+              <div class="bg-orange-50 p-4 rounded-lg border border-orange-200">
+                <h4 class="font-bold text-orange-700 mb-2">关系检索</h4>
+                <p class="text-sm text-gray-600 mb-2">如&#34;张三-李四&#34;</p>
+                <div class="text-xs text-orange-600">应用场景：设计对手戏</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- User Interaction -->
+      <section id="interaction" class="py-16 bg-white">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">用户交互设计</h2>
+
+          <!-- Three Mandatory Confirmation Nodes -->
+          <div class="quality-gate mb-12">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">三处强制确认节点</h3>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div class="bg-white/20 p-6 rounded-xl">
+                <div class="flex items-center mb-4">
+                  <div class="bg-blue-500 w-10 h-10 rounded-full flex items-center justify-center mr-3">
+                    <i class="fas fa-globe text-white"></i>
+                  </div>
+                  <h4 class="font-bold text-lg">世界观人物方案确认</h4>
+                </div>
+                <p class="text-sm mb-4 opacity-90">防止后期大规模返工，修正成本在此阶段最低（约1x）</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center">
+                    <i class="fas fa-radar-chart mr-2"></i>
+                    <span>世界观雷达图可视化</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-project-diagram mr-2"></i>
+                    <span>人物关系网络交互图</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-list-alt mr-2"></i>
+                    <span>关键规则条件列表</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white/20 p-6 rounded-xl">
+                <div class="flex items-center mb-4">
+                  <div class="bg-green-500 w-10 h-10 rounded-full flex items-center justify-center mr-3">
+                    <i class="fas fa-map text-white"></i>
+                  </div>
+                  <h4 class="font-bold text-lg">分章大纲确认</h4>
+                </div>
+                <p class="text-sm mb-4 opacity-90">把控故事走向与节奏预期，最后结构调整机会</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center">
+                    <i class="fas fa-route mr-2"></i>
+                    <span>故事地图可视化</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-chart-line mr-2"></i>
+                    <span>节奏曲线图</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-puzzle-piece mr-2"></i>
+                    <span>悬念布局表</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white/20 p-6 rounded-xl">
+                <div class="flex items-center mb-4">
+                  <div class="bg-orange-500 w-10 h-10 rounded-full flex items-center justify-center mr-3">
+                    <i class="fas fa-check-double text-white"></i>
+                  </div>
+                  <h4 class="font-bold text-lg">终稿验收确认</h4>
+                </div>
+                <p class="text-sm mb-4 opacity-90">交付前的最终质量把关，产品形态固化</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center">
+                    <i class="fas fa-file-alt mr-2"></i>
+                    <span>多格式终稿预览</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-chart-pie mr-2"></i>
+                    <span>创作历程摘要</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-medal mr-2"></i>
+                    <span>质量评分报告</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Optional Interaction Modes -->
+          <div class="bg-slate-50 p-8 rounded-2xl">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">可选介入模式</h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div class="bg-white p-6 rounded-xl shadow-sm">
+                <div class="bg-purple-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-book-open text-purple-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">章节级审阅</h4>
+                <p class="text-sm text-gray-600 mb-3">对关键章节逐章确认，适用于对特定情节有强控制需求的场景</p>
+                <div class="text-xs text-purple-600">提供章节正文、创作说明、前后关联提示</div>
+              </div>
+
+              <div class="bg-white p-6 rounded-xl shadow-sm">
+                <div class="bg-blue-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-tv text-blue-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">实时监督模式</h4>
+                <p class="text-sm text-gray-600 mb-3">查看各Agent工作状态与中间产出，满足过程透明性需求</p>
+                <div class="text-xs text-blue-600">仪表盘展示状态、进度、异常告警</div>
+              </div>
+
+              <div class="bg-white p-6 rounded-xl shadow-sm">
+                <div class="bg-green-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-bullseye text-green-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">定向反馈</h4>
+                <p class="text-sm text-gray-600 mb-3">针对特定Agent产出提出修改意见，实现精准干预</p>
+                <div class="text-xs text-green-600">支持内容修正、风格调整、补充需求</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Quality Assurance -->
+      <section id="quality" class="py-16 bg-slate-50">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">质量保障与风险控制</h2>
+
+          <!-- Veto Power Design -->
+          <div class="quality-gate mb-12">
+            <h3 class="font-serif text-2xl font-bold mb-6 flex items-center">
+              <i class="fas fa-gavel mr-3"></i>逻辑校验Agent的否决权设计
+            </h3>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              <div class="bg-white/20 p-6 rounded-lg">
+                <h4 class="font-bold mb-4">否决触发条件</h4>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between p-3 bg-red-500/20 rounded">
+                    <span class="text-sm">设定矛盾</span>
+                    <span class="bg-red-500 text-white px-2 py-1 rounded text-xs">CRITICAL</span>
+                  </div>
+                  <div class="flex items-center justify-between p-3 bg-orange-500/20 rounded">
+                    <span class="text-sm">情节漏洞</span>
+                    <span class="bg-orange-500 text-white px-2 py-1 rounded text-xs">MAJOR</span>
+                  </div>
+                  <div class="flex items-center justify-between p-3 bg-yellow-500/20 rounded">
+                    <span class="text-sm">人设偏离</span>
+                    <span class="bg-yellow-500 text-white px-2 py-1 rounded text-xs">MINOR</span>
+                  </div>
+                  <div class="flex items-center justify-between p-3 bg-red-500/20 rounded">
+                    <span class="text-sm">伏笔断裂</span>
+                    <span class="bg-red-500 text-white px-2 py-1 rounded text-xs">MAJOR</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white/20 p-6 rounded-lg">
+                <h4 class="font-bold mb-4">否决执行流程</h4>
+                <div class="space-y-3 text-sm">
+                  <div class="flex items-center">
+                    <div class="w-6 h-6 bg-white rounded-full flex items-center justify-center mr-3">
+                      <span class="text-primary font-bold">1</span>
+                    </div>
+                    <span>标记问题位置、类型、严重程度</span>
+                  </div>
+                  <div class="flex items-center">
+                    <div class="w-6 h-6 bg-white rounded-full flex items-center justify-center mr-3">
+                      <span class="text-primary font-bold">2</span>
+                    </div>
+                    <span>通知总控调度Agent与责任Agent</span>
+                  </div>
+                  <div class="flex items-center">
+                    <div class="w-6 h-6 bg-white rounded-full flex items-center justify-center mr-3">
+                      <span class="text-primary font-bold">3</span>
+                    </div>
+                    <span>强制返回修订，签发CONFIRMATION</span>
+                  </div>
+                  <div class="flex items-center">
+                    <div class="w-6 h-6 bg-white rounded-full flex items-center justify-center mr-3">
+                      <span class="text-primary font-bold">4</span>
+                    </div>
+                    <span>复核通过方可流转，争议提交仲裁</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-white/20 p-6 rounded-lg">
+              <h4 class="font-bold mb-4">申诉与仲裁机制</h4>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <h5 class="font-semibold mb-2">申诉条件</h5>
+                  <ul class="text-sm space-y-1 opacity-90">
+                    <li>• 责任Agent对否决判定有异议</li>
+                    <li>• 可提供额外证据或替代方案</li>
+                    <li>• 单章申诉次数上限1次</li>
+                  </ul>
+                </div>
+                <div>
+                  <h5 class="font-semibold mb-2">仲裁依据</h5>
+                  <ul class="text-sm space-y-1 opacity-90">
+                    <li>• 预设创作规范优先级</li>
+                    <li>• 用户历史偏好记录</li>
+                    <li>• 行业最佳实践参考</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Consistency Guarantee -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+            <!-- Character Consistency -->
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+              <h3 class="font-serif text-xl font-bold mb-6 flex items-center">
+                <i class="fas fa-user-friends mr-3 text-blue-600"></i>跨章节人物一致性
+              </h3>
+
+              <div class="space-y-4">
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <h4 class="font-bold text-blue-700 mb-2">追踪机制</h4>
+                  <p class="text-sm text-gray-600 mb-2">人物档案中的&#34;行为准则清单&#34;与&#34;语言风格样本&#34;作为基准</p>
+                  <div class="text-xs text-blue-600">自动比对当前表现与基准偏离度</div>
+                </div>
+
+                <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+                  <h4 class="font-bold text-green-700 mb-2">偏离度量化</h4>
+                  <ul class="text-sm space-y-1 text-gray-600">
+                    <li>• 行为一致性得分（0-1）</li>
+                    <li>• 语言风格相似度（向量余弦）</li>
+                    <li>• 关键特质出现频率</li>
+                  </ul>
+                </div>
+
+                <div class="bg-orange-50 p-4 rounded-lg border border-orange-200">
+                  <h4 class="font-bold text-orange-700 mb-2">预警阈值</h4>
+                  <div class="space-y-1 text-sm">
+                    <div class="flex justify-between">
+                      <span>偏离度&gt;0.3</span>
+                      <span class="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs">WARNING</span>
+                    </div>
+                    <div class="flex justify-between">
+                      <span>偏离度&gt;0.5</span>
+                      <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">MAJOR</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Setting Drift Protection -->
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+              <h3 class="font-serif text-xl font-bold mb-6 flex items-center">
+                <i class="fas fa-shield-alt mr-3 text-green-600"></i>设定漂移防护
+              </h3>
+
+              <div class="space-y-4">
+                <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                  <h4 class="font-bold text-purple-700 mb-2">扫描策略</h4>
+                  <p class="text-sm text-gray-600 mb-2">定期全量扫描（每5章）+ 增量监控（新内容实时）</p>
+                  <div class="text-xs text-purple-600">扫描范围：硬规则符合度、软规则一致性、新设定兼容性</div>
+                </div>
+
+                <div class="bg-red-50 p-4 rounded-lg border border-red-200">
+                  <h4 class="font-bold text-red-700 mb-2">漂移处理</h4>
+                  <p class="text-sm text-gray-600 mb-2">评估影响范围，决定局部修正或回溯设定阶段</p>
+                  <div class="text-xs text-red-600">预防级联错误传播</div>
+                </div>
+
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <h4 class="font-bold text-blue-700 mb-2">时间线管理</h4>
+                  <p class="text-sm text-gray-600 mb-2">事件顺序与因果关系的全局校验</p>
+                  <div class="text-xs text-blue-600">拓扑排序检测循环依赖</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resource and Cost Control -->
+          <div class="bg-white p-8 rounded-xl shadow-lg">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">资源与成本控制</h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div class="bg-yellow-50 p-6 rounded-lg border border-yellow-200">
+                <div class="bg-yellow-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-redo text-yellow-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold text-yellow-700 mb-3">迭代次数上限</h4>
+                <p class="text-sm text-gray-600 mb-3">防止润色-校验循环无限进行</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex justify-between">
+                    <span>润色-校验循环</span>
+                    <span class="font-semibold">默认3轮</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>单章修订</span>
+                    <span class="font-semibold">默认2次</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-blue-50 p-6 rounded-lg border border-blue-200">
+                <div class="bg-blue-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-coins text-blue-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold text-blue-700 mb-3">令牌消耗监控</h4>
+                <p class="text-sm text-gray-600 mb-3">长文本创作的通信开销预警</p>
+                <div class="space-y-2 text-xs">
+                  <div>阶段消耗超预算50% → WARNING</div>
+                  <div>阶段消耗超预算100% → MAJOR</div>
+                </div>
+              </div>
+
+              <div class="bg-green-50 p-6 rounded-lg border border-green-200">
+                <div class="bg-green-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-balance-scale text-green-600 text-xl"></i>
+                </div>
+                <h4 class="font-bold text-green-700 mb-3">质量-成本平衡</h4>
+                <p class="text-sm text-gray-600 mb-3">根据用户预算调整迭代深度</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex justify-between">
+                    <span>经济型</span>
+                    <span class="text-gray-500">1轮润色</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>标准型</span>
+                    <span class="text-gray-500">2轮润色</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>精品型</span>
+                    <span class="text-gray-500">3轮润色</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Scalability Design -->
+      <section id="scalability" class="py-16 bg-white">
+        <div class="max-w-6xl mx-auto px-8">
+          <h2 class="font-serif text-4xl font-bold mb-12 text-center">扩展性与适配设计</h2>
+
+          <!-- Word Count Adaptation -->
+          <div class="bg-gradient-to-br from-blue-50 to-indigo-50 p-8 rounded-2xl border border-blue-200 mb-12">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-blue-800">字数弹性适配（1-5万字）</h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div class="bg-white/50 p-6 rounded-xl">
+                <div class="bg-blue-500 w-12 h-12 rounded-full flex items-center justify-center mb-4">
+                  <span class="text-white font-bold">短篇</span>
+                </div>
+                <h4 class="font-bold mb-2">1万字内</h4>
+                <p class="text-sm text-gray-600 mb-4">简化大纲层级，合并部分校验环节</p>
+                <ul class="text-xs space-y-1">
+                  <li>• 章节数：5-8章</li>
+                  <li>• 取消&#34;幕&#34;级结构</li>
+                  <li>• 润色-校验循环：1-2轮</li>
+                  <li>• 单次综合校验</li>
+                </ul>
+              </div>
+
+              <div class="bg-white/50 p-6 rounded-xl">
+                <div class="bg-green-500 w-12 h-12 rounded-full flex items-center justify-center mb-4">
+                  <span class="text-white font-bold">中篇</span>
+                </div>
+                <h4 class="font-bold mb-2">1-3万字</h4>
+                <p class="text-sm text-gray-600 mb-4">标准三阶段工作流</p>
+                <ul class="text-xs space-y-1">
+                  <li>• 章节数：15-20章</li>
+                  <li>• 标准三幕式结构</li>
+                  <li>• 完整三阶段流程</li>
+                  <li>• 三处强制确认节点</li>
+                </ul>
+              </div>
+
+              <div class="bg-white/50 p-6 rounded-xl">
+                <div class="bg-orange-500 w-12 h-12 rounded-full flex items-center justify-center mb-4">
+                  <span class="text-white font-bold">长篇</span>
+                </div>
+                <h4 class="font-bold mb-2">3-5万字</h4>
+                <p class="text-sm text-gray-600 mb-4">增强伏笔管理，增加中期审阅</p>
+                <ul class="text-xs space-y-1">
+                  <li>• 伏笔网络支持</li>
+                  <li>• 中期用户审阅节点</li>
+                  <li>• 批次管理模式</li>
+                  <li>• 增强校验严格度</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Style and Type Adaptation -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+            <!-- Type Templates -->
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+              <h3 class="font-serif text-xl font-bold mb-6 flex items-center">
+                <i class="fas fa-film mr-3 text-purple-600"></i>类型模板库
+              </h3>
+
+              <div class="space-y-4">
+                <div class="border-l-4 border-purple-500 pl-4">
+                  <h4 class="font-bold text-purple-700">科幻类型</h4>
+                  <p class="text-sm text-gray-600 mb-1">技术奇点/太空歌剧/反乌托邦</p>
+                  <div class="text-xs text-purple-600">情节特征：信息密度高，概念解释穿插</div>
+                </div>
+                <div class="border-l-4 border-green-500 pl-4">
+                  <h4 class="font-bold text-green-700">奇幻类型</h4>
+                  <p class="text-sm text-gray-600 mb-1">高魔/低魔/都市奇幻</p>
+                  <div class="text-xs text-green-600">情节特征：世界展示与情节推进平衡</div>
+                </div>
+                <div class="border-l-4 border-blue-500 pl-4">
+                  <h4 class="font-bold text-blue-700">悬疑类型</h4>
+                  <p class="text-sm text-gray-600 mb-1">本格/社会派/冷硬派</p>
+                  <div class="text-xs text-blue-600">情节特征：悬念密集，误导与揭示交替</div>
+                </div>
+                <div class="border-l-4 border-pink-500 pl-4">
+                  <h4 class="font-bold text-pink-700">言情类型</h4>
+                  <p class="text-sm text-gray-600 mb-1">现代/古代/职场</p>
+                  <div class="text-xs text-pink-600">情节特征：情感细腻，心理描写比重高</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Writing Style Presets -->
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+              <h3 class="font-serif text-xl font-bold mb-6 flex items-center">
+                <i class="fas fa-feather-alt mr-3 text-green-600"></i>文风预设
+              </h3>
+
+              <div class="space-y-4">
+                <div class="bg-gray-50 p-4 rounded-lg">
+                  <h4 class="font-bold text-gray-700 mb-2">冷峻风格</h4>
+                  <div class="text-xs space-y-1 mt-2">
+                    <div><span class="font-semibold">句长：</span>短句为主，节奏明快</div>
+                    <div><span class="font-semibold">词汇：</span>抽象、概念性词汇</div>
+                    <div><span class="font-semibold">情感：</span>内敛，行动胜于言辞</div>
+                  </div>
+                </div>
+                <div class="bg-purple-50 p-4 rounded-lg">
+                  <h4 class="font-bold text-purple-700 mb-2">华丽风格</h4>
+                  <div class="text-xs space-y-1 mt-2">
+                    <div><span class="font-semibold">句长：</span>长短交错，富有韵律</div>
+                    <div><span class="font-semibold">词汇：</span>具象、感官性词汇</div>
+                    <div><span class="font-semibold">情感：</span>外放，直接渲染情绪</div>
+                  </div>
+                </div>
+                <div class="bg-yellow-50 p-4 rounded-lg">
+                  <h4 class="font-bold text-yellow-700 mb-2">诙谐风格</h4>
+                  <div class="text-xs space-y-1 mt-2">
+                    <div><span class="font-semibold">句长：</span>灵活多变，意外转折</div>
+                    <div><span class="font-semibold">词汇：</span>双关、反讽、俚语</div>
+                    <div><span class="font-semibold">情感：</span>轻松，自嘲与调侃</div>
+                  </div>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg">
+                  <h4 class="font-bold text-green-700 mb-2">写实风格</h4>
+                  <div class="text-xs space-y-1 mt-2">
+                    <div><span class="font-semibold">句长：</span>中等长度，自然流畅</div>
+                    <div><span class="font-semibold">词汇：</span>日常、精确性词汇</div>
+                    <div><span class="font-semibold">情感：</span>克制，情境引发共鸣</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Human-AI Collaboration Depth -->
+          <div class="bg-slate-50 p-8 rounded-2xl">
+            <h3 class="font-serif text-2xl font-bold mb-6 text-center">人机协作深度调节</h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div class="bg-gray-100 p-6 rounded-xl border border-gray-300">
+                <div class="bg-gray-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-robot text-white text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">全自动模式</h4>
+                <p class="text-sm text-gray-600 mb-4">用户仅在三处节点介入，追求最高效率</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-gray-500"></i>
+                    <span>所有校验问题自动处理</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-gray-500"></i>
+                    <span>不请求用户确认章节内容</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-gray-500"></i>
+                    <span>终稿直接生成</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-blue-100 p-6 rounded-xl border border-blue-300">
+                <div class="bg-blue-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-handshake text-white text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">协作模式（默认）</h4>
+                <p class="text-sm text-gray-600 mb-4">用户可随时插入修改意见，平衡控制与效率</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-blue-500"></i>
+                    <span>标准三处强制确认节点</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-blue-500"></i>
+                    <span>可选章节级审阅</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-blue-500"></i>
+                    <span>支持定向反馈与实时监督</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-green-100 p-6 rounded-xl border border-green-300">
+                <div class="bg-green-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                  <i class="fas fa-user-edit text-white text-xl"></i>
+                </div>
+                <h4 class="font-bold mb-3">指导模式</h4>
+                <p class="text-sm text-gray-600 mb-4">用户深度参与大纲与关键章节共创</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-green-500"></i>
+                    <span>大纲编制多轮反馈</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-green-500"></i>
+                    <span>关键章节强制共同撰写</span>
+                  </div>
+                  <div class="flex items-center">
+                    <i class="fas fa-check mr-2 text-green-500"></i>
+                    <span>实时监督模式默认启用</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Initialize Mermaid -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            mermaid.initialize({ 
+                startOnLoad: true,
+                theme: 'default',
+                themeVariables: {
+                    primaryColor: '#3b82f6',
+                    primaryTextColor: '#1e293b',
+                    primaryBorderColor: '#64748b',
+                    lineColor: '#64748b',
+                    secondaryColor: '#f8fafc',
+                    tertiaryColor: '#e2e8f0',
+                    background: '#ffffff',
+                    mainBkg: '#ffffff',
+                    secondBkg: '#f8fafc',
+                    tertiaryBkg: '#f1f5f9',
+                    fontFamily: 'Inter, sans-serif',
+                    fontSize: '14px'
+                },
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                },
+                sequence: {
+                    useMaxWidth: true,
+                    wrap: true
+                },
+                gantt: {
+                    useMaxWidth: true
+                }
+            });
+            
+            // Initialize Mermaid Controls for zoom and pan
+            initializeMermaidControls();
+        });
+        
+        // Initialize Mermaid Controls for zoom and pan
+        function initializeMermaidControls() {
+            const containers = document.querySelectorAll('.mermaid-container');
+
+            containers.forEach(container => {
+            const mermaidElement = container.querySelector('.mermaid');
+            let scale = 1;
+            let isDragging = false;
+            let startX, startY, translateX = 0, translateY = 0;
+
+            // 触摸相关状态
+            let isTouch = false;
+            let touchStartTime = 0;
+            let initialDistance = 0;
+            let initialScale = 1;
+            let isPinching = false;
+
+            // Zoom controls
+            const zoomInBtn = container.querySelector('.zoom-in');
+            const zoomOutBtn = container.querySelector('.zoom-out');
+            const resetBtn = container.querySelector('.reset-zoom');
+            const fullscreenBtn = container.querySelector('.fullscreen');
+
+            function updateTransform() {
+                mermaidElement.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+
+                if (scale > 1) {
+                container.classList.add('zoomed');
+                } else {
+                container.classList.remove('zoomed');
+                }
+
+                mermaidElement.style.cursor = isDragging ? 'grabbing' : 'grab';
+            }
+
+            if (zoomInBtn) {
+                zoomInBtn.addEventListener('click', () => {
+                scale = Math.min(scale * 1.25, 4);
+                updateTransform();
+                });
+            }
+
+            if (zoomOutBtn) {
+                zoomOutBtn.addEventListener('click', () => {
+                scale = Math.max(scale / 1.25, 0.3);
+                if (scale <= 1) {
+                    translateX = 0;
+                    translateY = 0;
+                }
+                updateTransform();
+                });
+            }
+
+            if (resetBtn) {
+                resetBtn.addEventListener('click', () => {
+                scale = 1;
+                translateX = 0;
+                translateY = 0;
+                updateTransform();
+                });
+            }
+
+            if (fullscreenBtn) {
+                fullscreenBtn.addEventListener('click', () => {
+                if (container.requestFullscreen) {
+                    container.requestFullscreen();
+                } else if (container.webkitRequestFullscreen) {
+                    container.webkitRequestFullscreen();
+                } else if (container.msRequestFullscreen) {
+                    container.msRequestFullscreen();
+                }
+                });
+            }
+
+            // Mouse Events
+            mermaidElement.addEventListener('mousedown', (e) => {
+                if (isTouch) return; // 如果是触摸设备，忽略鼠标事件
+
+                isDragging = true;
+                startX = e.clientX - translateX;
+                startY = e.clientY - translateY;
+                mermaidElement.style.cursor = 'grabbing';
+                updateTransform();
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging && !isTouch) {
+                translateX = e.clientX - startX;
+                translateY = e.clientY - startY;
+                updateTransform();
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isDragging && !isTouch) {
+                isDragging = false;
+                mermaidElement.style.cursor = 'grab';
+                updateTransform();
+                }
+            });
+
+            document.addEventListener('mouseleave', () => {
+                if (isDragging && !isTouch) {
+                isDragging = false;
+                mermaidElement.style.cursor = 'grab';
+                updateTransform();
+                }
+            });
+
+            // 获取两点之间的距离
+            function getTouchDistance(touch1, touch2) {
+                return Math.hypot(
+                touch2.clientX - touch1.clientX,
+                touch2.clientY - touch1.clientY
+                );
+            }
+
+            // Touch Events - 触摸事件处理
+            mermaidElement.addEventListener('touchstart', (e) => {
+                isTouch = true;
+                touchStartTime = Date.now();
+
+                if (e.touches.length === 1) {
+                // 单指拖动
+                isPinching = false;
+                isDragging = true;
+
+                const touch = e.touches[0];
+                startX = touch.clientX - translateX;
+                startY = touch.clientY - translateY;
+
+                } else if (e.touches.length === 2) {
+                // 双指缩放
+                isPinching = true;
+                isDragging = false;
+
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                initialDistance = getTouchDistance(touch1, touch2);
+                initialScale = scale;
+                }
+
+                e.preventDefault();
+            }, { passive: false });
+
+            mermaidElement.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 1 && isDragging && !isPinching) {
+                // 单指拖动
+                const touch = e.touches[0];
+                translateX = touch.clientX - startX;
+                translateY = touch.clientY - startY;
+                updateTransform();
+
+                } else if (e.touches.length === 2 && isPinching) {
+                // 双指缩放
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                const currentDistance = getTouchDistance(touch1, touch2);
+
+                if (initialDistance > 0) {
+                    const newScale = Math.min(Math.max(
+                    initialScale * (currentDistance / initialDistance),
+                    0.3
+                    ), 4);
+                    scale = newScale;
+                    updateTransform();
+                }
+                }
+
+                e.preventDefault();
+            }, { passive: false });
+
+            mermaidElement.addEventListener('touchend', (e) => {
+                // 重置状态
+                if (e.touches.length === 0) {
+                isDragging = false;
+                isPinching = false;
+                initialDistance = 0;
+
+                // 延迟重置isTouch，避免鼠标事件立即触发
+                setTimeout(() => {
+                    isTouch = false;
+                }, 100);
+                } else if (e.touches.length === 1 && isPinching) {
+                // 从双指变为单指，切换为拖动模式
+                isPinching = false;
+                isDragging = true;
+
+                const touch = e.touches[0];
+                startX = touch.clientX - translateX;
+                startY = touch.clientY - translateY;
+                }
+
+                updateTransform();
+            });
+
+            mermaidElement.addEventListener('touchcancel', (e) => {
+                isDragging = false;
+                isPinching = false;
+                initialDistance = 0;
+
+                setTimeout(() => {
+                isTouch = false;
+                }, 100);
+
+                updateTransform();
+            });
+
+            // Enhanced wheel zoom with better center point handling
+            container.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const rect = container.getBoundingClientRect();
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                const newScale = Math.min(Math.max(scale * delta, 0.3), 4);
+
+                // Adjust translation to zoom towards center
+                if (newScale !== scale) {
+                const scaleDiff = newScale / scale;
+                translateX = translateX * scaleDiff;
+                translateY = translateY * scaleDiff;
+                scale = newScale;
+
+                if (scale <= 1) {
+                    translateX = 0;
+                    translateY = 0;
+                }
+
+                updateTransform();
+                }
+            });
+
+            // Initialize display
+            updateTransform();
+            });
+        }
+
+        // Smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Highlight active section in TOC
+        window.addEventListener('scroll', function() {
+            const sections = document.querySelectorAll('section[id]');
+            const tocLinks = document.querySelectorAll('.toc-fixed a');
+            
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.clientHeight;
+                if (window.pageYOffset >= sectionTop - 200) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            tocLinks.forEach(link => {
+                link.classList.remove('bg-accent', 'text-white');
+                if (link.getAttribute('href') === '#' + current) {
+                    link.classList.add('bg-accent', 'text-white');
+                }
+            });
+        });
+    </script>
+  
+
+</body></html>
