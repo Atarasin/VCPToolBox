@@ -1,0 +1,93 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "StoryOrchestrator",
+  "version": "1.0.0",
+  "displayName": "多智能体故事创作编排器",
+  "description": "九智能体协作短文小说创作系统，内置完整章节操作能力，支持三阶段工作流与闭环校验",
+  "author": "VCPToolBox",
+  "pluginType": "hybridservice",
+  "entryPoint": {
+    "script": "core/StoryOrchestrator.js"
+  },
+  "communication": {
+    "protocol": "direct",
+    "timeout": 600000
+  },
+  "webSocketPush": {
+    "enabled": true,
+    "messageType": "story_orchestrator_notification"
+  },
+  "configSchema": {
+    "ORCHESTRATOR_DEBUG_MODE": "boolean",
+    "MAX_PHASE_ITERATIONS": "integer",
+    "DEFAULT_TARGET_WORD_COUNT_MIN": "integer",
+    "DEFAULT_TARGET_WORD_COUNT_MAX": "integer",
+    "USER_CHECKPOINT_TIMEOUT_MS": "integer",
+    "STORY_STATE_RETENTION_DAYS": "integer",
+    "AGENT_WORLD_BUILDER": "string",
+    "AGENT_CHARACTER_DESIGNER": "string",
+    "AGENT_PLOT_ARCHITECT": "string",
+    "AGENT_CHAPTER_WRITER": "string",
+    "AGENT_DETAIL_FILLER": "string",
+    "AGENT_LOGIC_VALIDATOR": "string",
+    "AGENT_STYLE_POLISHER": "string",
+    "AGENT_FINAL_EDITOR": "string",
+    "AGENT_ORCHESTRATOR": "string"
+  },
+  "capabilities": {
+    "invocationCommands": [
+      {
+        "commandIdentifier": "StartStoryProject",
+        "description": "启动新的故事创作项目，进入第一阶段\n参数:\n- story_prompt (字符串, 必需): 故事梗概或开头\n- target_word_count (整数, 可选): 目标字数，默认3000\n- genre (字符串, 可选): 故事类型\n- style_preference (字符串, 可选): 文风偏好\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:\u300c始\u300dStoryOrchestrator\u300c末\u300d,\ncommand:\u300c始\u300dStartStoryProject\u300c末\u300d,\nstory_prompt:\u300c始\u300d故事梗概...\u300c末\u300d,\ntarget_word_count:\u300c始\u300d3000\u300c末\u300d,\ngenre:\u300c始\u300d科幻\u300c末\u300d\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "commandIdentifier": "QueryStoryStatus",
+        "description": "查询故事项目当前状态和进度\n参数:\n- story_id (字符串, 必需): 故事项目ID\n返回: 当前阶段、进度百分比、检查点状态等"
+      },
+      {
+        "commandIdentifier": "UserConfirmCheckpoint",
+        "description": "用户在确认节点批准或拒绝继续\n参数:\n- story_id (字符串, 必需)\n- checkpoint_id (字符串, 必需)\n- approval (布尔值, 必需): true批准/false拒绝\n- feedback (字符串, 可选): 拒绝时的反馈意见"
+      },
+      {
+        "commandIdentifier": "CreateChapterDraft",
+        "description": "【内部章节操作】创建章节草稿，直接调用章节执笔Agent生成正文\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- outline_context (字符串, 必需): 本章大纲和上下文\n- target_word_count (整数, 可选)\n返回: 章节草稿内容及字数统计"
+      },
+      {
+        "commandIdentifier": "ReviewChapter",
+        "description": "【内部章节操作】审查章节质量，调用逻辑校验Agent进行多维度评估\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- chapter_content (字符串, 必需)\n- review_focus (字符串, 可选): 审查重点\n返回: 结构化审查报告(通过/有条件通过/不通过、问题清单、建议)"
+      },
+      {
+        "commandIdentifier": "ReviseChapter",
+        "description": "【内部章节操作】定向修订章节，根据问题清单进行精准修改\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- chapter_content (字符串, 必需)\n- revision_instructions (字符串, 必需): 修订指令\n- issues (数组, 可选): 问题清单\n- max_rewrite_ratio (数字, 可选): 最大改写比例(0-1)，默认0.35\n返回: 修订后的章节内容及变更摘要"
+      },
+      {
+        "commandIdentifier": "PolishChapter",
+        "description": "【内部章节操作】润色章节文笔，调用文笔润色Agent优化表达\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- chapter_content (字符串, 必需)\n- polish_focus (字符串, 可选): 润色重点\n返回: 润色后的章节内容及改进说明"
+      },
+      {
+        "commandIdentifier": "ValidateConsistency",
+        "description": "【内部验证】验证内容与故事圣经的一致性\n参数:\n- story_id (字符串, 必需)\n- content (字符串, 必需)\n- validation_type (字符串, 可选): worldview/character/plot\n返回: 一致性验证结果"
+      },
+      {
+        "commandIdentifier": "CountChapterMetrics",
+        "description": "【内部工具】统计章节字数和结构指标\n参数:\n- chapter_content (字符串, 必需)\n- target_min (整数, 可选)\n- target_max (整数, 可选)\n- count_mode (字符串, 可选): cn_chars/non_whitespace，默认cn_chars\n- length_policy (字符串, 可选): range/min_only，默认range\n返回: 详细字数统计和达标判断"
+      },
+      {
+        "commandIdentifier": "ExportStory",
+        "description": "导出完成的故事为指定格式\n参数:\n- story_id (字符串, 必需)\n- format (字符串, 可选): markdown/txt/json，默认markdown\n返回: 完整故事内容"
+      }
+    ],
+    "systemPromptPlaceholders": [
+      {
+        "placeholder": "{{StoryOrchestratorStatus}}",
+        "description": "当前活跃的故事项目状态摘要",
+        "isDynamic": true
+      },
+      {
+        "placeholder": "{{StoryBible}}",
+        "description": "当前故事的世界观和人物设定(故事圣经)",
+        "isDynamic": true
+      }
+    ]
+  }
+}
