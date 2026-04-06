@@ -53,9 +53,6 @@ Layer 2 和 Layer 3 之间通过**「登场标记」**进行连接。
 
 ### 4. 挑刺者审核闭环
 从 Layer 1 到 Layer 3，任何 Agent 产出的设定文档，都必须通过 `ProposeWikiUpdate` 发起提案，并接受 **审判官（奥西里斯）** 的审核（`ReviewProposal`）。
-- 审核分数必须 **≥85分**。
-- 且不能包含任何 CRITICAL 级别问题。
-- 且 MAJOR 级别问题 ≤ 1个。
 如果被 Reject，原 Agent 必须无条件根据修改意见重新调整并再次提案。
 
 ---
