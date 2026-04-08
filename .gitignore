@@ -1,4 +1,5 @@
 .sisyphus/
+VCPAsyncResults/
 
 # Logs
 logs
@@ -194,6 +195,7 @@ Plugin/AgentDream/dream_schedule_state.json
 Plugin/FeishuBridge/state/
 Plugin/MCPO/custom-mcp-config/mcp-config.json
 Plugin/NovelWorkflowOrchestrator/storage
+Plugin/StoryOrchestrator/state
 
 # ===== 图片 / 媒体 =====
 # 忽略通用表情包目录下的所有内容...

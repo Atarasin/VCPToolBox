@@ -1,4 +1,4 @@
-const axios = require('axios');
+const http = require('http');
 const { AGENT_TYPES, getAgentConfig } = require('./AgentDefinitions');
 
 const COMPLETION_MARKERS = {
@@ -11,8 +11,10 @@ class AgentDispatcher {
   constructor(globalConfig, stateManager) {
     this.config = globalConfig;
     this.stateManager = stateManager;
-    this.agentAssistantUrl = globalConfig.AGENT_ASSISTANT_URL || 'http://localhost:5890';
-    this.vcpKey = globalConfig.VCP_Key;
+    const port = process.env.PORT || globalConfig.PORT || 5890;
+    this.agentAssistantUrl = globalConfig.AGENT_ASSISTANT_URL || `http://127.0.0.1:${port}`;
+    this.vcpKey = globalConfig.VCP_Key || process.env.VCP_Key || process.env.Key;
+    console.log(`[AgentDispatcher] URL: ${this.agentAssistantUrl}`);
   }
 
   async initialize() {
@@ -63,56 +65,110 @@ class AgentDispatcher {
   }
 
   async _delegateSync(payload, options) {
-    const response = await axios.post(
-      `${this.agentAssistantUrl}/v1/chat/completions`,
-      payload,
-      {
-        headers: {
-          'Authorization': `Bearer ${this.vcpKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: options.timeoutMs
-      }
-    );
-
-    const content = response.data.choices?.[0]?.message?.content || '';
+    const url = new URL(`${this.agentAssistantUrl}/v1/chat/completions`);
+    const postData = JSON.stringify(payload);
     
-    return {
-      content,
-      raw: response.data,
-      markers: this._parseMarkers(content)
+    const requestOptions = {
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      family: 4,
+      headers: {
+        'Authorization': `Bearer ${this.vcpKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
     };
+
+    return new Promise((resolve, reject) => {
+      const req = http.request(requestOptions, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const responseData = JSON.parse(data);
+            const content = responseData.choices?.[0]?.message?.content || '';
+            resolve({
+              content,
+              raw: responseData,
+              markers: this._parseMarkers(content)
+            });
+          } catch (e) {
+            reject(new Error(`Failed to parse response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => {
+        reject(error);
+      });
+
+      req.setTimeout(options.timeoutMs, () => {
+        req.destroy();
+        reject(new Error(`Request timeout after ${options.timeoutMs}ms`));
+      });
+
+      req.write(postData);
+      req.end();
+    });
   }
 
   async _delegateAsync(payload, options) {
-    const response = await axios.post(
-      `${this.agentAssistantUrl}/v1/human/tool`,
-      {
-        tool_name: 'AgentAssistant',
-        command: 'delegate_task',
-        payload: payload,
-        temporary_contact: options.temporaryContact,
-        timeout_ms: options.timeoutMs
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${this.vcpKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
+    const url = new URL(`${this.agentAssistantUrl}/v1/human/tool`);
+    const postData = JSON.stringify({
+      tool_name: 'AgentAssistant',
+      command: 'delegate_task',
+      payload: payload,
+      temporary_contact: options.temporaryContact,
+      timeout_ms: options.timeoutMs
+    });
+
+    const requestOptions = {
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      family: 4,
+      headers: {
+        'Authorization': `Bearer ${this.vcpKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
       }
-    );
-
-    const delegationId = response.data.result?.delegation_id;
-    if (!delegationId) {
-      throw new Error('No delegation ID returned');
-    }
-
-    return {
-      delegationId,
-      status: 'delegated',
-      poll: () => this.pollDelegation(delegationId, options.timeoutMs)
     };
+
+    return new Promise((resolve, reject) => {
+      const req = http.request(requestOptions, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const responseData = JSON.parse(data);
+            const delegationId = responseData.result?.delegation_id;
+            if (!delegationId) {
+              reject(new Error('No delegation ID returned'));
+              return;
+            }
+            resolve({
+              delegationId,
+              status: 'delegated',
+              poll: () => this.pollDelegation(delegationId, options.timeoutMs)
+            });
+          } catch (e) {
+            reject(new Error(`Failed to parse response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.setTimeout(30000, () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
   }
 
   async pollDelegation(delegationId, timeoutMs = 120000) {
@@ -121,49 +177,71 @@ class AgentDispatcher {
 
     while (Date.now() - startTime < timeoutMs) {
       try {
-        const response = await axios.post(
-          `${this.agentAssistantUrl}/v1/human/tool`,
-          {
-            tool_name: 'AgentAssistant',
-            command: 'query_delegation',
-            delegation_id: delegationId
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${this.vcpKey}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 10000
-          }
-        );
+        const url = new URL(`${this.agentAssistantUrl}/v1/human/tool`);
+        const postData = JSON.stringify({
+          tool_name: 'AgentAssistant',
+          command: 'query_delegation',
+          delegation_id: delegationId
+        });
 
-        const result = response.data.result;
-        
-        if (result.status === 'completed') {
-          const content = result.response || '';
+        const requestOptions = {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: 'POST',
+          family: 4,
+          headers: {
+            'Authorization': `Bearer ${this.vcpKey}`,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(postData)
+          }
+        };
+
+        const result = await new Promise((resolve, reject) => {
+          const req = http.request(requestOptions, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              try {
+                resolve(JSON.parse(data));
+              } catch (e) {
+                reject(e);
+              }
+            });
+          });
+
+          req.on('error', reject);
+          req.setTimeout(10000, () => {
+            req.destroy();
+            reject(new Error('Poll timeout'));
+          });
+
+          req.write(postData);
+          req.end();
+        });
+
+        if (result.result?.status === 'completed') {
+          const content = result.result.response || '';
           return {
             content,
             status: 'completed',
             markers: this._parseMarkers(content),
-            raw: result
+            raw: result.result
           };
         }
 
-        if (result.status === 'failed') {
+        if (result.result?.status === 'failed') {
           return {
             content: '',
             status: 'failed',
-            error: result.error || 'Delegation failed',
+            error: result.result.error || 'Delegation failed',
             markers: { isComplete: false, isFailed: true, hasHeartbeat: false },
-            raw: result
+            raw: result.result
           };
         }
 
         await this._sleep(pollInterval);
       } catch (error) {
-        if (error.response?.status === 404) {
-          throw new Error(`Delegation not found: ${delegationId}`);
-        }
         console.error('[AgentDispatcher] Poll error:', error.message);
         await this._sleep(pollInterval);
       }

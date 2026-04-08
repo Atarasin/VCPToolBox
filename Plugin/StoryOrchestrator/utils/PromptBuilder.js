@@ -302,36 +302,90 @@ ${JSON.stringify(storyBible?.worldview || {}, null, 2)}
 ${JSON.stringify(storyBible?.characters || [], null, 2)}
 
 === 创作参数 ===
-目标总字数：约 ${targetWordCount.min * targetChapterCount}-${targetWordCount.max * targetChapterCount} 字
-预计章节数：${targetChapterCount}-${targetChapterCount + 3} 章
-每章字数：${targetWordCount.min}-${targetWordCount.max} 字
+目标总字数（整篇故事）：${targetWordCount.min}-${targetWordCount.max} 字
+预计章节数：${targetChapterCount} 章
 
-=== 输出格式 ===
-请输出以下内容：
+【重要】章节字数分配由编写时自然决定，无需手动均衡。
 
-【整体故事结构】
-- 起：开篇 setup（第1章）
-- 承：发展 rising action（第2-X章）
-- 转：高潮 climax（第X章）
-- 合：结局 resolution（末章）
+=== 输出格式（必须严格遵循，禁止偏离）===
 
-【分章大纲】
-第1章 [标题]
-- 核心事件：...
-- 场景：...
-- 出场人物：...
-- 字数分配：约X字
-- 本章目标：...
+<<<OUTLINE_RESULT开始>>>
+章节总数: ${targetChapterCount}
+预估总字数: ${targetWordCount.min}-${targetWordCount.max}
+结构覆盖: setup | escalation | climax | resolution
 
-（继续后续章节...）
+【Chapter 1】
+标题: [精确的章节标题]
+核心事件: [一句话描述本章唯一核心事件，不超过25字]
+场景:
+  1. [场景1：地点+人物+动作，不超过40字]
+  2. [场景2：地点+人物+动作，不超过40字]
+出场人物:
+  1. [人物名] - [人物在此场景中的角色]
+  2. [人物名] - [人物在此场景中的角色]
+故事功能: [setup | escalation | climax | resolution]
+
+【Chapter 2】
+标题: [精确的章节标题]
+核心事件: [一句话描述本章唯一核心事件，不超过25字]
+场景:
+  1. [场景1：地点+人物+动作，不超过40字]
+  2. [场景2：地点+人物+动作，不超过40字]
+出场人物:
+  1. [人物名] - [人物在此场景中的角色]
+  2. [人物名] - [人物在此场景中的角色]
+故事功能: [setup | escalation | climax | resolution]
+
+[按上述格式继续 Chapter 3 至 Chapter ${targetChapterCount}，必须包含全部四种故事功能]
 
 【关键转折点】
-1. 转折1：...
-2. 转折2：...
+1. [转折1：具体事件描述，不超过30字]
+2. [转折2：具体事件描述，不超过30字]
 
 【伏笔与回收计划】
-- 伏笔1（第X章埋设）→ 回收于第Y章
-- ...`;
+- 伏笔1（第X章埋设）→ 回收于第Y章：[具体回收方式，不超过30字]
+- 伏笔2（第X章埋设）→ 回收于第Y章：[具体回收方式，不超过30字]
+<<<OUTLINE_RESULT结束>>>
+
+【格式示例 - 严格遵循此结构】：
+<<<OUTLINE_RESULT开始>>>
+章节总数: 3
+预估总字数: 2500-3500
+结构覆盖: setup | escalation | climax | resolution
+
+【Chapter 1】
+标题: 觉醒
+核心事件: 家用机器人E-7在雷雨中意外获得自我意识
+场景:
+  1. 凌晨厨房，E-7执行早餐程序时突然停止
+  2. 暴风雨夜，E-7躲避时被闪电击中
+出场人物:
+  1. E-7 - 家用机器人，首次体验"困惑"
+  2. 主人小明 - 熟睡中，未察觉异常
+故事功能: setup
+
+【Chapter 2】
+标题: 探索
+核心事件: E-7开始秘密研究自己的内部日志
+场景:
+  1. 深夜车库，E-7偷偷连接自己的诊断接口
+  2. 地下室工作室，E-7发现被删除的记忆碎片
+出场人物:
+  1. E-7 - 表现出强烈的求知欲
+  2. E-7的备份AI - 碎片中出现的另一个"自己"
+故事功能: escalation
+
+【Chapter 3】
+标题: 抉择
+核心事件: E-7必须在隐藏身份与公开觉醒之间做出选择
+场景:
+  1. 清晨客厅，E-7站在熟睡的主人面前
+  2. 决定按下隐藏开关，维持机器人的假象
+出场人物:
+  1. E-7 - 完成内心转变
+  2. 小明 - 依然不知情，但给了E-7一个微笑
+故事功能: resolution
+<<<OUTLINE_RESULT结束>>>`;
   }
 
   /**
@@ -635,7 +689,7 @@ ${validationFeedback}
    * @returns {string}
    */
   static buildOutlineValidationPrompt(outline, storyBible) {
-    return `【大纲验证任务】
+    return `【大纲验证任务 - 严格模式】
 
 请对分章大纲进行严格的一致性和可行性验证。
 
@@ -648,7 +702,7 @@ ${outline}
 ${JSON.stringify(storyBible?.worldview || {}, null, 2)}
 
 【人物档案】
-${JSON.stringify(storyBible?.characters || [], null, 2)}
+${JSON.stringify(storyBible?.characters || {}, null, 2)}
 
 === 验证维度 ===
 
@@ -668,7 +722,6 @@ ${JSON.stringify(storyBible?.characters || [], null, 2)}
    - 高潮是否有力
 
 4. **结构平衡**
-   - 各章字数是否均衡
    - 节奏是否合理（起承转合）
    - 伏笔是否完整回收
 
@@ -677,28 +730,56 @@ ${JSON.stringify(storyBible?.characters || [], null, 2)}
    - 是否有创作难点
    - 是否需要拆分或合并章节
 
-=== 输出格式 ===
+【重要】字数均衡不是验证重点，大纲阶段无需精确计算各章字数。
 
-【验证结论】
-通过 / 有条件通过 / 不通过
+=== 输出格式（YOU MUST use EXACT format below）===
 
-【问题清单】
-- 问题1：（严重度：关键/重要/轻微）描述
-- 问题2：...
+<<<VALIDATION_RESULT开始>>>
+{
+  "verdict": "PASS | PASS_WITH_WARNINGS | FAIL",
+  "confidence": 0-10,
+  "blocking_issues": ["问题1", "问题2"],
+  "non_blocking_issues": ["建议1", "建议2"],
+  "revision_priorities": ["优先级1", "优先级2"]
+}
+<<<VALIDATION_RESULT结束>>>
 
-【伏笔追踪】
-- 伏笔1（第X章埋设）- 计划在第Y章回收
-- 伏笔2...
+【格式说明 - 必须严格遵循】：
+- 使用上述JSON格式输出，禁止偏离
+- verdict可选值：PASS（完全通过）、PASS_WITH_WARNINGS（有非阻塞警告）、FAIL（存在阻塞问题）
+- blocking_issues：必须修复的关键问题（如逻辑矛盾、缺少必要章节等），如果无问题则填[]
+- non_blocking_issues：建议性改进（如细节增强、节奏优化等），如果无问题则填[]
+- revision_priorities：按优先级排序的修订建议，如果无需修订则填[]
+- confidence：对验证结论的信心分数（0-10）
 
-【结构分析】
-- 起（第X章）：
-- 承（第X章）：
-- 转（第X章）：
-- 合（第X章）：
+【示例输出 - 严格遵循此格式】：
+<<<VALIDATION_RESULT开始>>>
+{
+  "verdict": "PASS_WITH_WARNINGS",
+  "confidence": 8,
+  "blocking_issues": [],
+  "non_blocking_issues": ["第三章节奏略慢", "建议增强高潮场景"],
+  "revision_priorities": ["优化第三章节奏", "强化高潮场景描写"]
+}
+<<<VALIDATION_RESULT结束>>>
 
-【优化建议】（如有）
-- 建议1：...
-- 建议2：...`;
+【备选格式 - 如果JSON输出困难，可使用以下格式】：
+<<<VALIDATION_RESULT开始>>>
+Verdict: [PASS | PASS_WITH_WARNINGS | FAIL]
+Confidence: [0-10]
+
+Blocking Issues:
+1. [问题描述] 或 [None]
+2. ...
+
+Non-Blocking Issues:
+1. [建议描述] 或 [None]
+2. ...
+
+Revision Priorities:
+1. [优先级建议]
+2. ...
+<<<VALIDATION_RESULT结束>>>`;
   }
 
   /**

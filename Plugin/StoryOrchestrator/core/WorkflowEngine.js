@@ -69,31 +69,30 @@ class WorkflowEngine {
       await this.stateManager.initialize();
     }
 
-    // 初始化 Phase1
+    const { PromptBuilder } = require('../utils/PromptBuilder');
+    
     this.phases.phase1 = new Phase1_WorldBuilding({
       stateManager: this.stateManager,
       agentDispatcher: this.agentDispatcher,
-      promptBuilder: require('../utils/PromptBuilder'),
+      promptBuilder: PromptBuilder,
       config: this.config
     });
 
-    // 初始化 Phase2
     this.phases.phase2 = new Phase2_OutlineDrafting({
       stateManager: this.stateManager,
       agentDispatcher: this.agentDispatcher,
       chapterOperations: this.chapterOperations,
       contentValidator: this.contentValidator,
-      promptBuilder: require('../utils/PromptBuilder'),
+      promptBuilder: PromptBuilder,
       config: this.config
     });
 
-    // 初始化 Phase3
     this.phases.phase3 = new Phase3_Refinement({
       stateManager: this.stateManager,
       agentDispatcher: this.agentDispatcher,
       chapterOperations: this.chapterOperations,
       contentValidator: this.contentValidator,
-      promptBuilder: require('../utils/PromptBuilder'),
+      promptBuilder: PromptBuilder,
       config: this.config
     });
 
@@ -415,8 +414,8 @@ class WorkflowEngine {
       }
     }
 
-    // 4. 获取当前 phase
-    const currentPhase = story.workflow?.currentPhase;
+    // 4. 获取当前 phase - 优先从 activeCheckpoint 获取
+    const currentPhase = activeCheckpoint?.phase || story.workflow?.currentPhase;
     if (!currentPhase) {
       return {
         status: 'error',
@@ -996,6 +995,24 @@ class WorkflowEngine {
   async _runPhase3(storyId) {
     console.log(`[WorkflowEngine] Running Phase 3 for story: ${storyId}`);
 
+    // 验证 Phase2 完成状态
+    const story = await this.stateManager.getStory(storyId);
+    const phase2 = story.phase2 || {};
+    
+    // 检查是否有可用的章节
+    const hasChapters = phase2.chapters && phase2.chapters.length > 0;
+    const phase2Completed = phase2.status === 'completed' || phase2.userConfirmed;
+    
+    if (!hasChapters || !phase2Completed) {
+      console.error(`[WorkflowEngine] Cannot start Phase3: Phase2 incomplete or no chapters`);
+      return {
+        status: 'failed',
+        phase: 'phase3',
+        error: 'Phase2 has no approved chapters or is not completed',
+        data: { hasChapters, phase2Status: phase2.status, userConfirmed: phase2.userConfirmed }
+      };
+    }
+
     // 更新 workflow 状态
     await this.stateManager.updateWorkflow(storyId, {
       currentPhase: 'phase3',
@@ -1003,7 +1020,6 @@ class WorkflowEngine {
     });
 
     // 检查 phase3 是否有 continueFromCheckpoint 方法
-    const story = await this.stateManager.getStory(storyId);
     const phase3NeedsResume = story.phase3?.checkpointId && !story.phase3?.userConfirmed;
 
     let phase3Result;
@@ -1100,15 +1116,15 @@ class WorkflowEngine {
   async _handleWaitingCheckpoint(storyId, phaseName, result) {
     console.log(`[WorkflowEngine] ${phaseName} waiting for checkpoint: ${result.checkpointId}`);
 
-    // 计算超时时间
-    const timeoutMs = this.config.USER_CHECKPOINT_TIMEOUT_MS || 86400000; // 默认 24 小时
+    const timeoutMs = this.config.USER_CHECKPOINT_TIMEOUT_MS || 86400000;
     const expiresAt = new Date(Date.now() + timeoutMs).toISOString();
 
-    // 设置活跃检查点
+    const checkpointType = result.checkpointType || `${phaseName}_checkpoint`;
+
     await this.stateManager.setActiveCheckpoint(storyId, {
       id: result.checkpointId,
       phase: phaseName,
-      type: `${phaseName}_checkpoint`,
+      type: checkpointType,
       status: 'pending',
       createdAt: new Date().toISOString(),
       expiresAt,
@@ -1243,6 +1259,10 @@ class WorkflowEngine {
   async _handleApproval(storyId, currentPhase, checkpointId, feedback) {
     console.log(`[WorkflowEngine] Handling approval for ${currentPhase}`);
 
+    // 获取检查点类型（在清除前读取）
+    const story = await this.stateManager.getStory(storyId);
+    const checkpointType = story.workflow?.activeCheckpoint?.type;
+
     // 标记检查点为已批准
     await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || 'Approved');
 
@@ -1274,11 +1294,23 @@ class WorkflowEngine {
     }
 
     if (currentPhase === 'phase2') {
-      // Phase2 批准后继续 Phase3
-      await this.stateManager.updateWorkflow(storyId, {
-        state: 'running'
-      });
-      return await this._runPhase3(storyId);
+      // 使用已获取的检查点类型确定下一步
+      // 如果是内容检查点，说明章节已生成，进入Phase3
+      // 如果是大纲检查点，需要继续生成章节
+      if (checkpointType === 'phase2_content_confirmation') {
+        // Phase2 内容确认后继续 Phase3
+        await this.stateManager.updateWorkflow(storyId, {
+          state: 'running'
+        });
+        return await this._runPhase3(storyId);
+      } else {
+        // 大纲检查点或其他 - 继续在Phase2中生成章节
+        console.log(`[WorkflowEngine] Phase2 outline checkpoint approved, continuing to content production`);
+        await this.stateManager.updateWorkflow(storyId, {
+          state: 'running'
+        });
+        return await this._runPhase2(storyId);
+      }
     }
 
     if (currentPhase === 'phase3') {

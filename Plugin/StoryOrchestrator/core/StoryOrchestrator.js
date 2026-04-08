@@ -5,6 +5,8 @@ const { AgentDispatcher } = require('../agents/AgentDispatcher');
 const { WorkflowEngine } = require('./WorkflowEngine');
 const { validateInput } = require('../utils/ValidationSchemas');
 const { TextMetrics } = require('../utils/TextMetrics');
+const path = require('path');
+const fs = require('fs');
 
 class StoryOrchestrator {
   constructor() {
@@ -21,6 +23,13 @@ class StoryOrchestrator {
     console.log('[StoryOrchestrator] Initializing...');
     
     this.globalConfig = config || {};
+    
+    const pluginConfigPath = path.join(__dirname, '..', 'config.env');
+    if (fs.existsSync(pluginConfigPath)) {
+      const envConfig = require('dotenv').parse(fs.readFileSync(pluginConfigPath));
+      this.globalConfig = { ...envConfig, ...this.globalConfig };
+      console.log(`[StoryOrchestrator] Loaded config from ${pluginConfigPath}`);
+    }
     
     await this.stateManager.initialize();
     
@@ -160,6 +169,9 @@ class StoryOrchestrator {
   }
 
   async userConfirmCheckpoint(args) {
+    if (args.approval === 'true') args.approval = true;
+    if (args.approval === 'false') args.approval = false;
+    
     const validation = validateInput('userConfirmCheckpoint', args);
     if (!validation.valid) {
       return { status: 'error', error: validation.errors.join(', ') };

@@ -65,8 +65,11 @@ class Phase3_Refinement {
     const chapters = story.phase2?.chapters || [];
     if (chapters.length === 0) {
       return {
-        status: 'error',
-        error: 'No chapters found in phase2'
+        status: 'failed',
+        phase: 'phase3',
+        nextAction: 'phase2_recovery_required',
+        error: 'No chapters found in phase2. Phase2 must be completed with approved chapters before Phase3.',
+        recoverable: true
       };
     }
 

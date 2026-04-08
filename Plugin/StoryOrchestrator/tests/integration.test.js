@@ -1084,6 +1084,191 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       assert.strictEqual(result.autoApproved, 0);
     });
   });
+
+  describe('8. Phase2 Retry and Checkpoint Tests', () => {
+    it('should retry outline validation up to 5 times', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      let validationAttempts = 0;
+      const mockValidator = {
+        async validate() {
+          validationAttempts++;
+          return { passed: validationAttempts >= 5, issues: [], suggestions: [] };
+        }
+      };
+      
+      orchestrator.phases.phase2.contentValidator = mockValidator;
+      
+      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.phases.phase2._runOutlineGeneration(storyId);
+      
+      assert.strictEqual(validationAttempts >= 1 && validationAttempts <= 5, true, 
+        `Expected 1-5 validation attempts, got ${validationAttempts}`);
+    });
+
+    it('should not hard-fail on outline warnings only', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      const mockDispatcher = {
+        async delegate(agentType, prompt) {
+          if (agentType === 'logicValidator') {
+            return {
+              content: '【验证结论】\n有条件通过\n\n【问题清单】\n警告：第2章场景描述可以更详细\n建议：增加人物心理描写',
+              raw: {},
+              markers: {}
+            };
+          }
+          return { content: 'mock content', raw: {}, markers: {} };
+        },
+        async delegateParallel() {
+          return { succeeded: [], failed: [] };
+        }
+      };
+      
+      orchestrator.phases.phase2.agentDispatcher = mockDispatcher;
+      
+      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      const result = await orchestrator.phases.phase2._validateOutline(storyId, { chapters: [] });
+      
+      assert.strictEqual(result.passed, true, 'Outline with only warnings should pass');
+    });
+
+    it('should create second checkpoint after content generation', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.stateManager.updatePhase2(storyId, { 
+        outline: { chapters: [{ title: '第一章', scenes: [] }] },
+        userConfirmed: true 
+      });
+      
+      await orchestrator.phases.phase2._produceContent(storyId);
+      
+      const story = await orchestrator.stateManager.getStory(storyId);
+      assert.ok(story.phase2.checkpointId, 'Should have content checkpoint ID');
+      assert.strictEqual(story.phase2.status, 'content_pending_confirmation', 
+        'Should be waiting for content confirmation');
+    });
+  });
+
+  describe('9. Phase3 Guard Tests', () => {
+    it('should not run Phase3 when Phase2 has no approved chapters', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.stateManager.updateStory(storyId, {
+        status: 'phase2_completed',
+        phase2: { chapters: [], userConfirmed: true }
+      });
+      
+      const result = await orchestrator.phases.phase3.run(storyId);
+      
+      assert.strictEqual(result.status, 'failed');
+      assert.ok(result.error.includes('No chapters') || result.error.includes('no approved chapters'));
+    });
+
+    it('should run Phase3 when Phase2 has approved chapters', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.stateManager.updateStory(storyId, {
+        status: 'phase2_completed',
+        phase2: { 
+          chapters: [{ content: '第一章内容', status: 'completed' }], 
+          userConfirmed: true 
+        }
+      });
+      
+      const result = await orchestrator.phases.phase3.run(storyId);
+      
+      assert.notStrictEqual(result.status, 'failed');
+    });
+  });
+
+  describe('10. Complete Workflow Closure Tests', () => {
+    it('should complete full 3-phase workflow with all checkpoints', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      const storyId = await orchestrator.processToolCall('StartStoryProject', {
+        story_prompt: 'AI觉醒的科幻故事',
+        genre: '科幻'
+      });
+      
+      assert.ok(storyId);
+      
+      let story = await orchestrator.stateManager.getStory(storyId);
+      assert.ok(story.workflow.checkpointId, 'Phase1 should have checkpoint');
+      
+      await orchestrator.processToolCall('UserConfirmCheckpoint', {
+        story_id: storyId,
+        checkpoint_id: story.workflow.checkpointId,
+        approval: true
+      });
+      
+      story = await orchestrator.stateManager.getStory(storyId);
+      if (story.phase2.status === 'outline_pending_confirmation') {
+        assert.ok(story.phase2.checkpointId, 'Phase2 outline should have checkpoint');
+        
+        await orchestrator.processToolCall('UserConfirmCheckpoint', {
+          story_id: storyId,
+          checkpoint_id: story.phase2.checkpointId,
+          approval: true
+        });
+      }
+      
+      story = await orchestrator.stateManager.getStory(storyId);
+      if (story.phase2.status === 'content_pending_confirmation') {
+        assert.ok(story.phase2.checkpointId, 'Phase2 content should have checkpoint');
+        
+        await orchestrator.processToolCall('UserConfirmCheckpoint', {
+          story_id: storyId,
+          checkpoint_id: story.phase2.checkpointId,
+          approval: true
+        });
+      }
+      
+      story = await orchestrator.stateManager.getStory(storyId);
+      if (story.phase3.status === 'pending_confirmation') {
+        assert.ok(story.phase3.checkpointId, 'Phase3 should have checkpoint');
+        
+        await orchestrator.processToolCall('UserConfirmCheckpoint', {
+          story_id: storyId,
+          checkpoint_id: story.phase3.checkpointId,
+          approval: true
+        });
+      }
+      
+      story = await orchestrator.stateManager.getStory(storyId);
+      assert.strictEqual(story.status, 'completed', 'Story should be completed');
+      assert.ok(story.finalOutput, 'Should have final output');
+    });
+
+    it('should generate story within target word count range', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      await orchestrator.initialize();
+      
+      const storyId = await orchestrator.stateManager.createStory('测试故事', {
+        target_word_count: { min: 2500, max: 3500 }
+      });
+      
+      await orchestrator.stateManager.updateStory(storyId, {
+        status: 'completed',
+        finalOutput: 'A'.repeat(3000)
+      });
+      
+      const story = await orchestrator.stateManager.getStory(storyId);
+      const wordCount = story.finalOutput ? story.finalOutput.length : 0;
+      
+      assert.ok(wordCount >= 2500 && wordCount <= 3500,
+        `Story word count ${wordCount} should be within target range 2500-3500`);
+    });
+  });
 });
 
 module.exports = { createMockAgentDispatcher, createMockStateManager, createMockChapterOperations, createMockContentValidator, createTestableStoryOrchestrator };

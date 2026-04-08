@@ -9,7 +9,7 @@ class Phase2_OutlineDrafting {
     this.contentValidator = contentValidator;
     this.promptBuilder = promptBuilder || PromptBuilder;
     this.config = config || {};
-    this.maxRevisionAttempts = this.config.MAX_OUTLINE_REVISION_ATTEMPTS || 2;
+    this.maxRevisionAttempts = this.config.MAX_OUTLINE_REVISION_ATTEMPTS || 5;
     this.maxChapterRevisions = this.config.MAX_CHAPTER_REVISION_ATTEMPTS || 1;
   }
 
@@ -26,6 +26,45 @@ class Phase2_OutlineDrafting {
     }
 
     console.log(`[Phase2] Starting for story: ${storyId}`);
+
+    // 检查是否已有已确认的大纲，直接跳到内容生成
+    const existingOutline = story.phase2?.outline;
+    const userConfirmed = story.phase2?.userConfirmed;
+    const hasValidOutline = existingOutline && 
+                           existingOutline.chapters && 
+                           existingOutline.chapters.length > 0 &&
+                           existingOutline.chapters.some(c => c.coreEvent && c.coreEvent.trim() !== '');
+    
+    if (userConfirmed && hasValidOutline) {
+      console.log(`[Phase2] Using confirmed outline with ${existingOutline.chapters.length} chapters, skipping to content production`);
+      
+      // 更新状态为 running，但保留现有大纲
+      await this.stateManager.updateStory(storyId, {
+        status: 'phase2_running',
+        phase2: {
+          ...story.phase2,
+          status: 'running',
+          checkpointId: null,  // 清除检查点ID
+          currentChapter: 0
+        }
+      });
+      
+      // 直接跳到阶段B: 正文生产
+      const contentResult = await this._produceContent(storyId);
+      
+      return {
+        status: contentResult.status,
+        phase: 'phase2',
+        nextAction: contentResult.status === 'completed' ? 'phase3_ready' : 'content_in_progress',
+        checkpointId: contentResult.checkpointId,
+        checkpointType: contentResult.checkpointType,
+        data: {
+          chaptersCompleted: contentResult.chaptersCompleted,
+          totalWordCount: contentResult.totalWordCount,
+          chapterResults: contentResult.chapterResults
+        }
+      };
+    }
 
     // 更新状态为 phase2_running
     await this.stateManager.updateStory(storyId, {
@@ -93,10 +132,38 @@ class Phase2_OutlineDrafting {
     }
 
     const checkpointId = story.phase2?.checkpointId;
-    console.log(`[Phase2] Continuing from checkpoint: ${checkpointId}, decision: ${decision}`);
+    const phase2Status = story.phase2?.status;
+    console.log(`[Phase2] Continuing from checkpoint: ${checkpointId}, decision: ${decision}, status: ${phase2Status}`);
+
+    if (phase2Status === 'content_pending_confirmation') {
+      if (decision === 'approve') {
+        await this.stateManager.updatePhase2(storyId, {
+          userConfirmed: true,
+          checkpointId: null,
+          status: 'completed'
+        });
+        await this.stateManager.updateStory(storyId, {
+          status: 'phase2_completed'
+        });
+        return {
+          status: 'completed',
+          phase: 'phase2',
+          nextAction: 'phase3_ready',
+          data: {
+            chaptersCompleted: story.phase2.chapters?.length || 0,
+            totalWordCount: story.phase2.totalWordCount || 0
+          }
+        };
+      } else {
+        return {
+          status: 'failed',
+          phase: 'phase2',
+          error: 'Content approval rejected'
+        };
+      }
+    }
 
     if (decision === 'approve') {
-      // 批准后继续正文生产
       await this.stateManager.updatePhase2(storyId, {
         userConfirmed: true,
         checkpointId: null,
@@ -109,7 +176,7 @@ class Phase2_OutlineDrafting {
         status: contentResult.status,
         phase: 'phase2',
         nextAction: contentResult.status === 'completed' ? 'phase3_ready' : 'content_in_progress',
-        checkpointId: null,
+        checkpointId: contentResult.checkpointId,
         data: {
           chaptersCompleted: contentResult.chaptersCompleted,
           totalWordCount: contentResult.totalWordCount,
@@ -227,6 +294,7 @@ class Phase2_OutlineDrafting {
     return {
       status: 'waiting_checkpoint',
       checkpointId,
+      checkpointType: 'phase2_outline_confirmation',
       outline,
       validationResult
     };
@@ -467,19 +535,25 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
       console.log(`[Phase2] Chapter ${chapterNum} ${chapterResult.status}`);
     }
 
-    // 标记 phase2 完成
+    const completedChapters = chapterResults.filter(r => r.status === 'completed').length;
+    const checkpointId = `cp-phase2-content-${storyId}-${Date.now()}`;
+
     await this.stateManager.updatePhase2(storyId, {
-      status: 'completed',
-      userConfirmed: true
+      status: 'content_pending_confirmation',
+      checkpointId: checkpointId,
+      chapters: chapterResults,
+      totalWordCount: totalWordCount
     });
 
     await this.stateManager.updateStory(storyId, {
-      status: 'phase2_completed'
+      status: 'phase2_content_pending_confirmation'
     });
 
     return {
-      status: 'completed',
-      chaptersCompleted: chapterResults.filter(r => r.status === 'completed').length,
+      status: 'waiting_checkpoint',
+      checkpointType: 'phase2_content_confirmation',
+      checkpointId: checkpointId,
+      chaptersCompleted: completedChapters,
       totalWordCount,
       chapterResults
     };
@@ -752,30 +826,100 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
   }
 
   /**
-   * 解析大纲验证结果
+   * 解析大纲验证结果（支持JSON和文本格式）
    */
   _parseOutlineValidationResult(content) {
     const result = {
       passed: true,
+      verdict: 'PASS',
+      confidence: 5,
+      blockingIssues: [],
+      nonBlockingIssues: [],
       issues: [],
-      suggestions: []
+      suggestions: [],
+      revisionPriorities: []
     };
 
-    if (content.includes('不通过') || content.includes('失败')) {
-      result.passed = false;
+    // 策略1: 尝试解析JSON格式
+    const jsonMatch = content.match(/<<<VALIDATION_RESULT开始>>>([\s\S]*?)<<<VALIDATION_RESULT结束>>>/);
+    if (jsonMatch) {
+      try {
+        const jsonContent = jsonMatch[1].trim();
+        const parsed = JSON.parse(jsonContent);
+        
+        result.verdict = parsed.verdict || 'PASS';
+        result.passed = parsed.verdict !== 'FAIL';
+        result.confidence = parsed.confidence || 5;
+        result.blockingIssues = parsed.blocking_issues || [];
+        result.nonBlockingIssues = parsed.non_blocking_issues || [];
+        result.revisionPriorities = parsed.revision_priorities || [];
+        
+        // 向后兼容
+        result.issues = [...result.blockingIssues, ...result.nonBlockingIssues];
+        result.suggestions = result.revisionPriorities;
+        
+        console.log('[OutlineValidation] Parsed JSON result:', {
+          verdict: result.verdict,
+          passed: result.passed,
+          blockingCount: result.blockingIssues.length,
+          nonBlockingCount: result.nonBlockingIssues.length
+        });
+        
+        return result;
+      } catch (e) {
+        console.log('[OutlineValidation] JSON parse failed, falling back to text parsing');
+      }
     }
 
-    // 提取问题
-    const issueMatches = content.match(/[-\d\.\s]*([^\n]*(?:问题|冲突|不符|错误)[^\n]*)/gi) || [];
-    result.issues = issueMatches
-      .map(line => line.replace(/^[-\d\.\s]+/, '').trim())
-      .filter(line => line.length > 5);
+    // 策略2: 文本格式回退解析
+    const normalized = content.toLowerCase();
+    
+    // 提取Verdict
+    if (content.includes('不通过') || content.includes('失败') || normalized.includes('fail')) {
+      result.verdict = 'FAIL';
+      result.passed = false;
+    } else if (content.includes('有条件通过') || content.includes('警告') || normalized.includes('warning')) {
+      result.verdict = 'PASS_WITH_WARNINGS';
+      result.passed = true;
+    } else if (content.includes('通过') || normalized.includes('pass')) {
+      result.verdict = 'PASS';
+      result.passed = true;
+    }
 
-    // 提取建议
-    const suggestMatches = content.match(/[-\d\.\s]*([^\n]*(?:建议|修正|改进)[^\n]*)/gi) || [];
-    result.suggestions = suggestMatches
-      .map(line => line.replace(/^[-\d\.\s]+/, '').trim())
-      .filter(line => line.length > 5);
+    // 提取问题（带编号或符号的列表项）
+    const lines = content.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // 匹配列表项格式：1. xxx, - xxx, * xxx
+      if (/^\s*(?:\d+[\.\)]\s+|[-*]\s+)/.test(trimmed)) {
+        const cleanLine = trimmed.replace(/^\s*(?:\d+[\.\)]\s+|[-*]\s+)/, '');
+        if (cleanLine.length > 5) {
+          // 判断是问题还是建议
+          if (/(?:问题|冲突|不符|错误|矛盾|失败|阻塞|blocking)/i.test(cleanLine)) {
+            result.blockingIssues.push(cleanLine);
+          } else if (/(?:建议|修正|改进|优化|增强|warning)/i.test(cleanLine)) {
+            result.nonBlockingIssues.push(cleanLine);
+          } else {
+            // 默认归类为非阻塞问题
+            result.nonBlockingIssues.push(cleanLine);
+          }
+        }
+      }
+    }
+
+    // 向后兼容
+    result.issues = [...result.blockingIssues, ...result.nonBlockingIssues];
+    result.suggestions = result.nonBlockingIssues;
+    result.revisionPriorities = result.blockingIssues.length > 0 
+      ? result.blockingIssues 
+      : result.nonBlockingIssues;
+
+    console.log('[OutlineValidation] Parsed text result:', {
+      verdict: result.verdict,
+      passed: result.passed,
+      blockingCount: result.blockingIssues.length,
+      nonBlockingCount: result.nonBlockingIssues.length
+    });
 
     return result;
   }

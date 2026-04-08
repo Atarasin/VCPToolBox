@@ -20,9 +20,22 @@ class ContentValidator {
   }
 
   async validateCharacters(storyId, content, storyBible) {
+    // Handle nested characters structure from Phase1 output
+    let characters = storyBible.characters || [];
+    if (characters && typeof characters === 'object' && !Array.isArray(characters)) {
+      // Try to extract characters from nested structure
+      if (characters.characters && Array.isArray(characters.characters)) {
+        characters = characters.characters;
+      } else if (characters.protagonists && Array.isArray(characters.protagonists)) {
+        characters = characters.protagonists;
+      } else {
+        characters = [];
+      }
+    }
+    
     const prompt = PromptBuilder.buildCharacterValidationPrompt({
       content,
-      characters: storyBible.characters
+      characters: characters
     });
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {

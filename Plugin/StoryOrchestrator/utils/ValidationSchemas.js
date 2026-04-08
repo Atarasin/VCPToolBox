@@ -154,6 +154,11 @@ function validateInput(schemaName, data) {
       continue;
     }
 
+    // 布尔值转换：将字符串 "true"/"false" 转换为布尔值
+    if (rules.type === 'boolean' && typeof value === 'string') {
+      data[field] = value === 'true';
+    }
+
     // 字符串长度验证
     if (rules.type === 'string') {
       if (rules.minLength !== undefined && value.length < rules.minLength) {
@@ -201,6 +206,9 @@ function validateInput(schemaName, data) {
 function validateType(value, expectedType) {
   if (expectedType === 'array') {
     return Array.isArray(value);
+  }
+  if (expectedType === 'boolean') {
+    return typeof value === 'boolean' || value === 'true' || value === 'false';
   }
   return typeof value === expectedType;
 }
