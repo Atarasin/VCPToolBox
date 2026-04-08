@@ -6,6 +6,11 @@ import { wsClient } from './core/ws.js';
 import { renderStoriesPage } from './pages/StoriesPage.js';
 import { renderReviewQueuePage } from './pages/ReviewQueuePage.js';
 import { renderStorySummaryPage } from './pages/StorySummaryPage.js';
+import { renderStoryBiblePage } from './pages/StoryBiblePage.js';
+import { renderOutlinePage } from './pages/OutlinePage.js';
+import { renderChapterReaderPage } from './pages/ChapterReaderPage.js';
+import { renderQualityPage } from './pages/QualityPage.js';
+import { renderFinalOutputPage } from './pages/FinalOutputPage.js';
 
 class App {
     constructor() {
@@ -39,6 +44,30 @@ class App {
 
         router.register('/stories/:id', (params) => {
             renderStorySummaryPage(this.routerView, store, api, params.id);
+        });
+
+        router.register('/stories/:id/bible', (params) => {
+            renderStoryBiblePage(this.routerView, store, api, params.id);
+        });
+
+        router.register('/stories/:id/outline', (params) => {
+            renderOutlinePage(this.routerView, store, api, params.id);
+        });
+
+        router.register('/stories/:id/chapters', (params) => {
+            renderChapterReaderPage(this.routerView, store, api, params.id, 1);
+        });
+
+        router.register('/stories/:id/chapters/:num', (params) => {
+            renderChapterReaderPage(this.routerView, store, api, params.id, params.num);
+        });
+
+        router.register('/stories/:id/quality', (params) => {
+            renderQualityPage(this.routerView, store, api, params.id);
+        });
+
+        router.register('/stories/:id/final', (params) => {
+            renderFinalOutputPage(this.routerView, store, api, params.id);
         });
 
         router.register('/review-queue', () => {
