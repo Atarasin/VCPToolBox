@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StoryOrchestrator Panel</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --text-color: #f0f6fc;
+            --sidebar-bg: #161b22;
+            --border-color: #30363d;
+            --accent-color: #58a6ff;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #app {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        .sidebar {
+            width: 250px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 20px 0;
+        }
+
+        .sidebar h2 {
+            margin: 0 20px 20px 20px;
+            font-size: 1.2rem;
+            color: var(--accent-color);
+        }
+
+        .nav-link {
+            padding: 10px 20px;
+            color: var(--text-color);
+            text-decoration: none;
+            display: block;
+            transition: background-color 0.2s;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(139, 148, 158, 0.1);
+            border-left: 3px solid var(--accent-color);
+            padding-left: 17px;
+        }
+
+        .main-content {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            font-size: 1.2rem;
+            color: #8b949e;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="sidebar">
+            <h2>StoryOrchestrator</h2>
+            <nav>
+                <a href="#/stories" class="nav-link">Stories</a>
+                <a href="#/review-queue" class="nav-link">Review Queue</a>
+                <a href="#/settings" class="nav-link">Settings</a>
+            </nav>
+        </div>
+        <div class="main-content" id="router-view">
+            <div class="loading">Loading StoryOrchestrator Panel...</div>
+        </div>
+    </div>
+
+    <script type="module" src="js/core/events.js"></script>
+    <script type="module" src="js/core/store.js"></script>
+    <script type="module" src="js/core/api.js"></script>
+    <script type="module" src="js/core/router.js"></script>
+    <script type="module" src="js/core/ws.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
