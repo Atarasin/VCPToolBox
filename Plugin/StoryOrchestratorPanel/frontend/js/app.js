@@ -1,8 +1,11 @@
+// Import core modules
 import { events } from './core/events.js';
 import { store } from './core/store.js';
 import { api } from './core/api.js';
 import { router } from './core/router.js';
 import { wsClient } from './core/ws.js';
+
+// Import page renderers
 import { renderStoriesPage } from './pages/StoriesPage.js';
 import { renderReviewQueuePage } from './pages/ReviewQueuePage.js';
 import { renderStorySummaryPage } from './pages/StorySummaryPage.js';
@@ -21,16 +24,23 @@ class App {
     async init() {
         if (this.initialized) return;
 
-        this.setupRoutes();
-        
-        wsClient.connect();
+        try {
+            this.setupRoutes();
+            this.setupEventListeners();
+            
+            // Initialize router first
+            router.init();
+            
+            // Connect WebSocket after router is ready
+            wsClient.connect();
 
-        this.setupEventListeners();
-
-        router.init();
-
-        this.initialized = true;
-        console.log('App initialized');
+            this.initialized = true;
+            console.log('[App] Initialized successfully');
+        } catch (error) {
+            console.error('[App] Initialization failed:', error);
+            this.showError('Failed to initialize app: ' + error.message);
+            throw error;
+        }
     }
 
     setupRoutes() {
@@ -81,15 +91,15 @@ class App {
 
     setupEventListeners() {
         events.on('store:updated', (data) => {
-            console.log('Store updated:', data);
+            console.log('[Store] Updated:', data);
         });
 
         events.on('ws:connected', () => {
-            console.log('WebSocket connected');
+            console.log('[WebSocket] Connected');
         });
 
         events.on('ws:disconnected', () => {
-            console.log('WebSocket disconnected');
+            console.log('[WebSocket] Disconnected');
         });
 
         events.on('route:change', (routeInfo) => {
@@ -117,12 +127,41 @@ class App {
             </div>
         `;
     }
+
+    showError(message) {
+        if (!this.routerView) return;
+        this.routerView.innerHTML = `
+            <div style="padding: 20px; color: #f85149; border: 1px solid #f85149; border-radius: 6px; margin: 20px;">
+                <h3>Error</h3>
+                <p>${message}</p>
+                <p style="font-size: 0.9em; margin-top: 10px;">Check browser console for details.</p>
+            </div>
+        `;
+    }
 }
 
-const app = new App();
-
-document.addEventListener('DOMContentLoaded', () => {
-    app.init().catch(err => {
-        console.error('Failed to initialize app:', err);
-    });
-});
+// Initialize app
+try {
+    const app = new App();
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            app.init().catch(err => {
+                console.error('[App] Failed to initialize:', err);
+            });
+        });
+    } else {
+        app.init().catch(err => {
+            console.error('[App] Failed to initialize:', err);
+        });
+    }
+} catch (error) {
+    console.error('[App] Critical error during setup:', error);
+    document.body.innerHTML = `
+        <div style="padding: 40px; color: #f85149; text-align: center;">
+            <h2>Failed to Load Application</h2>
+            <p>${error.message}</p>
+            <pre style="text-align: left; background: rgba(0,0,0,0.3); padding: 20px; margin-top: 20px; overflow: auto;">${error.stack}</pre>
+        </div>
+    `;
+}
