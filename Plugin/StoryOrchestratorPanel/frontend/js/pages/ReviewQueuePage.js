@@ -170,7 +170,7 @@ export async function renderReviewQueuePage(containerElement, store, api) {
                 const now = new Date();
                 if (autoApproveTime > now) {
                     const hoursLeft = Math.ceil((autoApproveTime - now) / (1000 * 60 * 60));
-                    countdownHtml = \`<div class="countdown">Auto-approves in ~\${hoursLeft}h</div>\`;
+                    countdownHtml = `<div class="countdown">Auto-approves in ~${hoursLeft}h</div>`;
                 }
             }
 
