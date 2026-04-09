@@ -177,14 +177,14 @@ export async function renderReviewQueuePage(containerElement, store, api) {
             html += `
                 <div class="queue-item">
                     <div class="item-details">
-                        <h3 class="story-title">\${story.title || 'Untitled Story'}</h3>
+                        <h3 class="story-title">${story.title || 'Untitled Story'}</h3>
                         <div class="meta-info">
-                            <span class="badge phase">Phase: \${phase}</span>
-                            <span class="badge checkpoint-type">\${checkpointType}</span>
-                            \${countdownHtml}
+                            <span class="badge phase">Phase: ${phase}</span>
+                            <span class="badge checkpoint-type">${checkpointType}</span>
+                            ${countdownHtml}
                         </div>
                     </div>
-                    <button class="btn-review" data-id="\${story.id}">Review Now</button>
+                    <button class="btn-review" data-id="${story.id}">Review Now</button>
                 </div>
             `;
         });
@@ -196,7 +196,7 @@ export async function renderReviewQueuePage(containerElement, store, api) {
         reviewButtons.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const storyId = e.target.getAttribute('data-id');
-                router.navigate(\`/stories/\${storyId}/review\`);
+                router.navigate(`/stories/${storyId}/review`);
             });
         });
 
@@ -205,7 +205,7 @@ export async function renderReviewQueuePage(containerElement, store, api) {
         contentEl.innerHTML = `
             <div class="error-state">
                 Failed to load review queue. Please try again later.
-                <br><small>\${error.message}</small>
+                <br><small>${error.message}</small>
             </div>
         `;
     }
