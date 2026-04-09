@@ -172,7 +172,7 @@ export async function renderStoryBiblePage(container, store, api, storyId) {
                 
                 btn.classList.add('active');
                 const targetId = btn.getAttribute('data-target');
-                const targetPane = container.querySelector(\`#\${targetId}\`);
+                const targetPane = container.querySelector(`#${targetId}`);
                 if (targetPane) {
                     targetPane.style.display = 'grid';
                 }
