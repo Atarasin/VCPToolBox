@@ -36,6 +36,112 @@
     "AGENT_ORCHESTRATOR": "string"
   },
   "capabilities": {
+    "parameters": {
+      "story_prompt": {
+        "type": "string",
+        "description": "故事创作提示词，至少10个字符"
+      },
+      "target_word_count": {
+        "type": "integer",
+        "description": "目标字数"
+      },
+      "genre": {
+        "type": "string",
+        "description": "故事类型/题材"
+      },
+      "style_preference": {
+        "type": "string",
+        "description": "风格偏好"
+      },
+      "story_id": {
+        "type": "string",
+        "description": "故事项目唯一ID"
+      },
+      "checkpoint_id": {
+        "type": "string",
+        "description": "检查点ID"
+      },
+      "approval": {
+        "type": "boolean",
+        "description": "是否批准检查点"
+      },
+      "feedback": {
+        "type": "string",
+        "description": "反馈内容"
+      },
+      "chapter_number": {
+        "type": "integer",
+        "description": "章节编号"
+      },
+      "outline_context": {
+        "type": "string",
+        "description": "大纲上下文"
+      },
+      "chapter_content": {
+        "type": "string",
+        "description": "章节内容"
+      },
+      "review_focus": {
+        "type": "string",
+        "description": "审查重点"
+      },
+      "revision_instructions": {
+        "type": "string",
+        "description": "修改指令"
+      },
+      "issues": {
+        "type": "string",
+        "description": "问题列表"
+      },
+      "max_rewrite_ratio": {
+        "type": "number",
+        "description": "最大重写比例"
+      },
+      "polish_focus": {
+        "type": "string",
+        "description": "润色重点"
+      },
+      "validation_type": {
+        "type": "string",
+        "description": "校验类型"
+      },
+      "target_min": {
+        "type": "integer",
+        "description": "最小字数目标"
+      },
+      "target_max": {
+        "type": "integer",
+        "description": "最大字数目标"
+      },
+      "count_mode": {
+        "type": "string",
+        "description": "字数统计模式"
+      },
+      "length_policy": {
+        "type": "string",
+        "description": "长度策略"
+      },
+      "format": {
+        "type": "string",
+        "description": "导出格式"
+      },
+      "recovery_action": {
+        "type": "string",
+        "description": "恢复操作类型"
+      },
+      "target_phase": {
+        "type": "string",
+        "description": "目标阶段"
+      },
+      "phase_name": {
+        "type": "string",
+        "description": "阶段名称"
+      },
+      "reason": {
+        "type": "string",
+        "description": "原因"
+      }
+    },
     "invocationCommands": [
       {
         "commandIdentifier": "StartStoryProject",

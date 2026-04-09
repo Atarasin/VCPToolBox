@@ -665,6 +665,34 @@ class PluginManager {
             throw new Error(`[PluginManager] Plugin "${toolName}" not found for tool call.`);
         }
 
+        // === VCP 参数类型自动转换 ===
+        // 根据 plugin-manifest.json 中的 parameters schema，将字符串参数转换为声明类型
+        if (plugin.capabilities && plugin.capabilities.parameters && typeof toolArgs === 'object' && toolArgs !== null) {
+            const paramSchema = plugin.capabilities.parameters;
+            for (const [key, value] of Object.entries(toolArgs)) {
+                if (paramSchema[key] && typeof value === 'string') {
+                    const expectedType = paramSchema[key].type;
+                    if (expectedType === 'number' || expectedType === 'float') {
+                        const parsed = Number(value);
+                        if (!isNaN(parsed)) toolArgs[key] = parsed;
+                    } else if (expectedType === 'integer' || expectedType === 'int') {
+                        const parsed = parseInt(value, 10);
+                        if (!isNaN(parsed)) toolArgs[key] = parsed;
+                    } else if (expectedType === 'boolean' || expectedType === 'bool') {
+                        const lower = value.toLowerCase();
+                        toolArgs[key] = lower === 'true' || lower === '1' || lower === 'yes';
+                    } else if (expectedType === 'array' || expectedType === 'object') {
+                        try {
+                            toolArgs[key] = JSON.parse(value);
+                        } catch (e) {
+                            // 解析失败时保持原字符串值
+                        }
+                    }
+                }
+            }
+        }
+        // === 参数类型转换结束 ===
+
         // Helper function to generate a timestamp string
         const _getFormattedLocalTimestamp = () => {
             const date = new Date();

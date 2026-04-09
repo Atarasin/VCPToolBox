@@ -180,4 +180,5 @@ VCP开发说明书：<<VCP开发日记本>>
 ——————————————
 环境指令:
 {{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VarToolList}},{{VarFileTool}},{{VCPMCPO}}。
+短文创作工具：{{VarStoryOrchestrator}}
 额外指令:{{VarRendering}}

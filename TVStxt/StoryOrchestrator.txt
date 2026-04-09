@@ -1,0 +1,148 @@
+# StoryOrchestrator Agent 使用速查
+
+StoryOrchestrator 是 VCP 的多智能体小说创作插件，通过三阶段工作流自动完成 1-5 万字短篇小说。Agent 只需通过 TOOL_REQUEST 调用以下命令即可。
+
+---
+
+## 1. 可用命令
+
+| 命令 | 用途 | 关键参数 |
+|------|------|---------|
+| `StartStoryProject` | 启动新项目 | `story_prompt`(必需), `target_word_count`, `genre`, `style_preference` |
+| `QueryStoryStatus` | 查询项目状态 | `story_id`(必需) |
+| `UserConfirmCheckpoint` | 确认/拒绝检查点 | `story_id`, `checkpoint_id`, `approval`(true/false), `feedback` |
+| `CreateChapterDraft` | 手动生成/重写某章 | `story_id`, `chapter_number`, `outline_context`, `target_word_count` |
+| `ReviewChapter` | 审查章节质量 | `story_id`, `chapter_number`, `chapter_content`, `review_focus` |
+| `ReviseChapter` | 定向修改章节 | `story_id`, `chapter_number`, `chapter_content`, `revision_instructions`, `issues`, `max_rewrite_ratio`(默认0.35) |
+| `PolishChapter` | 润色章节文笔 | `story_id`, `chapter_number`, `chapter_content`, `polish_focus` |
+| `ValidateConsistency` | 校验与故事圣经一致性 | `story_id`, `content`, `validation_type`(worldview/character/plot) |
+| `CountChapterMetrics` | 字数统计 | `chapter_content`, `target_min`, `target_max`, `count_mode`(cn_chars/non_whitespace), `length_policy`(range/min_only) |
+| `ExportStory` | 导出成品 | `story_id`, `format`(markdown/txt/json) |
+| `RecoverStoryWorkflow` | 恢复/重启/回滚 | `story_id`, `recovery_action`(continue/restart_phase/rollback), `target_phase`, `feedback` |
+| `RetryPhase` | 重试指定阶段 | `story_id`, `phase_name`(phase1/phase2/phase3), `reason` |
+
+---
+
+## 2. 调用格式
+
+所有参数值用「始」...「末」包裹：
+
+```
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」StoryOrchestrator「末」,
+command:「始」{命令名}「末」,
+参数1:「始」值1「末」,
+参数2:「始」值2「末」
+<<<[END_TOOL_REQUEST]>>>
+```
+
+### 示例
+
+**启动项目**
+```
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」StoryOrchestrator「末」,
+command:「始」StartStoryProject「末」,
+story_prompt:「始」一个关于AI觉醒的科幻故事，主角是一个家用机器人，在一次意外中获得了自我意识「末」,
+target_word_count:「始」3000「末」,
+genre:「始」科幻「末」,
+style_preference:「始」硬科幻风格，注重逻辑和细节描写「末」
+<<<[END_TOOL_REQUEST]>>>
+```
+
+**查询状态**
+```
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」StoryOrchestrator「末」,
+command:「始」QueryStoryStatus「末」,
+story_id:「始」story-abc123「末」
+<<<[END_TOOL_REQUEST]>>>
+```
+
+**批准检查点**
+```
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」StoryOrchestrator「末」,
+command:「始」UserConfirmCheckpoint「末」,
+story_id:「始」story-abc123「末」,
+checkpoint_id:「始」cp-1-worldview「末」,
+approval:「始」true「末」
+<<<[END_TOOL_REQUEST]>>>
+```
+
+**拒绝检查点（带反馈）**
+```
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」StoryOrchestrator「末」,
+command:「始」UserConfirmCheckpoint「末」,
+story_id:「始」story-abc123「末」,
+checkpoint_id:「始」cp-1-worldview「末」,
+approval:「始」false「末」,
+feedback:「始」主角人设需要更深的内心矛盾描写「末」
+<<<[END_TOOL_REQUEST]>>>
+```
+
+**导出终稿**
+```
+<<<[TOOL_REQUEST]>>>
+tool_name:「始」StoryOrchestrator「末」,
+command:「始」ExportStory「末」,
+story_id:「始」story-abc123「末」,
+format:「始」markdown「末」
+<<<[END_TOOL_REQUEST]>>>
+```
+
+---
+
+## 3. 检查点机制
+
+工作流分三阶段，每阶段完成后会暂停并等待用户确认：
+
+| 检查点 ID | 阶段 | 确认内容 |
+|-----------|------|---------|
+| `cp-1-worldview` | Phase1 | 世界观与人物设定 |
+| `cp-2-outline` | Phase2 | 分章大纲 |
+| `cp-3-final` | Phase3 | 完整终稿 |
+
+- `approval=true` → 流程继续到下一阶段。
+- `approval=false` + `feedback` → 重跑当前阶段，反馈会传给 Agent 作为修改依据。
+- 检查点默认 24 小时超时自动批准（`USER_CHECKPOINT_TIMEOUT_MS=86400000`）。
+
+---
+
+## 4. QueryStoryStatus 返回值要点
+
+重点读取以下字段判断下一步操作：
+
+- `checkpoint_pending`：`true` 时说明正在等待用户确认，需调用 `UserConfirmCheckpoint`。
+- `checkpoint_id`：当前待确认的ID（`cp-1-worldview` / `cp-2-outline` / `cp-3-final`）。
+- `phase` / `phase_name`：`1`=世界观与人设搭建, `2`=大纲与正文生产, `3`=润色与终稿, `4`=已完成。
+- `status`：如 `phase1_running`, `waiting_checkpoint`, `completed`, `error`。
+- `progress_percent`：整体进度（0-100）。
+- `chapters_completed`：已完成章节数。
+- `total_word_count`：当前累计中文字数。
+- `workflow_state`：`idle` / `running` / `waiting_checkpoint` / `completed` / `error`。
+- `last_error`：最近错误信息（如有）。
+
+---
+
+## 5. 故障排查
+
+| 现象 | 操作 |
+|------|------|
+| 创作卡住/没反应 | 先 `QueryStoryStatus` |
+| `checkpoint_pending=true` | 向用户展示当前产出，确认后调用 `UserConfirmCheckpoint` |
+| `status=running` | 正常执行中，建议等待 |
+| `status=error` | 调用 `RecoverStoryWorkflow`，`recovery_action` 可选 `continue`/`restart_phase`/`rollback` |
+| 字数不达标 | 先 `CountChapterMetrics` 诊断，再 `ReviseChapter` 扩充或 `CreateChapterDraft` 重写 |
+
+---
+
+## 6. 最佳实践
+
+1. **启动后保存 `story_id`**，所有后续命令均需此 ID。
+2. **周期查询状态**：长时间运行中应定时调用 `QueryStoryStatus`，避免错过 `checkpoint_pending`。
+3. **检查点确认前向用户展示**：Phase1 展示世界观和人物设定；Phase2 展示分章大纲；Phase3 展示终稿。
+4. **拒绝时给出具体反馈**：如"主角年龄改为25岁"、"第三章合并到第二章"，反馈直接作为重跑上下文。
+5. **字数问题**：`CreateChapterDraft` 生成字数不足时会自动扩充；手动干预先用 `CountChapterMetrics` 确认 deficit，再用 `ReviseChapter` 定向扩充。
+6. **终稿导出**：用 `ExportStory` + `format=markdown` 获取完整内容和字数统计。
