@@ -178,7 +178,6 @@ export async function renderStoryBiblePage(container, store, api, storyId) {
                 }
             });
         });
-        });
 
     } catch (error) {
         container.innerHTML = `
