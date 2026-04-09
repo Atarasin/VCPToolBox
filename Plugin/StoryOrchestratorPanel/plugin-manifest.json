@@ -1,0 +1,35 @@
+{
+  "manifestVersion": "1.0.2",
+  "name": "StoryOrchestratorPanel",
+  "version": "1.0.0",
+  "displayName": "Story Orchestrator Panel",
+  "description": "故事编排器前端管理面板，用于展示故事创作动态和检查点评审",
+  "author": "VCP Team",
+  "pluginType": "service",
+  "entryPoint": {
+    "script": "index.js"
+  },
+  "communication": {
+    "protocol": "direct"
+  },
+  "configSchema": {
+    "DebugMode": {
+      "type": "boolean",
+      "description": "是否启用调试日志输出",
+      "default": false
+    },
+    "PanelPathPrefix": {
+      "type": "string",
+      "description": "前端面板路径前缀",
+      "default": "/AdminPanel/StoryOrchestrator"
+    },
+    "ApiPathPrefix": {
+      "type": "string",
+      "description": "API路径前缀",
+      "default": "/admin_api/story-orchestrator-panel"
+    }
+  },
+  "capabilities": {
+    "invocationCommands": []
+  }
+}
