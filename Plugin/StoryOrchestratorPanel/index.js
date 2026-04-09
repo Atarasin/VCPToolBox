@@ -27,6 +27,106 @@ const StoryOrchestrator = require('../StoryOrchestrator/core/StoryOrchestrator')
 // All functions are safe: they handle null/undefined gracefully and don't throw.
 // ============================================================================
 
+function safeParseLooseJson(raw, logLabel) {
+  if (!raw || typeof raw !== 'string') {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  const startIndex = trimmed.indexOf('{');
+  const endIndex = trimmed.lastIndexOf('}');
+  const candidates = [];
+
+  if (startIndex !== -1) {
+    candidates.push(trimmed.slice(startIndex));
+  }
+
+  if (startIndex !== -1 && endIndex > startIndex) {
+    candidates.push(trimmed.slice(startIndex, endIndex + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      const repaired = repairTruncatedJson(candidate);
+      if (repaired) {
+        try {
+          return JSON.parse(repaired);
+        } catch (repairError) {
+        }
+      }
+    }
+  }
+
+  if (logLabel) {
+    console.error(`[StoryOrchestratorPanel] Failed to parse ${logLabel}: malformed JSON output`);
+  }
+
+  return null;
+}
+
+function repairTruncatedJson(input) {
+  if (!input || typeof input !== 'string') {
+    return null;
+  }
+
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  let squareDepth = 0;
+  let braceDepth = 0;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    result += char;
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{') braceDepth++;
+    if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+    if (char === '[') squareDepth++;
+    if (char === ']') squareDepth = Math.max(0, squareDepth - 1);
+  }
+
+  result = result.replace(/,\s*$/, '');
+
+  if (inString) {
+    result += '"';
+  }
+
+  while (squareDepth > 0) {
+    result = result.replace(/,\s*$/, '');
+    result += ']';
+    squareDepth--;
+  }
+
+  while (braceDepth > 0) {
+    result = result.replace(/,\s*$/, '');
+    result += '}';
+    braceDepth--;
+  }
+
+  return result.replace(/,\s*([}\]])/g, '$1');
+}
+
 /**
  * Normalize worldview data from various formats into a consistent structure.
  * 
@@ -59,7 +159,7 @@ function normalizeWorldview(worldview) {
   // Handle raw JSON string input
   if (typeof worldview === 'string') {
     try {
-      worldview = JSON.parse(worldview);
+      worldview = safeParseLooseJson(worldview, 'worldview string') || worldview;
     } catch (e) {
       // If it's not valid JSON, treat it as a setting text
       return { ...result, setting: worldview };
@@ -76,16 +176,24 @@ function normalizeWorldview(worldview) {
   // Parse raw JSON string if present
   if (worldview.raw && typeof worldview.raw === 'string') {
     try {
-      const parsedRaw = JSON.parse(worldview.raw);
-      result = {
-        ...result,
-        ...parsedRaw,
-        setting: parsedRaw.setting || worldview.setting || '',
-        rules: parsedRaw.rules || worldview.rules || [],
-        factions: parsedRaw.factions || worldview.factions || [],
-        history: parsedRaw.history || worldview.history || [],
-        secrets: parsedRaw.secrets || worldview.secrets || []
-      };
+      const parsedRaw = safeParseLooseJson(worldview.raw, 'worldview raw');
+      if (parsedRaw) {
+        result = {
+          ...result,
+          ...parsedRaw,
+          setting: parsedRaw.setting || worldview.setting || '',
+          rules: parsedRaw.rules || worldview.rules || [],
+          factions: parsedRaw.factions || worldview.factions || [],
+          history: parsedRaw.history || worldview.history || [],
+          secrets: parsedRaw.secrets || worldview.secrets || []
+        };
+      } else {
+        result.setting = worldview.setting || '';
+        result.rules = worldview.rules || [];
+        result.factions = worldview.factions || [];
+        result.history = worldview.history || [];
+        result.secrets = worldview.secrets || [];
+      }
     } catch (e) {
       // Keep what we have, try direct fields
       result.setting = worldview.setting || '';
@@ -175,10 +283,10 @@ function normalizeCharacters(charData) {
     // Try to get richer data from raw field first
     if (charData.raw && typeof charData.raw === 'string') {
       try {
-        const parsedRaw = JSON.parse(charData.raw);
-        if (parsedRaw.characters) {
+        const parsedRaw = safeParseLooseJson(charData.raw, 'characters raw');
+        if (parsedRaw?.characters) {
           charsObj = parsedRaw.characters;
-        } else if (parsedRaw.protagonists || parsedRaw.supporting || parsedRaw.antagonists) {
+        } else if (parsedRaw?.protagonists || parsedRaw?.supporting || parsedRaw?.supportingCharacters || parsedRaw?.antagonists) {
           // Raw contains the categories directly
           charsObj = parsedRaw;
         }
@@ -191,7 +299,7 @@ function normalizeCharacters(charData) {
     if (charsObj === charData && charData.characters) {
       if (typeof charData.characters === 'string') {
         try {
-          charsObj = JSON.parse(charData.characters);
+          charsObj = safeParseLooseJson(charData.characters, 'characters string') || charsObj;
         } catch (e) {
           // Keep charsObj as is
         }
@@ -207,10 +315,16 @@ function normalizeCharacters(charData) {
       categories.protagonists = normalized.length;
     }
 
+    if (charsObj.supportingCharacters && Array.isArray(charsObj.supportingCharacters)) {
+      const normalized = charsObj.supportingCharacters.map(c => normalizeSingleCharacter({ ...c, roleCategory: 'supporting', roleType: '配角' }));
+      characters = characters.concat(normalized);
+      categories.supporting += normalized.length;
+    }
+
     if (charsObj.supporting && Array.isArray(charsObj.supporting)) {
       const normalized = charsObj.supporting.map(c => normalizeSingleCharacter({ ...c, roleCategory: 'supporting', roleType: '配角' }));
       characters = characters.concat(normalized);
-      categories.supporting = normalized.length;
+      categories.supporting += normalized.length;
     }
 
     if (charsObj.antagonists && Array.isArray(charsObj.antagonists)) {
@@ -228,6 +342,63 @@ function normalizeCharacters(charData) {
   return {
     characters,
     summary: categories
+  };
+}
+
+function extractCharactersStructure(charData) {
+  const empty = {
+    protagonists: [],
+    supportingCharacters: [],
+    antagonists: [],
+    relationshipNetwork: {
+      direct: [],
+      hidden: []
+    },
+    oocRules: {}
+  };
+
+  if (charData == null) {
+    return empty;
+  }
+
+  if (Array.isArray(charData)) {
+    return {
+      ...empty,
+      protagonists: charData
+    };
+  }
+
+  let charsObj = charData;
+
+  if (charData.raw && typeof charData.raw === 'string') {
+    try {
+      const parsedRaw = safeParseLooseJson(charData.raw, 'characters raw');
+      if (parsedRaw?.characters) {
+        charsObj = parsedRaw.characters;
+      } else if (parsedRaw?.protagonists || parsedRaw?.supporting || parsedRaw?.supportingCharacters || parsedRaw?.antagonists) {
+        charsObj = parsedRaw;
+      }
+    } catch (e) {
+    }
+  }
+
+  if (charsObj === charData && charData.characters) {
+    if (typeof charData.characters === 'string') {
+      try {
+        charsObj = safeParseLooseJson(charData.characters, 'characters string') || charsObj;
+      } catch (e) {
+      }
+    } else if (typeof charData.characters === 'object') {
+      charsObj = charData.characters;
+    }
+  }
+
+  return {
+    protagonists: normalizeArray(charsObj?.protagonists),
+    supportingCharacters: normalizeArray(charsObj?.supportingCharacters || charsObj?.supporting),
+    antagonists: normalizeArray(charsObj?.antagonists),
+    relationshipNetwork: charsObj?.relationshipNetwork || empty.relationshipNetwork,
+    oocRules: charsObj?.oocRules || {}
   };
 }
 
@@ -981,6 +1152,43 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
     }
   });
 
+  router.get('/stories/:id/phase1', async (req, res) => {
+    try {
+      const storyId = req.params.id;
+      const storyPath = path.join(storiesDir, `${storyId}.json`);
+
+      try {
+        await fs.access(storyPath);
+      } catch {
+        return res.status(404).json({ success: false, error: 'Story not found' });
+      }
+
+      const content = await fs.readFile(storyPath, 'utf8');
+      const data = JSON.parse(content);
+      const phase1 = data.phase1 || {};
+      const worldview = normalizeWorldview(phase1.worldview);
+      const characters = extractCharactersStructure(phase1.characters);
+      const normalizedCharacters = normalizeCharacters(phase1.characters);
+
+      res.json({
+        success: true,
+        phase1: {
+          worldview,
+          characters,
+          characterSummary: normalizedCharacters.summary,
+          allCharacters: normalizedCharacters.characters,
+          validation: phase1.validation || null,
+          userConfirmed: phase1.userConfirmed || false,
+          checkpointId: phase1.checkpointId || null,
+          status: phase1.status || 'pending'
+        }
+      });
+    } catch (error) {
+      console.error('[StoryOrchestratorPanel] Error getting phase1 data:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   /**
    * 获取故事章节列表
    * GET /admin_api/story-orchestrator-panel/stories/:id/chapters
@@ -1118,9 +1326,19 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
             if (charsObj.protagonists && Array.isArray(charsObj.protagonists)) {
               characters = characters.concat(charsObj.protagonists.map(c => ({...c, roleType: '主角', roleCategory: 'protagonist'})));
             }
+            
+            // Handle both supporting and supportingCharacters keys
+            let supportingList = null;
             if (charsObj.supporting && Array.isArray(charsObj.supporting)) {
-              characters = characters.concat(charsObj.supporting.map(c => ({...c, roleType: '配角', roleCategory: 'supporting'})));
+                supportingList = charsObj.supporting;
+            } else if (charsObj.supportingCharacters && Array.isArray(charsObj.supportingCharacters)) {
+                supportingList = charsObj.supportingCharacters;
             }
+            
+            if (supportingList && Array.isArray(supportingList)) {
+              characters = characters.concat(supportingList.map(c => ({...c, roleType: '配角', roleCategory: 'supporting'})));
+            }
+            
             if (charsObj.antagonists && Array.isArray(charsObj.antagonists)) {
               characters = characters.concat(charsObj.antagonists.map(c => ({...c, roleType: '反派', roleCategory: 'antagonist'})));
             }
@@ -1454,9 +1672,64 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
 /**
  * 格式化故事列表项（摘要信息）
  */
+function normalizeTargetWordCount(targetWordCount) {
+  if (typeof targetWordCount === 'number' && Number.isFinite(targetWordCount) && targetWordCount > 0) {
+    return {
+      min: targetWordCount,
+      max: targetWordCount
+    };
+  }
+
+  if (targetWordCount && typeof targetWordCount === 'object') {
+    const min = Number(targetWordCount.min ?? targetWordCount.minimum ?? targetWordCount.target ?? 0) || 0;
+    const max = Number(targetWordCount.max ?? targetWordCount.maximum ?? targetWordCount.target ?? min) || min;
+    const normalizedMin = Math.max(0, Math.min(min || max, max || min));
+    const normalizedMax = Math.max(normalizedMin, Math.max(min, max));
+
+    if (normalizedMin > 0 || normalizedMax > 0) {
+      return {
+        min: normalizedMin,
+        max: normalizedMax
+      };
+    }
+  }
+
+  return {
+    min: 2500,
+    max: 3500
+  };
+}
+
+function formatTargetWordCountLabel(targetWordCount) {
+  const normalized = normalizeTargetWordCount(targetWordCount);
+
+  if (normalized.min === normalized.max) {
+    return `${normalized.min.toLocaleString()} 字`;
+  }
+
+  return `${normalized.min.toLocaleString()} - ${normalized.max.toLocaleString()} 字`;
+}
+
+function extractStoryShortId(storyId) {
+  if (typeof storyId !== 'string' || !storyId) {
+    return '';
+  }
+
+  return storyId.startsWith('story-') ? storyId.slice(6) : storyId;
+}
+
 function formatStoryListItem(data) {
   // 计算整体进度
   const progress = calculateProgress(data);
+  const targetWordCount = normalizeTargetWordCount(data.config?.targetWordCount);
+  const phaseStatuses = {
+    phase1: data.phase1?.status,
+    phase2: data.phase2?.status,
+    phase3: data.phase3?.status
+  };
+  const retryingPhase = ['phase1', 'phase2', 'phase3'].find(phase => {
+    return data.status === `${phase}_retrying` || phaseStatuses[phase] === 'retrying';
+  });
 
   // 确定当前阶段显示
   let phaseDisplay = '未开始';
@@ -1486,19 +1759,33 @@ function formatStoryListItem(data) {
     phaseClass = 'completed';
   }
 
+  if (retryingPhase) {
+    const retryingLabels = {
+      phase1: '阶段1：正在根据退回意见重建设定',
+      phase2: '阶段2：正在根据退回意见重写大纲正文',
+      phase3: '阶段3：正在根据退回意见重新润色'
+    };
+    phaseDisplay = retryingLabels[retryingPhase] || '正在重新生成';
+    phaseClass = 'retrying';
+  }
+
   // 获取检查点信息
   const hasCheckpoint = !!data.workflow?.activeCheckpoint;
   const checkpointPending = hasCheckpoint && data.workflow.activeCheckpoint.status === 'pending';
 
   return {
     id: data.id,
+    shortId: extractStoryShortId(data.id),
     title: data.config?.title || data.config?.storyPrompt?.substring(0, 50) + '...' || '未命名故事',
     genre: data.config?.genre || 'general',
-    targetWordCount: data.config?.targetWordCount || { min: 2500, max: 3500 },
+    targetWordCount,
+    targetWordCountLabel: formatTargetWordCountLabel(targetWordCount),
     status: data.status || 'idle',
     phase: data.workflow?.currentPhase || null,
     phaseDisplay,
     phaseClass,
+    isRetrying: !!retryingPhase,
+    retryingPhase,
     progress,
     checkpointPending,
     checkpointType: data.workflow?.activeCheckpoint?.type || null,
@@ -1534,6 +1821,13 @@ function formatStoryDetail(data) {
       const chars = charData.characters;
       if (chars.protagonists) characterCount += chars.protagonists.length;
       if (chars.supporting) characterCount += chars.supporting.length;
+      if (chars.supportingCharacters) characterCount += chars.supportingCharacters.length;
+      if (chars.antagonists) characterCount += chars.antagonists.length;
+    } else {
+      if (charData.protagonists) characterCount += charData.protagonists.length;
+      if (charData.supporting) characterCount += charData.supporting.length;
+      if (charData.supportingCharacters) characterCount += charData.supportingCharacters.length;
+      if (charData.antagonists) characterCount += charData.antagonists.length;
     }
   }
 
@@ -1548,6 +1842,8 @@ function formatStoryDetail(data) {
     phase1Completed: data.phase1?.userConfirmed || false,
     phase2Completed: data.phase2?.userConfirmed || false,
     phase3Completed: data.phase3?.userConfirmed || false,
+    lastRejectionFeedback: data[base.retryingPhase]?.lastRejectionFeedback || null,
+    lastRejectedAt: data[base.retryingPhase]?.lastRejectedAt || null,
     workflow: {
       state: data.workflow?.state || 'idle',
       currentPhase: data.workflow?.currentPhase || null,
@@ -1577,14 +1873,14 @@ function calculateProgress(data) {
   // Phase 1 贡献
   if (phaseStatuses.phase1 === 'completed' || data.phase1?.userConfirmed) {
     progress += 33;
-  } else if (phaseStatuses.phase1 === 'running') {
+  } else if (phaseStatuses.phase1 === 'running' || phaseStatuses.phase1 === 'retrying') {
     progress += 15;
   }
 
   // Phase 2 贡献
   if (phaseStatuses.phase2 === 'completed' || data.phase2?.userConfirmed) {
     progress += 33;
-  } else if (phaseStatuses.phase2 === 'running') {
+  } else if (phaseStatuses.phase2 === 'running' || phaseStatuses.phase2 === 'retrying') {
     const chapters = data.phase2?.chapters || [];
     const totalChapters = chapters.length || 5; // 预估5章
     const isCompleted = (status) => status && (status === 'completed' || status.startsWith('completed'));
@@ -1595,7 +1891,7 @@ function calculateProgress(data) {
   // Phase 3 贡献
   if (phaseStatuses.phase3 === 'completed' || data.phase3?.userConfirmed) {
     progress += 34;
-  } else if (phaseStatuses.phase3 === 'running') {
+  } else if (phaseStatuses.phase3 === 'running' || phaseStatuses.phase3 === 'retrying') {
     const iteration = data.phase3?.iterationCount || 0;
     const maxIterations = 5;
     progress += Math.round((iteration / maxIterations) * 34);
@@ -1612,5 +1908,8 @@ module.exports = {
   normalizeChapter,
   normalizeWorkflowHistory,
   normalizeQualityScores,
-  extractArtifactSummary
+  extractArtifactSummary,
+  normalizeTargetWordCount,
+  formatTargetWordCountLabel,
+  extractStoryShortId
 };

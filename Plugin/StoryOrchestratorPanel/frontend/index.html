@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StoryOrchestrator Panel</title>
+    <title>短文创作控制台</title>
     <style>
         :root {
             --bg-color: #0d1117;
@@ -91,20 +91,30 @@
 <body>
     <div id="app">
         <div class="sidebar">
-            <h2>StoryOrchestrator</h2>
+            <h2>故事编排控制台</h2>
             <nav>
-                <a href="#/stories" class="nav-link">Stories</a>
-                <a href="#/review-queue" class="nav-link">Review Queue</a>
-                <a href="#/settings" class="nav-link">Settings</a>
+                <a href="#/stories" class="nav-link">故事列表</a>
+                <a href="#/review-queue" class="nav-link">评审队列</a>
+                <a href="#/settings" class="nav-link">系统设置</a>
             </nav>
         </div>
         <div class="main-content" id="router-view">
-            <div class="loading" id="loading-msg">Loading StoryOrchestrator Panel...</div>
+            <div class="loading" id="loading-msg">正在加载控制台...</div>
         </div>
     </div>
 
     <div id="error-container"></div>
 
+    <script>
+        // Load saved theme on startup
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'light') {
+            document.documentElement.style.setProperty('--bg-color', '#ffffff');
+            document.documentElement.style.setProperty('--text-color', '#24292e');
+            document.documentElement.style.setProperty('--sidebar-bg', '#f6f8fa');
+            document.documentElement.style.setProperty('--border-color', '#e1e4e8');
+        }
+    </script>
     <script type="module">
         // Error handling
         window.addEventListener('error', (e) => {

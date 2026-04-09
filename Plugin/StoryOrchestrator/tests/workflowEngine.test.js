@@ -1,836 +1,510 @@
 'use strict';
 
-const { describe, it, beforeEach, afterEach } = require('node:test');
+const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert');
+const { mock } = require('node:test');
 
-const storyDb = {};
-const stateHistory = [];
+const { WorkflowEngine } = require('../core/WorkflowEngine');
 
-const createMockStateManager = () => {
-  const sm = {
-    initialized: false,
-    cache: new Map(),
-    
-    async initialize() {
-      this.initialized = true;
+function createStory(overrides = {}) {
+  return {
+    id: 'story-123',
+    status: 'draft',
+    phase1: {
+      worldview: null,
+      characters: [],
+      validation: null,
+      userConfirmed: false,
+      checkpointId: null,
+      status: 'pending'
     },
-
-    generateStoryId() {
-      return 'story-test-123';
+    phase2: {
+      outline: null,
+      chapters: [],
+      currentChapter: 0,
+      userConfirmed: false,
+      checkpointId: null,
+      status: 'pending'
     },
+    phase3: {
+      polishedChapters: [],
+      finalValidation: null,
+      iterationCount: 0,
+      userConfirmed: false,
+      checkpointId: null,
+      status: 'pending'
+    },
+    workflow: {
+      state: 'idle',
+      currentPhase: 'phase1',
+      currentStep: null,
+      activeCheckpoint: null,
+      retryContext: {
+        phase: null,
+        step: null,
+        attempt: 0,
+        maxAttempts: 3,
+        lastError: null
+      },
+      history: [],
+      runToken: 'existing-run-token'
+    },
+    ...overrides
+  };
+}
 
-    async createStory(storyPrompt, config = {}) {
-      const storyId = sm.generateStoryId();
-      const now = new Date().toISOString();
-      const story = {
-        id: storyId,
-        status: 'phase1_running',
-        createdAt: now,
-        updatedAt: now,
-        config: {
-          targetWordCount: config.target_word_count || { min: 2500, max: 3500 },
-          genre: config.genre || 'general',
-          stylePreference: config.style_preference || '',
-          storyPrompt: storyPrompt
-        },
-        phase1: {
-          worldview: null,
-          characters: [],
-          validation: null,
-          userConfirmed: false,
-          checkpointId: null,
-          status: 'running'
-        },
-        phase2: {
-          outline: null,
-          chapters: [],
-          currentChapter: 0,
-          userConfirmed: false,
-          checkpointId: null,
-          status: 'pending'
-        },
-        phase3: {
-          polishedChapters: [],
-          finalValidation: null,
-          iterationCount: 0,
-          userConfirmed: false,
-          checkpointId: null,
-          status: 'pending'
-        },
-        workflow: {
-          state: 'idle',
-          currentPhase: 'phase1',
-          currentStep: null,
-          activeCheckpoint: null,
-          retryContext: {
-            phase: null,
-            step: null,
-            attempt: 0,
-            maxAttempts: 3,
-            lastError: null
-          },
-          history: [],
-          runToken: 'test-uuid-1234'
-        }
+function createMockStateManager(initialStory) {
+  let story = initialStory;
+
+  const stateManager = {
+    initialize: mock.fn(async () => {}),
+    getStory: mock.fn(async (storyId) => (story && story.id === storyId ? story : null)),
+    updateStory: mock.fn(async (_storyId, updates) => {
+      story = {
+        ...story,
+        ...updates
       };
-      storyDb[storyId] = story;
-      sm.cache.set(storyId, story);
       return story;
-    },
-
-    async getStory(storyId) {
-      if (sm.cache.has(storyId)) {
-        return sm.cache.get(storyId);
-      }
-      return storyDb[storyId] || null;
-    },
-
-    async updateStory(storyId, updates) {
-      const story = await sm.getStory(storyId);
-      if (!story) throw new Error('Story not found: ' + storyId);
-      Object.assign(story, updates, { updatedAt: new Date().toISOString() });
-      sm.cache.set(storyId, story);
-      storyDb[storyId] = story;
-      stateHistory.push({ action: 'updateStory', storyId, updates });
-      return story;
-    },
-
-    async updateWorkflow(storyId, updates) {
-      const story = await sm.getStory(storyId);
-      if (!story) throw new Error('Story not found: ' + storyId);
-      if (!story.workflow) {
-        story.workflow = {
-          state: 'idle',
-          currentPhase: null,
-          currentStep: null,
-          activeCheckpoint: null,
-          retryContext: { phase: null, step: null, attempt: 0, maxAttempts: 3, lastError: null },
-          history: [],
-          runToken: 'test-uuid-1234'
-        };
-      }
-      if (updates.retryContext !== undefined) {
-        story.workflow.retryContext = { ...story.workflow.retryContext, ...updates.retryContext };
-      }
-      Object.assign(story.workflow, updates);
-      stateHistory.push({ action: 'updateWorkflow', storyId, updates });
-      return story;
-    },
-
-    async appendWorkflowHistory(storyId, entry) {
-      const story = await sm.getStory(storyId);
-      if (!story) throw new Error('Story not found: ' + storyId);
-      if (!story.workflow) story.workflow = {};
-      if (!story.workflow.history) story.workflow.history = [];
-      story.workflow.history.push({
-        at: new Date().toISOString(),
-        type: entry.type || 'notification',
-        phase: entry.phase !== undefined ? entry.phase : story.workflow.currentPhase,
-        step: entry.step !== undefined ? entry.step : story.workflow.currentStep,
-        detail: entry.detail || {}
-      });
-      stateHistory.push({ action: 'appendWorkflowHistory', storyId, entry });
-      return story;
-    },
-
-    async setActiveCheckpoint(storyId, checkpoint) {
-      const story = await sm.getStory(storyId);
-      if (!story) throw new Error('Story not found: ' + storyId);
-      if (!story.workflow) story.workflow = {};
-      story.workflow.activeCheckpoint = {
-        id: checkpoint.id || 'cp-test-' + Date.now(),
-        phase: checkpoint.phase || story.workflow.currentPhase,
-        type: checkpoint.type || 'outline_confirmation',
-        status: checkpoint.status || 'pending',
-        createdAt: checkpoint.createdAt || new Date().toISOString(),
-        expiresAt: checkpoint.expiresAt || null,
-        autoContinueOnTimeout: checkpoint.autoContinueOnTimeout !== undefined ? checkpoint.autoContinueOnTimeout : true,
-        feedback: checkpoint.feedback || ''
+    }),
+    updateWorkflow: mock.fn(async (_storyId, updates) => {
+      story.workflow = story.workflow || {};
+      story.workflow = {
+        ...story.workflow,
+        ...updates,
+        retryContext: updates.retryContext !== undefined
+          ? { ...(story.workflow.retryContext || {}), ...updates.retryContext }
+          : story.workflow.retryContext
       };
-      stateHistory.push({ action: 'setActiveCheckpoint', storyId, checkpoint });
       return story;
-    },
-
-    async clearActiveCheckpoint(storyId) {
-      const story = await sm.getStory(storyId);
-      if (!story) throw new Error('Story not found: ' + storyId);
-      if (story.workflow) story.workflow.activeCheckpoint = null;
-      stateHistory.push({ action: 'clearActiveCheckpoint', storyId });
+    }),
+    updatePhase1: mock.fn(async (_storyId, updates) => {
+      story.phase1 = { ...story.phase1, ...updates };
       return story;
-    },
-
-    async recordPhaseFeedback(storyId, phaseName, feedback) {
-      const story = await sm.getStory(storyId);
-      if (!story) throw new Error('Story not found: ' + storyId);
-      const now = new Date().toISOString();
-      if (story.workflow && story.workflow.activeCheckpoint) {
+    }),
+    updatePhase2: mock.fn(async (_storyId, updates) => {
+      story.phase2 = { ...story.phase2, ...updates };
+      return story;
+    }),
+    updatePhase3: mock.fn(async (_storyId, updates) => {
+      story.phase3 = { ...story.phase3, ...updates };
+      return story;
+    }),
+    appendWorkflowHistory: mock.fn(async (_storyId, entry) => {
+      story.workflow.history.push(entry);
+      return story;
+    }),
+    setActiveCheckpoint: mock.fn(async (_storyId, checkpoint) => {
+      story.workflow.activeCheckpoint = { ...checkpoint };
+      return story;
+    }),
+    clearActiveCheckpoint: mock.fn(async () => {
+      story.workflow.activeCheckpoint = null;
+      return story;
+    }),
+    recordPhaseFeedback: mock.fn(async (_storyId, phaseName, feedback) => {
+      if (story.workflow.activeCheckpoint) {
         story.workflow.activeCheckpoint.feedback = feedback;
-        story.workflow.activeCheckpoint.status = 'approved';
-        story.workflow.activeCheckpoint.resolvedAt = now;
       }
       if (story[phaseName]) {
         story[phaseName].userFeedback = feedback;
-        story[phaseName].feedbackRecordedAt = now;
       }
-      stateHistory.push({ action: 'recordPhaseFeedback', storyId, phaseName, feedback });
       return story;
-    }
+    }),
+    listStories: mock.fn(async () => (story ? [story.id] : [])),
+    __getStory: () => story
   };
-  return sm;
-};
+
+  return stateManager;
+}
 
 describe('WorkflowEngine', () => {
-  let mockStateManager;
-  let mockAgentDispatcher;
-  let mockChapterOperations;
-  let mockContentValidator;
-  let WorkflowEngine;
+  let story;
+  let stateManager;
+  let agentDispatcher;
   let engine;
 
   beforeEach(() => {
-    stateHistory.length = 0;
-    Object.keys(storyDb).forEach(k => delete storyDb[k]);
-    mockStateManager = createMockStateManager();
-    mockAgentDispatcher = {};
-    mockChapterOperations = {};
-    mockContentValidator = {};
+    story = createStory();
+    stateManager = createMockStateManager(story);
+    agentDispatcher = { dispatch: mock.fn() };
 
-    const { WorkflowEngine: WE } = require('../core/WorkflowEngine');
-    WorkflowEngine = WE;
-    
     engine = new WorkflowEngine({
-      stateManager: mockStateManager,
-      agentDispatcher: mockAgentDispatcher,
-      chapterOperations: mockChapterOperations,
-      contentValidator: mockContentValidator,
-      config: { MAX_PHASE_RETRY_ATTEMPTS: 3 }
+      stateManager,
+      agentDispatcher,
+      chapterOperations: {},
+      contentValidator: {},
+      config: {
+        MAX_PHASE_RETRY_ATTEMPTS: 4,
+        USER_CHECKPOINT_TIMEOUT_MS: 1000
+      }
     });
-  });
 
-  const setPhaseBehaviors = (phaseConfigs) => {
     engine.phases = {
-      phase1: {
-        async run() {
-          return phaseConfigs.phase1 ? phaseConfigs.phase1() : { status: 'completed', phase: 'phase1', data: { message: 'phase1 done' } };
-        }
-      },
+      phase1: { run: mock.fn(async () => ({ status: 'completed', phase: 'phase1' })) },
       phase2: {
-        async run() {
-          return phaseConfigs.phase2 ? phaseConfigs.phase2() : { status: 'completed', phase: 'phase2', data: { message: 'phase2 done' } };
-        },
-        async continueFromCheckpoint() {
-          return phaseConfigs.phase2Continue ? phaseConfigs.phase2Continue() : { status: 'completed', phase: 'phase2' };
-        }
+        run: mock.fn(async () => ({ status: 'completed', phase: 'phase2' })),
+        continueFromCheckpoint: mock.fn(async () => ({ status: 'completed', phase: 'phase2' }))
       },
       phase3: {
-        async run() {
-          return phaseConfigs.phase3 ? phaseConfigs.phase3() : { status: 'completed', phase: 'phase3', data: { message: 'phase3 done' } };
-        },
-        async continueFromCheckpoint() {
-          return phaseConfigs.phase3Continue ? phaseConfigs.phase3Continue() : { status: 'completed', phase: 'phase3' };
-        }
+        run: mock.fn(async () => ({ status: 'completed', phase: 'phase3' })),
+        continueFromCheckpoint: mock.fn(async () => ({ status: 'completed', phase: 'phase3' }))
       }
     };
-  };
+  });
 
-  describe('State Machine Transitions', () => {
-
-    describe('idle to running (phase1)', () => {
-      it('transitions from idle to running when starting workflow', async () => {
-        let phase1Ran = false;
-        setPhaseBehaviors({
-          phase1: () => {
-            phase1Ran = true;
-            return { status: 'completed', phase: 'phase1' };
-          }
-        });
-        const story = await mockStateManager.createStory('Test story prompt');
-
-        const result = await engine.start(story.id);
-
-        assert.strictEqual(result.status, 'completed');
-        assert.ok(phase1Ran);
-      });
-
-      it('rejects start if workflow already running', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test story');
-        await mockStateManager.updateWorkflow(story.id, { state: 'running' });
-
-        const result = await engine.start(story.id);
-
-        assert.strictEqual(result.status, 'error');
-        assert.ok(result.error.includes('already running'));
-      });
-
-      it('rejects start if workflow already completed', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test story');
-        await mockStateManager.updateWorkflow(story.id, { state: 'completed' });
-
-        const result = await engine.start(story.id);
-
-        assert.strictEqual(result.status, 'error');
-        assert.ok(result.error.includes('already completed'));
-      });
-
-      it('rejects start for non-existent story', async () => {
-        setPhaseBehaviors({});
-        const result = await engine.start('non-existent-story');
-
-        assert.strictEqual(result.status, 'error');
-        assert.ok(result.error.includes('not found'));
-      });
+  describe('constructor()', () => {
+    it('initializes dependencies, retry config and default state', () => {
+      assert.strictEqual(engine.stateManager, stateManager);
+      assert.strictEqual(engine.agentDispatcher, agentDispatcher);
+      assert.strictEqual(engine.retryConfig.maxAttempts, 4);
+      assert.deepStrictEqual(engine.retryConfig.retryOnPhases, ['phase1', 'phase2', 'phase3']);
+      assert.strictEqual(engine.initialized, false);
+      assert.deepStrictEqual(engine.phases && Object.keys(engine.phases), ['phase1', 'phase2', 'phase3']);
+      assert.strictEqual(engine.webSocketPusher, null);
     });
 
-    describe('running to awaiting_checkpoint', () => {
-      it('transitions to awaiting_checkpoint when phase requires confirmation', async () => {
-        setPhaseBehaviors({
-          phase1: () => ({
-            status: 'waiting_checkpoint',
-            phase: 'phase1',
-            checkpointId: 'cp-1-worldview',
-            data: { message: 'Worldview ready for review' }
-          })
-        });
-
-        const story = await mockStateManager.createStory('Test story');
-        const result = await engine.start(story.id);
-
-        assert.strictEqual(result.status, 'waiting_checkpoint');
-        assert.strictEqual(result.checkpointId, 'cp-1-worldview');
-        assert.strictEqual(result.phase, 'phase1');
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.state, 'waiting_checkpoint');
-      });
-    });
-
-    describe('awaiting_checkpoint to running (phase2)', () => {
-      it('transitions to phase2 when checkpoint is approved', async () => {
-        setPhaseBehaviors({
-          phase2: () => ({ status: 'waiting_checkpoint', phase: 'phase2', checkpointId: 'cp-2' })
-        });
-        const story = await mockStateManager.createStory('Test story');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1'
-        });
-        await mockStateManager.setActiveCheckpoint(story.id, {
-          id: 'cp-1-worldview',
-          phase: 'phase1',
-          status: 'pending'
-        });
-
-        const result = await engine.resume(story.id, {
-          checkpointId: 'cp-1-worldview',
-          approval: true,
-          feedback: 'Looks good'
-        });
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.currentPhase, 'phase2');
-      });
-    });
-
-    describe('phase2 to awaiting_checkpoint (checkpoint 2)', () => {
-      it('creates checkpoint 2 after phase2 completes', async () => {
-        setPhaseBehaviors({
-          phase1: () => ({ status: 'completed', phase: 'phase1' }),
-          phase2: () => ({
-            status: 'waiting_checkpoint',
-            phase: 'phase2',
-            checkpointId: 'cp-2-outline',
-            data: { outline: 'Chapter outline...' }
-          })
-        });
-
-        const story = await mockStateManager.createStory('Test story');
-        await engine.start(story.id);
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.activeCheckpoint && updatedStory.workflow.activeCheckpoint.phase, 'phase2');
-      });
-    });
-
-    describe('awaiting_checkpoint to running (phase3)', () => {
-      it('transitions to phase3 after approving checkpoint 2', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test story');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase2'
-        });
-        await mockStateManager.setActiveCheckpoint(story.id, {
-          id: 'cp-2-outline',
-          phase: 'phase2',
-          status: 'pending'
-        });
-
-        const result = await engine.resume(story.id, {
-          checkpointId: 'cp-2-outline',
-          approval: true,
-          feedback: 'Good outline'
-        });
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.currentPhase, 'phase3');
-      });
-    });
-
-    describe('phase3 to awaiting_checkpoint (checkpoint 3)', () => {
-      it('creates checkpoint 3 after phase3 completes', async () => {
-        setPhaseBehaviors({
-          phase1: () => ({ status: 'completed', phase: 'phase1' }),
-          phase2: () => ({ status: 'completed', phase: 'phase2' }),
-          phase3: () => ({
-            status: 'waiting_checkpoint',
-            phase: 'phase3',
-            checkpointId: 'cp-3-final',
-            data: { finalOutput: 'Complete story...' }
-          })
-        });
-
-        const story = await mockStateManager.createStory('Test story');
-        await engine.start(story.id);
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.activeCheckpoint && updatedStory.workflow.activeCheckpoint.phase, 'phase3');
-        assert.strictEqual(updatedStory.workflow.activeCheckpoint && updatedStory.workflow.activeCheckpoint.id, 'cp-3-final');
-      });
-    });
-
-    describe('awaiting_checkpoint to completed', () => {
-      it('transitions to completed when final checkpoint is approved', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test story');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase3'
-        });
-        await mockStateManager.setActiveCheckpoint(story.id, {
-          id: 'cp-3-final',
-          phase: 'phase3',
-          status: 'pending'
-        });
-
-        const result = await engine.resume(story.id, {
-          checkpointId: 'cp-3-final',
-          approval: true,
-          feedback: 'Excellent work!'
-        });
-
-        assert.strictEqual(result.status, 'completed');
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.state, 'completed');
-        assert.strictEqual(updatedStory.status, 'completed');
-      });
-    });
-
-    describe('Error transitions', () => {
-      it('handles phase failure and transitions to failed state', async () => {
-        setPhaseBehaviors({
-          phase1: () => ({
-            status: 'failed',
-            phase: 'phase1',
-            error: 'AI service unavailable'
-          })
-        });
-
-        const story = await mockStateManager.createStory('Test story');
-        await engine.start(story.id);
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.state, 'failed');
-      });
+    it('does not currently expose a public pause() method', () => {
+      assert.strictEqual(typeof engine.pause, 'undefined');
     });
   });
 
-  describe('Checkpoint Handling', () => {
-    
-    describe('Checkpoint creation', () => {
-      it('creates checkpoint with correct properties', async () => {
-        setPhaseBehaviors({
-          phase1: () => ({
-            status: 'waiting_checkpoint',
-            checkpointId: 'cp-1-worldview',
-            data: { worldview: {}, characters: [] }
-          })
-        });
+  describe('start(storyId)', () => {
+    it('starts an idle workflow and moves into waiting_checkpoint when phase1 needs approval', async () => {
+      engine.phases.phase1.run = mock.fn(async () => ({
+        status: 'waiting_checkpoint',
+        phase: 'phase1',
+        checkpointId: 'cp-1',
+        data: { worldview: 'ok' }
+      }));
 
-        const story = await mockStateManager.createStory('Test');
-        await engine.start(story.id);
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        const checkpoint = updatedStory.workflow.activeCheckpoint;
-
-        assert.ok(checkpoint);
-        assert.strictEqual(checkpoint.id, 'cp-1-worldview');
-        assert.strictEqual(checkpoint.phase, 'phase1');
-        assert.strictEqual(checkpoint.type, 'phase1_checkpoint');
-        assert.strictEqual(checkpoint.status, 'pending');
-        assert.strictEqual(checkpoint.autoContinueOnTimeout, true);
-      });
-    });
-
-    describe('Timeout handling', () => {
-      it('has autoContinueOnTimeout enabled by default', async () => {
-        setPhaseBehaviors({
-          phase1: () => ({
-            status: 'waiting_checkpoint',
-            checkpointId: 'cp-1',
-            data: {}
-          })
-        });
-
-        const story = await mockStateManager.createStory('Test');
-        await engine.start(story.id);
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.activeCheckpoint && updatedStory.workflow.activeCheckpoint.autoContinueOnTimeout, true);
-      });
-    });
-
-    describe('User approval/rejection', () => {
-      it('handles approval and continues workflow', async () => {
-        setPhaseBehaviors({
-          phase2: () => ({ status: 'waiting_checkpoint', phase: 'phase2', checkpointId: 'cp-2' }),
-          phase3: () => ({ status: 'completed', phase: 'phase3' })
-        });
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1'
-        });
-        await mockStateManager.setActiveCheckpoint(story.id, {
-          id: 'cp-1',
-          phase: 'phase1',
-          status: 'pending'
-        });
-
-        await engine.resume(story.id, {
-          checkpointId: 'cp-1',
-          approval: true,
-          feedback: 'Approved!'
-        });
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.strictEqual(updatedStory.workflow.currentPhase, 'phase2');
-      });
-
-      it('handles rejection and re-runs current phase', async () => {
-        let phase1RunCount = 0;
-        
-        setPhaseBehaviors({
-          phase1: () => {
-            phase1RunCount++;
-            return {
-              status: 'waiting_checkpoint',
-              checkpointId: 'cp-1',
-              data: { attempt: phase1RunCount }
-            };
-          }
-        });
-
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1'
-        });
-        await mockStateManager.setActiveCheckpoint(story.id, {
-          id: 'cp-1',
-          phase: 'phase1',
-          status: 'pending'
-        });
-
-        await engine.resume(story.id, {
-          checkpointId: 'cp-1',
-          approval: false,
-          feedback: 'Please improve',
-          reason: 'Not detailed enough'
-        });
-
-        assert.ok(phase1RunCount >= 1);
-      });
-
-      it('rejects when checkpointId does not match', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'waiting_checkpoint',
-          currentPhase: 'phase1'
-        });
-        await mockStateManager.setActiveCheckpoint(story.id, {
-          id: 'cp-correct',
-          phase: 'phase1',
-          status: 'pending'
-        });
-
-        const result = await engine.resume(story.id, {
-          checkpointId: 'cp-wrong',
-          approval: true,
-          feedback: 'Approved'
-        });
-
-        assert.strictEqual(result.status, 'error');
-        assert.ok(result.error.includes('mismatch'));
-      });
-    });
-  });
-
-  describe('Workflow Execution', () => {
-    
-    describe('Phase 1 execution', () => {
-      it('executes phase1 and updates story status', async () => {
-        let phase1Ran = false;
-        setPhaseBehaviors({
-          phase1: () => {
-            phase1Ran = true;
-            return { status: 'completed', phase: 'phase1' };
-          }
-        });
-        await mockStateManager.createStory('Test story');
-
-        await engine.start('story-test-123');
-
-        const updatedStory = await mockStateManager.getStory('story-test-123');
-        assert.ok(updatedStory.phase1);
-        assert.ok(phase1Ran);
-      });
-    });
-
-    describe('Phase 2 execution', () => {
-      it('executes phase2 after phase1 completes', async () => {
-        const executionOrder = [];
-        
-        setPhaseBehaviors({
-          phase1: () => {
-            executionOrder.push('phase1');
-            return { status: 'completed', phase: 'phase1' };
-          },
-          phase2: () => {
-            executionOrder.push('phase2');
-            return { status: 'completed', phase: 'phase2' };
-          }
-        });
-
-        await mockStateManager.createStory('Test');
-        await engine.start('story-test-123');
-
-        assert.ok(executionOrder.includes('phase1'));
-        assert.ok(executionOrder.includes('phase2'));
-        assert.ok(executionOrder.indexOf('phase1') < executionOrder.indexOf('phase2'));
-      });
-    });
-
-    describe('Phase 3 execution', () => {
-      it('executes phase3 after phase2 completes', async () => {
-        const executionOrder = [];
-        
-        setPhaseBehaviors({
-          phase1: () => {
-            executionOrder.push('phase1');
-            return { status: 'completed', phase: 'phase1' };
-          },
-          phase2: () => {
-            executionOrder.push('phase2');
-            return { status: 'completed', phase: 'phase2' };
-          },
-          phase3: () => {
-            executionOrder.push('phase3');
-            return { status: 'completed', phase: 'phase3' };
-          }
-        });
-
-        await mockStateManager.createStory('Test');
-        await engine.start('story-test-123');
-
-        assert.strictEqual(executionOrder[0], 'phase1');
-        assert.strictEqual(executionOrder[1], 'phase2');
-        assert.strictEqual(executionOrder[2], 'phase3');
-      });
-    });
-
-    describe('Error recovery', () => {
-      it('recovers from crash state', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          state: 'running',
-          currentPhase: 'phase1',
-          retryContext: { attempt: 1, maxAttempts: 3 }
-        });
-
-        const result = await engine.recover(story.id);
-
-        assert.ok(result.status === 'success' || result.status === 'completed');
-
-        const updatedStory = await mockStateManager.getStory(story.id);
-        assert.ok(updatedStory.workflow.runToken);
-      });
-
-      it('reports already completed on recover if completed', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, { state: 'completed' });
-
-        const result = await engine.recover(story.id);
-
-        assert.strictEqual(result.status, 'success');
-        assert.ok(result.message.includes('completed'));
-      });
-
-      it('reports idle state if workflow is idle', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, { state: 'idle' });
-
-        const result = await engine.recover(story.id);
-
-        assert.strictEqual(result.status, 'success');
-        assert.ok(result.message.includes('idle'));
-      });
-    });
-  });
-
-  describe('Retry Logic', () => {
-    
-    describe('3 attempts with backoff', () => {
-      it('allows up to 3 retry attempts', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          retryContext: { attempt: 0, maxAttempts: 3, lastError: 'Initial error' }
-        });
-
-        const result1 = await engine.retryPhase(story.id, 'phase1', 'Test error 1');
-        assert.ok(result1.status === 'completed' || result1.status === 'error');
-
-        await mockStateManager.updateWorkflow(story.id, {
-          retryContext: { attempt: 1, maxAttempts: 3 }
-        });
-
-        const result2 = await engine.retryPhase(story.id, 'phase1', 'Test error 2');
-        assert.ok(result2.status === 'completed' || result2.status === 'error');
-
-        await mockStateManager.updateWorkflow(story.id, {
-          retryContext: { attempt: 2, maxAttempts: 3 }
-        });
-
-        const result3 = await engine.retryPhase(story.id, 'phase1', 'Test error 3');
-        assert.ok(result3.status === 'completed' || result3.status === 'error');
-      });
-
-      it('fails when max attempts exceeded', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          retryContext: { attempt: 3, maxAttempts: 3, lastError: 'Previous error' }
-        });
-
-        const result = await engine.retryPhase(story.id, 'phase1', 'New error');
-
-        assert.strictEqual(result.status, 'failed');
-        assert.ok(result.error.includes('Max retry attempts'));
-      });
-
-      it('applies backoff delays', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-        
-        await mockStateManager.updateWorkflow(story.id, {
-          retryContext: { attempt: 1, maxAttempts: 3 }
-        });
-
-        await engine.retryPhase(story.id, 'phase1', 'Test error');
-      });
-
-      it('rejects invalid phase names for retry', async () => {
-        setPhaseBehaviors({});
-        const story = await mockStateManager.createStory('Test');
-
-        const result = await engine.retryPhase(story.id, 'invalid_phase', 'Error');
-
-        assert.strictEqual(result.status, 'error');
-        assert.ok(result.error.includes('Invalid phase'));
-      });
-    });
-  });
-
-  describe('getWorkflowStatus', () => {
-    it('returns current workflow status', async () => {
-      setPhaseBehaviors({});
-      const story = await mockStateManager.createStory('Test');
-      
-      await mockStateManager.updateWorkflow(story.id, {
-        state: 'running',
-        currentPhase: 'phase2',
-        currentStep: 'outline_drafting'
-      });
-
-      const status = await engine.getWorkflowStatus(story.id);
-
-      assert.strictEqual(status.state, 'running');
-      assert.strictEqual(status.currentPhase, 'phase2');
-      assert.strictEqual(status.currentStep, 'outline_drafting');
-    });
-
-    it('returns null for non-existent story', async () => {
-      setPhaseBehaviors({});
-
-      const status = await engine.getWorkflowStatus('non-existent');
-
-      assert.strictEqual(status, null);
-    });
-  });
-
-  describe('WebSocket Notifications', () => {
-    it('sends notification when workflow starts', async () => {
       const notifications = [];
-      const mockPusher = {
-        push: async (storyId, notification) => {
+      engine.setWebSocketPusher({
+        push: mock.fn(async (_storyId, notification) => {
           notifications.push(notification);
-        }
-      };
-
-      setPhaseBehaviors({
-        phase1: () => ({ status: 'waiting_checkpoint', phase: 'phase1', checkpointId: 'cp-1' })
+        })
       });
-      engine.setWebSocketPusher(mockPusher);
 
-      await mockStateManager.createStory('Test');
-      await engine.start('story-test-123');
+      const result = await engine.start('story-123');
+      const updatedStory = stateManager.__getStory();
 
-      assert.ok(notifications.length > 0);
-      const startedNotification = notifications.find(n => n.eventType === 'workflow_started');
-      assert.ok(startedNotification, 'Should have sent workflow_started notification');
+      assert.strictEqual(result.status, 'waiting_checkpoint');
+      assert.strictEqual(updatedStory.workflow.state, 'waiting_checkpoint');
+      assert.strictEqual(updatedStory.workflow.currentPhase, 'phase1');
+      assert.strictEqual(updatedStory.workflow.activeCheckpoint.id, 'cp-1');
+      assert.strictEqual(updatedStory.status, 'phase1_waiting_checkpoint');
+      assert.strictEqual(engine.phases.phase1.run.mock.calls.length, 1);
+      assert.ok(notifications.some((notification) => notification.eventType === 'workflow_started'));
+      assert.ok(notifications.some((notification) => notification.eventType === 'checkpoint_pending'));
     });
 
-    it('does not throw if pusher fails', async () => {
-      const mockPusher = {
-        push: async () => {
-          throw new Error('Pusher failed');
-        }
+    it('rejects missing stories', async () => {
+      const result = await engine.start('missing-story');
+
+      assert.strictEqual(result.status, 'error');
+      assert.match(result.error, /Story not found/);
+    });
+
+    it('rejects workflows that are already running', async () => {
+      story.workflow.state = 'running';
+
+      const result = await engine.start('story-123');
+
+      assert.strictEqual(result.status, 'error');
+      assert.match(result.error, /already running/);
+    });
+
+    it('moves the workflow into failed state when a phase fails', async () => {
+      engine.phases.phase1.run = mock.fn(async () => ({
+        status: 'failed',
+        phase: 'phase1',
+        error: 'boom'
+      }));
+
+      const result = await engine.start('story-123');
+      const updatedStory = stateManager.__getStory();
+
+      assert.strictEqual(result.status, 'failed');
+      assert.strictEqual(updatedStory.workflow.state, 'failed');
+      assert.strictEqual(updatedStory.status, 'phase1_failed');
+    });
+  });
+
+  describe('resume(storyId, checkpointApproval)', () => {
+    it('approves a phase1 checkpoint and resumes into phase2', async () => {
+      story.workflow.state = 'waiting_checkpoint';
+      story.workflow.currentPhase = 'phase1';
+      story.workflow.activeCheckpoint = {
+        id: 'cp-1',
+        phase: 'phase1',
+        type: 'phase1_checkpoint',
+        status: 'pending'
       };
 
-      setPhaseBehaviors({});
-      engine.setWebSocketPusher(mockPusher);
+      engine._runPhase2 = mock.fn(async () => ({ status: 'running', phase: 'phase2' }));
+      engine._continueApprovedPhaseInBackground = mock.fn(async () => {});
 
-      await mockStateManager.createStory('Test');
+      const result = await engine.resume('story-123', {
+        checkpointId: 'cp-1',
+        approval: true,
+        feedback: 'approved'
+      });
 
-      await engine.start('story-test-123');
+      assert.strictEqual(result.status, 'running');
+      assert.strictEqual(result.background, true);
+      assert.strictEqual(result.phase, 'phase2');
+      assert.strictEqual(engine._continueApprovedPhaseInBackground.mock.calls.length, 1);
+      assert.strictEqual(engine._continueApprovedPhaseInBackground.mock.calls[0].arguments[1], 'phase2');
+      assert.strictEqual(stateManager.clearActiveCheckpoint.mock.calls.length, 1);
+      assert.strictEqual(stateManager.recordPhaseFeedback.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updatePhase1.mock.calls.at(-1).arguments[1].status, 'completed');
+      assert.strictEqual(stateManager.updateStory.mock.calls.at(-1).arguments[1].status, 'phase2_running');
+    });
+
+    it('rejects a checkpoint and reruns the current phase', async () => {
+      story.workflow.state = 'waiting_checkpoint';
+      story.workflow.currentPhase = 'phase2';
+      story.workflow.activeCheckpoint = {
+        id: 'cp-2',
+        phase: 'phase2',
+        type: 'phase2_checkpoint',
+        status: 'pending'
+      };
+
+      engine._runPhase2 = mock.fn(async () => ({ status: 'waiting_checkpoint', phase: 'phase2', checkpointId: 'cp-2b' }));
+      engine._rerunRejectedPhaseInBackground = mock.fn(async () => {});
+
+      const result = await engine.resume('story-123', {
+        checkpointId: 'cp-2',
+        approval: false,
+        feedback: 'needs work',
+        reason: 'outline too weak'
+      });
+
+      assert.strictEqual(result.status, 'retrying');
+      assert.strictEqual(result.background, true);
+      assert.strictEqual(engine._rerunRejectedPhaseInBackground.mock.calls.length, 1);
+      assert.strictEqual(stateManager.recordPhaseFeedback.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updateWorkflow.mock.calls.at(-1).arguments[1].state, 'running');
+      assert.strictEqual(stateManager.updateStory.mock.calls.at(-1).arguments[1].status, 'phase2_retrying');
+    });
+
+    it('rejects mismatched checkpoint ids', async () => {
+      story.workflow.state = 'waiting_checkpoint';
+      story.workflow.currentPhase = 'phase1';
+      story.workflow.activeCheckpoint = {
+        id: 'cp-expected',
+        phase: 'phase1',
+        status: 'pending'
+      };
+
+      const result = await engine.resume('story-123', {
+        checkpointId: 'cp-other',
+        approval: true,
+        feedback: 'approved'
+      });
+
+      assert.strictEqual(result.status, 'error');
+      assert.match(result.error, /Checkpoint mismatch/);
+    });
+
+    it('completes the workflow when the final checkpoint is approved', async () => {
+      story.workflow.state = 'waiting_checkpoint';
+      story.workflow.currentPhase = 'phase3';
+      story.workflow.activeCheckpoint = {
+        id: 'cp-3',
+        phase: 'phase3',
+        type: 'phase3_checkpoint',
+        status: 'pending'
+      };
+
+      const result = await engine.resume('story-123', {
+        checkpointId: 'cp-3',
+        approval: true,
+        feedback: 'ship it'
+      });
+
+      const updatedStory = stateManager.__getStory();
+      assert.strictEqual(result.status, 'completed');
+      assert.strictEqual(updatedStory.workflow.state, 'completed');
+      assert.strictEqual(updatedStory.status, 'completed');
+    });
+  });
+
+  describe('retryPhase(storyId, phase)', () => {
+    it('retries a valid phase and refreshes retry context', async () => {
+      story.workflow.retryContext = {
+        phase: 'phase2',
+        step: 'draft',
+        attempt: 1,
+        maxAttempts: 4,
+        lastError: 'old error'
+      };
+
+      engine._sleep = mock.fn(async () => {});
+      engine._runPhase2 = mock.fn(async () => ({ status: 'running', phase: 'phase2' }));
+
+      const result = await engine.retryPhase('story-123', 'phase2', 'temporary failure');
+
+      assert.strictEqual(result.status, 'running');
+      assert.strictEqual(engine._sleep.mock.calls.length, 1);
+      assert.strictEqual(engine._runPhase2.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updateWorkflow.mock.calls.at(-1).arguments[1].retryContext.attempt, 2);
+    });
+
+    it('fails once max retry attempts are exceeded', async () => {
+      story.workflow.retryContext = {
+        phase: 'phase1',
+        step: 'initial',
+        attempt: 4,
+        maxAttempts: 4,
+        lastError: 'persistent error'
+      };
+
+      const result = await engine.retryPhase('story-123', 'phase1', 'still broken');
+
+      assert.strictEqual(result.status, 'failed');
+      assert.match(result.error, /Max retry attempts/);
+    });
+
+    it('rejects invalid phase names', async () => {
+      const result = await engine.retryPhase('story-123', 'phase99', 'bad');
+
+      assert.strictEqual(result.status, 'error');
+      assert.match(result.error, /Invalid phase name/);
+    });
+  });
+
+  describe('recover(storyId, action)', () => {
+    it('continues a crashed workflow into the next phase when the checkpointed phase is already confirmed', async () => {
+      story.workflow.state = 'failed';
+      story.workflow.currentPhase = 'phase2';
+      story.phase2.userConfirmed = true;
+
+      engine._runPhase3 = mock.fn(async () => ({ status: 'running', phase: 'phase3' }));
+
+      const result = await engine.recover('story-123', { recoveryAction: 'continue', feedback: 'resume' });
+
+      assert.strictEqual(result.status, 'running');
+      assert.strictEqual(engine._runPhase3.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updateWorkflow.mock.calls.at(-1).arguments[1].retryContext.attempt, 0);
+    });
+
+    it('restarts a requested phase and resets downstream phase state', async () => {
+      story.workflow.state = 'failed';
+      story.workflow.currentPhase = 'phase3';
+      story.phase2.chapters = [{ number: 1, title: 'old' }];
+      story.phase3.polishedChapters = [{ number: 1, content: 'old' }];
+
+      engine._runPhase2 = mock.fn(async () => ({ status: 'running', phase: 'phase2' }));
+
+      const result = await engine.recover('story-123', {
+        recoveryAction: 'restart_phase',
+        targetPhase: 'phase2'
+      });
+
+      assert.strictEqual(result.status, 'running');
+      assert.strictEqual(engine._runPhase2.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updatePhase2.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updatePhase3.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updateStory.mock.calls.at(-1).arguments[1].status, 'phase2_running');
+    });
+
+    it('rolls back to an inferred phase checkpoint and reruns that phase', async () => {
+      story.workflow.state = 'failed';
+      story.workflow.currentPhase = 'phase3';
+      story.phase2.userConfirmed = true;
+      story.phase2.checkpointId = 'cp-2-outline';
+
+      engine._runPhase2 = mock.fn(async () => ({ status: 'running', phase: 'phase2' }));
+
+      const result = await engine.recover('story-123', {
+        recoveryAction: 'rollback'
+      });
+
+      assert.strictEqual(result.status, 'running');
+      assert.strictEqual(engine._runPhase2.mock.calls.length, 1);
+      assert.strictEqual(stateManager.clearActiveCheckpoint.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updateWorkflow.mock.calls.at(-1).arguments[1].currentPhase, 'phase2');
+    });
+  });
+
+  describe('notification flow', () => {
+    it('pushes workflow events through the configured websocket pusher', async () => {
+      const received = [];
+      engine.setWebSocketPusher({
+        push: mock.fn(async (_storyId, notification) => {
+          received.push(notification);
+        })
+      });
+
+      engine.phases.phase1.run = mock.fn(async () => ({
+        status: 'waiting_checkpoint',
+        phase: 'phase1',
+        checkpointId: 'cp-notify',
+        data: { summary: 'pending review' }
+      }));
+
+      await engine.start('story-123');
+
+      assert.strictEqual(received[0].type, 'workflow_event');
+      assert.strictEqual(received[0].storyId, 'story-123');
+      assert.ok(received.every((notification) => typeof notification.timestamp === 'string'));
+      assert.ok(received.some((notification) => notification.eventType === 'workflow_started'));
+      assert.ok(received.some((notification) => notification.eventType === 'checkpoint_pending'));
+    });
+
+    it('swallows websocket push failures while preserving workflow progress', async () => {
+      engine.setWebSocketPusher({
+        push: mock.fn(async () => {
+          throw new Error('socket offline');
+        })
+      });
+
+      engine.phases.phase1.run = mock.fn(async () => ({
+        status: 'waiting_checkpoint',
+        phase: 'phase1',
+        checkpointId: 'cp-resilient',
+        data: {}
+      }));
+
+      const result = await engine.start('story-123');
+      const updatedStory = stateManager.__getStory();
+
+      assert.strictEqual(result.status, 'waiting_checkpoint');
+      assert.strictEqual(updatedStory.workflow.state, 'waiting_checkpoint');
+    });
+  });
+
+  describe('state transition chain', () => {
+    it('covers idle → running → waiting_checkpoint → completed across public APIs', async () => {
+      engine.phases.phase1.run = mock.fn(async () => ({
+        status: 'waiting_checkpoint',
+        phase: 'phase1',
+        checkpointId: 'cp-chain',
+        data: {}
+      }));
+
+      const startResult = await engine.start('story-123');
+      assert.strictEqual(startResult.status, 'waiting_checkpoint');
+      assert.strictEqual(stateManager.__getStory().workflow.state, 'waiting_checkpoint');
+
+      const updatedStory = stateManager.__getStory();
+      updatedStory.workflow.currentPhase = 'phase3';
+      updatedStory.workflow.activeCheckpoint = {
+        id: 'cp-final',
+        phase: 'phase3',
+        type: 'phase3_checkpoint',
+        status: 'pending'
+      };
+
+      const resumeResult = await engine.resume('story-123', {
+        checkpointId: 'cp-final',
+        approval: true,
+        feedback: 'done'
+      });
+
+      assert.strictEqual(resumeResult.status, 'completed');
+      assert.strictEqual(stateManager.__getStory().workflow.state, 'completed');
     });
   });
 });

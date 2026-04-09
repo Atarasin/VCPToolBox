@@ -4,11 +4,11 @@ export async function renderReviewQueuePage(containerElement, store, api) {
     containerElement.innerHTML = `
         <div class="review-queue-page">
             <div class="page-header">
-                <h2>Review Queue</h2>
-                <p>Checkpoints waiting for your approval</p>
+                <h2>评审队列</h2>
+                <p>等待您审批的创作检查点</p>
             </div>
             <div id="review-queue-content" class="queue-content">
-                <div class="loading">Loading review queue...</div>
+                <div class="loading">正在加载评审队列...</div>
             </div>
         </div>
         <style>
@@ -135,8 +135,14 @@ export async function renderReviewQueuePage(containerElement, store, api) {
     const contentEl = containerElement.querySelector('#review-queue-content');
 
     try {
-        const stories = await api.getStories();
-        const pendingStories = stories.filter(story => story.checkpointPending);
+        const response = await api.getStories();
+        const stories = response.data || response.stories || response || [];
+        const pendingStories = stories.filter(story => {
+            return story.checkpointPending || 
+                   story.status === 'checkpoint_pending' || 
+                   story.status === 'pending_confirmation' || 
+                   (story.workflow && story.workflow.activeCheckpoint && story.workflow.activeCheckpoint.status === 'pending');
+        });
 
         pendingStories.sort((a, b) => {
             const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
@@ -147,8 +153,8 @@ export async function renderReviewQueuePage(containerElement, store, api) {
         if (pendingStories.length === 0) {
             contentEl.innerHTML = `
                 <div class="empty-state">
-                    <h3>All caught up!</h3>
-                    <p>There are no checkpoints waiting for your review.</p>
+                    <h3>暂无待办事项</h3>
+                    <p>目前没有需要您评审的检查点。</p>
                 </div>
             `;
             return;
@@ -157,34 +163,51 @@ export async function renderReviewQueuePage(containerElement, store, api) {
         let html = '<div class="queue-list">';
         
         pendingStories.forEach(story => {
-            const phase = story.currentPhase || 'Unknown Phase';
-            let checkpointType = 'Unknown Checkpoint';
-            if (phase === 'phase1') checkpointType = 'Foundation';
-            else if (phase === 'phase2') checkpointType = 'Outline';
-            else if (phase === 'phase3') checkpointType = 'Content';
-            else if (phase === 'phase4') checkpointType = 'Final';
+            let phase = story.workflow?.currentPhase || story.currentPhase || '未知阶段';
+            let phaseName = phase;
+            
+            // Check for phase embedded in status if workflow object is missing/incomplete
+            if (phase === '未知阶段' && story.status) {
+                if (story.status.startsWith('phase1')) phase = 'phase1';
+                else if (story.status.startsWith('phase2')) phase = 'phase2';
+                else if (story.status.startsWith('phase3')) phase = 'phase3';
+            }
+
+            let checkpointType = story.workflow?.activeCheckpoint?.type || '未知检查点';
+            
+            if (phase === 'phase1') { phaseName = '世界观设定'; checkpointType = checkpointType === '未知检查点' ? '基础设定确认' : checkpointType; }
+            else if (phase === 'phase2') { phaseName = '大纲与正文'; checkpointType = checkpointType === '未知检查点' ? '故事大纲确认' : checkpointType; }
+            else if (phase === 'phase3') { phaseName = '润色校验'; checkpointType = checkpointType === '未知检查点' ? '内容质量确认' : checkpointType; }
+            else if (phase === 'phase4') { phaseName = '已完成'; checkpointType = checkpointType === '未知检查点' ? '最终定稿确认' : checkpointType; }
+            
+            // Format checkpoint type if it's the raw english string
+            if (checkpointType === 'phase1_checkpoint' || checkpointType === 'worldview_confirmation') checkpointType = '世界观设定确认';
+            if (checkpointType === 'outline_checkpoint' || checkpointType === 'outline_confirmation') checkpointType = '故事大纲确认';
+            if (checkpointType === 'content_checkpoint' || checkpointType === 'content_quality_confirmation') checkpointType = '内容质量确认';
+            if (checkpointType === 'final_checkpoint' || checkpointType === 'final_approval') checkpointType = '最终定稿确认';
 
             let countdownHtml = '';
-            if (story.autoApproveAt) {
-                const autoApproveTime = new Date(story.autoApproveAt);
+            let targetTime = story.autoApproveAt || story.workflow?.activeCheckpoint?.expiresAt;
+            if (targetTime) {
+                const autoApproveTime = new Date(targetTime);
                 const now = new Date();
                 if (autoApproveTime > now) {
                     const hoursLeft = Math.ceil((autoApproveTime - now) / (1000 * 60 * 60));
-                    countdownHtml = `<div class="countdown">Auto-approves in ~${hoursLeft}h</div>`;
+                    countdownHtml = `<div class="countdown">将在 ~${hoursLeft} 小时后自动通过</div>`;
                 }
             }
 
             html += `
                 <div class="queue-item">
                     <div class="item-details">
-                        <h3 class="story-title">${story.title || 'Untitled Story'}</h3>
+                        <h3 class="story-title">${story.title || '未命名故事'}</h3>
                         <div class="meta-info">
-                            <span class="badge phase">Phase: ${phase}</span>
+                            <span class="badge phase">阶段: ${phaseName}</span>
                             <span class="badge checkpoint-type">${checkpointType}</span>
                             ${countdownHtml}
                         </div>
                     </div>
-                    <button class="btn-review" data-id="${story.id}">Review Now</button>
+                    <a href="#/stories/${story.id}/review" class="btn-review" data-id="${story.id}" role="button">立即评审</a>
                 </div>
             `;
         });
@@ -192,19 +215,24 @@ export async function renderReviewQueuePage(containerElement, store, api) {
         html += '</div>';
         contentEl.innerHTML = html;
 
-        const reviewButtons = contentEl.querySelectorAll('.btn-review');
-        reviewButtons.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const storyId = e.target.getAttribute('data-id');
-                router.navigate(`/stories/${storyId}/review`);
+        // Ensure we properly attach click events to all review buttons
+        setTimeout(() => {
+            const reviewButtons = containerElement.querySelectorAll('.btn-review');
+            reviewButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const storyId = e.currentTarget.getAttribute('data-id');
+                    window.location.hash = `#/stories/${storyId}/review`;
+                });
             });
-        });
+        }, 0);
 
     } catch (error) {
         console.error('Failed to load review queue:', error);
         contentEl.innerHTML = `
             <div class="error-state">
-                Failed to load review queue. Please try again later.
+                加载评审队列失败，请稍后再试。
                 <br><small>${error.message}</small>
             </div>
         `;

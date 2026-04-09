@@ -142,6 +142,17 @@ describe('Phase1_WorldBuilding', () => {
     assert.deepEqual(parsed.suggestions, ['建议统一年代设定', '建议补充人物前史']);
   });
 
+  test('parsers repair truncated JSON output from agents when possible', () => {
+    const worldview = phase._parseWorldview('```json\n{"setting":"海上城邦","rules":{"physical":"潮汐驱动","special":"意识共振","limitations":"会损耗记忆"},"secrets":["旧系统仍在监听"]');
+    const characters = phase._parseCharacters('{"protagonists":[{"name":"林澜","identity":"维护工程师","motivation":"查明真相"}],"supportingCharacters":[{"name":"许沉","identity":"档案管理员","relationship":"盟友"}]');
+
+    assert.equal(worldview.setting, '海上城邦');
+    assert.equal(worldview.rules.limitations, '会损耗记忆');
+    assert.equal(worldview.secrets[0], '旧系统仍在监听');
+    assert.equal(characters.protagonists[0].name, '林澜');
+    assert.equal(characters.supportingCharacters[0].name, '许沉');
+  });
+
   test('run returns needs_retry when revision also fails validation', async () => {
     deps.agentDispatcher.delegate.mock.mockImplementation(async () => ({
       content: '【验证结论】\n不通过\n\n【发现的问题】\n- 世界观冲突（严重）\n\n【修正建议】\n- 建议统一规则'

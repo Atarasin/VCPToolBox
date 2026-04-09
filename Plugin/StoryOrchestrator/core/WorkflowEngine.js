@@ -1262,9 +1262,10 @@ class WorkflowEngine {
     // 获取检查点类型（在清除前读取）
     const story = await this.stateManager.getStory(storyId);
     const checkpointType = story.workflow?.activeCheckpoint?.type;
+    const approvalTime = new Date().toISOString();
 
     // 标记检查点为已批准
-    await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || 'Approved');
+    await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || 'Approved', 'approved');
 
     // 清除活跃检查点
     await this.stateManager.clearActiveCheckpoint(storyId);
@@ -1284,32 +1285,85 @@ class WorkflowEngine {
       feedback
     });
 
-    // 根据当前 phase 继续下一阶段
     if (currentPhase === 'phase1') {
-      // Phase1 批准后继续 Phase2
-      await this.stateManager.updateWorkflow(storyId, {
-        state: 'running'
+      await this.stateManager.updatePhase1(storyId, {
+        userConfirmed: true,
+        checkpointId: null,
+        status: 'completed',
+        approvedAt: approvalTime
       });
-      return await this._runPhase2(storyId);
+      await this.stateManager.updateWorkflow(storyId, {
+        state: 'running',
+        currentPhase: 'phase2',
+        currentStep: 'approved_transition'
+      });
+      await this.stateManager.updateStory(storyId, {
+        status: 'phase2_running'
+      });
+
+      void this._continueApprovedPhaseInBackground(storyId, 'phase2');
+
+      return {
+        status: 'running',
+        phase: 'phase2',
+        background: true,
+        checkpointId,
+        message: `Checkpoint ${checkpointId} approved, continuing phase2`
+      };
     }
 
     if (currentPhase === 'phase2') {
-      // 使用已获取的检查点类型确定下一步
-      // 如果是内容检查点，说明章节已生成，进入Phase3
-      // 如果是大纲检查点，需要继续生成章节
       if (checkpointType === 'phase2_content_confirmation') {
-        // Phase2 内容确认后继续 Phase3
-        await this.stateManager.updateWorkflow(storyId, {
-          state: 'running'
+        await this.stateManager.updatePhase2(storyId, {
+          userConfirmed: true,
+          checkpointId: null,
+          status: 'completed',
+          approvedAt: approvalTime
         });
-        return await this._runPhase3(storyId);
+        await this.stateManager.updateWorkflow(storyId, {
+          state: 'running',
+          currentPhase: 'phase3',
+          currentStep: 'approved_transition'
+        });
+        await this.stateManager.updateStory(storyId, {
+          status: 'phase3_running'
+        });
+
+        void this._continueApprovedPhaseInBackground(storyId, 'phase3');
+
+        return {
+          status: 'running',
+          phase: 'phase3',
+          background: true,
+          checkpointId,
+          message: `Checkpoint ${checkpointId} approved, continuing phase3`
+        };
       } else {
-        // 大纲检查点或其他 - 继续在Phase2中生成章节
         console.log(`[WorkflowEngine] Phase2 outline checkpoint approved, continuing to content production`);
-        await this.stateManager.updateWorkflow(storyId, {
-          state: 'running'
+        await this.stateManager.updatePhase2(storyId, {
+          userConfirmed: true,
+          checkpointId: null,
+          status: 'content_production',
+          approvedAt: approvalTime
         });
-        return await this._runPhase2(storyId);
+        await this.stateManager.updateWorkflow(storyId, {
+          state: 'running',
+          currentPhase: 'phase2',
+          currentStep: 'approved_transition'
+        });
+        await this.stateManager.updateStory(storyId, {
+          status: 'phase2_running'
+        });
+
+        void this._continueApprovedPhaseInBackground(storyId, 'phase2');
+
+        return {
+          status: 'running',
+          phase: 'phase2',
+          background: true,
+          checkpointId,
+          message: `Checkpoint ${checkpointId} approved, continuing phase2`
+        };
       }
     }
 
@@ -1325,6 +1379,22 @@ class WorkflowEngine {
     };
   }
 
+  async _continueApprovedPhaseInBackground(storyId, nextPhase) {
+    try {
+      if (nextPhase === 'phase2') {
+        await this._runPhase2(storyId);
+        return;
+      }
+
+      if (nextPhase === 'phase3') {
+        await this._runPhase3(storyId);
+      }
+    } catch (error) {
+      console.error(`[WorkflowEngine] Background continuation failed for ${storyId} -> ${nextPhase}:`, error.message);
+      await this._handlePhaseError(storyId, nextPhase, error);
+    }
+  }
+
   /**
    * 处理拒绝
    * @private
@@ -1334,7 +1404,7 @@ class WorkflowEngine {
     console.log(`[WorkflowEngine] Feedback: ${feedback}`);
 
     // 记录反馈
-    await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || 'Rejected');
+    await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || 'Rejected', 'rejected');
 
     // 记录到历史
     await this.stateManager.appendWorkflowHistory(storyId, {
@@ -1352,26 +1422,74 @@ class WorkflowEngine {
       reason
     });
 
-    // 重新运行当前 phase
-    await this.stateManager.updateWorkflow(storyId, {
-      state: 'running'
-    });
+    // 立刻更新状态，让用户可感知到系统正在重新生成
+    await this.stateManager.clearActiveCheckpoint(storyId);
+
+    const phaseStatusUpdate = {
+      userConfirmed: false,
+      checkpointId: null,
+      status: 'retrying',
+      lastRejectionFeedback: feedback || '',
+      lastRejectedAt: new Date().toISOString()
+    };
 
     if (currentPhase === 'phase1') {
-      return await this._runPhase1(storyId);
+      await this.stateManager.updatePhase1(storyId, phaseStatusUpdate);
     }
     if (currentPhase === 'phase2') {
-      return await this._runPhase2(storyId);
+      await this.stateManager.updatePhase2(storyId, phaseStatusUpdate);
     }
     if (currentPhase === 'phase3') {
-      return await this._runPhase3(storyId);
+      await this.stateManager.updatePhase3(storyId, phaseStatusUpdate);
     }
 
+    await this.stateManager.updateWorkflow(storyId, {
+      state: 'running',
+      currentPhase,
+      currentStep: 'retrying_after_rejection',
+      retryContext: {
+        ...(await this.stateManager.getStory(storyId)).workflow?.retryContext,
+        lastError: reason || feedback || 'Checkpoint rejected by user'
+      }
+    });
+
+    await this.stateManager.updateStory(storyId, {
+      status: `${currentPhase}_retrying`
+    });
+
+    void this._rerunRejectedPhaseInBackground(storyId, currentPhase);
+
     return {
-      status: 'success',
-      message: `Checkpoint ${checkpointId} rejected, re-running ${currentPhase}`,
-      currentPhase
+      status: 'retrying',
+      phase: currentPhase,
+      background: true,
+      checkpointId,
+      message: `Checkpoint ${checkpointId} rejected, re-running ${currentPhase}`
     };
+  }
+
+  async _rerunRejectedPhaseInBackground(storyId, currentPhase) {
+    try {
+      if (currentPhase === 'phase1') {
+        await this._runPhase1(storyId);
+        return;
+      }
+      if (currentPhase === 'phase2') {
+        await this._runPhase2(storyId);
+        return;
+      }
+      if (currentPhase === 'phase3') {
+        await this._runPhase3(storyId);
+      }
+    } catch (error) {
+      console.error(`[WorkflowEngine] Background rerun failed for ${storyId}/${currentPhase}:`, error);
+      await this._handlePhaseError(storyId, currentPhase, {
+        status: 'error',
+        phase: currentPhase,
+        error: error.message,
+        data: { error: error.message }
+      });
+    }
   }
 
   /**

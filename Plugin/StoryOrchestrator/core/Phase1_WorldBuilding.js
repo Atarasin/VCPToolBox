@@ -412,10 +412,9 @@ ${stylePreference || '保持叙事流畅，注重人物刻画'}
    */
   _parseWorldview(content) {
     try {
-      // 尝试提取JSON
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+      const parsed = this._extractStructuredJson(content);
+      if (parsed) {
+        return parsed;
       }
     } catch (e) {
       console.warn('[Phase1_WorldBuilding] Failed to parse worldview JSON:', e.message);
@@ -435,10 +434,9 @@ ${stylePreference || '保持叙事流畅，注重人物刻画'}
    */
   _parseCharacters(content) {
     try {
-      // 尝试提取JSON
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+      const parsed = this._extractStructuredJson(content);
+      if (parsed) {
+        return parsed;
       }
     } catch (e) {
       console.warn('[Phase1_WorldBuilding] Failed to parse characters JSON:', e.message);
@@ -449,6 +447,113 @@ ${stylePreference || '保持叙事流畅，注重人物刻画'}
       characters: content,
       raw: content
     };
+  }
+
+  _extractStructuredJson(content) {
+    if (!content || typeof content !== 'string') {
+      return null;
+    }
+
+    const startIndex = content.indexOf('{');
+    if (startIndex === -1) {
+      return null;
+    }
+
+    const candidate = content.slice(startIndex).trim();
+
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      const repaired = this._repairTruncatedJson(candidate);
+      if (repaired) {
+        try {
+          return JSON.parse(repaired);
+        } catch (repairError) {
+          console.warn('[Phase1_WorldBuilding] Failed to repair JSON output:', repairError.message);
+        }
+      }
+    }
+
+    const endIndex = content.lastIndexOf('}');
+    if (endIndex > startIndex) {
+      const boundedCandidate = content.slice(startIndex, endIndex + 1);
+      try {
+        return JSON.parse(boundedCandidate);
+      } catch (boundedError) {
+        const repaired = this._repairTruncatedJson(boundedCandidate);
+        if (repaired) {
+          try {
+            return JSON.parse(repaired);
+          } catch (repairError) {
+            console.warn('[Phase1_WorldBuilding] Failed to repair bounded JSON output:', repairError.message);
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  _repairTruncatedJson(input) {
+    if (!input || typeof input !== 'string') {
+      return null;
+    }
+
+    let result = '';
+    let inString = false;
+    let escaped = false;
+    let squareDepth = 0;
+    let braceDepth = 0;
+
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i];
+      result += char;
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) {
+        continue;
+      }
+
+      if (char === '{') braceDepth++;
+      if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+      if (char === '[') squareDepth++;
+      if (char === ']') squareDepth = Math.max(0, squareDepth - 1);
+    }
+
+    result = result.replace(/,\s*$/, '');
+
+    if (inString) {
+      result += '"';
+    }
+
+    while (squareDepth > 0) {
+      result = result.replace(/,\s*$/, '');
+      result += ']';
+      squareDepth--;
+    }
+
+    while (braceDepth > 0) {
+      result = result.replace(/,\s*$/, '');
+      result += '}';
+      braceDepth--;
+    }
+
+    result = result.replace(/,\s*([}\]])/g, '$1');
+    return result;
   }
 
   /**

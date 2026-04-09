@@ -274,7 +274,7 @@ class StateManager {
     return story;
   }
 
-  async recordPhaseFeedback(storyId, phaseName, feedback) {
+  async recordPhaseFeedback(storyId, phaseName, feedback, resolutionStatus = 'approved') {
     const story = await this.getStory(storyId);
     if (!story) {
       throw new Error(`Story not found: ${storyId}`);
@@ -284,7 +284,7 @@ class StateManager {
 
     if (story.workflow.activeCheckpoint) {
       story.workflow.activeCheckpoint.feedback = feedback;
-      story.workflow.activeCheckpoint.status = 'approved';
+      story.workflow.activeCheckpoint.status = resolutionStatus;
       story.workflow.activeCheckpoint.resolvedAt = now;
     }
 
@@ -299,7 +299,7 @@ class StateManager {
         type: 'checkpoint_resolved',
         phase: phaseName,
         step: story.workflow.currentStep,
-        detail: { feedback, checkpointId: story.workflow.activeCheckpoint?.id }
+        detail: { feedback, checkpointId: story.workflow.activeCheckpoint?.id, resolutionStatus }
       });
     }
 

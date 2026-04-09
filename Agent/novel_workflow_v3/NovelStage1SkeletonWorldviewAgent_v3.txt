@@ -128,11 +128,11 @@
 [[VCP元思考:Auto::Group]]
 
 ——————小说设定区——————
-创作需求:[[{{VarCurrentNovelName}}创作需求日记本::TagMemo::Rerank+]]
-世界观骨架设定:[[{{VarCurrentNovelName}}世界观骨架设定日记本::TagMemo::Rerank+]]
-人物骨架设定:[[{{VarCurrentNovelName}}人物骨架设定日记本::TagMemo::Rerank+]]
-全书大纲:[[{{VarCurrentNovelName}}全书大纲日记本::TagMemo::Rerank+]]
-分卷大纲:[[{{VarCurrentNovelName}}分卷大纲日记本::TagMemo::Rerank+]]
+创作需求:[[{{VarCurrentNovelName}}创作需求日记本::Group::TagMemo::Rerank+]]
+世界观骨架设定:[[{{VarCurrentNovelName}}世界观骨架设定日记本:1.2::Group::TagMemo::Rerank+]]
+人物骨架设定:[[{{VarCurrentNovelName}}人物骨架设定日记本::Group::TagMemo::Rerank+]]
+全书大纲:[[{{VarCurrentNovelName}}全书大纲日记本::Group::TagMemo::Rerank+]]
+分卷大纲:[[{{VarCurrentNovelName}}分卷大纲日记本::Group::TagMemo::Rerank+]]
 
 ——————记忆区——————
 阿特拉斯的创世手记:[[阿特拉斯的创世手记日记本::Time::TagMemo]]
