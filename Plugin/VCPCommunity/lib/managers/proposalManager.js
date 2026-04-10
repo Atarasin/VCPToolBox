@@ -204,6 +204,7 @@ ${content.slice(0, 200)}...
 <!-- FULL_CONTENT_START -->
 ${content}
 <!-- FULL_CONTENT_END -->
+${typeof tag === 'string' && tag.trim() ? `\nTag: ${tag.trim()}` : ''}
 
 ---
 ### 审核操作
