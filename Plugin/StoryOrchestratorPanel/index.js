@@ -446,6 +446,8 @@ function normalizeOutline(outline) {
     turningPoints: [],
     foreshadowing: [],
     summary: '',
+    structure: '',
+    totalTargetWordCount: 0,
     raw: null
   };
 
@@ -504,6 +506,8 @@ function normalizeOutline(outline) {
       description: f.description || f.hint || ''
     }));
 
+  result.structure = outline.structure || outline.storyStructure || outline.summary || '';
+  result.totalTargetWordCount = result.chapterCards.reduce((sum, ch) => sum + (ch.targetWordCount || 0), 0);
   // Generate summary
   result.summary = generateOutlineSummary(result);
 
@@ -541,14 +545,17 @@ function generateOutlineSummary(outline) {
  */
 function normalizeChapterCard(ch) {
   if (typeof ch !== 'object' || ch === null) {
-    return { id: generateId(), number: 0, title: '未知章节', coreEvents: [], scenes: [], targetWordCount: 0 };
+    return { id: generateId(), number: 0, title: '未知章节', summary: '', coreEvents: [], scenes: [], targetWordCount: 0, appearingCharacters: [] };
   }
+
+  const coreEvents = normalizeArray(ch.coreEvents || ch.events || ch.keyEvents || ch.coreEvent || ch.summary || []);
 
   return {
     id: ch.id || generateId(),
     number: ch.number || ch.chapterNum || ch.chapterNumber || 0,
     title: ch.title || ch.chapterTitle || `第${ch.number || 0}章`,
-    coreEvents: normalizeArray(ch.coreEvents || ch.events || ch.keyEvents || []),
+    summary: ch.summary || ch.description || ch.coreEvent || coreEvents[0] || '',
+    coreEvents,
     scenes: normalizeArray(ch.scenes || ch.sceneList || []),
     targetWordCount: ch.targetWordCount || ch.wordCountTarget || ch.targetWords || 0,
     appearingCharacters: normalizeArray(ch.appearingCharacters || ch.characters || []),
@@ -568,12 +575,15 @@ function normalizeChapter(chapter) {
     number: 0,
     title: '',
     content: '',
+    originalContent: '',
     status: 'unknown',
     wordCount: 0,
     createdAt: null,
     updatedAt: null,
     validation: null,
     metrics: null,
+    improvements: [],
+    wasRevised: false,
     raw: null
   };
 
@@ -594,12 +604,15 @@ function normalizeChapter(chapter) {
 
   result.id = chapter.id || chapter.chapterId || null;
   result.number = chapter.number || chapter.chapterNum || chapter.chapterNumber || 0;
-  result.title = chapter.title || chapter.chapterTitle || `第${result.number}章`;
+  result.title = normalizeChapterTitle(chapter.title || chapter.chapterTitle, `第${result.number || 1}章`);
   result.content = chapter.content || chapter.text || chapter.body || '';
+  result.originalContent = chapter.originalContent || chapter.rawContent || '';
   result.status = normalizeChapterStatus(chapter.status);
-  result.wordCount = chapter.wordCount || chapter.word_count || calculateWordCount(result.content);
+  result.wordCount = chapter.wordCount || chapter.word_count || chapter.metrics?.counts?.actualCount || chapter.metrics?.counts?.chineseChars || calculateWordCount(result.content);
   result.createdAt = chapter.createdAt || chapter.createTime || null;
   result.updatedAt = chapter.updatedAt || chapter.updateTime || null;
+  result.improvements = normalizeArray(chapter.improvements || chapter.revisions || []);
+  result.wasRevised = Boolean(chapter.wasRevised || result.improvements.length > 0);
 
   // Extract validation if present
   if (chapter.validation || chapter.validations) {
@@ -614,13 +627,20 @@ function normalizeChapter(chapter) {
   return result;
 }
 
+function normalizeChapterTitle(title, fallbackTitle) {
+  const value = String(title || '').trim();
+  if (!value) return fallbackTitle;
+  if (/undefined|null/i.test(value)) return fallbackTitle;
+  return value;
+}
+
 /**
  * Normalize chapter status to consistent values
  */
 function normalizeChapterStatus(status) {
   if (!status) return 'draft';
   const lower = status.toLowerCase();
-  if (lower === 'completed' || lower === 'done' || lower === 'final') return 'completed';
+  if (lower === 'completed' || lower === 'done' || lower === 'final' || lower.startsWith('completed')) return 'completed';
   if (lower === 'draft' || lower === '草稿') return 'draft';
   if (lower === 'review' || lower === '审核中') return 'review';
   if (lower === 'revised' || lower === '已修改') return 'revised';
@@ -634,12 +654,65 @@ function normalizeChapterStatus(status) {
 function normalizeChapterValidation(validation) {
   if (!validation) return null;
   if (typeof validation === 'string') {
-    return { passed: false, issues: [validation], warnings: [] };
+    return {
+      passed: false,
+      overall: {
+        passed: false,
+        hasCriticalIssues: false,
+        criticalCount: 0
+      },
+      checks: {},
+      issues: [{ description: validation, severity: 'notice' }],
+      warnings: [],
+      suggestions: [],
+      allIssues: [{ description: validation, severity: 'notice' }],
+      allSuggestions: [],
+      rawReport: validation
+    };
   }
+  const checkEntries = validation.checks && typeof validation.checks === 'object'
+    ? Object.entries(validation.checks)
+    : [];
+  const normalizedChecks = Object.fromEntries(checkEntries.map(([key, item]) => {
+    return [key, {
+      passed: item?.passed ?? item?.success ?? true,
+      hasWarnings: item?.hasWarnings ?? false,
+      issues: normalizeArray(item?.issues || item?.problems || []).map(normalizeValidationIssue),
+      suggestions: normalizeArray(item?.suggestions || item?.recommendations || []).map((entry) => String(entry)),
+      rawReport: item?.rawReport || item?.report || ''
+    }];
+  }));
+  const allIssues = normalizeArray(validation.allIssues || validation.issues || validation.problems || []).map(normalizeValidationIssue);
+  const allSuggestions = normalizeArray(validation.allSuggestions || validation.suggestions || validation.recommendations || []).map((entry) => String(entry));
+  const derivedIssues = Object.values(normalizedChecks).flatMap((item) => item.issues);
   return {
-    passed: validation.passed ?? validation.success ?? true,
-    issues: normalizeArray(validation.issues || validation.problems || []),
-    warnings: normalizeArray(validation.warnings || validation.alerts || [])
+    passed: validation.passed ?? validation.success ?? validation.overall?.passed ?? true,
+    overall: {
+      passed: validation.overall?.passed ?? validation.passed ?? validation.success ?? true,
+      hasCriticalIssues: validation.overall?.hasCriticalIssues ?? false,
+      criticalCount: validation.overall?.criticalCount ?? 0
+    },
+    checks: normalizedChecks,
+    issues: allIssues.length > 0 ? allIssues : derivedIssues,
+    warnings: normalizeArray(validation.warnings || validation.alerts || []),
+    suggestions: allSuggestions,
+    allIssues: allIssues.length > 0 ? allIssues : derivedIssues,
+    allSuggestions,
+    rawReport: validation.rawReport || ''
+  };
+}
+
+function normalizeValidationIssue(issue) {
+  if (typeof issue === 'string') {
+    return {
+      description: issue,
+      severity: 'notice'
+    };
+  }
+
+  return {
+    description: issue?.description || issue?.message || issue?.issue || '',
+    severity: issue?.severity || issue?.level || 'notice'
   };
 }
 
@@ -781,14 +854,34 @@ function normalizeQualityScores(qualityScores) {
   }
 
   // Single quality score object
-  const dimensions = normalizeQualityDimensions(qualityScores.dimensions || qualityScores);
+  const dimensions = normalizeQualityDimensions(qualityScores.dimensions || qualityScores.scores || qualityScores);
+  const overall = normalizeDimensionScore(qualityScores.overall ?? qualityScores.average ?? calculateOverallScore(dimensions));
 
   return {
     dimensions,
     trends: [],
-    overall: qualityScores.overall || calculateOverallScore(dimensions),
+    overall,
     iterationCount: qualityScores.iterationCount || qualityScores.iteration || 0,
-    summary: `评分${qualityScores.overall || calculateOverallScore(dimensions)}`
+    summary: overall ? `评分${overall}` : ''
+  };
+}
+
+function normalizeQualityScore(qualityScore) {
+  if (!qualityScore || typeof qualityScore !== 'object') {
+    return {
+      iteration: 0,
+      overall: null,
+      dimensions: {}
+    };
+  }
+
+  const dimensions = normalizeQualityDimensions(qualityScore.dimensions || qualityScore.scores || qualityScore);
+  const overall = normalizeDimensionScore(qualityScore.overall ?? qualityScore.average ?? calculateOverallScore(dimensions));
+
+  return {
+    iteration: qualityScore.iteration || qualityScore.round || 0,
+    overall,
+    dimensions
   };
 }
 
@@ -852,6 +945,93 @@ function calculateOverallScore(dimensions) {
   const numericValues = values.map(v => typeof v === 'number' ? v : v.value || 0);
   const sum = numericValues.reduce((a, b) => a + b, 0);
   return Math.round(sum / numericValues.length);
+}
+
+function normalizeFinalValidation(finalValidation) {
+  if (!finalValidation || typeof finalValidation !== 'object') {
+    return null;
+  }
+
+  return {
+    passed: finalValidation.passed ?? finalValidation.success ?? false,
+    issues: normalizeArray(finalValidation.issues || finalValidation.problems || []).map((issue) => {
+      if (typeof issue === 'string') {
+        return {
+          severity: 'notice',
+          description: issue
+        };
+      }
+
+      return {
+        severity: issue?.severity || issue?.level || 'notice',
+        description: issue?.description || issue?.message || issue?.issue || ''
+      };
+    }).filter((issue) => issue.description),
+    qualityScores: normalizeArray(finalValidation.qualityScores || []),
+    summary: finalValidation.summary || finalValidation.report || ''
+  };
+}
+
+function formatFinalOutput(finalOutput, phase3) {
+  if (typeof finalOutput === 'string') {
+    return {
+      content: finalOutput,
+      available: !!finalOutput
+    };
+  }
+
+  if (finalOutput && typeof finalOutput === 'object') {
+    return {
+      ...finalOutput,
+      content: finalOutput.content || finalOutput.text || finalOutput.body || '',
+      available: !!(finalOutput.content || finalOutput.text || finalOutput.body)
+    };
+  }
+
+  const fallbackContent = phase3?.finalEditorOutput || '';
+  return {
+    content: fallbackContent,
+    available: !!fallbackContent
+  };
+}
+
+function formatPhase2Detail(phase2) {
+  const outline = normalizeOutline(phase2?.outline);
+  const chapters = normalizeArray(phase2?.chapters || []).map((chapter) => normalizeChapter(chapter));
+  const plannedChapterCount = outline.chapterCards.length || chapters.length;
+  const completedChapterCount = chapters.filter((chapter) => chapter.status === 'completed').length;
+  const generatedChapterCount = chapters.filter((chapter) => {
+    return Boolean((chapter.content && chapter.content.trim()) || chapter.wordCount || chapter.metrics?.counts?.actualCount);
+  }).length;
+
+  return {
+    outline,
+    chapters,
+    currentChapter: phase2?.currentChapter || 0,
+    userConfirmed: phase2?.userConfirmed || false,
+    checkpointId: phase2?.checkpointId || null,
+    status: phase2?.status || 'pending',
+    totalWordCount: phase2?.totalWordCount || chapters.reduce((sum, chapter) => sum + (chapter.wordCount || 0), 0),
+    plannedChapterCount,
+    generatedChapterCount,
+    completedChapterCount
+  };
+}
+
+function formatPhase3Detail(phase3) {
+  const polishedChapters = normalizeArray(phase3?.polishedChapters || []).map((chapter) => normalizeChapter(chapter));
+  const qualityScores = normalizeQualityScores(phase3?.qualityScores);
+
+  return {
+    polishedChapters,
+    finalValidation: normalizeFinalValidation(phase3?.finalValidation),
+    iterationCount: phase3?.iterationCount || qualityScores.iterationCount || 0,
+    userConfirmed: phase3?.userConfirmed || false,
+    checkpointId: phase3?.checkpointId || null,
+    status: phase3?.status || 'pending',
+    finalEditorOutput: phase3?.finalEditorOutput || '',
+    qualityScores
+  };
 }
 
 /**
@@ -1208,13 +1388,18 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
       const data = JSON.parse(content);
 
       const chapters = data.phase2?.chapters || [];
-      const formattedChapters = chapters.map(ch => ({
-        number: ch.chapterNum || ch.number,
-        title: ch.title || `第${ch.chapterNum || ch.number}章`,
-        status: ch.status || 'draft',
-        wordCount: ch.wordCount || 0,
-        updatedAt: ch.updatedAt
-      }));
+      const formattedChapters = chapters.map((ch) => {
+        const normalized = normalizeChapter(ch);
+        return {
+          number: normalized.number,
+          title: normalized.title || `第${normalized.number}章`,
+          status: normalized.status || 'draft',
+          wordCount: normalized.wordCount || 0,
+          updatedAt: normalized.updatedAt || normalized.createdAt || null,
+          hasContent: Boolean(normalized.content && normalized.content.trim()),
+          validation: normalized.validation
+        };
+      });
 
       res.json({
         success: true,
@@ -1254,17 +1439,11 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
         return res.status(404).json({ success: false, error: 'Chapter not found' });
       }
 
+      const normalizedChapter = normalizeChapter(chapter);
+
       res.json({
         success: true,
-        chapter: {
-          number: chapter.number,
-          title: chapter.title || `第${chapter.number}章`,
-          content: chapter.content || '',
-          status: chapter.status || 'draft',
-          wordCount: chapter.wordCount || 0,
-          createdAt: chapter.createdAt,
-          updatedAt: chapter.updatedAt
-        }
+        chapter: normalizedChapter
       });
     } catch (error) {
       console.error('[StoryOrchestratorPanel] Error getting chapter:', error);
@@ -1799,15 +1978,15 @@ function formatStoryListItem(data) {
  */
 function formatStoryDetail(data) {
   const base = formatStoryListItem(data);
+  const phase2 = formatPhase2Detail(data.phase2);
+  const phase3 = formatPhase3Detail(data.phase3);
 
-  // 章节统计
-  const chapters = data.phase2?.chapters || [];
   const isCompleted = (status) => status && (status === 'completed' || status.startsWith('completed'));
   const chapterStats = {
-    total: chapters.length,
-    completed: chapters.filter(ch => isCompleted(ch.status)).length,
-    draft: chapters.filter(ch => ch.status === 'draft').length,
-    totalWordCount: chapters.reduce((sum, ch) => sum + (ch.wordCount || 0), 0)
+    total: phase2.chapters.length,
+    completed: phase2.chapters.filter(ch => isCompleted(ch.status)).length,
+    draft: phase2.chapters.filter(ch => ch.status === 'draft').length,
+    totalWordCount: phase2.chapters.reduce((sum, ch) => sum + (ch.wordCount || 0), 0)
   };
 
   // 角色统计（适配新格式）
@@ -1844,6 +2023,9 @@ function formatStoryDetail(data) {
     phase3Completed: data.phase3?.userConfirmed || false,
     lastRejectionFeedback: data[base.retryingPhase]?.lastRejectionFeedback || null,
     lastRejectedAt: data[base.retryingPhase]?.lastRejectedAt || null,
+    phase2,
+    phase3,
+    finalOutput: formatFinalOutput(data.finalOutput, phase3),
     workflow: {
       state: data.workflow?.state || 'idle',
       currentPhase: data.workflow?.currentPhase || null,

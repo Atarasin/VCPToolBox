@@ -1,7 +1,9 @@
 export async function renderStoriesPage(containerElement, store, api, router) {
-  containerElement.innerHTML = `
-    <div class="loading">正在加载故事列表...</div>
-  `;
+  if (!containerElement.querySelector('.stories-page')) {
+    containerElement.innerHTML = `
+      <div class="loading">正在加载故事列表...</div>
+    `;
+  }
 
   try {
     const response = await api.getStories();
@@ -40,6 +42,12 @@ export async function renderStoriesPage(containerElement, store, api, router) {
     const savedLayout = localStorage.getItem('layout') || 'default';
     const contentClass = savedLayout === 'compact' ? 'stories-content compact' : 'stories-content';
 
+    const scrollState = {
+      windowX: window.scrollX || 0,
+      windowY: window.scrollY || 0,
+      containerTop: containerElement ? (containerElement.scrollTop || 0) : 0
+    };
+
     containerElement.innerHTML = `
       <div class="stories-page">
         <div class="stories-header">
@@ -59,6 +67,10 @@ export async function renderStoriesPage(containerElement, store, api, router) {
     `;
 
     addStyles();
+    
+    window.scrollTo(scrollState.windowX, scrollState.windowY);
+    containerElement.scrollTop = scrollState.containerTop;
+
     attachEventListeners(containerElement, router, stories);
     attachRetryPolling(containerElement, store, api, router, stories);
 
@@ -238,6 +250,10 @@ function attachRetryPolling(containerElement, store, api, router, stories) {
   }
 
   containerElement.__retryPollingTimer = setTimeout(() => {
+    if (window.location.hash !== '#/stories') {
+      containerElement.__retryPollingTimer = null;
+      return;
+    }
     renderStoriesPage(containerElement, store, api, router);
   }, 5000);
 }

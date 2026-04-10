@@ -1,20 +1,26 @@
 export async function renderStorySummaryPage(container, store, api, storyId) {
-    container.innerHTML = `
-        <div class="story-summary-page">
-            <div class="loading">正在加载故事详情...</div>
-        </div>
-    `;
+    if (!container.querySelector('.story-summary-page')) {
+        container.innerHTML = `
+            <div class="story-summary-page">
+                <div class="loading">正在加载故事详情...</div>
+            </div>
+        `;
+    }
 
     try {
-        const response = await api.getStory(storyId);
-        if (!response.success) {
-            throw new Error(response.error || '加载故事失败');
+        const [response, chaptersResponse] = await Promise.all([
+            api.getStory(storyId).catch(() => null),
+            api.getStoryChapters(storyId).catch(() => null)
+        ]);
+        if (!response?.success) {
+            throw new Error(response?.error || '加载故事失败');
         }
 
         const story = response.story;
         store.setCurrentStory(story);
         const shortStoryId = story.shortId || String(story.id || storyId || '').replace(/^story-/, '');
         const targetWordCountLabel = story.targetWordCountLabel || formatTargetWordCountLabel(story.targetWordCount);
+        const chapterList = normalizePhase2ChapterList(chaptersResponse?.chapters || story.phase2?.chapters || []);
 
         const phaseOrder = ['phase1', 'phase2', 'phase3'];
         const phaseLabels = {
@@ -26,6 +32,7 @@ export async function renderStorySummaryPage(container, store, api, storyId) {
         const currentPhaseIndex = phaseOrder.indexOf(story.workflow?.currentPhase || 'phase1');
         const retryingInfo = getRetryingInfo(story);
         const runningInfo = getRunningInfo(story);
+        const phase2Progress = getPhase2Progress(story, chapterList);
 
         const phaseRail = phaseOrder.map((phase, index) => {
             let state = 'pending';
@@ -73,6 +80,34 @@ export async function renderStorySummaryPage(container, store, api, storyId) {
             </div>
         ` : '';
 
+        const phase2ProgressCard = phase2Progress.visible ? `
+            <div class="phase2-progress-card">
+                <div class="phase2-progress-header">
+                    <div>
+                        <div class="phase2-progress-kicker">章节生成进度</div>
+                        <h3>${phase2Progress.title}</h3>
+                    </div>
+                    <div class="phase2-progress-percent">${phase2Progress.percent}%</div>
+                </div>
+                <p class="phase2-progress-message">${phase2Progress.message}</p>
+                <div class="phase2-progress-bar">
+                    <div class="phase2-progress-fill" style="width: ${phase2Progress.percent}%;"></div>
+                </div>
+                <div class="phase2-progress-meta">
+                    <span>总章节：${phase2Progress.total}</span>
+                    <span>已完成：${phase2Progress.completed}</span>
+                    <span>当前章节：${phase2Progress.currentLabel}</span>
+                    <span>当前步骤：${phase2Progress.stepLabel}</span>
+                </div>
+            </div>
+        ` : '';
+
+        const scrollState = {
+            windowX: window.scrollX || 0,
+            windowY: window.scrollY || 0,
+            containerTop: container ? (container.scrollTop || 0) : 0
+        };
+
         container.innerHTML = `
             <div class="story-summary-page">
                 <div class="page-header" style="display: flex; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px;">
@@ -115,6 +150,7 @@ export async function renderStorySummaryPage(container, store, api, storyId) {
 
                 ${retryingCard}
                 ${runningCard}
+                ${phase2ProgressCard}
                 ${checkpointCard}
 
                 <div class="navigation-cards" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-bottom: 30px;">
@@ -139,7 +175,7 @@ export async function renderStorySummaryPage(container, store, api, storyId) {
                             <span>📖</span> 章节正文 (Chapters)
                         </h4>
                         <p style="margin: 0; color: #8b949e; font-size: 0.9rem;">查看和编辑具体章节的详细内容</p>
-                        <div style="margin-top: 15px; font-size: 0.8rem; color: #8b949e;">共 ${story.chapterStats?.total || 0} 章 | 已完成 ${story.chapterStats?.completed || 0} 章</div>
+                        <div style="margin-top: 15px; font-size: 0.8rem; color: #8b949e;">共 ${phase2Progress.total || story.chapterStats?.total || 0} 章 | 已完成 ${phase2Progress.completed || story.chapterStats?.completed || 0} 章 | 已生成 ${phase2Progress.generated || 0} 章${phase2Progress.active ? ` | 生成中 ${phase2Progress.percent}%` : ''}</div>
                     </a>
                     
                     <a href="#/stories/${storyId}/quality" class="nav-card" style="text-decoration: none; color: inherit; background: var(--sidebar-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;">
@@ -168,6 +204,9 @@ export async function renderStorySummaryPage(container, store, api, storyId) {
 
         addStyles();
 
+        window.scrollTo(scrollState.windowX, scrollState.windowY);
+        container.scrollTop = scrollState.containerTop;
+
         // Add event listener for Review Now button
         const reviewBtn = container.querySelector('.btn-review-now');
         if (reviewBtn) {
@@ -183,6 +222,10 @@ export async function renderStorySummaryPage(container, store, api, storyId) {
                 clearTimeout(container.__storyRetryPollingTimer);
             }
             container.__storyRetryPollingTimer = setTimeout(() => {
+                if (window.location.hash !== `#/stories/${storyId}`) {
+                    container.__storyRetryPollingTimer = null;
+                    return;
+                }
                 renderStorySummaryPage(container, store, api, storyId);
             }, 5000);
         }
@@ -220,9 +263,14 @@ function formatTargetWordCountLabel(targetWordCount) {
 function getCheckpointTypeName(type) {
     if (!type) return '审批';
     const types = {
+        'phase1_checkpoint': '世界观设定确认',
         'worldview_confirmation': '世界观设定确认',
+        'phase2_checkpoint': '故事大纲确认',
+        'phase2_outline_confirmation': '故事大纲确认',
         'outline_confirmation': '故事大纲确认',
+        'phase2_content_confirmation': '正文内容确认',
         'content_quality_confirmation': '内容质量确认',
+        'phase3_checkpoint': '最终定稿确认',
         'final_approval': '最终定稿确认'
     };
     return types[type] || type;
@@ -275,6 +323,102 @@ function getRunningInfo(story) {
         phase,
         label: labels[phase] || '系统正在继续执行'
     };
+}
+
+function getPhase2Progress(story, chapterList = []) {
+    const phase2 = story.phase2 || {};
+    const outlineCards = phase2.outline?.chapterCards || [];
+    const chapters = chapterList.length > 0 ? chapterList : normalizePhase2ChapterList(phase2.chapters || []);
+    const total = phase2.plannedChapterCount || outlineCards.length || chapters.length || story.chapterStats?.total || 0;
+    const completed = phase2.completedChapterCount || chapters.filter((chapter) => isCompletedChapterStatus(chapter.status)).length;
+    const generated = phase2.generatedChapterCount || chapters.filter((chapter) => {
+        return Boolean((chapter.content && chapter.content.trim()) || chapter.wordCount || chapter.metrics?.counts?.actualCount);
+    }).length;
+    const currentChapter = Number(phase2.currentChapter) || 0;
+    const phase2Status = phase2.status || '';
+    const active = (story.workflow?.currentPhase === 'phase2' && story.workflow?.state === 'running')
+        || phase2Status === 'running'
+        || phase2Status === 'content_production';
+    const checkpointPending = story.workflow?.activeCheckpoint?.status === 'pending';
+    const waitingForReview = checkpointPending && (story.workflow?.activeCheckpoint?.phase === 'phase2' || phase2Status.includes('confirmation'));
+    const started = active && total > 0
+        ? Math.max(generated, Math.max(0, Math.min(total, currentChapter - 1)))
+        : generated;
+    let percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+    if (active && total > 0) {
+        percent = Math.round(((started + 0.5) / total) * 100);
+    }
+    if (waitingForReview && total > 0) {
+        percent = 100;
+    }
+    const stepLabel = getPhase2StepLabel(story.workflow?.currentStep, phase2Status, waitingForReview);
+
+    let title = '阶段2 尚未开始';
+    let message = '大纲确认后，系统会按章节顺序依次生成正文。';
+
+    if (waitingForReview) {
+        title = '章节生成已完成，等待正文确认';
+        message = `已完成 ${completed}/${total || completed} 章正文生成，当前流程暂停，等待您确认后继续进入下一阶段。`;
+    } else if (active && total > 0) {
+        title = `正在生成第 ${currentChapter || Math.min(completed + 1, total)} 章`;
+        message = `系统正在按大纲顺序逐章生成正文，已完成 ${completed}/${total} 章。您可以停留在当前页面，系统会自动刷新最新进度。`;
+    } else if (generated > 0 && total > 0) {
+        title = '章节生成进度已记录';
+        message = `当前已生成 ${generated}/${total} 章，其中 ${completed} 章达到完成状态，可进入章节页查看正文。`;
+    }
+
+    return {
+        visible: active || waitingForReview || (completed > 0 && total > 0),
+        active,
+        waitingForReview,
+        total,
+        completed,
+        generated,
+        current: currentChapter,
+        currentLabel: currentChapter > 0 ? `第 ${currentChapter} 章` : (completed >= total && total > 0 ? '已完成' : '未开始'),
+        percent: Math.min(100, Math.max(percent, 0)),
+        stepLabel,
+        title,
+        message
+    };
+}
+
+function normalizePhase2ChapterList(chapters) {
+    const list = Array.isArray(chapters) ? chapters : [];
+    return list.map((chapter, index) => ({
+        ...chapter,
+        number: chapter?.number || chapter?.chapterNum || chapter?.chapterNumber || index + 1,
+        status: String(chapter?.status || '').toLowerCase(),
+        content: chapter?.content || chapter?.text || chapter?.body || '',
+        wordCount: chapter?.wordCount || chapter?.metrics?.counts?.actualCount || chapter?.metrics?.counts?.chineseChars || 0
+    }));
+}
+
+function getPhase2StepLabel(currentStep, phase2Status, waitingForReview) {
+    if (waitingForReview) return '等待正文确认';
+
+    const labels = {
+        outline_drafting: '正在生成大纲',
+        approved_transition: '准备进入正文阶段',
+        checkpoint: '等待检查点处理',
+        retrying_after_rejection: '根据反馈重写中'
+    };
+
+    if (labels[currentStep]) {
+        return labels[currentStep];
+    }
+
+    if (phase2Status === 'content_production') return '正在生成正文';
+    if (phase2Status === 'running') return '阶段执行中';
+    if (phase2Status === 'content_pending_confirmation') return '等待正文确认';
+    if (phase2Status === 'pending_confirmation') return '等待大纲确认';
+    if (phase2Status === 'completed') return '已完成';
+    return '准备中';
+}
+
+function isCompletedChapterStatus(status) {
+    const value = String(status || '').toLowerCase();
+    return value === 'completed' || value === 'final' || value === 'polished' || value === 'revised' || value.startsWith('completed');
 }
 
 function addStyles() {
@@ -433,6 +577,84 @@ function addStyles() {
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(88, 166, 255, 0.16);
             color: #c9d1d9;
+        }
+
+        .phase2-progress-card {
+            background: linear-gradient(135deg, rgba(56, 139, 253, 0.12), rgba(46, 160, 67, 0.14));
+            border: 1px solid rgba(88, 166, 255, 0.28);
+            border-radius: 14px;
+            padding: 22px;
+            margin-bottom: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .phase2-progress-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .phase2-progress-kicker {
+            color: #8b949e;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+        }
+
+        .phase2-progress-header h3 {
+            margin: 0;
+            color: var(--text-color);
+            font-size: 1.2rem;
+        }
+
+        .phase2-progress-percent {
+            color: #3fb950;
+            font-size: 1.6rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .phase2-progress-message {
+            margin: 0;
+            color: var(--text-color);
+            line-height: 1.75;
+        }
+
+        .phase2-progress-bar {
+            width: 100%;
+            height: 12px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .phase2-progress-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #1f6feb, #3fb950);
+            box-shadow: 0 0 18px rgba(63, 185, 80, 0.28);
+            transition: width 0.3s ease;
+        }
+
+        .phase2-progress-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .phase2-progress-meta span {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #c9d1d9;
+            font-size: 0.82rem;
         }
         
         .nav-card:hover {

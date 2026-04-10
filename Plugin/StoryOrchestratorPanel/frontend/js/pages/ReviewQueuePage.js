@@ -182,9 +182,9 @@ export async function renderReviewQueuePage(containerElement, store, api) {
             
             // Format checkpoint type if it's the raw english string
             if (checkpointType === 'phase1_checkpoint' || checkpointType === 'worldview_confirmation') checkpointType = '世界观设定确认';
-            if (checkpointType === 'outline_checkpoint' || checkpointType === 'outline_confirmation') checkpointType = '故事大纲确认';
-            if (checkpointType === 'content_checkpoint' || checkpointType === 'content_quality_confirmation') checkpointType = '内容质量确认';
-            if (checkpointType === 'final_checkpoint' || checkpointType === 'final_approval') checkpointType = '最终定稿确认';
+            if (checkpointType === 'outline_checkpoint' || checkpointType === 'outline_confirmation' || checkpointType === 'phase2_checkpoint' || checkpointType === 'phase2_outline_confirmation') checkpointType = '故事大纲确认';
+            if (checkpointType === 'content_checkpoint' || checkpointType === 'content_quality_confirmation' || checkpointType === 'phase2_content_confirmation') checkpointType = '正文内容确认';
+            if (checkpointType === 'final_checkpoint' || checkpointType === 'final_approval' || checkpointType === 'phase3_checkpoint') checkpointType = '最终定稿确认';
 
             let countdownHtml = '';
             let targetTime = story.autoApproveAt || story.workflow?.activeCheckpoint?.expiresAt;

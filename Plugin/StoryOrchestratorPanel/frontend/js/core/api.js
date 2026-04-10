@@ -108,9 +108,10 @@ class ApiClient {
     });
   }
 
-  async exportStory(storyId) {
+  async exportStory(storyId, format = 'markdown') {
     return this._request(`/stories/${storyId}/export`, {
-      method: 'POST'
+      method: 'POST',
+      body: { format }
     });
   }
 }

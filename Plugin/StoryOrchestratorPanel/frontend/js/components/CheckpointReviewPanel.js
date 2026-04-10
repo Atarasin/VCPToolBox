@@ -15,9 +15,10 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
     function parseArtifacts(currentCheckpoint) {
         const result = [];
         const type = currentCheckpoint.type;
+        const checkpointKind = resolveCheckpointKind(type);
         const payload = currentCheckpoint.payload || {};
 
-        if (type === 'phase1_checkpoint') {
+        if (checkpointKind === 'phase1') {
             if (payload.worldview) {
                 result.push({
                     id: 'worldview',
@@ -42,7 +43,7 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                     data: payload.validation
                 });
             }
-        } else if (type === 'outline_checkpoint') {
+        } else if (checkpointKind === 'phase2-outline') {
             if (payload.outline) {
                 result.push({
                     id: 'outline',
@@ -54,19 +55,69 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
             if (payload.chapters) {
                 result.push({
                     id: 'chapters',
-                    title: '章节列表',
+                    title: '章节推进预览',
                     type: 'chapters',
                     data: payload.chapters
                 });
             }
-        } else if (type === 'content_checkpoint' || type === 'final_checkpoint') {
+        } else if (checkpointKind === 'phase2-content') {
+            if (payload.outline) {
+                result.push({
+                    id: 'outline',
+                    title: '大纲回看',
+                    type: 'outline',
+                    data: payload.outline
+                });
+            }
             if (Array.isArray(payload.chapters)) {
                 payload.chapters.forEach((chapter) => {
+                    const normalizedChapter = normalizeArtifactChapter(chapter);
                     result.push({
-                        id: `chapter-${chapter.chapterNum || chapter.number}`,
-                        title: chapter.title || `第${chapter.chapterNum || chapter.number}章`,
+                        id: `chapter-${normalizedChapter.chapterNum || normalizedChapter.number}`,
+                        title: normalizedChapter.title,
                         type: 'chapter',
-                        data: chapter
+                        data: normalizedChapter
+                    });
+                });
+            }
+        } else if (checkpointKind === 'phase3-final') {
+            if (payload.finalEditorOutput) {
+                result.push({
+                    id: 'final-manuscript',
+                    title: '最终整编稿',
+                    type: 'final-manuscript',
+                    data: {
+                        content: payload.finalEditorOutput
+                    }
+                });
+            }
+            if (payload.finalValidation) {
+                result.push({
+                    id: 'validation',
+                    title: '终校结论',
+                    type: 'validation',
+                    data: payload.finalValidation
+                });
+            }
+            if (payload.qualityScores) {
+                result.push({
+                    id: 'quality-scores',
+                    title: '评分记录',
+                    type: 'quality-scores',
+                    data: payload.qualityScores
+                });
+            }
+            const chapters = Array.isArray(payload.polishedChapters) && payload.polishedChapters.length > 0
+                ? payload.polishedChapters
+                : payload.chapters;
+            if (Array.isArray(chapters)) {
+                chapters.forEach((chapter) => {
+                    const normalizedChapter = normalizeArtifactChapter(chapter);
+                    result.push({
+                        id: `chapter-${normalizedChapter.chapterNum || normalizedChapter.number}`,
+                        title: normalizedChapter.title,
+                        type: 'chapter',
+                        data: normalizedChapter
                     });
                 });
             }
@@ -93,7 +144,12 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
             <section class="review-hero">
                 <div>
                     <div class="review-eyebrow">创作审阅台</div>
-                    <h1 class="review-title">${escapeHtml(checkpointMeta.title)}</h1>
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <button type="button" id="btn-review-back" style="background: none; border: none; cursor: pointer; padding: 6px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--review-gold); transition: background 0.2s;" title="返回概览">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                        </button>
+                        <h1 class="review-title">${escapeHtml(checkpointMeta.title)}</h1>
+                    </div>
                     <p class="review-subtitle">${escapeHtml(checkpointMeta.subtitle)}</p>
                 </div>
                 <div class="review-hero-meta">
@@ -148,32 +204,34 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                         <span class="review-panel-meta">影响后续工作流</span>
                     </div>
 
-                    <div class="decision-card highlight compact">
-                        <div class="decision-label">当前阶段</div>
-                        <div class="decision-value">${escapeHtml(checkpointMeta.phaseLabel)}</div>
-                        <p>${escapeHtml(checkpointMeta.hint)}</p>
-                    </div>
-
-                    <div class="decision-card compact">
-                        <div class="decision-label">审阅重点</div>
-                        <ol class="review-checklist">
-                            ${getReviewChecklist(checkpoint.type).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
-                        </ol>
-                    </div>
-
-                    <div class="decision-card compact">
-                        <div class="decision-label">快捷反馈</div>
-                        <div class="feedback-chip-group">
-                            ${feedbackPresets.map((chip) => `
-                                <button type="button" class="feedback-chip">${escapeHtml(chip)}</button>
-                            `).join('')}
+                    <div class="review-actions-inner">
+                        <div class="decision-card highlight compact">
+                            <div class="decision-label">当前阶段</div>
+                            <div class="decision-value">${escapeHtml(checkpointMeta.phaseLabel)}</div>
+                            <p>${escapeHtml(checkpointMeta.hint)}</p>
                         </div>
-                    </div>
 
-                    <div class="decision-card grow compact">
-                        <label class="decision-label" for="feedback-text">修改意见</label>
-                        <textarea id="feedback-text" class="review-textarea" placeholder="若需要退回修改，请明确指出问题、影响范围与期望调整方向。"></textarea>
-                        <div class="decision-tip">通过时可留空；拒绝时必须填写具体修改意见。</div>
+                        <div class="decision-card compact">
+                            <div class="decision-label">审阅重点</div>
+                            <ol class="review-checklist">
+                                ${getReviewChecklist(checkpoint.type).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+                            </ol>
+                        </div>
+
+                        <div class="decision-card compact">
+                            <div class="decision-label">快捷反馈</div>
+                            <div class="feedback-chip-group">
+                                ${feedbackPresets.map((chip) => `
+                                    <button type="button" class="feedback-chip">${escapeHtml(chip)}</button>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div class="decision-card grow compact">
+                            <label class="decision-label" for="feedback-text">修改意见</label>
+                            <textarea id="feedback-text" class="review-textarea" placeholder="若需要退回修改，请明确指出问题、影响范围与期望调整方向。"></textarea>
+                            <div class="decision-tip">通过时可留空；拒绝时必须填写具体修改意见。</div>
+                        </div>
                     </div>
 
                     <div class="review-action-bar">
@@ -190,6 +248,15 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                 render();
             });
         });
+
+        const btnBack = wrapper.querySelector('#btn-review-back');
+        if (btnBack) {
+            btnBack.addEventListener('click', () => {
+                window.location.hash = `#/stories/${storyId}`;
+            });
+            btnBack.addEventListener('mouseenter', () => { btnBack.style.background = 'rgba(161, 113, 54, 0.12)'; });
+            btnBack.addEventListener('mouseleave', () => { btnBack.style.background = 'none'; });
+        }
 
         const feedbackText = wrapper.querySelector('#feedback-text');
         wrapper.querySelectorAll('.feedback-chip').forEach((chip) => {
@@ -410,26 +477,53 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
         }
 
         if (artifact.type === 'outline') {
-            const cards = artifact.data.chapterCards || artifact.data.cards || [];
+            const cards = artifact.data.chapterCards || artifact.data.cards || artifact.data.chapters || [];
+            const turningPoints = artifact.data.turningPoints || artifact.data.keyTurningPoints || [];
+            const foreshadowing = artifact.data.foreshadowing || [];
             return `
                 <article class="manuscript-block">
+                    ${artifact.data.structure ? `
+                        <section class="manuscript-section">
+                            <div class="section-heading">整体结构</div>
+                            <div class="chapter-text">${formatParagraphs(artifact.data.structure)}</div>
+                        </section>
+                    ` : ''}
                     <section class="outline-timeline">
-                        ${cards.length > 0 ? cards.map((card, index) => `
-                            <div class="outline-card">
-                                <div class="outline-index">${String(index + 1).padStart(2, '0')}</div>
-                                <div class="outline-body">
-                                    <h3>${escapeHtml(card.title || `第${card.number || index + 1}章`)}</h3>
-                                    <p>${escapeHtml(card.description || card.summary || '暂无大纲')}</p>
+                        ${cards.length > 0 ? cards.map((card, index) => renderOutlineCard(card, index)).join('') : '<div class="empty-review-state">没有大纲卡片数据。</div>'}
+                    </section>
+                    ${(turningPoints.length > 0 || foreshadowing.length > 0) ? `
+                        <section class="manuscript-section">
+                            <div class="section-heading">节奏与伏笔</div>
+                            <div class="chapter-summary-list">
+                                <div class="chapter-summary-card">
+                                    <div class="chapter-summary-head">
+                                        <span class="chapter-tag">关键转折</span>
+                                    </div>
+                                    ${turningPoints.length > 0 ? `
+                                        <ul class="bullet-list">
+                                            ${turningPoints.map((item) => `<li>${escapeHtml(formatTurningPoint(item))}</li>`).join('')}
+                                        </ul>
+                                    ` : '<p>暂无关键转折。</p>'}
+                                </div>
+                                <div class="chapter-summary-card">
+                                    <div class="chapter-summary-head">
+                                        <span class="chapter-tag">伏笔回收</span>
+                                    </div>
+                                    ${foreshadowing.length > 0 ? `
+                                        <ul class="bullet-list">
+                                            ${foreshadowing.map((item) => `<li>${escapeHtml(formatForeshadowing(item))}</li>`).join('')}
+                                        </ul>
+                                    ` : '<p>暂无伏笔设计。</p>'}
                                 </div>
                             </div>
-                        `).join('') : '<div class="empty-review-state">没有大纲卡片数据。</div>'}
-                    </section>
+                        </section>
+                    ` : ''}
                 </article>
             `;
         }
 
         if (artifact.type === 'chapters') {
-            const chapters = Array.isArray(artifact.data) ? artifact.data : [];
+            const chapters = Array.isArray(artifact.data) ? artifact.data.map((chapter, index) => normalizeArtifactChapter(chapter, index + 1)) : [];
             return `
                 <article class="manuscript-block">
                     <section class="chapter-summary-list">
@@ -439,7 +533,11 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                                     <span class="chapter-tag">第 ${chapter.chapterNum || chapter.number || index + 1} 章</span>
                                     <h3>${escapeHtml(chapter.title || '未命名章节')}</h3>
                                 </div>
-                                <p>${escapeHtml(chapter.summary || chapter.description || '暂无章节摘要')}</p>
+                                <p>${escapeHtml(chapter.summary || chapter.description || chapter.content?.slice(0, 160) || '暂无章节摘要')}</p>
+                                <div class="chip-cloud">
+                                    ${Number(chapter.wordCount || chapter.wordCountTarget || 0) > 0 ? `<span class="meta-chip">${formatWordCount(chapter.wordCount || chapter.wordCountTarget)}</span>` : ''}
+                                    ${chapter.status ? `<span class="meta-chip">${escapeHtml(getReadableChapterStatus(chapter.status))}</span>` : ''}
+                                </div>
                             </div>
                         `).join('') : '<div class="empty-review-state">没有章节数据。</div>'}
                     </section>
@@ -449,20 +547,110 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
 
         if (artifact.type === 'chapter') {
             const text = artifact.data.content || artifact.data.text || '';
+            const originalText = artifact.data.originalContent || '';
+            const improvements = normalizeList(artifact.data.improvements);
+            const validation = artifact.data.validation || null;
+            const validationIssues = normalizeValidationIssues(validation?.allIssues || validation?.issues || validation?.warnings || validation || []);
+            const validationSuggestions = normalizeList(validation?.allSuggestions || validation?.suggestions || []);
+            const validationCheckEntries = Object.entries(validation?.checks || {});
             return `
                 <article class="manuscript-block">
                     <section class="chapter-manuscript">
-                        <div class="chapter-kicker">正文试读</div>
+                        <div class="chapter-kicker">${originalText || improvements.length > 0 ? '润色稿试读' : '正文试读'}</div>
+                        <div class="manuscript-grid">
+                            ${renderInfoCard('章节', `第${artifact.data.chapterNum || artifact.data.number || '—'}章`)}
+                            ${renderInfoCard('字数', formatWordCount(artifact.data.wordCount || artifact.data.metrics?.counts?.actualCount || countCharacters(text)))}
+                            ${renderInfoCard('状态', getReadableChapterStatus(artifact.data.status))}
+                        </div>
                         <div class="chapter-text">${formatParagraphs(text || '暂无正文')}</div>
                     </section>
+                    ${originalText ? `
+                        <section class="manuscript-section">
+                            <div class="section-heading">原始正文</div>
+                            <div class="chapter-text">${formatParagraphs(originalText)}</div>
+                        </section>
+                    ` : ''}
+                    ${improvements.length > 0 ? `
+                        <section class="manuscript-section">
+                            <div class="section-heading">润色改进点</div>
+                            <ul class="bullet-list">
+                                ${improvements.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+                            </ul>
+                        </section>
+                    ` : ''}
+                    ${validation ? `
+                        <section class="manuscript-section">
+                            <div class="section-heading">章节校验</div>
+                            ${validationCheckEntries.length > 0 ? `
+                                <div class="validation-cards-container" style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px;">
+                                    ${validationCheckEntries.map(([key, item]) => {
+                                        const isPassed = item.passed;
+                                        const statusLabel = isPassed ? (item.hasWarnings ? '有条件通过' : '通过') : '待修正';
+                                        const statusColor = isPassed ? (item.hasWarnings ? '#d29922' : '#3fb950') : '#f85149';
+                                        const statusBg = isPassed ? (item.hasWarnings ? 'rgba(210, 153, 34, 0.1)' : 'rgba(63, 185, 80, 0.1)') : 'rgba(248, 81, 73, 0.1)';
+                                        
+                                        return `
+                                        <div class="validation-card" style="border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; background: rgba(255,255,255,0.02);">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                                <strong style="font-size: 1.1rem; color: var(--text-color);">${escapeHtml(getValidationCheckLabel(key))}</strong>
+                                                <span style="padding: 4px 10px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; color: ${statusColor}; background: ${statusBg}; border: 1px solid ${statusColor}40;">
+                                                    ${escapeHtml(statusLabel)}
+                                                </span>
+                                            </div>
+                                            ${(item.issues && item.issues.length > 0) ? `
+                                                <div style="margin-bottom: 12px;">
+                                                    <span style="display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 6px;">发现问题：</span>
+                                                    <ul style="margin: 0; padding-left: 20px; color: var(--text-color); font-size: 0.95rem; line-height: 1.6;">
+                                                        ${item.issues.map(issue => `<li>${escapeHtml(issue.description || issue)}</li>`).join('')}
+                                                    </ul>
+                                                </div>
+                                            ` : ''}
+                                            ${(item.suggestions && item.suggestions.length > 0) ? `
+                                                <div style="margin-bottom: 12px;">
+                                                    <span style="display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 6px;">修改建议：</span>
+                                                    <ul style="margin: 0; padding-left: 20px; color: var(--text-color); font-size: 0.95rem; line-height: 1.6;">
+                                                        ${item.suggestions.map(sugg => `<li>${escapeHtml(sugg)}</li>`).join('')}
+                                                    </ul>
+                                                </div>
+                                            ` : ''}
+                                            ${item.rawReport ? `
+                                                <div>
+                                                    <span style="display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 6px;">详细报告：</span>
+                                                    <div style="color: var(--text-color); font-size: 0.95rem; line-height: 1.7; background: rgba(139, 148, 158, 0.1); border: 1px solid rgba(139, 148, 158, 0.2); padding: 12px; border-radius: 8px;">
+                                                        ${formatParagraphs(item.rawReport)}
+                                                    </div>
+                                                </div>
+                                            ` : (!item.issues?.length && !item.suggestions?.length ? '<p style="color: #8b949e; margin: 0; font-size: 0.95rem;">未发现明显问题。</p>' : '')}
+                                        </div>
+                                    `}).join('')}
+                                </div>
+                            ` : ''}
+                            <div class="validation-list">
+                                ${validationIssues.length > 0 ? validationIssues.map((issue) => `
+                                    <div class="validation-item severity-${escapeHtml(issue.severity)}">
+                                        <div class="validation-item-head">
+                                            <strong>${escapeHtml(getSeverityLabel(issue.severity))}</strong>
+                                        </div>
+                                        <p>${escapeHtml(issue.description)}</p>
+                                    </div>
+                                `).join('') : '<div class="empty-review-state">暂无综合校验问题。</div>'}
+                            </div>
+                            ${validationSuggestions.length > 0 ? `
+                                <div class="section-heading" style="margin-top: 20px;">综合修正建议</div>
+                                <ul class="bullet-list">
+                                    ${validationSuggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+                                </ul>
+                            ` : ''}
+                        </section>
+                    ` : ''}
                 </article>
             `;
         }
 
         if (artifact.type === 'validation') {
-            const issues = artifact.data.issues || [];
-            const rawReport = artifact.data.rawReport || '';
-            const suggestions = artifact.data.suggestions || [];
+            const issues = normalizeValidationIssues(artifact.data.issues || []);
+            const rawReport = artifact.data.rawReport || artifact.data.summary || '';
+            const suggestions = normalizeList(artifact.data.suggestions);
             return `
                 <article class="manuscript-block">
                     <section class="manuscript-section">
@@ -470,15 +658,15 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                         <div class="validation-overview">
                             <div class="info-card">
                                 <span>通过状态</span>
-                                <strong>${artifact.data.passed ? '有条件通过' : '未通过'}</strong>
+                                <strong>${artifact.data.passed ? '通过' : '待修正'}</strong>
                             </div>
                             <div class="info-card">
                                 <span>问题数量</span>
                                 <strong>${issues.length}</strong>
                             </div>
                             <div class="info-card">
-                                <span>含警告</span>
-                                <strong>${artifact.data.hasWarnings ? '是' : '否'}</strong>
+                                <span>评分条目</span>
+                                <strong>${normalizeValidationScoreRows(artifact.data.qualityScores).length}</strong>
                             </div>
                         </div>
                     </section>
@@ -488,13 +676,31 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                             ${issues.length > 0 ? issues.map((issue) => `
                                 <div class="validation-item severity-${escapeHtml(issue.severity || 'unknown')}">
                                     <div class="validation-item-head">
-                                        <strong>${escapeHtml(issue.severity || '提示')}</strong>
+                                        <strong>${escapeHtml(getSeverityLabel(issue.severity || 'notice'))}</strong>
                                     </div>
                                     <p>${escapeHtml(issue.description || '暂无描述')}</p>
                                 </div>
                             `).join('') : '<div class="empty-review-state">暂无校验问题。</div>'}
                         </div>
                     </section>
+                    ${normalizeValidationScoreRows(artifact.data.qualityScores).length > 0 ? `
+                        <section class="manuscript-section">
+                            <div class="section-heading">评分记录</div>
+                            <div class="quality-trend-grid">
+                                ${normalizeValidationScoreRows(artifact.data.qualityScores).map((row) => `
+                                    <div class="quality-score-card">
+                                        <div class="quality-score-head">
+                                            <strong>${escapeHtml(row.title)}</strong>
+                                            <span>${escapeHtml(row.average)}</span>
+                                        </div>
+                                        <ul class="bullet-list">
+                                            ${row.items.map((item) => `<li>${escapeHtml(item.label)}：${escapeHtml(item.value)}</li>`).join('')}
+                                        </ul>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </section>
+                    ` : ''}
                     ${suggestions.length > 0 ? `
                         <section class="manuscript-section">
                             <div class="section-heading">修正建议</div>
@@ -509,6 +715,41 @@ export function renderCheckpointReviewPanel(containerElement, store, api, storyI
                             <div class="chapter-text">${formatParagraphs(rawReport)}</div>
                         </section>
                     ` : ''}
+                </article>
+            `;
+        }
+
+        if (artifact.type === 'quality-scores') {
+            const rows = normalizeQualityTrendRows(artifact.data);
+            return `
+                <article class="manuscript-block">
+                    <section class="manuscript-section">
+                        <div class="section-heading">质量迭代</div>
+                        <div class="quality-trend-grid">
+                            ${rows.length > 0 ? rows.map((row) => `
+                                <div class="quality-score-card">
+                                    <div class="quality-score-head">
+                                        <strong>${escapeHtml(row.title)}</strong>
+                                        <span>${escapeHtml(row.overall)}</span>
+                                    </div>
+                                    <ul class="bullet-list">
+                                        ${row.items.map((item) => `<li>${escapeHtml(item.label)}：${escapeHtml(item.value)}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            `).join('') : '<div class="empty-review-state">暂无评分记录。</div>'}
+                        </div>
+                    </section>
+                </article>
+            `;
+        }
+
+        if (artifact.type === 'final-manuscript') {
+            return `
+                <article class="manuscript-block">
+                    <section class="chapter-manuscript">
+                        <div class="chapter-kicker">最终整编稿</div>
+                        <div class="chapter-text">${formatParagraphs(artifact.data.content || '暂无终稿')}</div>
+                    </section>
                 </article>
             `;
         }
@@ -621,39 +862,59 @@ function escapeHtml(unsafe) {
         .replace(/'/g, '&#039;');
 }
 
+function resolveCheckpointKind(type) {
+    if (type === 'phase1_checkpoint' || type === 'worldview_confirmation') {
+        return 'phase1';
+    }
+
+    if (type === 'outline_checkpoint' || type === 'outline_confirmation' || type === 'phase2_checkpoint' || type === 'phase2_outline_confirmation') {
+        return 'phase2-outline';
+    }
+
+    if (type === 'content_checkpoint' || type === 'content_quality_confirmation' || type === 'phase2_content_confirmation') {
+        return 'phase2-content';
+    }
+
+    if (type === 'final_checkpoint' || type === 'final_approval' || type === 'phase3_checkpoint') {
+        return 'phase3-final';
+    }
+
+    return 'unknown';
+}
+
 function getCheckpointMeta(checkpoint) {
     const map = {
-        phase1_checkpoint: {
+        phase1: {
             title: '设定审阅',
             subtitle: '确认世界观、角色与故事基础框架是否稳定可用。',
             phaseLabel: '阶段一 · 世界观设定',
             typeLabel: '基础设定确认',
             hint: '重点检查设定是否自洽、人物是否立得住、后续能否顺畅展开。'
         },
-        outline_checkpoint: {
+        'phase2-outline': {
             title: '大纲审阅',
-            subtitle: '确认章节推进、情节转折与冲突节奏是否合理。',
-            phaseLabel: '阶段二 · 大纲与正文',
+            subtitle: '确认章节推进、情节转折、伏笔布局与总体结构是否已经稳定。',
+            phaseLabel: '阶段二 · 大纲规划',
             typeLabel: '故事大纲确认',
             hint: '重点检查结构完整性、章节顺序与故事张力。'
         },
-        content_checkpoint: {
+        'phase2-content': {
             title: '正文审阅',
-            subtitle: '确认正文完成度、语感和情绪推进是否达标。',
-            phaseLabel: '阶段三 · 内容润色',
-            typeLabel: '正文质量确认',
-            hint: '重点检查语言表现、角色声音与段落节奏。'
+            subtitle: '确认章节正文是否已达到进入润色阶段的基础质量要求。',
+            phaseLabel: '阶段二 · 正文生产',
+            typeLabel: '正文内容确认',
+            hint: '重点检查章节完整度、情绪推进、场景调度与上下文衔接。'
         },
-        final_checkpoint: {
+        'phase3-final': {
             title: '定稿审阅',
-            subtitle: '确认终稿是否可以直接发布或导出。',
-            phaseLabel: '阶段四 · 最终交付',
+            subtitle: '确认润色稿、终校结果与最终整编稿是否达到交付标准。',
+            phaseLabel: '阶段三 · 润色定稿',
             typeLabel: '最终定稿确认',
             hint: '重点检查整体一致性、可读性与最终完成质量。'
         }
     };
 
-    return map[checkpoint.type] || {
+    return map[resolveCheckpointKind(checkpoint.type)] || {
         title: '检查点审阅',
         subtitle: '请逐项检查当前生成内容并给出明确结论。',
         phaseLabel: '待确认阶段',
@@ -670,6 +931,8 @@ function getArtifactLabel(type) {
         chapters: '章节概览',
         chapter: '正文内容',
         validation: '一致性校验',
+        'quality-scores': '评分记录',
+        'final-manuscript': '最终稿件',
         raw: '原始数据'
     };
     return labelMap[type] || '审阅材料';
@@ -692,9 +955,10 @@ function getSummaryCards(artifact) {
     }
 
     if (artifact.type === 'outline') {
-        const cards = artifact.data.chapterCards || artifact.data.cards || [];
+        const cards = artifact.data.chapterCards || artifact.data.cards || artifact.data.chapters || [];
         return [
             { label: '章节卡片', value: `${cards.length}` },
+            { label: '关键转折', value: `${(artifact.data.turningPoints || artifact.data.keyTurningPoints || []).length}` },
             { label: '审阅重点', value: '结构节奏' }
         ];
     }
@@ -711,16 +975,32 @@ function getSummaryCards(artifact) {
         const text = artifact.data.content || artifact.data.text || '';
         return [
             { label: '字数估计', value: `${countCharacters(text)}` },
-            { label: '段落数', value: `${countParagraphs(text)}` }
+            { label: '段落数', value: `${countParagraphs(text)}` },
+            { label: '状态', value: getReadableChapterStatus(artifact.data.status) }
         ];
     }
 
     if (artifact.type === 'validation') {
-        const issues = artifact.data.issues || [];
+        const issues = normalizeValidationIssues(artifact.data.issues || []);
         const critical = issues.filter((item) => item.severity === 'critical').length;
         return [
             { label: '问题数', value: `${issues.length}` },
             { label: '关键问题', value: `${critical}` }
+        ];
+    }
+
+    if (artifact.type === 'quality-scores') {
+        const rows = normalizeQualityTrendRows(artifact.data);
+        return [
+            { label: '迭代轮次', value: `${rows.length}` },
+            { label: '审阅重点', value: '质量走势' }
+        ];
+    }
+
+    if (artifact.type === 'final-manuscript') {
+        return [
+            { label: '字数估计', value: `${countCharacters(artifact.data.content || '')}` },
+            { label: '审阅重点', value: '交付可读性' }
         ];
     }
 
@@ -732,22 +1012,22 @@ function getSummaryCards(artifact) {
 
 function getFeedbackPresets(checkpointType) {
     const presets = {
-        phase1_checkpoint: ['设定逻辑还不够闭环', '人物关系需要更清晰', '世界观规则需要补充', '核心冲突还不够明确'],
-        outline_checkpoint: ['章节推进略显平', '转折需要更集中', '高潮位置不够突出', '伏笔与回收需要强化'],
-        content_checkpoint: ['语气还不够统一', '情绪递进可以更强', '场景描写需要更具体', '人物对白还可更自然'],
-        final_checkpoint: ['整体完成度良好', '建议统一术语表达', '个别段落仍可精简', '发布前建议再通读一轮']
+        phase1: ['设定逻辑还不够闭环', '人物关系需要更清晰', '世界观规则需要补充', '核心冲突还不够明确'],
+        'phase2-outline': ['章节推进略显平', '转折需要更集中', '高潮位置不够突出', '伏笔与回收需要强化'],
+        'phase2-content': ['语气还不够统一', '情绪递进可以更强', '场景描写需要更具体', '人物对白还可更自然'],
+        'phase3-final': ['整体完成度良好', '建议统一术语表达', '个别段落仍可精简', '发布前建议再通读一轮']
     };
-    return presets[checkpointType] || ['表达尚可再收束', '信息密度可以再平衡', '建议补充关键细节', '建议明确阶段目标'];
+    return presets[resolveCheckpointKind(checkpointType)] || ['表达尚可再收束', '信息密度可以再平衡', '建议补充关键细节', '建议明确阶段目标'];
 }
 
 function getReviewChecklist(checkpointType) {
     const checklist = {
-        phase1_checkpoint: ['设定自洽', '角色成立', '可继续展开'],
-        outline_checkpoint: ['主线清晰', '结构合理', '冲突升级'],
-        content_checkpoint: ['语言顺畅', '角色统一', '节奏稳定'],
-        final_checkpoint: ['达到交付', '无明显漏洞', '适合导出']
+        phase1: ['设定自洽', '角色成立', '可继续展开'],
+        'phase2-outline': ['主线清晰', '结构合理', '冲突升级'],
+        'phase2-content': ['语言顺畅', '角色统一', '章节衔接稳定'],
+        'phase3-final': ['达到交付', '无明显漏洞', '适合导出']
     };
-    return checklist[checkpointType] || ['确认内容完整性', '确认表达清晰度', '确认是否可推进'];
+    return checklist[resolveCheckpointKind(checkpointType)] || ['确认内容完整性', '确认表达清晰度', '确认是否可推进'];
 }
 
 function renderInfoCard(label, value) {
@@ -757,6 +1037,182 @@ function renderInfoCard(label, value) {
             <strong>${escapeHtml(value)}</strong>
         </div>
     `;
+}
+
+function normalizeArtifactChapter(chapter, fallbackNumber = 1) {
+    const number = chapter?.chapterNum || chapter?.number || chapter?.chapterNumber || fallbackNumber;
+    const fallbackTitle = `第${number || fallbackNumber || 1}章`;
+    return {
+        ...chapter,
+        number,
+        chapterNum: number,
+        title: sanitizeChapterTitle(chapter?.title || chapter?.chapterTitle, fallbackTitle),
+        content: chapter?.content || chapter?.text || chapter?.body || '',
+        wordCount: chapter?.wordCount || chapter?.metrics?.counts?.actualCount || chapter?.metrics?.counts?.chineseChars || 0,
+        status: String(chapter?.status || '').toLowerCase(),
+        validation: normalizeChapterValidationPayload(chapter?.validation)
+    };
+}
+
+function sanitizeChapterTitle(title, fallbackTitle) {
+    const raw = String(title || '').trim();
+    if (!raw) return fallbackTitle;
+    if (/undefined|null/i.test(raw)) return fallbackTitle;
+    return raw;
+}
+
+function renderOutlineCard(card, index) {
+    const scenes = normalizeList(card.scenes || []);
+    const characters = normalizeList(card.appearingCharacters || card.characters || []);
+    const events = normalizeList(card.coreEvents || card.events || []);
+
+    return `
+        <div class="outline-card">
+            <div class="outline-index">${String(card.number || index + 1).padStart(2, '0')}</div>
+            <div class="outline-body">
+                <h3>${escapeHtml(card.title || `第${card.number || index + 1}章`)}</h3>
+                <p>${escapeHtml(card.summary || events[0] || '暂无大纲')}</p>
+                <div class="chip-cloud">
+                    ${Number(card.targetWordCount || card.wordCountTarget || 0) > 0 ? `<span class="meta-chip">${formatWordCount(card.targetWordCount || card.wordCountTarget)}</span>` : ''}
+                    ${scenes.map((scene) => `<span class="meta-chip">场景 · ${escapeHtml(scene)}</span>`).join('')}
+                    ${characters.map((character) => `<span class="meta-chip">角色 · ${escapeHtml(character)}</span>`).join('')}
+                </div>
+                ${events.length > 1 ? `
+                    <ul class="bullet-list">
+                        ${events.map((event) => `<li>${escapeHtml(event)}</li>`).join('')}
+                    </ul>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function formatTurningPoint(item) {
+    if (typeof item === 'string') return item;
+    return [item.chapter ? `第${item.chapter}章` : '', item.title || item.description || '未命名转折']
+        .filter(Boolean)
+        .join(' · ');
+}
+
+function formatForeshadowing(item) {
+    if (typeof item === 'string') return item;
+    const setup = item.setup || item.description || '未说明';
+    const payoff = item.payoff || '待回收';
+    return `${setup} → ${payoff}`;
+}
+
+function normalizeValidationIssues(issues) {
+    return normalizeList(issues)
+        .map((issue) => {
+            if (typeof issue === 'string') {
+                return {
+                    severity: 'notice',
+                    description: issue
+                };
+            }
+
+            return {
+                severity: issue?.severity || issue?.level || 'notice',
+                description: issue?.description || issue?.message || issue?.issue || ''
+            };
+        })
+        .filter((issue) => issue.description);
+}
+
+function normalizeChapterValidationPayload(validation) {
+    if (!validation || typeof validation !== 'object') {
+        return validation || null;
+    }
+
+    const checkEntries = validation.checks && typeof validation.checks === 'object'
+        ? Object.entries(validation.checks)
+        : [];
+    const checks = Object.fromEntries(checkEntries.map(([key, item]) => {
+        return [key, {
+            passed: item?.passed ?? item?.success ?? true,
+            hasWarnings: item?.hasWarnings ?? false,
+            issues: normalizeValidationIssues(item?.issues || item?.problems || []),
+            suggestions: normalizeList(item?.suggestions || item?.recommendations || []),
+            rawReport: item?.rawReport || item?.report || ''
+        }];
+    }));
+    const allIssues = normalizeValidationIssues(validation.allIssues || validation.issues || validation.problems || []);
+    const allSuggestions = normalizeList(validation.allSuggestions || validation.suggestions || validation.recommendations || []);
+
+    return {
+        passed: validation.passed ?? validation.success ?? validation.overall?.passed ?? true,
+        overall: {
+            passed: validation.overall?.passed ?? validation.passed ?? validation.success ?? true,
+            hasCriticalIssues: validation.overall?.hasCriticalIssues ?? false,
+            criticalCount: validation.overall?.criticalCount ?? 0
+        },
+        checks,
+        issues: allIssues,
+        warnings: normalizeValidationIssues(validation.warnings || validation.alerts || []),
+        suggestions: allSuggestions,
+        allIssues,
+        allSuggestions,
+        rawReport: validation.rawReport || ''
+    };
+}
+
+function getValidationCheckLabel(key) {
+    const labels = {
+        worldview: '世界观',
+        characters: '人物',
+        plot: '情节'
+    };
+    return labels[key] || key;
+}
+
+function normalizeValidationScoreRows(rows) {
+    return normalizeList(rows).map((row, index) => ({
+        title: `第 ${row?.iteration || index + 1} 轮`,
+        average: row?.average ?? '—',
+        items: Object.entries(row?.scores || {}).map(([label, value]) => ({
+            label,
+            value
+        }))
+    }));
+}
+
+function normalizeQualityTrendRows(qualityScores) {
+    const rows = Array.isArray(qualityScores?.trends)
+        ? qualityScores.trends
+        : Array.isArray(qualityScores)
+            ? qualityScores
+            : [];
+
+    return rows.map((row, index) => ({
+        title: `第 ${row?.iteration || index + 1} 轮`,
+        overall: row?.overall ?? row?.average ?? '—',
+        items: Object.entries(row?.dimensions || row?.scores || {}).map(([label, value]) => ({
+            label,
+            value: typeof value === 'object' && value !== null ? value.value ?? '—' : value
+        }))
+    }));
+}
+
+function getReadableChapterStatus(status) {
+    const labels = {
+        draft: '草稿',
+        completed: '已完成',
+        completed_with_warnings: '已完成（有警告）',
+        revised: '已修订',
+        polished: '已润色',
+        review: '待审阅'
+    };
+    return labels[status] || status || '未标记';
+}
+
+function getSeverityLabel(severity) {
+    const labels = {
+        critical: '关键问题',
+        major: '主要问题',
+        warning: '提醒',
+        notice: '提示'
+    };
+    return labels[severity] || severity || '提示';
 }
 
 function formatParagraphs(text) {
@@ -777,6 +1233,11 @@ function countParagraphs(text) {
         .map((item) => item.trim())
         .filter(Boolean)
         .length;
+}
+
+function formatWordCount(value) {
+    const count = Number(value) || 0;
+    return count > 0 ? `${count.toLocaleString()} 字` : '未统计';
 }
 
 function setDecisionPendingState(btnApprove, btnReject, action) {
@@ -807,7 +1268,12 @@ function ensureReviewPanelStyles() {
             --review-gold: #a17136;
             --review-red: #8f3a2f;
             --review-green: #2b6a4d;
-            height: 100%;
+            
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
             display: flex;
             flex-direction: column;
             gap: 18px;
@@ -816,10 +1282,11 @@ function ensureReviewPanelStyles() {
                 radial-gradient(circle at top right, rgba(161, 113, 54, 0.18), transparent 28%),
                 linear-gradient(180deg, #f9f5eb 0%, #f2ead9 100%);
             padding: 20px;
-            overflow: auto;
+            overflow: hidden;
         }
 
         .review-hero {
+            flex: none;
             display: flex;
             justify-content: space-between;
             gap: 24px;
@@ -887,25 +1354,25 @@ function ensureReviewPanelStyles() {
             display: grid;
             grid-template-columns: 230px minmax(0, 1fr) 290px;
             gap: 18px;
+            align-items: stretch;
         }
 
         .review-sidebar,
         .review-content,
         .review-actions {
-            min-height: 0;
+            display: flex;
+            flex-direction: column;
             border: 1px solid var(--review-line);
             border-radius: 24px;
             background: rgba(255, 251, 244, 0.92);
             box-shadow: 0 14px 30px rgba(77, 52, 29, 0.08);
-        }
-
-        .review-sidebar,
-        .review-actions {
-            display: flex;
-            flex-direction: column;
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .review-panel-header {
+            flex: none;
             display: flex;
             justify-content: space-between;
             align-items: baseline;
@@ -995,6 +1462,7 @@ function ensureReviewPanelStyles() {
         }
 
         .review-content-header {
+            flex: none;
             padding: 18px 20px 16px;
             border-bottom: 1px solid var(--review-line);
             display: flex;
@@ -1044,7 +1512,10 @@ function ensureReviewPanelStyles() {
 
         .review-reader-surface {
             flex: 1;
-            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
             padding: 20px;
         }
 
@@ -1055,6 +1526,9 @@ function ensureReviewPanelStyles() {
             border-radius: 24px;
             padding: 30px;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 18px 40px rgba(65, 42, 15, 0.08);
+            width: 100%;
+            min-height: 100%;
+            flex: 1 0 auto;
         }
 
         .manuscript-section + .manuscript-section,
@@ -1159,6 +1633,23 @@ function ensureReviewPanelStyles() {
             color: #40342a;
         }
 
+        .chip-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .meta-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: rgba(89, 70, 50, 0.08);
+            color: #6a5238;
+            font-size: 12px;
+        }
+
         .bullet-list {
             margin: 10px 0 0;
             padding-left: 18px;
@@ -1206,7 +1697,6 @@ function ensureReviewPanelStyles() {
 
         .review-actions {
             padding-bottom: 14px;
-            overflow: auto;
         }
 
         .validation-overview {
@@ -1237,10 +1727,41 @@ function ensureReviewPanelStyles() {
             background: rgba(143, 58, 47, 0.06);
         }
 
+        .validation-item.severity-warning,
+        .validation-item.severity-major {
+            border-color: rgba(161, 113, 54, 0.28);
+            background: rgba(161, 113, 54, 0.08);
+        }
+
+        .validation-item.severity-notice {
+            border-color: rgba(89, 70, 50, 0.16);
+            background: rgba(255, 255, 255, 0.68);
+        }
+
         .validation-item p {
             margin: 0;
             line-height: 1.8;
             color: #43372d;
+        }
+
+        .quality-trend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        .quality-score-card {
+            border-radius: 18px;
+            padding: 16px;
+            border: 1px solid rgba(112, 86, 52, 0.14);
+            background: rgba(255, 255, 255, 0.78);
+        }
+
+        .quality-score-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
         }
 
         .decision-card {
@@ -1303,10 +1824,13 @@ function ensureReviewPanelStyles() {
             background: rgba(161, 113, 54, 0.12);
         }
 
-        .decision-card.grow {
-            flex: 1;
+        .review-actions-inner {
             display: flex;
             flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding-bottom: 12px;
         }
 
         .review-textarea {
@@ -1320,6 +1844,7 @@ function ensureReviewPanelStyles() {
             padding: 14px 16px;
             line-height: 1.8;
             color: #2c241e;
+            overflow-y: auto;
         }
 
         .review-textarea:focus {
@@ -1336,12 +1861,11 @@ function ensureReviewPanelStyles() {
         }
 
         .review-action-bar {
+            flex: none;
             display: grid;
             grid-template-columns: 1fr;
             gap: 8px;
             padding: 12px 12px 0;
-            position: sticky;
-            bottom: 0;
             background: linear-gradient(180deg, rgba(247, 241, 227, 0), rgba(247, 241, 227, 0.96) 32%, rgba(247, 241, 227, 0.98) 100%);
         }
 
@@ -1397,6 +1921,7 @@ function ensureReviewPanelStyles() {
         @media (max-width: 900px) {
             .checkpoint-review-shell {
                 padding: 14px;
+                min-height: auto;
             }
 
             .review-hero,

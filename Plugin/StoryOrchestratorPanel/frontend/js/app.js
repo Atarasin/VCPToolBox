@@ -50,47 +50,47 @@ class App {
         });
 
         router.register('/stories', () => {
-            renderStoriesPage(this.routerView, store, api);
+            this.renderRoute(() => renderStoriesPage(this.routerView, store, api));
         });
 
         router.register('/stories/:id', (params) => {
-            renderStorySummaryPage(this.routerView, store, api, params.id);
+            this.renderRoute(() => renderStorySummaryPage(this.routerView, store, api, params.id));
         });
 
         router.register('/stories/:id/review', (params) => {
-            this.renderStoryReviewPage(params.id);
+            this.renderRoute(() => this.renderStoryReviewPage(params.id));
         });
 
         router.register('/stories/:id/bible', (params) => {
-            renderStoryBiblePage(this.routerView, store, api, params.id);
+            this.renderRoute(() => renderStoryBiblePage(this.routerView, store, api, params.id));
         });
 
         router.register('/stories/:id/outline', (params) => {
-            renderOutlinePage(this.routerView, store, api, params.id);
+            this.renderRoute(() => renderOutlinePage(this.routerView, store, api, params.id));
         });
 
         router.register('/stories/:id/chapters', (params) => {
-            renderChapterReaderPage(this.routerView, store, api, params.id, 1);
+            this.renderRoute(() => renderChapterReaderPage(this.routerView, store, api, params.id, 1));
         });
 
         router.register('/stories/:id/chapters/:num', (params) => {
-            renderChapterReaderPage(this.routerView, store, api, params.id, params.num);
+            this.renderRoute(() => renderChapterReaderPage(this.routerView, store, api, params.id, params.num));
         });
 
         router.register('/stories/:id/quality', (params) => {
-            renderQualityPage(this.routerView, store, api, params.id);
+            this.renderRoute(() => renderQualityPage(this.routerView, store, api, params.id));
         });
 
         router.register('/stories/:id/final', (params) => {
-            renderFinalOutputPage(this.routerView, store, api, params.id);
+            this.renderRoute(() => renderFinalOutputPage(this.routerView, store, api, params.id));
         });
 
         router.register('/review-queue', () => {
-            renderReviewQueuePage(this.routerView, store, api);
+            this.renderRoute(() => renderReviewQueuePage(this.routerView, store, api));
         });
 
         router.register('/settings', () => {
-            this.renderSettingsPlaceholder();
+            this.renderRoute(() => this.renderSettingsPlaceholder());
         });
     }
 
@@ -119,6 +119,25 @@ class App {
                 link.classList.add('active');
             }
         });
+    }
+
+    renderRoute(renderFn) {
+        this.clearRouteTimers();
+        renderFn();
+    }
+
+    clearRouteTimers() {
+        if (!this.routerView) return;
+
+        if (this.routerView.__storyRetryPollingTimer) {
+            clearTimeout(this.routerView.__storyRetryPollingTimer);
+            this.routerView.__storyRetryPollingTimer = null;
+        }
+
+        if (this.routerView.__retryPollingTimer) {
+            clearTimeout(this.routerView.__retryPollingTimer);
+            this.routerView.__retryPollingTimer = null;
+        }
     }
 
     renderSettingsPlaceholder() {
@@ -260,15 +279,20 @@ class App {
     async loadReviewCheckpointPayload(apiClient, storyId, checkpoint) {
         if (!checkpoint) return {};
 
-        const historyResponse = await apiClient.getStoryHistory(storyId).catch(() => null);
+        const [historyResponse, storyResponse] = await Promise.all([
+            apiClient.getStoryHistory(storyId).catch(() => null),
+            apiClient.getStory(storyId).catch(() => null)
+        ]);
         const history = historyResponse?.history || [];
-        const checkpointEntry = history.find((entry) => {
+        const story = storyResponse?.story || {};
+        const checkpointEntry = [...history].reverse().find((entry) => {
             return entry.type === 'checkpoint_created' &&
                 entry.detail?.checkpointId === checkpoint.id;
         });
         const historyPayload = checkpointEntry?.detail?.data || {};
+        const checkpointKind = resolveCheckpointKind(checkpoint.type);
 
-        if (checkpoint.type === 'phase1_checkpoint') {
+        if (checkpointKind === 'phase1') {
             const [worldviewResponse, charactersResponse] = await Promise.all([
                 apiClient.getStoryWorldview(storyId).catch(() => null),
                 apiClient.getStoryCharacters(storyId).catch(() => null)
@@ -286,22 +310,30 @@ class App {
             };
         }
 
-        if (checkpoint.type === 'outline_checkpoint') {
-            const [outlineResponse, chaptersResponse] = await Promise.all([
-                apiClient.getStoryOutline(storyId).catch(() => null),
-                apiClient.getStoryChapters(storyId).catch(() => null)
-            ]);
-
+        if (checkpointKind === 'phase2-outline') {
             return {
-                outline: historyPayload.outline || outlineResponse?.outline || null,
-                chapters: historyPayload.chapters || chaptersResponse?.chapters || []
+                outline: historyPayload.outline || story.phase2?.outline || null,
+                chapters: normalizeReviewChapters(historyPayload.chapters || historyPayload.chapterResults || story.phase2?.chapters || []),
+                phase2: story.phase2 || null
             };
         }
 
-        if (checkpoint.type === 'content_checkpoint' || checkpoint.type === 'final_checkpoint') {
-            const chaptersResponse = await apiClient.getStoryChapters(storyId).catch(() => null);
+        if (checkpointKind === 'phase2-content') {
             return {
-                chapters: historyPayload.chapters || chaptersResponse?.chapters || []
+                chapters: normalizeReviewChapters(historyPayload.chapters || historyPayload.chapterResults || story.phase2?.chapters || []),
+                outline: historyPayload.outline || story.phase2?.outline || null,
+                phase2: story.phase2 || null
+            };
+        }
+
+        if (checkpointKind === 'phase3-final') {
+            return {
+                chapters: normalizeReviewChapters(historyPayload.chapters || historyPayload.chapterResults || story.phase3?.polishedChapters || story.phase2?.chapters || []),
+                polishedChapters: normalizeReviewChapters(historyPayload.polishedChapters || story.phase3?.polishedChapters || []),
+                finalValidation: historyPayload.finalValidation || story.phase3?.finalValidation || null,
+                finalEditorOutput: historyPayload.finalEditorOutput || story.phase3?.finalEditorOutput || '',
+                qualityScores: historyPayload.qualityScores || story.phase3?.qualityScores || null,
+                phase3: story.phase3 || null
             };
         }
 
@@ -332,6 +364,38 @@ function buildReviewCharacterGroups(characters) {
         },
         oocRules: {}
     };
+}
+
+function normalizeReviewChapters(chapters) {
+    const list = Array.isArray(chapters) ? chapters : [];
+    return list.map((chapter, index) => ({
+        ...chapter,
+        number: chapter?.number || chapter?.chapterNum || chapter?.chapterNumber || index + 1,
+        chapterNum: chapter?.chapterNum || chapter?.number || chapter?.chapterNumber || index + 1,
+        title: chapter?.title || chapter?.chapterTitle || `第${chapter?.chapterNum || chapter?.number || chapter?.chapterNumber || index + 1}章`,
+        content: chapter?.content || chapter?.text || chapter?.body || '',
+        wordCount: chapter?.wordCount || chapter?.metrics?.counts?.actualCount || chapter?.metrics?.counts?.chineseChars || 0
+    }));
+}
+
+function resolveCheckpointKind(type) {
+    if (type === 'phase1_checkpoint' || type === 'worldview_confirmation') {
+        return 'phase1';
+    }
+
+    if (type === 'outline_checkpoint' || type === 'outline_confirmation' || type === 'phase2_checkpoint' || type === 'phase2_outline_confirmation') {
+        return 'phase2-outline';
+    }
+
+    if (type === 'content_checkpoint' || type === 'content_quality_confirmation' || type === 'phase2_content_confirmation') {
+        return 'phase2-content';
+    }
+
+    if (type === 'final_checkpoint' || type === 'final_approval' || type === 'phase3_checkpoint') {
+        return 'phase3-final';
+    }
+
+    return 'unknown';
 }
 
 // Initialize app

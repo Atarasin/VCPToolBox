@@ -1171,10 +1171,38 @@ phase2: {
         }
       },
       validation: {
-        passed: true,
-        issues: []
+        overall: {
+          passed: true,
+          hasCriticalIssues: false,
+          criticalCount: 0
+        },
+        checks: {
+          worldview: {
+            passed: true,
+            hasWarnings: false,
+            issues: [{ description: "设定冲突描述", severity: "minor|major|critical" }],
+            suggestions: ["修正建议"],
+            rawReport: "原始校验报告"
+          },
+          characters: {
+            passed: true,
+            hasWarnings: false,
+            issues: [],
+            suggestions: [],
+            rawReport: "原始校验报告"
+          },
+          plot: {
+            passed: true,
+            hasWarnings: false,
+            issues: [],
+            suggestions: [],
+            rawReport: "原始校验报告"
+          }
+        },
+        allIssues: [{ description: "聚合后的问题描述", severity: "minor|major|critical" }],
+        allSuggestions: ["聚合后的修正建议"]
       },
-      status: "draft|completed",
+      status: "draft|completed|completed_with_warnings",
       wasRevised: false,
       createdAt: "2026-01-15T10:00:00Z"
     }
