@@ -14,6 +14,7 @@ import { renderOutlinePage } from './pages/OutlinePage.js';
 import { renderChapterReaderPage } from './pages/ChapterReaderPage.js';
 import { renderQualityPage } from './pages/QualityPage.js';
 import { renderFinalOutputPage } from './pages/FinalOutputPage.js';
+import { renderTimelinePage } from './pages/TimelinePage.js';
 import { renderCheckpointReviewPanel } from './components/CheckpointReviewPanel.js';
 
 class App {
@@ -79,6 +80,10 @@ class App {
 
         router.register('/stories/:id/quality', (params) => {
             this.renderRoute(() => renderQualityPage(this.routerView, store, api, params.id));
+        });
+
+        router.register('/stories/:id/timeline', (params) => {
+            this.renderRoute(() => renderTimelinePage(this.routerView, store, api, params.id));
         });
 
         router.register('/stories/:id/final', (params) => {

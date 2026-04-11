@@ -565,22 +565,28 @@ class StoryOrchestrator {
   }
 
   _exportAsMarkdown(story) {
-    const chapters = story.phase2?.chapters || [];
-    const lines = ['# 故事创作', ''];
+    const chapters = story.phase3?.polishedChapters || story.phase2?.chapters || [];
+    const lines = [`# ${story.title || story.config?.title || '故事创作'}`, ''];
     
     if (story.phase1?.worldview?.setting) {
       lines.push('## 世界观', '', story.phase1.worldview.setting, '');
     }
 
-    chapters.forEach(ch => {
-      lines.push(`## ${ch.title || `第${ch.number}章`}`, '', ch.content || '', '');
+    chapters.forEach((ch, index) => {
+      const chapterNumber = ch.number || ch.chapterNum || ch.chapterNumber || (index + 1);
+      const title = ch.title || `第${chapterNumber}章`;
+      
+      // Filter out raw validation/diff metadata from content if present
+      let cleanContent = ch.content || '';
+      
+      lines.push(`## ${title}`, '', cleanContent, '');
     });
 
     return lines.join('\n');
   }
 
   _exportAsPlainText(story) {
-    const chapters = story.phase2?.chapters || [];
+    const chapters = story.phase3?.polishedChapters || story.phase2?.chapters || [];
     return chapters.map(ch => ch.content || '').join('\n\n');
   }
 }

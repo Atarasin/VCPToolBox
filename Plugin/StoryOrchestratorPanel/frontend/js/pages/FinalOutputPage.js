@@ -140,11 +140,32 @@ export async function renderFinalOutputPage(container, store, api, storyId) {
                 btn.textContent = '导出中...';
                 try {
                     const result = await api.exportStory(storyId, format);
-                    if (result.downloadUrl) {
+                    let fileContent = result.content || result.data || '';
+                    if (typeof fileContent === 'object') {
+                        fileContent = JSON.stringify(fileContent, null, 2);
+                    }
+                    
+                    const fileExtension = format === 'markdown' ? 'md' : format;
+                    
+                    if (fileContent) {
+                        const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${story.title || 'story'}.${fileExtension}`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    } else if (result.downloadUrl) {
                         const a = document.createElement('a');
                         a.href = result.downloadUrl;
-                        a.download = `${story.title || 'story'}.${format}`;
+                        a.download = `${story.title || 'story'}.${fileExtension}`;
+                        document.body.appendChild(a);
                         a.click();
+                        document.body.removeChild(a);
+                    } else {
+                        throw new Error('未返回可下载的内容');
                     }
                 } catch (e) {
                     alert('导出失败: ' + e.message);
