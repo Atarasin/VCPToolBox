@@ -467,17 +467,73 @@ async function loadWikiPages(communityId) {
             return;
         }
         wikiPages.innerHTML = '';
+        
+        // 构建树形结构
+        const tree = {};
         pages.forEach((page) => {
-            const btn = document.createElement('button');
-            btn.className = 'btn-secondary community-wiki-page-item';
-            btn.textContent = page;
-            btn.addEventListener('click', async () => {
-                const pageInput = document.getElementById('community-wiki-page-name');
-                if (pageInput) pageInput.value = page;
-                await handleLoadWikiPage();
+            const parts = page.split('/');
+            let current = tree;
+            parts.forEach((part, index) => {
+                if (index === parts.length - 1) {
+                    current[part] = page; // 叶子节点存储完整路径
+                } else {
+                    current[part] = current[part] || {};
+                    current = current[part];
+                }
             });
-            wikiPages.appendChild(btn);
         });
+
+        // 递归渲染树形结构
+        function renderTree(node, container, level = 0) {
+            const ul = document.createElement('ul');
+            ul.className = 'community-wiki-tree';
+            
+            Object.keys(node).sort().forEach(key => {
+                const li = document.createElement('li');
+                const isLeaf = typeof node[key] === 'string';
+                
+                if (isLeaf) {
+                    const btn = document.createElement('button');
+                    btn.className = 'btn-secondary community-wiki-page-item';
+                    btn.innerHTML = `<span class="material-symbols-outlined" style="font-size: 16px; margin-right: 6px; vertical-align: middle;">description</span> <span style="vertical-align: middle;">${escapeHtml(key)}</span>`;
+                    btn.title = node[key];
+                    btn.addEventListener('click', async () => {
+                        // 移除其他选中状态
+                        document.querySelectorAll('.community-wiki-page-item').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        
+                        const pageInput = document.getElementById('community-wiki-page-name');
+                        if (pageInput) pageInput.value = node[key];
+                        await handleLoadWikiPage();
+                    });
+                    li.appendChild(btn);
+                } else {
+                    const folder = document.createElement('div');
+                    folder.className = 'community-wiki-folder';
+                    folder.innerHTML = `
+                        <span class="material-symbols-outlined folder-icon" style="font-size: 18px; margin-right: 6px; transition: transform 0.2s; vertical-align: middle;">folder</span>
+                        <span class="folder-name" style="vertical-align: middle; font-weight: 500;">${escapeHtml(key)}</span>
+                    `;
+                    const childrenContainer = document.createElement('div');
+                    childrenContainer.className = 'community-wiki-folder-content';
+                    childrenContainer.style.display = 'block'; // 默认展开
+                    
+                    folder.addEventListener('click', () => {
+                        const isExpanded = childrenContainer.style.display !== 'none';
+                        childrenContainer.style.display = isExpanded ? 'none' : 'block';
+                        folder.querySelector('.folder-icon').style.transform = isExpanded ? 'rotate(-90deg)' : 'rotate(0deg)';
+                    });
+                    
+                    li.appendChild(folder);
+                    renderTree(node[key], childrenContainer, level + 1);
+                    li.appendChild(childrenContainer);
+                }
+                ul.appendChild(li);
+            });
+            container.appendChild(ul);
+        }
+        
+        renderTree(tree, wikiPages);
     } catch (error) {
         wikiPages.innerHTML = `<p class="error-message">加载 Wiki 页面失败: ${error.message}</p>`;
     }
