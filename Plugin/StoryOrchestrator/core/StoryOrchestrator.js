@@ -205,7 +205,10 @@ class StoryOrchestrator {
     const result = await this.chapterOperations.createChapterDraft(
       args.story_id,
       args.chapter_number,
-      { targetWordCount: args.target_word_count }
+      {
+        targetWordCount: args.target_word_count,
+        outlineContext: args.outline_context
+      }
     );
 
     return {
@@ -282,12 +285,22 @@ class StoryOrchestrator {
   }
 
   async validateConsistency(args) {
+    const validation = validateInput('validateConsistency', args);
+    if (!validation.valid) {
+      return { status: 'error', error: validation.errors.join(', ') };
+    }
+
     const story = await this.stateManager.getStory(args.story_id);
     if (!story) {
       return { status: 'error', error: 'Story not found' };
     }
 
     const storyBible = this.stateManager.getStoryBible(args.story_id);
+    if (!storyBible) {
+      return { status: 'error', error: 'Story Bible not found' };
+    }
+
+    const previousChapters = story.phase2?.chapters || [];
     
     let result;
     switch (args.validation_type) {
@@ -298,14 +311,15 @@ class StoryOrchestrator {
         result = await this.contentValidator.validateCharacters(args.story_id, args.content, storyBible);
         break;
       case 'plot':
-        result = await this.contentValidator.validatePlot(args.story_id, args.content, storyBible);
+        result = await this.contentValidator.validatePlot(args.story_id, args.content, storyBible, previousChapters);
         break;
       default:
         result = await this.contentValidator.comprehensiveValidation(
           args.story_id,
           0,
           args.content,
-          storyBible
+          storyBible,
+          previousChapters
         );
     }
 
@@ -406,13 +420,9 @@ class StoryOrchestrator {
   }
 
   async retryPhase(args) {
-    const validation = validateInput('queryStoryStatus', args);
+    const validation = validateInput('retryPhase', args);
     if (!validation.valid) {
       return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    if (!args.phase_name || !['phase1', 'phase2', 'phase3'].includes(args.phase_name)) {
-      return { status: 'error', error: 'Invalid or missing phase_name (phase1, phase2, or phase3)' };
     }
 
     const story = await this.stateManager.getStory(args.story_id);

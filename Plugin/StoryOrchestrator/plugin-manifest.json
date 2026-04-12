@@ -3,7 +3,7 @@
   "name": "StoryOrchestrator",
   "version": "1.0.0",
   "displayName": "多智能体故事创作编排器",
-  "description": "九智能体协作短文小说创作系统，内置完整章节操作能力，支持三阶段工作流与闭环校验",
+  "description": "九智能体协作的短篇故事创作编排器，支持三阶段工作流、用户检查点确认、章节级生成/审查/修订/润色，以及恢复重试与导出闭环。",
   "author": "VCPToolBox",
   "pluginType": "hybridservice",
   "entryPoint": {
@@ -39,157 +39,462 @@
     "parameters": {
       "story_prompt": {
         "type": "string",
-        "description": "故事创作提示词，至少10个字符"
+        "description": "故事项目的核心梗概或开篇设定，至少 10 个字符。"
       },
       "target_word_count": {
         "type": "integer",
-        "description": "目标字数"
+        "description": "目标总字数或章节目标字数。启动项目时建议传入 500-50000 之间的整数。"
       },
       "genre": {
         "type": "string",
-        "description": "故事类型/题材"
+        "description": "故事类型/题材，例如科幻、悬疑、奇幻、现实向。"
       },
       "style_preference": {
         "type": "string",
-        "description": "风格偏好"
+        "description": "文风偏好或表达要求，例如硬科幻、第一人称、冷峻克制。"
       },
       "story_id": {
         "type": "string",
-        "description": "故事项目唯一ID"
+        "description": "故事项目唯一 ID，通常为 story- 开头，用于后续查询、恢复、导出与章节操作。"
       },
       "checkpoint_id": {
         "type": "string",
-        "description": "检查点ID"
+        "description": "待确认的检查点 ID，需与当前故事状态中的 active checkpoint 一致。"
       },
       "approval": {
         "type": "boolean",
-        "description": "是否批准检查点"
+        "description": "是否通过当前检查点。true 表示继续推进，false 表示驳回并结合 feedback 回流。"
       },
       "feedback": {
         "type": "string",
-        "description": "反馈内容"
+        "description": "对检查点审批、恢复或重试的补充反馈，可写明希望修改的问题与方向。"
       },
       "chapter_number": {
         "type": "integer",
-        "description": "章节编号"
+        "description": "章节编号，通常从 1 开始。"
       },
       "outline_context": {
         "type": "string",
-        "description": "大纲上下文"
+        "description": "本章的大纲与上下文说明。当前契约要求传入，便于约束章节草稿生成目标。"
       },
       "chapter_content": {
         "type": "string",
-        "description": "章节内容"
+        "description": "待审查、修订、润色或统计的章节正文内容。"
+      },
+      "content": {
+        "type": "string",
+        "description": "待做一致性校验的正文片段或章节内容。"
       },
       "review_focus": {
         "type": "string",
-        "description": "审查重点"
+        "description": "审查重点，例如人物一致性、节奏、逻辑漏洞、伏笔回收。"
       },
       "revision_instructions": {
         "type": "string",
-        "description": "修改指令"
+        "description": "修订指令，明确说明要改什么、保留什么、优先解决什么问题。"
       },
       "issues": {
-        "type": "string",
-        "description": "问题列表"
+        "type": "array",
+        "description": "需要定向修复的问题列表，建议传入字符串数组。"
       },
       "max_rewrite_ratio": {
         "type": "number",
-        "description": "最大重写比例"
+        "description": "最大改写比例，取值 0-1，默认建议 0.35。"
       },
       "polish_focus": {
         "type": "string",
-        "description": "润色重点"
+        "description": "润色重点，例如增强画面感、压缩赘述、统一语气或提升情绪张力。"
       },
       "validation_type": {
         "type": "string",
-        "description": "校验类型"
+        "description": "一致性校验类型。可选 worldview、character、plot；不提供时执行综合校验。"
       },
       "target_min": {
         "type": "integer",
-        "description": "最小字数目标"
+        "description": "章节字数最小目标。"
       },
       "target_max": {
         "type": "integer",
-        "description": "最大字数目标"
+        "description": "章节字数最大目标。"
       },
       "count_mode": {
         "type": "string",
-        "description": "字数统计模式"
+        "description": "字数统计模式。可选 cn_chars 或 non_whitespace。"
       },
       "length_policy": {
         "type": "string",
-        "description": "长度策略"
+        "description": "长度判定策略。可选 range 或 min_only。"
       },
       "format": {
         "type": "string",
-        "description": "导出格式"
+        "description": "导出格式。可选 markdown、txt、json，默认 markdown。"
       },
       "recovery_action": {
         "type": "string",
-        "description": "恢复操作类型"
+        "description": "恢复动作类型。可选 continue、restart_phase、rollback。"
       },
       "target_phase": {
         "type": "string",
-        "description": "目标阶段"
+        "description": "恢复目标阶段。可选 phase1、phase2、phase3。"
+      },
+      "target_checkpoint": {
+        "type": "string",
+        "description": "恢复时指定的目标检查点 ID。仅在需要精确恢复位置时提供。"
       },
       "phase_name": {
         "type": "string",
-        "description": "阶段名称"
+        "description": "需要手动重试的阶段名称。可选 phase1、phase2、phase3。"
       },
       "reason": {
         "type": "string",
-        "description": "原因"
+        "description": "手动重试阶段的原因说明。"
       }
     },
     "invocationCommands": [
       {
         "commandIdentifier": "StartStoryProject",
-        "description": "启动新的故事创作项目，进入第一阶段\n参数:\n- story_prompt (字符串, 必需): 故事梗概或开头\n- target_word_count (整数, 可选): 目标字数，默认3000\n- genre (字符串, 可选): 故事类型\n- style_preference (字符串, 可选): 文风偏好\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:\u300c始\u300dStoryOrchestrator\u300c末\u300d,\ncommand:\u300c始\u300dStartStoryProject\u300c末\u300d,\nstory_prompt:\u300c始\u300d故事梗概...\u300c末\u300d,\ntarget_word_count:\u300c始\u300d3000\u300c末\u300d,\ngenre:\u300c始\u300d科幻\u300c末\u300d\n<<<[END_TOOL_REQUEST]>>>"
+        "description": "启动新的故事创作项目，创建 story_id 并立即进入第一阶段“世界观与人设搭建”。适用于从一个故事梗概开始完整跑通三阶段流程。",
+        "parameters": [
+          {
+            "name": "story_prompt",
+            "description": "故事梗概、开篇设定或创作任务说明，至少 10 个字符。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "target_word_count",
+            "description": "目标总字数，建议传入 500-50000 之间的整数。不提供时使用插件默认范围。",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "genre",
+            "description": "故事题材，例如科幻、悬疑、奇幻、都市。",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "style_preference",
+            "description": "文风偏好、叙事视角或语气要求。",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "example": "<<<[TOOL_REQUEST]>>>\ntool_name:「始」StoryOrchestrator「末」,\ncommand:「始」StartStoryProject「末」,\nstory_prompt:「始」2045 年，第一批具备自我叙事能力的城市级 AI 被要求与人类共治，一名维护工程师发现其中一个 AI 正在悄悄重写自己的起源档案。请创作一个兼具悬疑与情感张力的近未来故事。「末」,\ntarget_word_count:「始」3200「末」,\ngenre:「始」科幻悬疑「末」,\nstyle_preference:「始」冷峻克制，注重细节铺垫与人物心理变化「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "QueryStoryStatus",
-        "description": "查询故事项目当前状态和进度\n参数:\n- story_id (字符串, 必需): 故事项目ID\n返回: 当前阶段、进度百分比、检查点状态等"
+        "description": "查询故事项目当前状态、阶段进度、检查点与工作流运行信息。适用于轮询异步推进结果或在用户确认前获取最新上下文。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "要查询的故事项目 ID。",
+            "required": true,
+            "type": "string"
+          }
+        ]
       },
       {
         "commandIdentifier": "UserConfirmCheckpoint",
-        "description": "用户在确认节点批准或拒绝继续\n参数:\n- story_id (字符串, 必需)\n- checkpoint_id (字符串, 必需)\n- approval (布尔值, 必需): true批准/false拒绝\n- feedback (字符串, 可选): 拒绝时的反馈意见"
+        "description": "对当前检查点执行人工确认。批准后工作流继续，拒绝后会结合 feedback 进入回流修订。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "checkpoint_id",
+            "description": "当前待确认的检查点 ID，需与故事状态中的 checkpoint_id 一致。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "approval",
+            "description": "true 表示批准继续，false 表示驳回并回流。",
+            "required": true,
+            "type": "boolean"
+          },
+          {
+            "name": "feedback",
+            "description": "当 approval=false 时建议提供具体修改意见；approval=true 时可省略。",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "example": "<<<[TOOL_REQUEST]>>>\ntool_name:「始」StoryOrchestrator「末」,\ncommand:「始」UserConfirmCheckpoint「末」,\nstory_id:「始」story-abc123def456「末」,\ncheckpoint_id:「始」cp-phase1-story-abc123def456-1712345678901「末」,\napproval:「始」false「末」,\nfeedback:「始」世界观结构已经清晰，但主角与城市级 AI 的利益冲突还不够尖锐，请强化二者在价值观上的对立，并补一条后续会引爆主线的伏笔。「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "CreateChapterDraft",
-        "description": "【内部章节操作】创建章节草稿，直接调用章节执笔Agent生成正文\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- outline_context (字符串, 必需): 本章大纲和上下文\n- target_word_count (整数, 可选)\n返回: 章节草稿内容及字数统计"
+        "description": "创建指定章节的正文草稿。该命令主要用于章节级内部操作或人工介入调试，可直接拉起章节执笔环节。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "chapter_number",
+            "description": "要生成的章节编号，通常从 1 开始。",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "outline_context",
+            "description": "本章大纲、剧情目标与承接上下文。当前验证契约要求必传。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "target_word_count",
+            "description": "本章目标字数。",
+            "required": false,
+            "type": "integer"
+          }
+        ]
       },
       {
         "commandIdentifier": "ReviewChapter",
-        "description": "【内部章节操作】审查章节质量，调用逻辑校验Agent进行多维度评估\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- chapter_content (字符串, 必需)\n- review_focus (字符串, 可选): 审查重点\n返回: 结构化审查报告(通过/有条件通过/不通过、问题清单、建议)"
+        "description": "对章节正文做质量审查，输出结构化评估结果，包括通过情况、问题清单与优化建议。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "chapter_number",
+            "description": "待审查章节编号。",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "chapter_content",
+            "description": "待审查的章节正文，建议传入完整章节内容。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "review_focus",
+            "description": "额外指定审查重点，例如人物一致性、节奏控制、逻辑漏洞。",
+            "required": false,
+            "type": "string"
+          }
+        ]
       },
       {
         "commandIdentifier": "ReviseChapter",
-        "description": "【内部章节操作】定向修订章节，根据问题清单进行精准修改\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- chapter_content (字符串, 必需)\n- revision_instructions (字符串, 必需): 修订指令\n- issues (数组, 可选): 问题清单\n- max_rewrite_ratio (数字, 可选): 最大改写比例(0-1)，默认0.35\n返回: 修订后的章节内容及变更摘要"
+        "description": "根据修订指令和问题清单，对章节进行定向修改，尽量在限定改写比例内完成精准修复。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "chapter_number",
+            "description": "待修订章节编号。",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "chapter_content",
+            "description": "待修订的原始章节内容。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "revision_instructions",
+            "description": "明确指出修订目标、保留约束和优先级。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "issues",
+            "description": "可选的问题列表，建议传入字符串数组，帮助执行精准修订。",
+            "required": false,
+            "type": "array"
+          },
+          {
+            "name": "max_rewrite_ratio",
+            "description": "最大改写比例，取值 0-1，默认建议 0.35。",
+            "required": false,
+            "type": "number"
+          }
+        ]
       },
       {
         "commandIdentifier": "PolishChapter",
-        "description": "【内部章节操作】润色章节文笔，调用文笔润色Agent优化表达\n参数:\n- story_id (字符串, 必需)\n- chapter_number (整数, 必需)\n- chapter_content (字符串, 必需)\n- polish_focus (字符串, 可选): 润色重点\n返回: 润色后的章节内容及改进说明"
+        "description": "对章节文笔进行表达层优化，提升画面感、节奏感与语气统一性，同时尽量保持原有剧情结构。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "chapter_number",
+            "description": "待润色章节编号。",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "chapter_content",
+            "description": "待润色的章节正文。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "polish_focus",
+            "description": "额外指定润色方向，例如压缩赘述、增强意象、提升情绪浓度。",
+            "required": false,
+            "type": "string"
+          }
+        ]
       },
       {
         "commandIdentifier": "ValidateConsistency",
-        "description": "【内部验证】验证内容与故事圣经的一致性\n参数:\n- story_id (字符串, 必需)\n- content (字符串, 必需)\n- validation_type (字符串, 可选): worldview/character/plot\n返回: 一致性验证结果"
+        "description": "校验正文内容与当前故事圣经的一致性，可按世界观、人物或情节维度单独验证，也可做综合校验。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "content",
+            "description": "待验证的一段内容或完整章节正文。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "validation_type",
+            "description": "可选 worldview、character、plot；不提供时执行综合校验。",
+            "required": false,
+            "type": "string"
+          }
+        ]
       },
       {
         "commandIdentifier": "CountChapterMetrics",
-        "description": "【内部工具】统计章节字数和结构指标\n参数:\n- chapter_content (字符串, 必需)\n- target_min (整数, 可选)\n- target_max (整数, 可选)\n- count_mode (字符串, 可选): cn_chars/non_whitespace，默认cn_chars\n- length_policy (字符串, 可选): range/min_only，默认range\n返回: 详细字数统计和达标判断"
+        "description": "统计章节字数与长度达标情况，可用于生成后快速判断是否满足区间目标。",
+        "parameters": [
+          {
+            "name": "chapter_content",
+            "description": "待统计的章节正文。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "target_min",
+            "description": "最小字数目标。",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "target_max",
+            "description": "最大字数目标。",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "count_mode",
+            "description": "统计模式。可选 cn_chars 或 non_whitespace。",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "length_policy",
+            "description": "长度判断策略。可选 range 或 min_only。",
+            "required": false,
+            "type": "string"
+          }
+        ]
       },
       {
         "commandIdentifier": "ExportStory",
-        "description": "导出完成的故事为指定格式\n参数:\n- story_id (字符串, 必需)\n- format (字符串, 可选): markdown/txt/json，默认markdown\n返回: 完整故事内容"
+        "description": "导出完整故事内容，适合在项目完成后输出 markdown、txt 或 json 版本。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "要导出的故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "format",
+            "description": "导出格式。可选 markdown、txt、json，默认 markdown。",
+            "required": false,
+            "type": "string"
+          }
+        ]
       },
       {
         "commandIdentifier": "RecoverStoryWorkflow",
-        "description": "手动恢复卡住的工作流，从崩溃或错误状态继续执行\n参数:\n- story_id (字符串, 必需): 故事项目ID\n返回: 恢复操作结果及当前工作流状态"
+        "description": "在工作流卡住、异常中断或需要人工干预时执行恢复。支持继续推进、重启某阶段或回滚到上一个有效节点。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "需要恢复的故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "recovery_action",
+            "description": "恢复动作。可选 continue、restart_phase、rollback；默认 continue。",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "target_phase",
+            "description": "当 recovery_action=restart_phase 时可指定 phase1、phase2、phase3。",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "target_checkpoint",
+            "description": "可选的目标检查点 ID，用于更精细的恢复定位。",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "feedback",
+            "description": "恢复时附带的原因说明或修正方向。",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "example": "<<<[TOOL_REQUEST]>>>\ntool_name:「始」StoryOrchestrator「末」,\ncommand:「始」RecoverStoryWorkflow「末」,\nstory_id:「始」story-abc123def456「末」,\nrecovery_action:「始」restart_phase「末」,\ntarget_phase:「始」phase2「末」,\nfeedback:「始」第二阶段生成的大纲冲突较多，请从 Phase2 重新开始，并优先确保角色动机与主线事件因果闭合。「末」\n<<<[END_TOOL_REQUEST]>>>"
       },
       {
         "commandIdentifier": "RetryPhase",
-        "description": "手动重试指定阶段，适用于某阶段执行失败需要重新执行\n参数:\n- story_id (字符串, 必需): 故事项目ID\n- phase_name (字符串, 必需): 阶段名称(phase1/phase2/phase3)\n- reason (字符串, 可选): 重试原因\n返回: 重试操作结果"
+        "description": "手动重试指定阶段，适用于阶段执行失败、结果不稳定或需要重新触发某一阶段时使用。",
+        "parameters": [
+          {
+            "name": "story_id",
+            "description": "所属故事项目 ID。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "phase_name",
+            "description": "需要重试的阶段名称。可选 phase1、phase2、phase3。",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "reason",
+            "description": "触发手动重试的原因说明。",
+            "required": false,
+            "type": "string"
+          }
+        ]
       }
     ],
     "systemPromptPlaceholders": [

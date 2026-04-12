@@ -49,8 +49,9 @@ class ChapterOperations {
     const storyBible = storyState.phase1;
     const outline = storyState.phase2?.outline?.chapters?.[chapterNum - 1];
     const config = storyState.config;
+    const chapterOutline = outline || (options.outlineContext ? { providedContext: options.outlineContext } : null);
 
-    if (!outline) {
+    if (!chapterOutline) {
       throw new Error(`Outline not found for chapter ${chapterNum}`);
     }
 
@@ -59,7 +60,8 @@ class ChapterOperations {
     const prompt = PromptBuilder.buildChapterWriterPrompt({
       storyBible,
       chapterNum,
-      chapterOutline: outline,
+      chapterOutline,
+      additionalContext: options.outlineContext || '',
       previousChapterEnding: previousEnding,
       targetWordCount: options.targetWordCount || config.targetWordCount,
       stylePreference: config.stylePreference
@@ -78,7 +80,7 @@ class ChapterOperations {
     );
 
     if (!wordCountCheck.validation.isQualified && wordCountCheck.validation.deficit > 200) {
-      const expanded = await this._expandChapter(storyId, result.content, wordCountCheck.validation.deficit, outline);
+      const expanded = await this._expandChapter(storyId, result.content, wordCountCheck.validation.deficit, chapterOutline);
       return {
         content: expanded.content,
         originalContent: result.content,

@@ -14,6 +14,7 @@ class PromptBuilder {
       storyBible,
       chapterNum,
       chapterOutline,
+      additionalContext = '',
       previousChapterEnding = '',
       targetWordCount = { min: 2500, max: 3500 },
       stylePreference = ''
@@ -33,7 +34,10 @@ ${JSON.stringify(storyBible?.characters || [], null, 2)}
 === 本章大纲 ===
 ${JSON.stringify(chapterOutline, null, 2)}
 
-=== 上下文 ===
+${additionalContext ? `=== 补充上下文 ===
+${additionalContext}
+
+` : ''}=== 上下文 ===
 上一章结尾：
 ${previousChapterEnding || '（本章为开篇）'}
 

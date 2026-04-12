@@ -73,6 +73,12 @@ const ValidationSchemas = {
     polish_focus: { type: 'string', required: false, maxLength: 500 }
   },
 
+  validateConsistency: {
+    story_id: { type: 'string', required: true, pattern: /^story-[a-zA-Z0-9]+$/ },
+    content: { type: 'string', required: true, minLength: 1 },
+    validation_type: { type: 'string', required: false, enum: ['worldview', 'character', 'plot'] }
+  },
+
   /**
    * 字数统计参数验证
    */
@@ -117,6 +123,20 @@ const ValidationSchemas = {
       required: false,
       maxLength: 2000
     }
+  },
+
+  retryPhase: {
+    story_id: { type: 'string', required: true, pattern: /^story-[a-zA-Z0-9]+$/ },
+    phase_name: {
+      type: 'string',
+      required: true,
+      enum: ['phase1', 'phase2', 'phase3']
+    },
+    reason: {
+      type: 'string',
+      required: false,
+      maxLength: 2000
+    }
   }
 };
 
@@ -135,6 +155,10 @@ function validateInput(schemaName, data) {
   const errors = [];
 
   for (const [field, rules] of Object.entries(schema)) {
+    if (data[field] !== undefined && data[field] !== null) {
+      data[field] = coerceValue(data[field], rules);
+    }
+
     const value = data[field];
 
     // 检查必需字段
@@ -152,11 +176,6 @@ function validateInput(schemaName, data) {
     if (rules.type && !validateType(value, rules.type)) {
       errors.push(`字段 '${field}' 类型错误，期望 ${rules.type}，实际为 ${typeof value}`);
       continue;
-    }
-
-    // 布尔值转换：将字符串 "true"/"false" 转换为布尔值
-    if (rules.type === 'boolean' && typeof value === 'string') {
-      data[field] = value === 'true';
     }
 
     // 字符串长度验证
@@ -193,10 +212,67 @@ function validateInput(schemaName, data) {
     }
   }
 
+  if (
+    schemaName === 'countChapterMetrics' &&
+    data.target_min !== undefined &&
+    data.target_max !== undefined &&
+    data.target_min > data.target_max
+  ) {
+    errors.push(`字段 'target_min' 不能大于 'target_max'`);
+  }
+
+  if (
+    schemaName === 'recoverStoryWorkflow' &&
+    data.recovery_action === 'restart_phase' &&
+    !data.target_phase
+  ) {
+    errors.push(`字段 'target_phase' 是必需的`);
+  }
+
   return {
     valid: errors.length === 0,
     errors
   };
+}
+
+function coerceValue(value, rules) {
+  if (rules.type === 'boolean' && typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+
+  if (rules.type === 'number' && typeof value === 'string') {
+    const normalized = value.trim();
+    if (normalized.length > 0) {
+      const parsed = Number(normalized);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  if (rules.type === 'array' && typeof value === 'string') {
+    const normalized = value.trim();
+    if (!normalized) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(normalized);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (error) {
+    }
+
+    return normalized
+      .split(/\r?\n|,/)
+      .map(item => item.replace(/^[-*\d.、\s]+/, '').trim())
+      .filter(Boolean);
+  }
+
+  return value;
 }
 
 /**
@@ -208,7 +284,10 @@ function validateType(value, expectedType) {
     return Array.isArray(value);
   }
   if (expectedType === 'boolean') {
-    return typeof value === 'boolean' || value === 'true' || value === 'false';
+    return typeof value === 'boolean';
+  }
+  if (expectedType === 'number') {
+    return typeof value === 'number' && Number.isFinite(value);
   }
   return typeof value === expectedType;
 }

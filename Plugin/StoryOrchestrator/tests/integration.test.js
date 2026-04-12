@@ -657,6 +657,128 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         assert.ok(result.result.validation);
       });
 
+      it('should forward outline_context to chapter draft runtime', async () => {
+        const orchestrator = createTestableStoryOrchestrator();
+        let capturedCall = null;
+
+        orchestrator.chapterOperations = {
+          ...createMockChapterOperations(),
+          async createChapterDraft(storyId, chapterNumber, options = {}) {
+            capturedCall = { storyId, chapterNumber, options };
+            return {
+              content: '这是一个用于验证章节草稿调用参数透传的测试正文。'.repeat(40),
+              metrics: { counts: { actualCount: 2800, chineseChars: 2800 } },
+              wasExpanded: false
+            };
+          }
+        };
+
+        const outlineContext = '本章需要突出主角第一次与失控 AI 正面对话，并埋下后续背叛伏笔。';
+        const result = await orchestrator.processToolCall({
+          command: 'CreateChapterDraft',
+          story_id: 'story-1234567890ab',
+          chapter_number: '2',
+          outline_context: outlineContext,
+          target_word_count: '1800'
+        });
+
+        assert.strictEqual(result.status, 'success');
+        assert.ok(capturedCall);
+        assert.strictEqual(capturedCall.chapterNumber, 2);
+        assert.deepStrictEqual(capturedCall.options, {
+          targetWordCount: 1800,
+          outlineContext
+        });
+      });
+
+      it('should coerce revise issues from JSON string into array', async () => {
+        const orchestrator = createTestableStoryOrchestrator();
+        let receivedIssues = null;
+
+        orchestrator.chapterOperations = {
+          ...createMockChapterOperations(),
+          async reviseChapter(storyId, chapterNum, content, options = {}) {
+            receivedIssues = options.issues;
+            return {
+              revisedContent: content + '\n\n【修订】...',
+              changeSummary: '已按问题列表修订',
+              originalMetrics: { counts: { actualCount: 2600 } },
+              revisedMetrics: { counts: { actualCount: 2680 } }
+            };
+          }
+        };
+
+        const result = await orchestrator.processToolCall({
+          command: 'ReviseChapter',
+          story_id: 'story-1234567890ab',
+          chapter_number: '1',
+          chapter_content: '这是一个足够长的章节内容，用于验证 issues 参数的 JSON 字符串会被自动转换成数组。'.repeat(10),
+          revision_instructions: '请根据问题列表进行定向修订，并保持主线情节不变。',
+          issues: '["人物动机不够清晰","第二段节奏过快"]',
+          max_rewrite_ratio: '0.4'
+        });
+
+        assert.strictEqual(result.status, 'success');
+        assert.deepStrictEqual(receivedIssues, ['人物动机不够清晰', '第二段节奏过快']);
+      });
+
+      it('should reject invalid validation_type for ValidateConsistency', async () => {
+        const orchestrator = createTestableStoryOrchestrator();
+        const story = await orchestrator.stateManager.createStory('用于校验 ValidateConsistency 参数约束的测试故事');
+
+        const result = await orchestrator.processToolCall({
+          command: 'ValidateConsistency',
+          story_id: story.id,
+          content: '用于校验一致性的正文片段。',
+          validation_type: 'all'
+        });
+
+        assert.strictEqual(result.status, 'error');
+        assert.ok(result.error.includes('validation_type'));
+      });
+
+      it('should pass previous chapters into plot consistency validation', async () => {
+        const orchestrator = createTestableStoryOrchestrator();
+        const story = await orchestrator.stateManager.createStory('用于校验 plot consistency 上下文透传的测试故事');
+        await orchestrator.stateManager.updatePhase2(story.id, {
+          chapters: [{ number: 1, content: '第一章已经完成的内容。', metrics: { counts: { chineseChars: 2000 } } }]
+        });
+
+        let receivedPreviousChapters = null;
+        orchestrator.contentValidator = {
+          ...createMockContentValidator(),
+          async validatePlot(storyId, content, storyBible, previousChapters = []) {
+            receivedPreviousChapters = previousChapters;
+            return { passed: true, issues: [] };
+          }
+        };
+
+        const result = await orchestrator.processToolCall({
+          command: 'ValidateConsistency',
+          story_id: story.id,
+          content: '这是用于校验剧情连续性的第二章片段。',
+          validation_type: 'plot'
+        });
+
+        assert.strictEqual(result.status, 'success');
+        assert.ok(Array.isArray(receivedPreviousChapters));
+        assert.strictEqual(receivedPreviousChapters.length, 1);
+      });
+
+      it('should require target_phase when restarting workflow manually', async () => {
+        const orchestrator = createTestableStoryOrchestrator();
+        const story = await orchestrator.stateManager.createStory('用于校验恢复参数约束的测试故事');
+
+        const result = await orchestrator.processToolCall({
+          command: 'RecoverStoryWorkflow',
+          story_id: story.id,
+          recovery_action: 'restart_phase'
+        });
+
+        assert.strictEqual(result.status, 'error');
+        assert.ok(result.error.includes('target_phase'));
+      });
+
       it('should return error for unknown command', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
