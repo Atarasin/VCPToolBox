@@ -165,7 +165,8 @@ tag-processor-config.env
 
 # ===== 运行时数据 / 缓存 =====
 DebugLog/
-dailynote/
+dailynote/*
+!dailynote/VCP桌面知识/
 ip_blacklist.json
 /VectorStore
 
@@ -221,3 +222,10 @@ rust-vexus-lite/target/
 VCPDistributedServer
 # XiaohongshuFetch config
 Plugin/XiaohongshuFetch/config.env
+Plugin/ImageProcessor/multimodal_cache.sqlite
+Plugin/ImageProcessor/multimodal_cache.sqlite-wal
+Plugin/ImageProcessor/multimodal_cache.sqlite-shm
+Plugin/VCPTaskAssistant/task-center-data.json
+Plugin/RAGDiaryPlugin/folding_store.db-shm
+Plugin/RAGDiaryPlugin/folding_store.db-wal
+Plugin/RAGDiaryPlugin/folding_store.db

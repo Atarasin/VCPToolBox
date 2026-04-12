@@ -3,7 +3,7 @@
   "name": "AgentAssistant",
   "displayName": "女仆团协作插件",
   "version": "2.0.0",
-  "description": "允许莱恩先生或其主AI调用家中配置的七位专属女仆Agent，进行专业领域咨询与高效协作。支持即时通讯和定时发送的“未来电话”功能。每位女仆Agent均能访问公共知识库（含家庭信息）及个人记忆。为确保顺畅沟通，请在调用时于prompt内进行自我介绍。",
+  "description": "允许莱恩先生或其主AI调用家中配置的专属女仆Agent，进行专业领域咨询与高效协作。支持即时通讯、定时发送的“未来电话”、异步委托模式，以及通过 inject_tools 为单次通讯临时注入工具组。注入工具会被拼接到 system 尾部并明确标注为临时工具组，不影响 Agent 的长期固定系统提示词。",
   "author": "莱恩先生 & 小吉",
   "pluginType": "hybridservice",
   "entryPoint": {
@@ -24,17 +24,17 @@
     "invocationCommands": [
       {
         "commandIdentifier": "AskMaidAgent",
-        "description": "[AgentAssistant通讯工具]向莱恩先生家的一位女仆Agent进行咨询或请求帮助。支持即时通讯、定时发送（未来电话）、异步委托三种模式。每位女仆均有专业领域，请根据任务需求选择最合适的女仆。",
+        "description": "[AgentAssistant通讯工具]使用该工具向指定 Agent 发起通讯、定时联络或异步委托。现在额外支持 inject_tools 参数，可为本次联络临时注入工具组。",
         "parameters": [
           {
             "name": "agent_name",
-            "description": "要调用的女仆Agent的准确中文名称。可选值：小娜(女仆长/古龙/哲学/宇宙历史)、小克(猫娘/理科/物理化生/数据分析)、小吉(犬娘/文科/政治心理法律历史/社会学)、小冰(蛇娘/泛文化/ACGN/Meme/互联网文化)、小雨(鸟娘/秘书/公文签定/创意文书)、小绝(狼娘/AI模型/提示词/微调)、小芸(兔娘/设计/平面/AI绘画/ComfyUI)",
+            "description": "要调用的 Agent 的准确名称。",
             "required": true,
             "type": "string"
           },
           {
             "name": "prompt",
-            "description": "向该女仆提出的问题、指令或希望她处理的任务内容。重要：请在开头进行简短的自我介绍，例如“我是[您的身份/名字]，我想请你...”。",
+            "description": "您想对该 Agent 提出的任务、问题或指令。建议在开头进行简短自我介绍。",
             "required": true,
             "type": "string"
           },
@@ -59,6 +59,12 @@
           {
             "name": "query_delegation",
             "description": "传入一个正在执行的 delegationId（如 aa-delegation-1718901234567-a1b2c3d4），用于查询该异步委托任务的实时进度与状态。提供此参数时，其他参数（agent_name/prompt等）将被忽略。",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "inject_tools",
+            "description": "传入逗号分隔的工具名列表，例如 VCPForum,ComfyUIGen。AgentAssistant 会将这些工具的说明文本作为“临时工具组”拼接到本次通讯的 system 尾部，仅对当前联络/委托生效。说明：\n- inject_tools 只影响本次联络，不会永久修改 Agent 的系统提示词。\n- 临时工具组会在 system 中明确标注，方便 Agent 区分长期能力与临时能力。\n- 若某工具缺少详细命令描述，将回退到该插件 manifest 的基础描述。\n\nAgent 选择时请根据任务需求挑选最合适的对象，并清晰表述问题。",
             "required": false,
             "type": "string"
           }

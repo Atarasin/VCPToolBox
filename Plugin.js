@@ -1,5 +1,6 @@
 // Plugin.js
 const fs = require('fs').promises;
+const EventEmitter = require('events');
 const path = require('path');
 const { spawn } = require('child_process');
 const schedule = require('node-schedule');
@@ -14,8 +15,9 @@ const PLUGIN_DIR = path.join(__dirname, 'Plugin');
 const manifestFileName = 'plugin-manifest.json';
 const PREPROCESSOR_ORDER_FILE = path.join(__dirname, 'preprocessor_order.json');
 
-class PluginManager {
+class PluginManager extends EventEmitter {
     constructor() {
+        super();
         this.plugins = new Map(); // 存储所有插件（本地和分布式）
         this.staticPlaceholderValues = new Map();
         this.scheduledJobs = new Map();
@@ -562,13 +564,29 @@ class PluginManager {
                         dependencies.vectorDBManager = this.vectorDBManager;
                     }
 
-                    // --- LightMemo 特殊依赖注入 ---
+                    // --- 🌟 ContextBridge 通用依赖注入 ---
+                    // 任何在 manifest 中声明 "requiresContextBridge": true 的插件都能获得 RAG 上下文向量接口
+                    if (manifest.requiresContextBridge) {
+                        const ragPluginModule = this.messagePreprocessors.get('RAGDiaryPlugin');
+                        if (ragPluginModule && typeof ragPluginModule.getContextBridge === 'function') {
+                            dependencies.contextBridge = ragPluginModule.getContextBridge();
+                            if (this.debugMode) console.log(`[PluginManager] 🌟 Injected ContextBridge into ${manifest.name}.`);
+                        } else {
+                            console.warn(`[PluginManager] Plugin "${manifest.name}" requires ContextBridge, but RAGDiaryPlugin is not available.`);
+                        }
+                    }
+
+                    // --- LightMemo 特殊依赖注入（向后兼容 + ContextBridge） ---
                     if (manifest.name === 'LightMemo') {
                         const ragPluginModule = this.messagePreprocessors.get('RAGDiaryPlugin');
                         if (ragPluginModule && ragPluginModule.vectorDBManager && typeof ragPluginModule.getSingleEmbedding === 'function') {
                             dependencies.vectorDBManager = ragPluginModule.vectorDBManager;
                             dependencies.getSingleEmbedding = ragPluginModule.getSingleEmbedding.bind(ragPluginModule);
-                            if (this.debugMode) console.log(`[PluginManager] Injected VectorDBManager and getSingleEmbedding into LightMemo.`);
+                            // 同时注入 ContextBridge（如果 LightMemo 未在 manifest 中声明，也主动注入）
+                            if (!dependencies.contextBridge && typeof ragPluginModule.getContextBridge === 'function') {
+                                dependencies.contextBridge = ragPluginModule.getContextBridge();
+                            }
+                            if (this.debugMode) console.log(`[PluginManager] Injected VectorDBManager, getSingleEmbedding and ContextBridge into LightMemo.`);
                         } else {
                             console.error(`[PluginManager] Critical dependency failure: RAGDiaryPlugin or its components not available for LightMemo injection.`);
                         }
@@ -650,13 +668,21 @@ class PluginManager {
     // 新增：获取 VCPLog 插件的推送函数，供其他插件依赖注入
     getVCPLogFunctions() {
         const vcpLogModule = this.getServiceModule('VCPLog');
-        if (vcpLogModule) {
-            return {
-                pushVcpLog: vcpLogModule.pushVcpLog,
-                pushVcpInfo: vcpLogModule.pushVcpInfo
-            };
-        }
-        return { pushVcpLog: () => { }, pushVcpInfo: () => { } };
+        const self = this;
+        return {
+            pushVcpLog: (data) => {
+                if (vcpLogModule && typeof vcpLogModule.pushVcpLog === 'function') {
+                    vcpLogModule.pushVcpLog(data);
+                }
+                self.emit('vcp_log', data);
+            },
+            pushVcpInfo: (data) => {
+                if (vcpLogModule && typeof vcpLogModule.pushVcpInfo === 'function') {
+                    vcpLogModule.pushVcpInfo(data);
+                }
+                self.emit('vcp_info', data);
+            }
+        };
     }
 
     async processToolCall(toolName, toolArgs, requestIp = null) {
@@ -762,7 +788,7 @@ class PluginManager {
         // --- 透明化处理结束 ---
 
         // --- 人工审核逻辑 (新增) ---
-        if (this.toolApprovalManager.shouldApprove(toolName)) {
+        if (this.toolApprovalManager.shouldApprove(toolName, pluginSpecificArgs)) {
             const requestId = `approve-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
             if (this.debugMode) console.log(`[PluginManager] Tool call for "${toolName}" requires manual approval. Request ID: ${requestId}`);
 
@@ -1334,12 +1360,15 @@ class PluginManager {
     startPluginWatcher() {
         if (this.debugMode) console.log('[PluginManager] Starting plugin file watcher...');
 
-        const pathsToWatch = [
-            path.join(PLUGIN_DIR, '**/plugin-manifest.json'),
-            path.join(PLUGIN_DIR, '**/plugin-manifest.json.block')
-        ];
-
-        const watcher = chokidar.watch(pathsToWatch, {
+        const watcher = chokidar.watch(PLUGIN_DIR, {
+            ignored: [
+                '**/node_modules/**',
+                '**/.git/**',
+                '**/dist/**',
+                '**/target/**',
+                '**/image/**',
+                '**/.*'
+            ],
             persistent: true,
             ignoreInitial: true, // Don't fire on initial scan
             awaitWriteFinish: {
@@ -1348,12 +1377,23 @@ class PluginManager {
             }
         });
 
-        watcher
-            .on('add', filePath => this.handlePluginManifestChange('add', filePath))
-            .on('change', filePath => this.handlePluginManifestChange('change', filePath))
-            .on('unlink', filePath => this.handlePluginManifestChange('unlink', filePath));
+        const filterManifest = (filePath) => {
+            const fileName = path.basename(filePath);
+            return fileName === 'plugin-manifest.json' || fileName === 'plugin-manifest.json.block';
+        };
 
-        console.log(`[PluginManager] Chokidar is now watching for manifest changes in: ${PLUGIN_DIR}`);
+        watcher
+            .on('add', filePath => {
+                if (filterManifest(filePath)) this.handlePluginManifestChange('add', filePath);
+            })
+            .on('change', filePath => {
+                if (filterManifest(filePath)) this.handlePluginManifestChange('change', filePath);
+            })
+            .on('unlink', filePath => {
+                if (filterManifest(filePath)) this.handlePluginManifestChange('unlink', filePath);
+            });
+
+        console.log(`[PluginManager] Chokidar is now watching ${PLUGIN_DIR} for manifest changes.`);
     }
 
     handlePluginManifestChange(eventType, filePath) {

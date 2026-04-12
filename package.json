@@ -16,7 +16,10 @@
     "eval:gate": "node eval/gate-rag-eval.js eval/reports/rag_eval_baseline.json eval/reports/rag_eval_candidate.json eval/reports/rag_eval_gate.json",
     "eval:all": "npm run eval:mock:baseline && npm run eval:mock:candidate && npm run eval:rag-params && npm run eval:compare && npm run eval:gate",
     "eval:all:real": "npm run eval:real:baseline && npm run eval:real:candidate && npm run eval:rag-params && npm run eval:compare && npm run eval:gate",
-    "eval:all:real:variant": "npm run eval:real:baseline:variant && npm run eval:real:candidate:variant && npm run eval:rag-params && npm run eval:compare && npm run eval:gate"
+    "eval:all:real:variant": "npm run eval:real:baseline:variant && npm run eval:real:candidate:variant && npm run eval:rag-params && npm run eval:compare && npm run eval:gate",
+    "start": "node server.js",
+    "start:admin": "node adminServer.js",
+    "start:all": "node server.js & node adminServer.js"
   },
   "keywords": [],
   "author": "",
