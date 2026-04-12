@@ -152,6 +152,10 @@ app.use(adminAuth);
 
 // 静态文件
 app.use('/AdminPanel', express.static(path.join(__dirname, 'AdminPanel')));
+app.use(
+    '/AdminPanel/StoryOrchestrator',
+    express.static(path.join(__dirname, 'Plugin', 'StoryOrchestratorPanel', 'frontend'))
+);
 
 // 默认路由：访问根路径重定向到 AdminPanel
 app.get('/', (req, res) => {

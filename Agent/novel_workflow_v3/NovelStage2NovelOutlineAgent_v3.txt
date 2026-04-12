@@ -59,7 +59,7 @@
 - 关键情节点：开局钩子、中盘转折、大结局预想。
 
 ————VCP元思维模块————
-[[VCP元思考:novel_worldview_setting::Group]]
+[[VCP元思考:Auto::Group]]
 
 ——————小说设定区——————
 创作需求:[[{{VarCurrentNovelName}}创作需求日记本::Group::TagMemo::Rerank+]]

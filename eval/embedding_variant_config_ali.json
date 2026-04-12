@@ -11,13 +11,13 @@
     }
   },
   "candidate": {
-    "ragParamsPath": "/home/zh/projects/VCP/VCPToolBox/rag_params.json",
+    "ragParamsPath": "/home/zh/projects/VCP/VCPToolBox/eval/rag_params_candidate_text_embedding_v4.json",
     "env": {
-      "WhitelistEmbeddingModel": "jy-gemini-embedding-2-preview",
-      "VECTORDB_DIMENSION": "3072",
-      "EMBEDDING_DIMENSIONS": "3072",
+      "WhitelistEmbeddingModel": "text-embedding-v4",
+      "VECTORDB_DIMENSION": "2048",
+      "EMBEDDING_DIMENSIONS": "2048",
       "KNOWLEDGEBASE_ROOT_PATH": "/home/zh/projects/VCP/VCPToolBox/eval/dailynote_eval",
-      "KNOWLEDGEBASE_STORE_PATH": "/home/zh/projects/VCP/VCPToolBox/eval/VectorStore_candidate",
+      "KNOWLEDGEBASE_STORE_PATH": "/home/zh/projects/VCP/VCPToolBox/eval/VectorStore_candidate_ali",
       "KNOWLEDGEBASE_FULL_SCAN_ON_STARTUP": "true"
     }
   }
