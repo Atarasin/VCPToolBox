@@ -701,18 +701,13 @@ class WorkflowEngine {
     let targetPhase = null;
     let checkpointId = targetCheckpoint;
 
-    // 如果没有指定检查点，查找最近的有效检查点
     if (!checkpointId) {
-      // 优先查找已批准的检查点
-      if (story.phase3?.checkpointId && story.phase3?.userConfirmed) {
-        targetPhase = 'phase3';
-        checkpointId = story.phase3.checkpointId;
-      } else if (story.phase2?.checkpointId && story.phase2?.userConfirmed) {
-        targetPhase = 'phase2';
-        checkpointId = story.phase2.checkpointId;
-      } else if (story.phase1?.checkpointId && story.phase1?.userConfirmed) {
-        targetPhase = 'phase1';
-        checkpointId = story.phase1.checkpointId;
+      const approvedCheckpoints = this.stateManager.repository.getApprovedCheckpoints(storyId, 1);
+
+      if (approvedCheckpoints && approvedCheckpoints.length > 0) {
+        const latestApproved = approvedCheckpoints[0];
+        targetPhase = latestApproved.phase_name;
+        checkpointId = latestApproved.checkpoint_id;
       } else {
         return {
           status: 'error',
@@ -720,76 +715,92 @@ class WorkflowEngine {
         };
       }
     } else {
-      // 根据检查点 ID 确定阶段
-      if (checkpointId.includes('cp-1') || checkpointId.includes('worldview')) {
-        targetPhase = 'phase1';
-      } else if (checkpointId.includes('cp-2') || checkpointId.includes('outline')) {
-        targetPhase = 'phase2';
-      } else if (checkpointId.includes('cp-3') || checkpointId.includes('final')) {
-        targetPhase = 'phase3';
+      const explicitCheckpoint = this.stateManager.repository.getCheckpoint(checkpointId);
+      if (explicitCheckpoint) {
+        targetPhase = explicitCheckpoint.phase_name;
+      } else {
+        return {
+          status: 'error',
+          error: 'Checkpoint not found'
+        };
       }
     }
 
     console.log(`[WorkflowEngine] Rollback target: phase=${targetPhase}, checkpoint=${checkpointId}`);
 
-    // 清除活跃检查点
+    const checkpointRow = this.stateManager.repository.getCheckpoint(checkpointId);
+    const rollbackSnapshotId = checkpointRow ? checkpointRow.snapshot_id : null;
+
     await this.stateManager.clearActiveCheckpoint(storyId);
 
-    // 回滚状态 - 清除指定阶段及其后续阶段的数据
+    const refreshedStory = await this.stateManager.getStory(storyId);
+    if (!refreshedStory) {
+      return { status: 'error', error: 'Story not found during rollback' };
+    }
+
+    const repoUpdates = {};
     if (targetPhase === 'phase1' || !targetPhase) {
-      // 回滚到 phase1 开始
-      await this.stateManager.updatePhase1(storyId, {
-        worldview: null,
-        characters: [],
-        validation: null,
+      refreshedStory.phase1 = {
+        ...refreshedStory.phase1,
         userConfirmed: false,
         checkpointId: checkpointId,
         status: 'running'
-      });
-      await this.stateManager.updatePhase2(storyId, {
+      };
+      refreshedStory.phase2 = {
+        ...refreshedStory.phase2,
         outline: null,
         chapters: [],
         currentChapter: 0,
         userConfirmed: false,
         checkpointId: null,
         status: 'pending'
-      });
-      await this.stateManager.updatePhase3(storyId, {
+      };
+      refreshedStory.phase3 = {
+        ...refreshedStory.phase3,
         polishedChapters: [],
         finalValidation: null,
         iterationCount: 0,
         userConfirmed: false,
         checkpointId: null,
         status: 'pending'
-      });
+      };
+      repoUpdates.current_phase1_snapshot_id = rollbackSnapshotId;
+      repoUpdates.current_phase2_snapshot_id = null;
+      repoUpdates.current_phase3_snapshot_id = null;
     } else if (targetPhase === 'phase2') {
-      // 回滚到 phase2 开始
-      await this.stateManager.updatePhase2(storyId, {
+      refreshedStory.phase2 = {
+        ...refreshedStory.phase2,
         chapters: [],
         currentChapter: 0,
         userConfirmed: false,
         checkpointId: checkpointId,
         status: 'pending'
-      });
-      await this.stateManager.updatePhase3(storyId, {
+      };
+      refreshedStory.phase3 = {
+        ...refreshedStory.phase3,
         polishedChapters: [],
         finalValidation: null,
         iterationCount: 0,
         userConfirmed: false,
         checkpointId: null,
         status: 'pending'
-      });
+      };
+      repoUpdates.current_phase2_snapshot_id = rollbackSnapshotId;
+      repoUpdates.current_phase3_snapshot_id = null;
     } else if (targetPhase === 'phase3') {
-      // 回滚到 phase3 开始
-      await this.stateManager.updatePhase3(storyId, {
+      refreshedStory.phase3 = {
+        ...refreshedStory.phase3,
         polishedChapters: [],
         finalValidation: null,
         iterationCount: 0,
         userConfirmed: false,
         checkpointId: checkpointId,
         status: 'pending'
-      });
+      };
+      repoUpdates.current_phase3_snapshot_id = rollbackSnapshotId;
     }
+
+    await this.stateManager.updateStory(storyId, refreshedStory, repoUpdates);
 
     // 生成新的 runToken
     const recoveryRunToken = uuidv4();
@@ -1267,6 +1278,29 @@ class WorkflowEngine {
     // 标记检查点为已批准
     await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || 'Approved', 'approved');
 
+    const checkpointRow = this.stateManager.repository.getCheckpoint(checkpointId);
+    if (checkpointRow && checkpointRow.snapshot_id) {
+      const validatedSnapshot = this.stateManager.repository.getSnapshot(checkpointRow.snapshot_id);
+      if (validatedSnapshot) {
+        const approvedSnapshotId = this.stateManager.repository.createSnapshot({
+          story_id: storyId,
+          phase_name: currentPhase,
+          snapshot_type: 'approved',
+          payload_json: validatedSnapshot.payload_json,
+          schema_version: validatedSnapshot.schema_version,
+          schema_valid: validatedSnapshot.schema_valid,
+          created_from_attempt_id: validatedSnapshot.created_from_attempt_id
+        });
+        const repoUpdates = {};
+        if (currentPhase === 'phase1') repoUpdates.current_phase1_snapshot_id = approvedSnapshotId;
+        if (currentPhase === 'phase2') repoUpdates.current_phase2_snapshot_id = approvedSnapshotId;
+        if (currentPhase === 'phase3') repoUpdates.current_phase3_snapshot_id = approvedSnapshotId;
+        if (Object.keys(repoUpdates).length > 0) {
+          await this.stateManager.updateStory(storyId, {}, repoUpdates);
+        }
+      }
+    }
+
     // 清除活跃检查点
     await this.stateManager.clearActiveCheckpoint(storyId);
 
@@ -1340,12 +1374,17 @@ class WorkflowEngine {
         };
       } else {
         console.log(`[WorkflowEngine] Phase2 outline checkpoint approved, continuing to content production`);
-        await this.stateManager.updatePhase2(storyId, {
-          userConfirmed: true,
-          checkpointId: null,
-          status: 'content_production',
-          approvedAt: approvalTime
-        });
+        const storyForApproval = await this.stateManager.getStory(storyId);
+        if (storyForApproval) {
+          storyForApproval.phase2 = {
+            ...storyForApproval.phase2,
+            userConfirmed: true,
+            checkpointId: null,
+            status: 'content_production',
+            approvedAt: approvalTime
+          };
+          await this.stateManager.updateStory(storyId, storyForApproval);
+        }
         await this.stateManager.updateWorkflow(storyId, {
           state: 'running',
           currentPhase: 'phase2',

@@ -1,6 +1,8 @@
 const fs = require('fs').promises;
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { StoryStateRepository } = require('./StoryStateRepository');
+const { ArtifactManager } = require('./ArtifactManager');
 
 const STATE_DIR = path.join(__dirname, '..', 'state', 'stories');
 
@@ -8,13 +10,17 @@ class StateManager {
   constructor() {
     this.cache = new Map();
     this.initialized = false;
+    this.repository = new StoryStateRepository();
+    this.artifactManager = new ArtifactManager(this.repository);
   }
 
   async initialize() {
     try {
       await fs.mkdir(STATE_DIR, { recursive: true });
+      this.repository.initialize();
+      await this.artifactManager.initialize();
       this.initialized = true;
-      console.log('[StateManager] Initialized');
+      console.log('[StateManager] Initialized with SQLite + JSON dual-write');
     } catch (error) {
       console.error('[StateManager] Initialization failed:', error);
       throw error;
@@ -86,6 +92,8 @@ class StateManager {
       }
     };
 
+    this.repository.createStory(storyId, story.config, now);
+
     await this._saveStory(storyId, story);
     this.cache.set(storyId, story);
 
@@ -95,6 +103,12 @@ class StateManager {
   async getStory(storyId) {
     if (this.cache.has(storyId)) {
       return this.cache.get(storyId);
+    }
+
+    const assembled = this._assembleStoryFromSQLite(storyId);
+    if (assembled) {
+      this.cache.set(storyId, assembled);
+      return assembled;
     }
 
     try {
@@ -110,7 +124,126 @@ class StateManager {
     }
   }
 
-  async updateStory(storyId, updates) {
+  _assembleStoryFromSQLite(storyId) {
+    const row = this.repository.getStoryWithFields(storyId);
+    if (!row) return null;
+
+    let finalOutput = null;
+    try {
+      finalOutput = row.final_output_json ? JSON.parse(row.final_output_json) : null;
+    } catch (e) {}
+
+    let retryContext = {
+      phase: null,
+      step: null,
+      attempt: 0,
+      maxAttempts: 3,
+      lastError: null
+    };
+    try {
+      if (row.retry_context_json) {
+        retryContext = JSON.parse(row.retry_context_json);
+      }
+    } catch (e) {}
+
+    const story = {
+      id: row.story_id,
+      status: row.status,
+      version: row.version,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      config: JSON.parse(row.config_json || '{}'),
+      phase1: null,
+      phase2: null,
+      phase3: null,
+      finalOutput,
+      workflow: {
+        state: row.workflow_state || (row.status === 'completed' ? 'completed' : 'idle'),
+        currentPhase: row.current_phase,
+        currentStep: row.current_step,
+        activeCheckpoint: null,
+        retryContext,
+        history: [],
+        runToken: uuidv4()
+      }
+    };
+
+    if (row.current_phase1_snapshot_id) {
+      const snap = this.repository.getSnapshot(row.current_phase1_snapshot_id);
+      if (snap) {
+        try {
+          story.phase1 = JSON.parse(snap.payload_json);
+        } catch (e) {
+          story.phase1 = null;
+        }
+      }
+    }
+    if (row.current_phase2_snapshot_id) {
+      const snap = this.repository.getSnapshot(row.current_phase2_snapshot_id);
+      if (snap) {
+        try {
+          story.phase2 = JSON.parse(snap.payload_json);
+        } catch (e) {
+          story.phase2 = null;
+        }
+      }
+    }
+    if (row.current_phase3_snapshot_id) {
+      const snap = this.repository.getSnapshot(row.current_phase3_snapshot_id);
+      if (snap) {
+        try {
+          story.phase3 = JSON.parse(snap.payload_json);
+        } catch (e) {
+          story.phase3 = null;
+        }
+      }
+    }
+
+    if (!story.phase1) {
+      story.phase1 = { worldview: null, characters: [], validation: null, userConfirmed: false, checkpointId: null, status: 'pending' };
+    }
+    if (!story.phase2) {
+      story.phase2 = { outline: null, chapters: [], currentChapter: 0, userConfirmed: false, checkpointId: null, status: 'pending' };
+    }
+    if (!story.phase3) {
+      story.phase3 = { polishedChapters: [], finalValidation: null, iterationCount: 0, userConfirmed: false, checkpointId: null, status: 'pending' };
+    }
+
+    if (row.active_checkpoint_id) {
+      const cp = this.repository.getCheckpoint(row.active_checkpoint_id);
+      if (cp) {
+        story.workflow.activeCheckpoint = {
+          id: cp.checkpoint_id,
+          phase: cp.phase_name,
+          type: cp.checkpoint_type,
+          status: cp.status,
+          createdAt: cp.created_at,
+          expiresAt: cp.expires_at,
+          autoContinueOnTimeout: true,
+          feedback: cp.feedback || ''
+        };
+      }
+    }
+
+    const events = this.repository.getEvents(storyId, { limit: 1000 });
+    story.workflow.history = events.reverse().map(evt => {
+      let detail = {};
+      try {
+        detail = JSON.parse(evt.event_detail_json || '{}');
+      } catch (e) {}
+      return {
+        at: evt.created_at,
+        type: evt.event_type,
+        phase: evt.phase_name,
+        step: detail.step || null,
+        detail
+      };
+    });
+
+    return story;
+  }
+
+  async updateStory(storyId, updates, repoExtraUpdates = {}) {
     const story = await this.getStory(storyId);
     if (!story) {
       throw new Error(`Story not found: ${storyId}`);
@@ -122,28 +255,116 @@ class StateManager {
       updatedAt: new Date().toISOString()
     };
 
+    const repoUpdates = { ...repoExtraUpdates };
+    if (updates.status !== undefined) repoUpdates.status = updates.status;
+    if (updates.config !== undefined) repoUpdates.config_json = JSON.stringify(updates.config);
+    if (updates.finalOutput !== undefined) repoUpdates.final_output_json = JSON.stringify(updates.finalOutput);
+    if (updates.workflow?.retryContext !== undefined) {
+      repoUpdates.retry_context_json = JSON.stringify(updates.workflow.retryContext);
+    } else if (updates.retryContext !== undefined) {
+      repoUpdates.retry_context_json = JSON.stringify(updates.retryContext);
+    }
+
+    const hasSnapshotRefChanges = [
+      'current_phase1_snapshot_id',
+      'current_phase2_snapshot_id',
+      'current_phase3_snapshot_id'
+    ].some(k => repoUpdates[k] !== undefined);
+
+    if (Object.keys(repoUpdates).length > 0) {
+      const expectedVersion = story.version;
+      this.repository.updateStory(storyId, repoUpdates, expectedVersion);
+      const refreshed = this.repository.getStory(storyId);
+      if (refreshed) {
+        updated.version = refreshed.version;
+      }
+    }
+
+    if (hasSnapshotRefChanges) {
+      const reassembled = this._assembleStoryFromSQLite(storyId);
+      if (reassembled) {
+        Object.assign(reassembled, {
+          finalOutput: updated.finalOutput !== undefined ? updated.finalOutput : reassembled.finalOutput,
+          workflow: {
+            ...reassembled.workflow,
+            ...updated.workflow,
+            retryContext: updated.workflow?.retryContext || reassembled.workflow.retryContext
+          }
+        });
+        reassembled.version = updated.version;
+        reassembled.updatedAt = updated.updatedAt;
+        await this._saveStory(storyId, reassembled);
+        this.cache.set(storyId, reassembled);
+        return reassembled;
+      }
+    }
+
     await this._saveStory(storyId, updated);
     this.cache.set(storyId, updated);
 
     return updated;
   }
 
-  async updatePhase1(storyId, updates) {
-    const story = await this.getStory(storyId);
-    story.phase1 = { ...story.phase1, ...updates };
-    return this.updateStory(storyId, story);
+  _resolveSnapshotType(mergedPhase) {
+    const candidateStatuses = ['validating', 'running', 'retrying', 'content_production'];
+    if (candidateStatuses.includes(mergedPhase.status)) {
+      return 'candidate';
+    }
+    if (mergedPhase.userConfirmed) {
+      return 'approved';
+    }
+    return 'validated';
   }
 
-  async updatePhase2(storyId, updates) {
+  async updatePhase1(storyId, updates, { snapshotType, schemaValid } = {}) {
     const story = await this.getStory(storyId);
-    story.phase2 = { ...story.phase2, ...updates };
-    return this.updateStory(storyId, story);
+    const newPhase1 = { ...story.phase1, ...updates };
+
+    const snapId = this.repository.createSnapshot({
+      story_id: storyId,
+      phase_name: 'phase1',
+      snapshot_type: snapshotType || this._resolveSnapshotType(newPhase1),
+      payload_json: newPhase1,
+      schema_version: 'phase1.v1',
+      schema_valid: schemaValid !== undefined ? !!schemaValid : true
+    });
+
+    story.phase1 = newPhase1;
+    return this.updateStory(storyId, story, { current_phase1_snapshot_id: snapId });
   }
 
-  async updatePhase3(storyId, updates) {
+  async updatePhase2(storyId, updates, { snapshotType, schemaValid } = {}) {
     const story = await this.getStory(storyId);
-    story.phase3 = { ...story.phase3, ...updates };
-    return this.updateStory(storyId, story);
+    const newPhase2 = { ...story.phase2, ...updates };
+
+    const snapId = this.repository.createSnapshot({
+      story_id: storyId,
+      phase_name: 'phase2',
+      snapshot_type: snapshotType || this._resolveSnapshotType(newPhase2),
+      payload_json: newPhase2,
+      schema_version: 'phase2.v1',
+      schema_valid: schemaValid !== undefined ? !!schemaValid : true
+    });
+
+    story.phase2 = newPhase2;
+    return this.updateStory(storyId, story, { current_phase2_snapshot_id: snapId });
+  }
+
+  async updatePhase3(storyId, updates, { snapshotType, schemaValid } = {}) {
+    const story = await this.getStory(storyId);
+    const newPhase3 = { ...story.phase3, ...updates };
+
+    const snapId = this.repository.createSnapshot({
+      story_id: storyId,
+      phase_name: 'phase3',
+      snapshot_type: snapshotType || this._resolveSnapshotType(newPhase3),
+      payload_json: newPhase3,
+      schema_version: 'phase3.v1',
+      schema_valid: schemaValid !== undefined ? !!schemaValid : true
+    });
+
+    story.phase3 = newPhase3;
+    return this.updateStory(storyId, story, { current_phase3_snapshot_id: snapId });
   }
 
   async updateWorkflow(storyId, updates) {
@@ -183,7 +404,14 @@ class StateManager {
       retryContext: story.workflow.retryContext
     };
 
-    return this.updateStory(storyId, story);
+    const repoUpdates = {
+      status: story.status,
+      current_phase: story.workflow.currentPhase,
+      current_step: story.workflow.currentStep,
+      workflow_state: story.workflow.state
+    };
+
+    return this.updateStory(storyId, story, repoUpdates);
   }
 
   async appendWorkflowHistory(storyId, entry) {
@@ -219,6 +447,14 @@ class StateManager {
     };
 
     story.workflow.history.push(historyEntry);
+
+    this.repository.appendEvent({
+      story_id: storyId,
+      phase_name: historyEntry.phase,
+      event_type: historyEntry.type,
+      event_detail_json: historyEntry.detail
+    });
+
     return this.updateStory(storyId, story);
   }
 
@@ -246,8 +482,10 @@ class StateManager {
       };
     }
 
+    const checkpointId = checkpoint.id || checkpoint.checkpointId || `cp-${uuidv4().replace(/-/g, '').substring(0, 8)}`;
+
     story.workflow.activeCheckpoint = {
-      id: checkpoint.id || `cp-${uuidv4().replace(/-/g, '').substring(0, 8)}`,
+      id: checkpointId,
       phase: checkpoint.phase || story.workflow.currentPhase,
       type: checkpoint.type || 'outline_confirmation',
       status: checkpoint.status || 'pending',
@@ -257,7 +495,67 @@ class StateManager {
       feedback: checkpoint.feedback || ''
     };
 
-    return this.updateStory(storyId, story);
+    let snapshotId = checkpoint.snapshot_id || null;
+    if (!snapshotId && checkpoint.phase) {
+      const phase = checkpoint.phase;
+      const validatedSnapshots = this.repository.getSnapshotsByStory(storyId, phase, 'validated');
+      if (validatedSnapshots && validatedSnapshots.length > 0) {
+        snapshotId = validatedSnapshots[0].snapshot_id;
+      } else {
+        if (phase === 'phase1' && story.phase1) {
+          snapshotId = this.repository.createSnapshot({
+            story_id: storyId,
+            phase_name: 'phase1',
+            snapshot_type: 'validated',
+            payload_json: story.phase1,
+            schema_version: 'phase1.v1',
+            schema_valid: true
+          });
+        } else if (phase === 'phase2' && story.phase2) {
+          snapshotId = this.repository.createSnapshot({
+            story_id: storyId,
+            phase_name: 'phase2',
+            snapshot_type: 'validated',
+            payload_json: story.phase2,
+            schema_version: 'phase2.v1',
+            schema_valid: true
+          });
+        } else if (phase === 'phase3' && story.phase3) {
+          snapshotId = this.repository.createSnapshot({
+            story_id: storyId,
+            phase_name: 'phase3',
+            snapshot_type: 'validated',
+            payload_json: story.phase3,
+            schema_version: 'phase3.v1',
+            schema_valid: true
+          });
+        }
+      }
+    }
+
+    const existingCheckpoint = this.repository.getCheckpoint(checkpointId);
+    if (existingCheckpoint) {
+      this.repository.updateCheckpoint(checkpointId, {
+        status: story.workflow.activeCheckpoint.status,
+        snapshot_id: snapshotId,
+        feedback: story.workflow.activeCheckpoint.feedback,
+        expires_at: story.workflow.activeCheckpoint.expiresAt
+      });
+    } else {
+      this.repository.createCheckpoint({
+        checkpoint_id: checkpointId,
+        story_id: storyId,
+        phase_name: story.workflow.activeCheckpoint.phase,
+        checkpoint_type: story.workflow.activeCheckpoint.type,
+        status: story.workflow.activeCheckpoint.status,
+        snapshot_id: snapshotId,
+        feedback: story.workflow.activeCheckpoint.feedback,
+        created_at: story.workflow.activeCheckpoint.createdAt,
+        expires_at: story.workflow.activeCheckpoint.expiresAt
+      });
+    }
+
+    return this.updateStory(storyId, story, { active_checkpoint_id: checkpointId });
   }
 
   async clearActiveCheckpoint(storyId) {
@@ -268,7 +566,7 @@ class StateManager {
 
     if (story.workflow) {
       story.workflow.activeCheckpoint = null;
-      return this.updateStory(storyId, story);
+      return this.updateStory(storyId, story, { active_checkpoint_id: null });
     }
 
     return story;
@@ -286,6 +584,12 @@ class StateManager {
       story.workflow.activeCheckpoint.feedback = feedback;
       story.workflow.activeCheckpoint.status = resolutionStatus;
       story.workflow.activeCheckpoint.resolvedAt = now;
+
+      this.repository.updateCheckpoint(story.workflow.activeCheckpoint.id, {
+        status: resolutionStatus,
+        feedback: feedback,
+        resolved_at: now
+      });
     }
 
     if (story[phaseName]) {
@@ -294,12 +598,20 @@ class StateManager {
     }
 
     if (story.workflow) {
+      const detail = { feedback, checkpointId: story.workflow.activeCheckpoint?.id, resolutionStatus };
       story.workflow.history.push({
         at: now,
         type: 'checkpoint_resolved',
         phase: phaseName,
         step: story.workflow.currentStep,
-        detail: { feedback, checkpointId: story.workflow.activeCheckpoint?.id, resolutionStatus }
+        detail
+      });
+
+      this.repository.appendEvent({
+        story_id: storyId,
+        phase_name: phaseName,
+        event_type: 'checkpoint_resolved',
+        event_detail_json: detail
       });
     }
 
@@ -329,7 +641,7 @@ class StateManager {
       updatedAt: new Date().toISOString()
     };
 
-    return this.updateStory(storyId, story);
+    return this.updatePhase2(storyId, story.phase2);
   }
 
   async upsertChapter(storyId, chapterData) {
@@ -396,7 +708,7 @@ class StateManager {
       story.phase2.currentChapter = firstIncomplete >= 0 ? firstIncomplete + 1 : story.phase2.chapters.length;
     }
 
-    return this.updateStory(storyId, story);
+    return this.updatePhase2(storyId, story.phase2);
   }
 
   async _saveStory(storyId, story) {
@@ -415,19 +727,22 @@ class StateManager {
   }
 
   async deleteStory(storyId) {
+    const success = this.repository.deleteStory(storyId);
     try {
       await fs.unlink(this.getStatePath(storyId));
-      this.cache.delete(storyId);
-      return true;
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        return false;
-      }
-      throw error;
+      if (error.code !== 'ENOENT') throw error;
     }
+    this.cache.delete(storyId);
+    return success;
   }
 
   async listStories() {
+    const rows = this.repository.listStories();
+    if (rows && rows.length > 0) {
+      return rows.map(r => r.story_id);
+    }
+
     try {
       const files = await fs.readdir(STATE_DIR);
       return files
@@ -462,13 +777,13 @@ class StateManager {
     return cleaned;
   }
 
-  getConfig(storyId) {
-    const story = this.cache.get(storyId);
+  async getConfig(storyId) {
+    const story = await this.getStory(storyId);
     return story?.config || null;
   }
 
-  getStoryBible(storyId) {
-    const story = this.cache.get(storyId);
+  async getStoryBible(storyId) {
+    const story = await this.getStory(storyId);
     if (!story || !story.phase1) return null;
 
     return {

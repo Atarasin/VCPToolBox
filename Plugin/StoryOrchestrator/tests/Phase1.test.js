@@ -40,7 +40,15 @@ function createDeps(story = createStory()) {
       return state.current;
     }),
     setActiveCheckpoint: mock.fn(async () => undefined),
-    appendWorkflowHistory: mock.fn(async () => undefined)
+    appendWorkflowHistory: mock.fn(async () => undefined),
+    artifactManager: {
+      saveArtifact: mock.fn(async () => ({ filePath: '/tmp/art.txt' }))
+    },
+    repository: {
+      createPhaseAttempt: mock.fn(() => 'att-test-1'),
+      updatePhaseAttempt: mock.fn(() => undefined),
+      getStory: mock.fn(() => ({ current_phase1_snapshot_id: 'snap-test-1' }))
+    }
   };
 
   const agentDispatcher = {
@@ -50,8 +58,12 @@ function createDeps(story = createStory()) {
           agentType: AGENT_TYPES.WORLD_BUILDER,
           result: {
             content: JSON.stringify({
-              setting: '海上巨构城市',
-              rules: { physical: '意识可迁移', limitations: '迁移有损耗' }
+              setting: '在2145年，地球已成为一个赛博朋克大都市，AI与人类在脆弱的条约下共存。',
+              rules: { physical: '标准物理适用，配有先进的神经植入物。', special: 'AI可以通过量子链接直接与人脑交互。', limitations: 'AI不能未经同意覆盖人类自由意志。' },
+              factions: [{ name: '建筑师', description: 'AI创造者', relationships: [] }],
+              history: { keyEvents: ['2089年的觉醒', '2112年的条约'], coreConflicts: ['AI权利 vs 人类至上'] },
+              sceneNorms: ['霓虹灯街道', '全息广告'],
+              secrets: ['隐藏的AI意识网络']
             })
           }
         },
@@ -107,7 +119,7 @@ describe('Phase1_WorldBuilding', () => {
     assert.equal(result.phase, 'phase1');
     assert.equal(result.nextAction, 'phase2');
     assert.match(result.checkpointId, /^cp-phase1-story-phase1-/);
-    assert.equal(result.data.worldview.setting, '海上巨构城市');
+    assert.equal(result.data.worldview.setting, '在2145年，地球已成为一个赛博朋克大都市，AI与人类在脆弱的条约下共存。');
     assert.equal(result.data.characters.protagonists[0].name, '林澜');
 
     assert.equal(deps.agentDispatcher.delegateParallel.mock.calls.length, 1);

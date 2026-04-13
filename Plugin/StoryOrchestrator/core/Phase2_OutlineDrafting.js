@@ -1,4 +1,5 @@
 const { PromptBuilder } = require('../utils/PromptBuilder');
+const { SchemaValidator } = require('../utils/SchemaValidator');
 const { v4: uuidv4 } = require('uuid');
 
 class Phase2_OutlineDrafting {
@@ -9,6 +10,7 @@ class Phase2_OutlineDrafting {
     this.contentValidator = contentValidator;
     this.promptBuilder = promptBuilder || PromptBuilder;
     this.config = config || {};
+    this.artifactManager = stateManager.artifactManager;
     this.maxRevisionAttempts = this.config.MAX_OUTLINE_REVISION_ATTEMPTS || 5;
     this.maxChapterRevisions = this.config.MAX_CHAPTER_REVISION_ATTEMPTS || 1;
   }
@@ -257,18 +259,92 @@ class Phase2_OutlineDrafting {
       temporaryContact: true
     });
 
+    // 1.5 保存原始响应和提示词为 artifacts
+    let rawResponsePath = null;
+    let promptPath = null;
+    try {
+      const rawArtifact = await this.artifactManager.saveArtifact(storyId, 'raw_response', outlineResult.content, 'txt');
+      const promptArtifact = await this.artifactManager.saveArtifact(storyId, 'prompt', outlinePrompt, 'txt');
+      rawResponsePath = rawArtifact.filePath;
+      promptPath = promptArtifact.filePath;
+    } catch (artifactError) {
+      console.warn('[Phase2] Failed to save artifacts:', artifactError.message);
+    }
+
+    const attemptId = this.stateManager.repository.createPhaseAttempt({
+      story_id: storyId,
+      phase_name: 'phase2',
+      attempt_kind: 'initial_generation',
+      trigger_source: 'agent',
+      raw_prompt_path: promptPath,
+      raw_response_path: rawResponsePath,
+      parse_status: 'parsed',
+      repair_used: false,
+      schema_valid: false,
+      business_valid: false
+    });
+
     // 2. 解析大纲
     const outline = this._parseOutline(outlineResult.content, estimatedChapters);
     console.log(`[Phase2] Outline generated with ${outline.chapters?.length || 0} chapters`);
 
+    // 2.5 验证大纲 schema
+    const schemaValidation = SchemaValidator.validateOutline(outline);
+    if (!schemaValidation.valid) {
+      console.log(`[Phase2] Outline schema invalid: ${schemaValidation.errors.join(', ')}`);
+      this.stateManager.repository.updatePhaseAttempt(attemptId, {
+        schema_valid: false,
+        error_message: schemaValidation.errors.join('; '),
+        completed_at: new Date().toISOString()
+      });
+      return {
+        status: 'error',
+        error: 'Outline schema invalid: ' + schemaValidation.errors.join(', ')
+      };
+    }
+
+    this.stateManager.repository.updatePhaseAttempt(attemptId, {
+      schema_valid: true
+    });
+
     // 3. 调用 logicValidator 验证大纲
     const validationResult = await this._validateOutline(storyId, outline);
 
-    if (!validationResult.passed && validationResult.issues.length > 0) {
-      // 验证失败，尝试修订
+    // 3.5 处理 PASS_WITH_WARNINGS - 创建 checkpoint 供人工复核，不自动放行
+    if (validationResult.verdict === 'PASS_WITH_WARNINGS') {
+      console.log(`[Phase2] Outline validation passed with warnings, creating checkpoint for human review`);
+      await this.stateManager.updatePhase2(storyId, {
+        outline,
+        status: 'pending_confirmation'
+      }, { snapshotType: 'validated' });
+
+      const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
+      await this.stateManager.updatePhase2(storyId, {
+        checkpointId
+      }, { snapshotType: 'validated' });
+
+      const headRow = this.stateManager.repository.getStory(storyId);
+      if (headRow) {
+        this.stateManager.repository.updatePhaseAttempt(attemptId, {
+          business_valid: true,
+          candidate_snapshot_id: headRow.current_phase2_snapshot_id,
+          completed_at: new Date().toISOString()
+        });
+      }
+
+      return {
+        status: 'waiting_checkpoint',
+        checkpointId,
+        checkpointType: 'phase2_outline_confirmation',
+        outline,
+        validationResult
+      };
+    }
+
+    if (validationResult.verdict === 'FAIL') {
       console.log(`[Phase2] Outline validation failed, attempting revision`);
-      const revisionResult = await this._attemptOutlineRevision(storyId, outline, validationResult, 1);
-      
+      const revisionResult = await this._attemptOutlineRevision(storyId, outline, validationResult, 1, attemptId);
+
       if (revisionResult.status === 'failed') {
         return {
           status: 'error',
@@ -283,13 +359,22 @@ class Phase2_OutlineDrafting {
     await this.stateManager.updatePhase2(storyId, {
       outline,
       status: 'pending_confirmation'
-    });
+    }, { snapshotType: 'validated' });
 
     // 5. 创建检查点
     const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
     await this.stateManager.updatePhase2(storyId, {
       checkpointId
-    });
+    }, { snapshotType: 'validated' });
+
+    const headRow = this.stateManager.repository.getStory(storyId);
+    if (headRow) {
+      this.stateManager.repository.updatePhaseAttempt(attemptId, {
+        business_valid: true,
+        candidate_snapshot_id: headRow.current_phase2_snapshot_id,
+        completed_at: new Date().toISOString()
+      });
+    }
 
     return {
       status: 'waiting_checkpoint',
@@ -353,12 +438,31 @@ ${JSON.stringify(outline, null, 2)}
   /**
    * 尝试修订大纲
    */
-  async _attemptOutlineRevision(storyId, outline, validationResult, attemptNumber) {
+  async _attemptOutlineRevision(storyId, outline, validationResult, attemptNumber, parentAttemptId) {
     if (attemptNumber > this.maxRevisionAttempts) {
+      if (parentAttemptId) {
+        this.stateManager.repository.updatePhaseAttempt(parentAttemptId, {
+          business_valid: false,
+          error_message: 'Max revision attempts exceeded',
+          completed_at: new Date().toISOString()
+        });
+      }
       return { status: 'failed' };
     }
 
     console.log(`[Phase2] Outline revision attempt ${attemptNumber}`);
+
+    const revisionAttemptId = this.stateManager.repository.createPhaseAttempt({
+      story_id: storyId,
+      phase_name: 'phase2',
+      attempt_kind: 'revision',
+      trigger_source: 'agent',
+      source_checkpoint_id: null,
+      parse_status: 'parsed',
+      repair_used: false,
+      schema_valid: false,
+      business_valid: false
+    });
 
     // 构建修订提示词
     const revisionPrompt = `
@@ -390,22 +494,69 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
       temporaryContact: true
     });
 
+    // 保存修订版本的 raw response
+    let rawPath = null;
+    try {
+      const art = await this.artifactManager.saveArtifact(storyId, 'raw_response', revisionResult.content, 'txt');
+      rawPath = art.filePath;
+    } catch (e) {}
+
+    this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+      raw_response_path: rawPath
+    });
+
     const revisedOutline = this._parseOutline(revisionResult.content, outline.chapters?.length || 5);
+
+    // Schema 验证
+    const schemaValidation = SchemaValidator.validateOutline(revisedOutline);
+    if (!schemaValidation.valid) {
+      console.log(`[Phase2] Revised outline schema invalid: ${schemaValidation.errors.join(', ')}, retrying`);
+      this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+        schema_valid: false,
+        error_message: schemaValidation.errors.join('; '),
+        completed_at: new Date().toISOString()
+      });
+      return this._attemptOutlineRevision(storyId, revisedOutline, validationResult, attemptNumber + 1, parentAttemptId);
+    }
+
+    this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+      schema_valid: true
+    });
 
     // 重新验证
     const reValidation = await this._validateOutline(storyId, revisedOutline);
 
-    if (reValidation.passed || reValidation.issues.length === 0) {
-      // 修订成功
+    // PASS_WITH_WARNINGS after revision creates checkpoint for human review
+    if (reValidation.verdict === 'PASS_WITH_WARNINGS') {
+      this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+        business_valid: true,
+        completed_at: new Date().toISOString()
+      });
+
       await this.stateManager.updatePhase2(storyId, {
         outline: revisedOutline,
         status: 'pending_confirmation'
-      });
+      }, { snapshotType: 'validated' });
 
       const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
       await this.stateManager.updatePhase2(storyId, {
         checkpointId
-      });
+      }, { snapshotType: 'validated' });
+
+      const headRow = this.stateManager.repository.getStory(storyId);
+      if (headRow) {
+        this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+          candidate_snapshot_id: headRow.current_phase2_snapshot_id
+        });
+      }
+
+      if (parentAttemptId) {
+        this.stateManager.repository.updatePhaseAttempt(parentAttemptId, {
+          business_valid: true,
+          candidate_snapshot_id: headRow ? headRow.current_phase2_snapshot_id : null,
+          completed_at: new Date().toISOString()
+        });
+      }
 
       return {
         status: 'waiting_checkpoint',
@@ -416,8 +567,49 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
       };
     }
 
-    // 再次失败，递归尝试
-    return this._attemptOutlineRevision(storyId, revisedOutline, reValidation, attemptNumber + 1);
+    if (reValidation.verdict === 'FAIL') {
+      this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+        business_valid: false,
+        error_message: `Validation failed: ${reValidation.verdict}`,
+        completed_at: new Date().toISOString()
+      });
+      return this._attemptOutlineRevision(storyId, revisedOutline, reValidation, attemptNumber + 1, parentAttemptId);
+    }
+
+    await this.stateManager.updatePhase2(storyId, {
+      outline: revisedOutline,
+      status: 'pending_confirmation'
+    }, { snapshotType: 'validated' });
+
+    const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
+    await this.stateManager.updatePhase2(storyId, {
+      checkpointId
+    }, { snapshotType: 'validated' });
+
+    const headRow = this.stateManager.repository.getStory(storyId);
+    if (headRow) {
+      this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
+        business_valid: true,
+        candidate_snapshot_id: headRow.current_phase2_snapshot_id,
+        completed_at: new Date().toISOString()
+      });
+    }
+
+    if (parentAttemptId) {
+      this.stateManager.repository.updatePhaseAttempt(parentAttemptId, {
+        business_valid: true,
+        candidate_snapshot_id: headRow ? headRow.current_phase2_snapshot_id : null,
+        completed_at: new Date().toISOString()
+      });
+    }
+
+    return {
+      status: 'waiting_checkpoint',
+      checkpointId,
+      outline: revisedOutline,
+      validationResult: reValidation,
+      revisionNumber: attemptNumber
+    };
   }
 
   /**
@@ -458,7 +650,20 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
       temporaryContact: true
     });
 
+    // 保存修订版本的 raw response
+    await this.artifactManager.saveArtifact(storyId, 'raw_response', revisionResult.content, 'txt');
+
     const revisedOutline = this._parseOutline(revisionResult.content, currentOutline.chapters?.length || 5);
+
+    // Schema 验证
+    const schemaValidation = SchemaValidator.validateOutline(revisedOutline);
+    if (!schemaValidation.valid) {
+      console.log(`[Phase2] User revision outline schema invalid: ${schemaValidation.errors.join(', ')}`);
+      return {
+        status: 'error',
+        error: 'Outline schema invalid after user revision: ' + schemaValidation.errors.join(', ')
+      };
+    }
 
     // 验证修订后的大纲
     const validation = await this._validateOutline(storyId, revisedOutline);

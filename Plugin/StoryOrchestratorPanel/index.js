@@ -1265,24 +1265,16 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
    */
   router.get('/stories', async (req, res) => {
     try {
-      // 检查目录是否存在
-      try {
-        await fs.access(storiesDir);
-      } catch {
-        return res.json({ success: true, stories: [], total: 0 });
-      }
-
-      const files = await fs.readdir(storiesDir);
-      const jsonFiles = files.filter(f => f.endsWith('.json'));
+      const storyIds = await StoryOrchestrator.stateManager.listStories();
 
       const stories = await Promise.all(
-        jsonFiles.map(async (file) => {
+        storyIds.map(async (storyId) => {
           try {
-            const content = await fs.readFile(path.join(storiesDir, file), 'utf8');
-            const data = JSON.parse(content);
+            const data = await StoryOrchestrator.stateManager.getStory(storyId);
+            if (!data) return null;
             return formatStoryListItem(data);
           } catch (err) {
-            if (debug) console.error(`[StoryOrchestratorPanel] Error reading ${file}:`, err.message);
+            if (debug) console.error(`[StoryOrchestratorPanel] Error reading ${storyId}:`, err.message);
             return null;
           }
         })
@@ -1311,16 +1303,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       res.json({
         success: true,
@@ -1335,16 +1321,11 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id/phase1', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
 
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
       const phase1 = data.phase1 || {};
       const worldview = normalizeWorldview(phase1.worldview);
       const characters = extractCharactersStructure(phase1.characters);
@@ -1376,16 +1357,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id/chapters', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       const chapters = data.phase2?.chapters || [];
       const formattedChapters = chapters.map((ch) => {
@@ -1421,16 +1396,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
     try {
       const storyId = req.params.id;
       const chapterNumber = parseInt(req.params.chapterNumber, 10);
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       const chapters = data.phase2?.chapters || [];
       const chapter = chapters.find(ch => (ch.chapterNum || ch.number) === chapterNumber);
@@ -1458,16 +1427,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id/characters', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       let characters = [];
       const charData = data.phase1?.characters;
@@ -1550,16 +1513,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id/worldview', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       let worldview = data.phase1?.worldview || null;
 
@@ -1604,16 +1561,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id/outline', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       res.json({
         success: true,
@@ -1634,16 +1585,10 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
   router.get('/stories/:id/history', async (req, res) => {
     try {
       const storyId = req.params.id;
-      const storyPath = path.join(storiesDir, `${storyId}.json`);
-
-      try {
-        await fs.access(storyPath);
-      } catch {
+      const data = await StoryOrchestrator.stateManager.getStory(storyId);
+      if (!data) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
-
-      const content = await fs.readFile(storyPath, 'utf8');
-      const data = JSON.parse(content);
 
       res.json({
         success: true,

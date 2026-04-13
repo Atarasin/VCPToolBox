@@ -1,4 +1,5 @@
 const { PromptBuilder } = require('../utils/PromptBuilder');
+const { SchemaValidator } = require('../utils/SchemaValidator');
 
 class ContentValidator {
   constructor(agentDispatcher) {
@@ -16,14 +17,12 @@ class ContentValidator {
       temporaryContact: true
     });
 
-    return this._parseValidationResult(result.content);
+    return this._parseStructuredValidationResult(result.content);
   }
 
   async validateCharacters(storyId, content, storyBible) {
-    // Handle nested characters structure from Phase1 output
     let characters = storyBible.characters || [];
     if (characters && typeof characters === 'object' && !Array.isArray(characters)) {
-      // Try to extract characters from nested structure
       if (characters.characters && Array.isArray(characters.characters)) {
         characters = characters.characters;
       } else if (characters.protagonists && Array.isArray(characters.protagonists)) {
@@ -32,7 +31,7 @@ class ContentValidator {
         characters = [];
       }
     }
-    
+
     const prompt = PromptBuilder.buildCharacterValidationPrompt({
       content,
       characters: characters
@@ -43,7 +42,7 @@ class ContentValidator {
       temporaryContact: true
     });
 
-    return this._parseValidationResult(result.content);
+    return this._parseStructuredValidationResult(result.content);
   }
 
   async validatePlot(storyId, content, storyBible, previousChapters = []) {
@@ -71,14 +70,22 @@ ${content}
 4. 悬念设置是否恰当
 5. 与已发生情节是否矛盾
 
-请输出验证结果。`;
+请输出严格 JSON 格式的验证结果：
+{
+  "verdict": "PASS | PASS_WITH_WARNINGS | FAIL",
+  "schema_risk": false,
+  "completeness_risk": false,
+  "blocking_issues": [],
+  "non_blocking_issues": [],
+  "suggestions": []
+}`;
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
       timeoutMs: 60000,
       temporaryContact: true
     });
 
-    return this._parseValidationResult(result.content);
+    return this._parseStructuredValidationResult(result.content);
   }
 
   async comprehensiveValidation(storyId, chapterNum, content, storyBible, previousChapters = []) {
@@ -88,18 +95,38 @@ ${content}
       this.validatePlot(storyId, content, storyBible, previousChapters)
     ]);
 
-    const allPassed = worldviewCheck.passed && characterCheck.passed && plotCheck.passed;
-    const allCritical = [
-      ...worldviewCheck.issues.filter(i => i.severity === 'critical'),
-      ...characterCheck.issues.filter(i => i.severity === 'critical'),
-      ...plotCheck.issues.filter(i => i.severity === 'critical')
+    const allBlocking = [
+      ...worldviewCheck.blockingIssues,
+      ...characterCheck.blockingIssues,
+      ...plotCheck.blockingIssues
     ];
+
+    const allPassed = worldviewCheck.verdict !== 'FAIL' &&
+                      characterCheck.verdict !== 'FAIL' &&
+                      plotCheck.verdict !== 'FAIL';
+
+    const hasWarnings = worldviewCheck.verdict === 'PASS_WITH_WARNINGS' ||
+                        characterCheck.verdict === 'PASS_WITH_WARNINGS' ||
+                        plotCheck.verdict === 'PASS_WITH_WARNINGS';
+
+    const aggregatedVerdict = !allPassed ? 'FAIL' : (hasWarnings ? 'PASS_WITH_WARNINGS' : 'PASS');
+
+    const canPromote = SchemaValidator.canPromoteToValidated(
+      { valid: allPassed && allBlocking.length === 0 },
+      {
+        verdict: aggregatedVerdict,
+        schemaRisk: worldviewCheck.schemaRisk || characterCheck.schemaRisk || plotCheck.schemaRisk,
+        completenessRisk: worldviewCheck.completenessRisk || characterCheck.completenessRisk || plotCheck.completenessRisk,
+        blockingIssues: allBlocking
+      }
+    );
 
     return {
       overall: {
-        passed: allPassed,
-        hasCriticalIssues: allCritical.length > 0,
-        criticalCount: allCritical.length
+        passed: allPassed && allBlocking.length === 0,
+        canPromoteToValidated: canPromote,
+        hasCriticalIssues: allBlocking.length > 0,
+        criticalCount: allBlocking.length
       },
       checks: {
         worldview: worldviewCheck,
@@ -145,42 +172,86 @@ ${content.substring(0, 3000)}...
     return this._parseQualityScore(result.content);
   }
 
-  _parseValidationResult(content) {
-    const result = {
-      passed: true,
-      hasWarnings: false,
+  _parseStructuredValidationResult(content) {
+    const empty = {
+      verdict: 'FAIL',
+      passed: false,
+      schemaRisk: false,
+      completenessRisk: false,
+      blockingIssues: [],
+      nonBlockingIssues: [],
       issues: [],
       suggestions: [],
       rawReport: content
     };
 
-    if (content.includes('不通过') || content.includes('失败') || content.includes('冲突')) {
-      result.passed = false;
-    } else if (content.includes('有条件通过') || content.includes('警告')) {
-      result.hasWarnings = true;
+    let parsed = null;
+
+    const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) ||
+                      content.match(/<<<VALIDATION_RESULT开始>>>([\s\S]*?)<<<VALIDATION_RESULT结束>>>/) ||
+                      content.match(/(\{[\s\S]*\})/);
+
+    if (jsonMatch) {
+      try {
+        parsed = JSON.parse(jsonMatch[1].trim());
+      } catch (e) {
+        try {
+          parsed = JSON.parse(jsonMatch[0].trim());
+        } catch (e2) {}
+      }
     }
 
-    const issueMatches = content.match(/[-\d\.\s]*([^\n]*(?:冲突|问题|不符|错误)[^\n]*)/gi) || [];
-    result.issues = issueMatches
-      .map(line => line.replace(/^[-\d\.\s]+/, '').trim())
-      .filter(line => line.length > 5)
-      .map(issue => ({
-        description: issue,
-        severity: this._determineSeverity(issue)
-      }));
+    if (!parsed) {
+      try {
+        parsed = JSON.parse(content);
+      } catch (e) {}
+    }
 
-    const suggestionMatches = content.match(/[-\d\.\s]*([^\n]*(?:建议|修正|改进)[^\n]*)/gi) || [];
-    result.suggestions = suggestionMatches
-      .map(line => line.replace(/^[-\d\.\s]+/, '').trim())
-      .filter(line => line.length > 5);
+    if (parsed && typeof parsed === 'object') {
+      const verdict = (parsed.verdict || '').toUpperCase();
+      const validVerdicts = ['PASS', 'PASS_WITH_WARNINGS', 'FAIL'];
+      const normalizedVerdict = validVerdicts.includes(verdict) ? verdict : this._fallbackVerdictFromText(content);
 
-    return result;
+      return {
+        verdict: normalizedVerdict,
+        passed: normalizedVerdict !== 'FAIL',
+        schemaRisk: parsed.schema_risk === true || parsed.schemaRisk === true,
+        completenessRisk: parsed.completeness_risk === true || parsed.completenessRisk === true,
+        blockingIssues: Array.isArray(parsed.blocking_issues) ? parsed.blocking_issues :
+                        Array.isArray(parsed.blockingIssues) ? parsed.blockingIssues : [],
+        nonBlockingIssues: Array.isArray(parsed.non_blocking_issues) ? parsed.non_blocking_issues :
+                           Array.isArray(parsed.nonBlockingIssues) ? parsed.nonBlockingIssues : [],
+        issues: Array.isArray(parsed.blocking_issues) ? parsed.blocking_issues :
+                Array.isArray(parsed.blockingIssues) ? parsed.blockingIssues : [],
+        suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+        rawReport: content
+      };
+    }
+
+    return {
+      ...empty,
+      verdict: this._fallbackVerdictFromText(content)
+    };
+  }
+
+  _fallbackVerdictFromText(content) {
+    const normalized = content.toLowerCase();
+    if (normalized.includes('不通过') || normalized.includes('失败')) {
+      return 'FAIL';
+    }
+    if (normalized.includes('有条件通过') || normalized.includes('警告')) {
+      return 'PASS_WITH_WARNINGS';
+    }
+    if (normalized.includes('通过')) {
+      return 'PASS';
+    }
+    return 'FAIL';
   }
 
   _parseQualityScore(content) {
     const scores = {};
     const lines = content.split('\n');
-    
+
     for (const line of lines) {
       const matches = line.match(/(.+?)[：:]\s*(\d+(?:\.\d+)?)\s*[分\/]/);
       if (matches) {
@@ -198,17 +269,6 @@ ${content.substring(0, 3000)}...
       average: Math.round(average * 10) / 10,
       rawReport: content
     };
-  }
-
-  _determineSeverity(issue) {
-    const lower = issue.toLowerCase();
-    if (lower.includes('严重') || lower.includes('关键') || lower.includes('critical')) {
-      return 'critical';
-    }
-    if (lower.includes('重要') || lower.includes('major')) {
-      return 'major';
-    }
-    return 'minor';
   }
 
   _summarize(content) {

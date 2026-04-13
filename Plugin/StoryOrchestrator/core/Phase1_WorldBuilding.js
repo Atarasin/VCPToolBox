@@ -9,6 +9,7 @@
  */
 
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');
+const { SchemaValidator } = require('../utils/SchemaValidator');
 
 class Phase1_WorldBuilding {
   constructor({ stateManager, agentDispatcher, promptBuilder, config }) {
@@ -17,6 +18,7 @@ class Phase1_WorldBuilding {
     this.promptBuilder = promptBuilder;
     this.config = config || {};
     this.maxRevisionAttempts = this.config.MAX_PHASE_ITERATIONS || 2;
+    this.artifactManager = stateManager.artifactManager;
   }
 
   /**
@@ -27,6 +29,9 @@ class Phase1_WorldBuilding {
    */
   async run(storyId, options = {}) {
     console.log(`[Phase1_WorldBuilding] Starting for story: ${storyId}`);
+    
+    let repairUsedForWorldview = false;
+    let repairUsedForCharacters = false;
     
     try {
       // 1. 获取故事配置
@@ -62,36 +67,183 @@ class Phase1_WorldBuilding {
         };
       }
 
-      const { worldview, characters } = parallelResult;
+      const { worldview, characters, worldviewPrompt, charactersPrompt,
+              worldviewRaw, charactersRaw, repairUsedWorldview, repairUsedCharacters } = parallelResult;
+      repairUsedForWorldview = repairUsedWorldview || false;
+      repairUsedForCharacters = repairUsedCharacters || false;
 
-      // 3. 保存初始结果
-      await this.stateManager.updatePhase1(storyId, {
-        worldview: worldview.parsed,
-        characters: characters.parsed,
-        status: 'validating'
+      let parsedWorldview = worldview;
+      let parsedCharacters = characters;
+
+      parsedWorldview = JSON.parse(JSON.stringify(parsedWorldview));
+      parsedCharacters = JSON.parse(JSON.stringify(parsedCharacters));
+
+      let worldviewArtifactPath = null;
+      let promptArtifactPath = null;
+
+      try {
+        const worldviewArtifact = await this.artifactManager.saveArtifact(storyId, 'raw_response', worldviewRaw, 'txt');
+        await this.artifactManager.saveArtifact(storyId, 'raw_response', charactersRaw, 'txt');
+        const promptArtifact = await this.artifactManager.saveArtifact(storyId, 'prompt', worldviewPrompt, 'txt');
+        await this.artifactManager.saveArtifact(storyId, 'prompt', charactersPrompt, 'txt');
+        worldviewArtifactPath = worldviewArtifact.filePath;
+        promptArtifactPath = promptArtifact.filePath;
+        console.log(`[Phase1_WorldBuilding] Saved artifacts for story ${storyId}`);
+      } catch (artifactError) {
+        console.warn(`[Phase1_WorldBuilding] Failed to save artifacts:`, artifactError.message);
+      }
+
+      const attemptId = this.stateManager.repository.createPhaseAttempt({
+        story_id: storyId,
+        phase_name: 'phase1',
+        attempt_kind: 'initial_generation',
+        trigger_source: 'agent',
+        raw_prompt_path: promptArtifactPath,
+        raw_response_path: worldviewArtifactPath,
+        parse_status: repairUsedForWorldview || repairUsedForCharacters ? 'repaired_parsed' : 'parsed',
+        repair_used: repairUsedForWorldview || repairUsedForCharacters,
+        schema_valid: false,
+        business_valid: false
       });
 
-      // 4. 记录工作流历史
+      // 3. Schema validation BEFORE saving anything
+      const worldviewSchemaResult = SchemaValidator.validateWorldview(parsedWorldview);
+      const charactersSchemaResult = SchemaValidator.validateCharacters(parsedCharacters);
+      
+      console.log(`[Phase1_WorldBuilding] Schema validation - worldview:`, 
+        worldviewSchemaResult.valid ? 'valid' : 'invalid',
+        worldviewSchemaResult.errors?.length ? worldviewSchemaResult.errors : '');
+      console.log(`[Phase1_WorldBuilding] Schema validation - characters:`, 
+        charactersSchemaResult.valid ? 'valid' : 'invalid',
+        charactersSchemaResult.errors?.length ? charactersSchemaResult.errors : '');
+
+      // If schema validation fails, do NOT save to phase1
+      if (!worldviewSchemaResult.valid || !charactersSchemaResult.valid) {
+        const allErrors = [
+          ...(worldviewSchemaResult.errors || []),
+          ...(charactersSchemaResult.errors || [])
+        ];
+
+        this.stateManager.repository.updatePhaseAttempt(attemptId, {
+          schema_valid: false,
+          error_message: allErrors.join('; '),
+          completed_at: new Date().toISOString()
+        });
+
+        await this._appendWorkflowHistory(storyId, {
+          step: 'schema_validation_failed',
+          worldviewSchemaValid: worldviewSchemaResult.valid,
+          charactersSchemaValid: charactersSchemaResult.valid,
+          errors: allErrors,
+          repairUsed: repairUsedForWorldview || repairUsedForCharacters
+        });
+
+        return {
+          status: 'needs_retry',
+          phase: 'phase1',
+          nextAction: 'retry',
+          checkpointId: null,
+          data: {
+            error: 'Schema validation failed',
+            schemaErrors: allErrors,
+            worldviewSchemaWarnings: worldviewSchemaResult.warnings || [],
+            charactersSchemaWarnings: charactersSchemaResult.warnings || [],
+            repairUsed: repairUsedForWorldview || repairUsedForCharacters
+          }
+        };
+      }
+
+      // 4. Schema passed - save initial results
+      this.stateManager.repository.updatePhaseAttempt(attemptId, {
+        schema_valid: true
+      });
+
+      await this.stateManager.updatePhase1(storyId, {
+        worldview: parsedWorldview,
+        characters: parsedCharacters,
+        status: 'validating',
+        schemaValidation: {
+          worldview: worldviewSchemaResult,
+          characters: charactersSchemaResult
+        }
+      }, { snapshotType: 'candidate', schemaValid: worldviewSchemaResult.schemaValid && charactersSchemaResult.schemaValid });
+
+      // 5. 记录工作流历史
       await this._appendWorkflowHistory(storyId, {
         step: 'initial_generation',
         worldviewGenerated: true,
         charactersGenerated: true,
-        worldviewQuality: worldview.quality,
-        charactersQuality: characters.quality
+        worldviewQuality: worldviewSchemaResult.completenessValid ? 'valid' : 'needs_review',
+        charactersQuality: charactersSchemaResult.completenessValid ? 'valid' : 'needs_review',
+        repairUsed: repairUsedForWorldview || repairUsedForCharacters
       });
 
-      // 5. 逻辑校验
-      const validationResult = await this._validateResults(storyId, worldview.parsed, characters.parsed);
+      const validationResult = await this._validateResults(storyId, parsedWorldview, parsedCharacters);
+      const structuredValidation = validationResult;
 
-      if (!validationResult.passed) {
+      if (structuredValidation.verdict === 'PASS_WITH_WARNINGS') {
+        // PASS_WITH_WARNINGS: 创建 checkpoint 供人工复核，不自动放行，也不自动修订
+        console.log(`[Phase1_WorldBuilding] Validation passed with warnings, creating checkpoint for human review`);
+
+        await this.stateManager.updatePhase1(storyId, {
+          worldview: parsedWorldview,
+          characters: parsedCharacters,
+          validation: structuredValidation,
+          repairUsed: repairUsedForWorldview || repairUsedForCharacters
+        }, { snapshotType: 'validated' });
+
+        await this._appendWorkflowHistory(storyId, {
+          step: 'validation',
+          passed: true,
+          verdict: structuredValidation.verdict,
+          hasWarnings: true,
+          repairUsed: repairUsedForWorldview || repairUsedForCharacters
+        });
+
+        const checkpointId = await this._createCheckpoint(storyId);
+
+        await this.stateManager.updatePhase1(storyId, {
+          status: 'pending_confirmation',
+          checkpointId: checkpointId
+        }, { snapshotType: 'validated' });
+
+        await this.stateManager.updateStory(storyId, {
+          status: 'phase1_waiting_checkpoint'
+        });
+
+        const headRow = this.stateManager.repository.getStory(storyId);
+        if (headRow && attemptId) {
+          this.stateManager.repository.updatePhaseAttempt(attemptId, {
+            business_valid: true,
+            candidate_snapshot_id: headRow.current_phase1_snapshot_id,
+            completed_at: new Date().toISOString()
+          });
+        }
+
+        console.log(`[Phase1_WorldBuilding] Completed with warnings for story: ${storyId}, checkpoint: ${checkpointId}`);
+
+        return {
+          status: 'waiting_checkpoint',
+          phase: 'phase1',
+          nextAction: 'phase2',
+          checkpointId: checkpointId,
+          data: {
+            worldview: parsedWorldview,
+            characters: parsedCharacters,
+            validation: structuredValidation
+          }
+        };
+      }
+
+      if (structuredValidation.verdict === 'FAIL') {
         console.log(`[Phase1_WorldBuilding] Initial validation failed, attempting revision`);
 
-        // 6. 修订并重新验证 (最多一次)
+        // 7. 修订并重新验证 (最多一次)
         const revisionResult = await this._reviseAndReValidate(
           storyId,
-          worldview.parsed,
-          characters.parsed,
-          validationResult
+          parsedWorldview,
+          parsedCharacters,
+          structuredValidation
         );
 
         if (!revisionResult.success) {
@@ -102,36 +254,244 @@ class Phase1_WorldBuilding {
             checkpointId: null,
             data: {
               error: 'Validation failed after revision',
-              issues: validationResult.issues,
-              revisionAttempts: 1
+              issues: structuredValidation.issues,
+              revisionAttempts: 1,
+              repairUsed: repairUsedForWorldview || repairUsedForCharacters
             }
           };
         }
 
-        // 使用修订后的结果
-        const { revisedWorldview, revisedCharacters } = revisionResult;
+        const { revisedWorldview, revisedCharacters, reValidationResult, revisionRepairUsed } = revisionResult;
+        
+        // Re-validate schema for revised results
+        const revisedWorldviewSchema = SchemaValidator.validateWorldview(revisedWorldview);
+        const revisedCharactersSchema = SchemaValidator.validateCharacters(revisedCharacters);
+        
+        if (!revisedWorldviewSchema.valid || !revisedCharactersSchema.valid) {
+          const schemaErrors = [
+            ...(revisedWorldviewSchema.errors || []),
+            ...(revisedCharactersSchema.errors || [])
+          ];
+          
+          await this._appendWorkflowHistory(storyId, {
+            step: 'revision_schema_validation_failed',
+            errors: schemaErrors
+          });
+
+          return {
+            status: 'needs_retry',
+            phase: 'phase1',
+            nextAction: 'retry',
+            checkpointId: null,
+            data: {
+              error: 'Revised content failed schema validation',
+              schemaErrors,
+              repairUsed: revisionRepairUsed
+            }
+          };
+        }
+
+        const structuredReValidation = reValidationResult;
+
+        if (structuredReValidation.verdict === 'PASS_WITH_WARNINGS') {
+          await this.stateManager.updatePhase1(storyId, {
+            worldview: revisedWorldview,
+            characters: revisedCharacters,
+            validation: structuredReValidation,
+            repairUsed: revisionRepairUsed
+          }, { snapshotType: 'validated' });
+
+          await this._appendWorkflowHistory(storyId, {
+            step: 'revision',
+            revisionAttempt: 1,
+            passed: true,
+            hasWarnings: true,
+            repairUsed: revisionRepairUsed
+          });
+
+          const checkpointId = await this._createCheckpoint(storyId);
+
+          await this.stateManager.updatePhase1(storyId, {
+            status: 'pending_confirmation',
+            checkpointId: checkpointId
+          }, { snapshotType: 'validated' });
+
+          await this.stateManager.updateStory(storyId, {
+            status: 'phase1_waiting_checkpoint'
+          });
+
+          const headRow = this.stateManager.repository.getStory(storyId);
+          if (headRow && attemptId) {
+            this.stateManager.repository.updatePhaseAttempt(attemptId, {
+              business_valid: true,
+              candidate_snapshot_id: headRow.current_phase1_snapshot_id,
+              completed_at: new Date().toISOString()
+            });
+          }
+
+          console.log(`[Phase1_WorldBuilding] Revision completed with warnings for story: ${storyId}, checkpoint: ${checkpointId}`);
+
+          return {
+            status: 'waiting_checkpoint',
+            phase: 'phase1',
+            nextAction: 'phase2',
+            checkpointId: checkpointId,
+            data: {
+              worldview: revisedWorldview,
+              characters: revisedCharacters,
+              validation: structuredReValidation
+            }
+          };
+        }
+        
+        const canPromoteRevision = SchemaValidator.canPromoteToValidated(
+          { 
+            worldview: revisedWorldviewSchema, 
+            characters: revisedCharactersSchema 
+          },
+          structuredReValidation
+        );
+
+        // Repaired results require stricter promotion - schema + completeness must be perfect
+        const repairedResultsPerfect = revisionRepairUsed && 
+          revisedWorldviewSchema.schemaValid && revisedWorldviewSchema.completenessValid &&
+          revisedCharactersSchema.schemaValid && revisedCharactersSchema.completenessValid;
+        
+        const canPromoteRepaired = !revisionRepairUsed || repairedResultsPerfect 
+          ? canPromoteRevision 
+          : false;
+
+        if (!canPromoteRepaired) {
+          await this._appendWorkflowHistory(storyId, {
+            step: 'revision_promotion_failed',
+            canPromote: canPromoteRepaired,
+            repairUsed: revisionRepairUsed,
+            verdict: structuredReValidation.verdict
+          });
+
+          return {
+            status: 'needs_retry',
+            phase: 'phase1',
+            nextAction: 'retry',
+            checkpointId: null,
+            data: {
+              error: 'Repaired content does not meet promotion criteria',
+              verdict: structuredReValidation.verdict,
+              blockingIssues: structuredReValidation.blockingIssues,
+              repairUsed: revisionRepairUsed,
+              suggestions: structuredReValidation.suggestions
+            }
+          };
+        }
+
         await this.stateManager.updatePhase1(storyId, {
           worldview: revisedWorldview,
           characters: revisedCharacters,
-          validation: validationResult
-        });
+          validation: structuredReValidation,
+          repairUsed: revisionRepairUsed
+        }, { snapshotType: 'validated' });
 
         await this._appendWorkflowHistory(storyId, {
           step: 'revision',
           revisionAttempt: 1,
-          passed: true
+          passed: true,
+          repairUsed: revisionRepairUsed
         });
-      } else {
-        // 校验通过
+
+        // 8. 创建检查点
+        const checkpointId = await this._createCheckpoint(storyId);
+
+        // 9. 更新状态为等待确认
         await this.stateManager.updatePhase1(storyId, {
-          validation: validationResult
+          status: 'pending_confirmation',
+          checkpointId: checkpointId
+        }, { snapshotType: 'validated' });
+
+        await this.stateManager.updateStory(storyId, {
+          status: 'phase1_waiting_checkpoint'
+        });
+
+        const headRow = this.stateManager.repository.getStory(storyId);
+        if (headRow && attemptId) {
+          this.stateManager.repository.updatePhaseAttempt(attemptId, {
+            business_valid: true,
+            candidate_snapshot_id: headRow.current_phase1_snapshot_id,
+            completed_at: new Date().toISOString()
+          });
+        }
+
+        console.log(`[Phase1_WorldBuilding] Completed for story: ${storyId}, checkpoint: ${checkpointId}`);
+
+        return {
+          status: 'waiting_checkpoint',
+          phase: 'phase1',
+          nextAction: 'phase2',
+          checkpointId: checkpointId,
+          data: {
+            worldview: revisedWorldview,
+            characters: revisedCharacters,
+            validation: structuredReValidation
+          }
+        };
+      }
+
+      const canPromote = SchemaValidator.canPromoteToValidated(
+        {
+          worldview: worldviewSchemaResult,
+          characters: charactersSchemaResult
+        },
+        structuredValidation
+      );
+
+      // Repaired content requires stricter promotion
+      const anyRepairUsed = repairUsedForWorldview || repairUsedForCharacters;
+      const allSchemaPerfect = worldviewSchemaResult.schemaValid &&
+        worldviewSchemaResult.completenessValid &&
+        charactersSchemaResult.schemaValid &&
+        charactersSchemaResult.completenessValid;
+
+      const canPromoteRepaired = !anyRepairUsed || allSchemaPerfect
+        ? canPromote
+        : false;
+
+      if (!canPromoteRepaired) {
+        this.stateManager.repository.updatePhaseAttempt(attemptId, {
+          business_valid: false,
+          error_message: `Promotion failed: ${structuredValidation.verdict}`,
+          completed_at: new Date().toISOString()
         });
 
         await this._appendWorkflowHistory(storyId, {
-          step: 'validation',
-          passed: true
+          step: 'promotion_check_failed',
+          canPromote: canPromoteRepaired,
+          verdict: structuredValidation.verdict,
+          repairUsed: anyRepairUsed
         });
+
+        return {
+          status: 'needs_retry',
+          phase: 'phase1',
+          nextAction: 'retry',
+          checkpointId: null,
+          data: {
+            error: 'Content does not meet promotion criteria',
+            verdict: structuredValidation.verdict,
+            blockingIssues: structuredValidation.blockingIssues,
+            repairUsed: anyRepairUsed,
+            suggestions: structuredValidation.suggestions
+          }
+        };
       }
+
+      await this.stateManager.updatePhase1(storyId, {
+        validation: structuredValidation
+      }, { snapshotType: 'validated' });
+
+      await this._appendWorkflowHistory(storyId, {
+        step: 'validation',
+        passed: true,
+        verdict: structuredValidation.verdict
+      });
 
       // 7. 创建检查点
       const checkpointId = await this._createCheckpoint(storyId);
@@ -140,11 +500,20 @@ class Phase1_WorldBuilding {
       await this.stateManager.updatePhase1(storyId, {
         status: 'pending_confirmation',
         checkpointId: checkpointId
-      });
+      }, { snapshotType: 'validated' });
 
       await this.stateManager.updateStory(storyId, {
         status: 'phase1_waiting_checkpoint'
       });
+
+      const headRow2 = this.stateManager.repository.getStory(storyId);
+      if (headRow2 && attemptId) {
+        this.stateManager.repository.updatePhaseAttempt(attemptId, {
+          business_valid: true,
+          candidate_snapshot_id: headRow2.current_phase1_snapshot_id,
+          completed_at: new Date().toISOString()
+        });
+      }
 
       console.log(`[Phase1_WorldBuilding] Completed for story: ${storyId}, checkpoint: ${checkpointId}`);
 
@@ -154,9 +523,9 @@ class Phase1_WorldBuilding {
         nextAction: 'phase2',
         checkpointId: checkpointId,
         data: {
-          worldview: (await this.stateManager.getStory(storyId)).phase1.worldview,
-          characters: (await this.stateManager.getStory(storyId)).phase1.characters,
-          validation: validationResult
+          worldview: parsedWorldview,
+          characters: parsedCharacters,
+          validation: structuredValidation
         }
       };
 
@@ -234,17 +603,153 @@ class Phase1_WorldBuilding {
       };
     }
 
+    const worldviewRaw = worldviewResult.result.content;
+    const charactersRaw = charactersResult.result.content;
+
+    // Extract and track repair usage
+    let repairUsedWorldview = false;
+    let repairUsedCharacters = false;
+
+    // Parse worldview with repair tracking
+    const parsedWorldview = this._parseWorldviewWithRepairTracking(worldviewRaw, (used) => {
+      repairUsedWorldview = used;
+    });
+
+    // Parse characters with repair tracking
+    const parsedCharacters = this._parseCharactersWithRepairTracking(charactersRaw, (used) => {
+      repairUsedCharacters = used;
+    });
+
     return {
       status: 'success',
-      worldview: {
-        raw: worldviewResult.result.content,
-        parsed: this._parseWorldview(worldviewResult.result.content)
-      },
-      characters: {
-        raw: charactersResult.result.content,
-        parsed: this._parseCharacters(charactersResult.result.content)
-      }
+      worldview: parsedWorldview.parsed,
+      characters: parsedCharacters.parsed,
+      worldviewPrompt,
+      charactersPrompt,
+      worldviewRaw,
+      charactersRaw,
+      repairUsedWorldview,
+      repairUsedCharacters
     };
+  }
+
+  /**
+   * Parse worldview with repair tracking
+   * @param {string} content - Raw content
+   * @param {Function} setRepairUsed - Callback to set repair flag
+   * @returns {Object} Parsed result with repair flag
+   */
+  _parseWorldviewWithRepairTracking(content, setRepairUsed) {
+    let repairUsed = false;
+    
+    try {
+      const parsed = this._extractStructuredJsonWithRepairTracking(content, (used) => {
+        repairUsed = used;
+      });
+      
+      if (parsed) {
+        setRepairUsed(repairUsed);
+        return { parsed, repairUsed };
+      }
+    } catch (e) {
+      console.warn('[Phase1_WorldBuilding] Failed to parse worldview JSON:', e.message);
+    }
+
+    setRepairUsed(repairUsed);
+    return {
+      parsed: {
+        setting: content,
+        raw: content
+      },
+      repairUsed
+    };
+  }
+
+  /**
+   * Parse characters with repair tracking
+   * @param {string} content - Raw content
+   * @param {Function} setRepairUsed - Callback to set repair flag
+   * @returns {Object} Parsed result with repair flag
+   */
+  _parseCharactersWithRepairTracking(content, setRepairUsed) {
+    let repairUsed = false;
+    
+    try {
+      const parsed = this._extractStructuredJsonWithRepairTracking(content, (used) => {
+        repairUsed = used;
+      });
+      
+      if (parsed) {
+        setRepairUsed(repairUsed);
+        return { parsed, repairUsed };
+      }
+    } catch (e) {
+      console.warn('[Phase1_WorldBuilding] Failed to parse characters JSON:', e.message);
+    }
+
+    setRepairUsed(repairUsed);
+    return {
+      parsed: {
+        characters: content,
+        raw: content
+      },
+      repairUsed
+    };
+  }
+
+  /**
+   * Extract structured JSON with repair tracking
+   * @param {string} content - Raw content
+   * @param {Function} setRepairUsed - Callback to set repair flag
+   * @returns {Object|null} Parsed JSON or null
+   */
+  _extractStructuredJsonWithRepairTracking(content, setRepairUsed) {
+    if (!content || typeof content !== 'string') {
+      return null;
+    }
+
+    const startIndex = content.indexOf('{');
+    if (startIndex === -1) {
+      return null;
+    }
+
+    const candidate = content.slice(startIndex).trim();
+
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      const repaired = this._repairTruncatedJson(candidate);
+      if (repaired) {
+        try {
+          const result = JSON.parse(repaired);
+          setRepairUsed(true);
+          return result;
+        } catch (repairError) {
+          console.warn('[Phase1_WorldBuilding] Failed to repair JSON output:', repairError.message);
+        }
+      }
+    }
+
+    const endIndex = content.lastIndexOf('}');
+    if (endIndex > startIndex) {
+      const boundedCandidate = content.slice(startIndex, endIndex + 1);
+      try {
+        return JSON.parse(boundedCandidate);
+      } catch (boundedError) {
+        const repaired = this._repairTruncatedJson(boundedCandidate);
+        if (repaired) {
+          try {
+            const result = JSON.parse(repaired);
+            setRepairUsed(true);
+            return result;
+          } catch (repairError) {
+            console.warn('[Phase1_WorldBuilding] Failed to repair bounded JSON output:', repairError.message);
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -625,28 +1130,73 @@ ${JSON.stringify(characters, null, 2)}
   }
 
   /**
-   * 解析验证结果
+   * 解析验证结果 - 返回结构化 verdict 格式
    * @param {string} content - 原始输出
-   * @returns {Object} 解析后的验证结果
+   * @returns {Object} 结构化验证结果
    */
   _parseValidationResult(content) {
+    // 尝试解析 JSON 格式
+    const jsonMatch = content.match(/<<<VALIDATION_RESULT开始>>>([\s\S]*?)<<<VALIDATION_RESULT末>>>/);
+    const jsonBlockMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+    
+    let structuredResult = null;
+    
+    if (jsonMatch && jsonMatch[1]) {
+      try {
+        structuredResult = JSON.parse(jsonMatch[1].trim());
+      } catch (e) {
+        // Fall through to text parsing
+      }
+    } else if (jsonBlockMatch && jsonBlockMatch[1]) {
+      try {
+        structuredResult = JSON.parse(jsonBlockMatch[1].trim());
+      } catch (e) {
+        // Fall through to text parsing
+      }
+    }
+
+    if (structuredResult && structuredResult.verdict) {
+      // Return already structured format from ContentValidator
+      return {
+        verdict: structuredResult.verdict || 'FAIL',
+        passed: structuredResult.verdict !== 'FAIL',
+        hasWarnings: structuredResult.verdict === 'PASS_WITH_WARNINGS',
+        issues: structuredResult.blockingIssues || [],
+        suggestions: structuredResult.suggestions || [],
+        schemaRisk: structuredResult.schemaRisk || 'unknown',
+        completenessRisk: structuredResult.completenessRisk || 'unknown',
+        blockingIssues: structuredResult.blockingIssues || [],
+        nonBlockingIssues: structuredResult.nonBlockingIssues || [],
+        rawReport: content
+      };
+    }
+
+    // Fallback to text-based parsing
     const result = {
+      verdict: 'PASS',
       passed: true,
       hasWarnings: false,
       issues: [],
       suggestions: [],
+      schemaRisk: 'low',
+      completenessRisk: 'low',
+      blockingIssues: [],
+      nonBlockingIssues: [],
       rawReport: content
     };
 
     // 检查是否通过
     if (content.includes('不通过') || content.includes('失败')) {
       result.passed = false;
+      result.verdict = 'FAIL';
+      result.blockingIssues = result.issues;
     } else if (content.includes('有条件通过') || content.includes('警告')) {
       result.hasWarnings = true;
+      result.verdict = 'PASS_WITH_WARNINGS';
     }
 
     // 提取问题
-    const issueMatches = content.match(/[-*•]\s*([^\n]*(?:问题|冲突|矛盾|不符|错误)[^\n]*)/gi) || [];
+    const issueMatches = content.match(/[-*•]\s*([^\n]*(?:问题|冲突|矛盾|不符|错误|风险)[^\n]*)/gi) || [];
     result.issues = issueMatches
       .map(line => line.replace(/^[-*•]\s*/, '').trim())
       .filter(line => line.length > 5)
@@ -655,11 +1205,34 @@ ${JSON.stringify(characters, null, 2)}
         severity: this._determineSeverity(issue)
       }));
 
+    // Categorize into blocking/non-blocking
+    result.blockingIssues = result.issues.filter(i => 
+      i.severity === 'critical' || i.severity === 'major'
+    );
+    result.nonBlockingIssues = result.issues.filter(i => 
+      i.severity === 'minor'
+    );
+
     // 提取建议
     const suggestionMatches = content.match(/[-*•]\s*([^\n]*(?:建议|修正|改进|调整)[^\n]*)/gi) || [];
     result.suggestions = suggestionMatches
       .map(line => line.replace(/^[-*•]\s*/, '').trim())
       .filter(line => line.length > 5);
+
+    // Determine risk levels based on issues
+    if (result.blockingIssues.length > 0) {
+      result.schemaRisk = 'high';
+      result.completenessRisk = 'high';
+      result.verdict = 'FAIL';
+      result.passed = false;
+    } else if (result.nonBlockingIssues.length > 0) {
+      result.schemaRisk = 'medium';
+      result.completenessRisk = 'medium';
+      if (result.verdict === 'PASS') {
+        result.verdict = 'PASS_WITH_WARNINGS';
+        result.hasWarnings = true;
+      }
+    }
 
     return result;
   }
@@ -744,17 +1317,29 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
       const worldviewResult = revisionResults.succeeded.find(s => s.agentType === AGENT_TYPES.WORLD_BUILDER);
       const charactersResult = revisionResults.succeeded.find(s => s.agentType === AGENT_TYPES.CHARACTER_DESIGNER);
 
-      const revisedWorldview = this._parseWorldview(worldviewResult.result.content);
-      const revisedCharacters = this._parseCharacters(charactersResult.result.content);
+      // Parse with repair tracking
+      let worldviewRepairUsed = false;
+      let charactersRepairUsed = false;
+      const worldviewParsed = this._parseWorldviewWithRepairTracking(worldviewResult.result.content, (used) => {
+        worldviewRepairUsed = used;
+      });
+      const charactersParsed = this._parseCharactersWithRepairTracking(charactersResult.result.content, (used) => {
+        charactersRepairUsed = used;
+      });
 
-      // 重新验证
+      let revisedWorldview = JSON.parse(JSON.stringify(worldviewParsed.parsed));
+      let revisedCharacters = JSON.parse(JSON.stringify(charactersParsed.parsed));
+
+      const revisionRepairUsed = !!(worldviewRepairUsed || charactersRepairUsed);
+
       const reValidationResult = await this._validateResults(storyId, revisedWorldview, revisedCharacters);
+      const structuredReValidation = reValidationResult;
 
-      if (!reValidationResult.passed) {
+      if (structuredReValidation.verdict === 'FAIL') {
         return {
           success: false,
           error: 'Re-validation failed',
-          issues: reValidationResult.issues
+          issues: structuredReValidation.issues || structuredReValidation.blockingIssues || []
         };
       }
 
@@ -762,7 +1347,8 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
         success: true,
         revisedWorldview,
         revisedCharacters,
-        reValidationResult
+        reValidationResult: structuredReValidation,
+        revisionRepairUsed
       };
 
     } catch (error) {

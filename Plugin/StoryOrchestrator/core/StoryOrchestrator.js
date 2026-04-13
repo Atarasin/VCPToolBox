@@ -295,7 +295,7 @@ class StoryOrchestrator {
       return { status: 'error', error: 'Story not found' };
     }
 
-    const storyBible = this.stateManager.getStoryBible(args.story_id);
+    const storyBible = await this.stateManager.getStoryBible(args.story_id);
     if (!storyBible) {
       return { status: 'error', error: 'Story Bible not found' };
     }
