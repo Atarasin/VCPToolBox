@@ -24,7 +24,7 @@ const OPENCLAW_DEFAULT_CONTEXT_TOKEN_BUDGET = 1200;
 /** 上下文构建最大 Token 预算 */
 const OPENCLAW_MAX_CONTEXT_TOKEN_BUDGET = 4000;
 /** 上下文构建默认最低相似度分数 */
-const OPENCLAW_DEFAULT_CONTEXT_MIN_SCORE = 0.7;
+const OPENCLAW_DEFAULT_CONTEXT_MIN_SCORE = 0.3;
 /** 上下文构建默认 Token 比例上限 */
 const OPENCLAW_DEFAULT_CONTEXT_MAX_TOKEN_RATIO = 0.6;
 /** 最大上下文消息数量 */
