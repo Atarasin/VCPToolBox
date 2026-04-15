@@ -11,11 +11,11 @@
     }
   },
   "candidate": {
-    "ragParamsPath": "/home/zh/projects/VCP/VCPToolBox/eval/rag_params_candidate_text_embedding_v4.json",
+    "ragParamsPath": "/home/zh/projects/VCP/VCPToolBox/eval/rag_params.json",
     "env": {
-      "WhitelistEmbeddingModel": "text-embedding-v4",
-      "VECTORDB_DIMENSION": "2048",
-      "EMBEDDING_DIMENSIONS": "2048",
+      "WhitelistEmbeddingModel": "what-qwen3-embedding-8b",
+      "VECTORDB_DIMENSION": "4096",
+      "EMBEDDING_DIMENSIONS": "4096",
       "KNOWLEDGEBASE_ROOT_PATH": "/home/zh/projects/VCP/VCPToolBox/eval/dailynote_eval",
       "KNOWLEDGEBASE_STORE_PATH": "/home/zh/projects/VCP/VCPToolBox/eval/VectorStore_candidate_ali",
       "KNOWLEDGEBASE_FULL_SCAN_ON_STARTUP": "true"
