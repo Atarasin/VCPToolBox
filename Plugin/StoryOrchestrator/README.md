@@ -2,7 +2,7 @@
 
 ## 概述
 
-StoryOrchestrator 是一个多智能体协作短文小说创作插件，通过9个专业化Agent的分工协作，实现1-5万字小说的自动化创作流程。
+StoryOrchestrator 是一个多智能体协作短文小说创作插件，通过 8 个专业化 Agent 的分工协作与代码工作流编排，实现 1-5 万字小说的自动化创作流程。
 
 ## 安装配置
 
@@ -15,14 +15,9 @@ cp -r StoryOrchestrator /path/to/VCPToolBox/Plugin/
 
 ### 2. 配置 Agent
 
-在 `config.env` 中配置9个Agent：
+在 `config.env` 中配置 8 个执行 Agent：
 
 ```bash
-# 决策协调层
-AGENT_ORCHESTRATOR_MODEL_ID=your-model-id
-AGENT_ORCHESTRATOR_CHINESE_NAME=总控调度
-AGENT_ORCHESTRATOR_SYSTEM_PROMPT=你是故事创作的总控调度Agent...
-
 # 创意生成层
 AGENT_WORLD_BUILDER_MODEL_ID=your-model-id
 AGENT_WORLD_BUILDER_CHINESE_NAME=世界观设定
@@ -270,7 +265,7 @@ waiting_checkpoint → running(对应phase) → waiting_checkpoint
 **详细步骤**：
 1. **并行触发**：世界观设定Agent 和 人物塑造Agent 同时开始工作
 2. **交叉验证**：逻辑校验Agent 并行审查两者的输出，检查设定一致性
-3. **冲突仲裁**：总控调度Agent 协调处理冲突（世界观设定与人物背景矛盾等）
+3. **冲突处理**：工作流根据逻辑校验结果触发修订或等待人工确认，避免设定冲突直接进入后续阶段
 4. **用户确认**：生成世界观文档和人物档案，等待用户确认（检查点1）
 
 **确认内容**：
@@ -1117,13 +1112,7 @@ DEFAULT_TARGET_WORD_COUNT_MAX=3500
 USER_CHECKPOINT_TIMEOUT_MS=86400000
 STORY_STATE_RETENTION_DAYS=30
 
-# 9个Agent配置（示例）
-AGENT_ORCHESTRATOR_MODEL_ID=gpt-4
-AGENT_ORCHESTRATOR_CHINESE_NAME=总控调度
-AGENT_ORCHESTRATOR_SYSTEM_PROMPT=你是故事创作的总控调度Agent。职责：1)任务分解与分配 2)进度监控 3)冲突仲裁 4)用户接口管理。拥有全局视角，协调其他8个Agent。
-AGENT_ORCHESTRATOR_MAX_OUTPUT_TOKENS=4000
-AGENT_ORCHESTRATOR_TEMPERATURE=0.7
-
+# 8个Agent配置（示例）
 AGENT_WORLD_BUILDER_MODEL_ID=gpt-4
 AGENT_WORLD_BUILDER_CHINESE_NAME=世界观设定
 AGENT_WORLD_BUILDER_SYSTEM_PROMPT=你是专业的世界观设定师。构建故事的背景架构：1)时代背景与地理环境 2)物理规则 3)势力体系 4)关键历史。输出必须具体、一致、可扩展。

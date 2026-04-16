@@ -30,8 +30,8 @@ StoryOrchestrator 是一个多智能体协作短文小说创作系统，通过 9
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    决策协调层                             │   │
-│  │              Agent_ORCHESTRATOR (总控调度)                │   │
+│  │                    工作流编排层                           │   │
+│  │      WorkflowEngine + Checkpoint / Retry Management      │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                              │                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
@@ -250,17 +250,6 @@ STORY_STATE_RETENTION_DAYS=30
 | `AGENT_*_MAX_OUTPUT_TOKENS` | 最大输出 Token | `4000` |
 | `AGENT_*_TEMPERATURE` | 生成温度 | `0.7` |
 
-##### 决策协调层
-
-```bash
-# ========== Agent: 总控调度 ==========
-AGENT_ORCHESTRATOR_MODEL_ID=your-model-id
-AGENT_ORCHESTRATOR_CHINESE_NAME=总控调度
-AGENT_ORCHESTRATOR_SYSTEM_PROMPT=你是故事创作的总控调度Agent。你的职责是：1) 任务分解与分配 2) 进度监控与状态追踪 3) 冲突仲裁与决策 4) 用户接口与确认节点管理。你拥有全局视角，协调其他8个Agent协同工作。你应当高效地分配任务，监控执行进度，在出现分歧时做出裁决，并在关键节点向用户汇报进度并获取确认。
-AGENT_ORCHESTRATOR_MAX_OUTPUT_TOKENS=4000
-AGENT_ORCHESTRATOR_TEMPERATURE=0.7
-```
-
 ##### 创意生成层
 
 ```bash
@@ -451,7 +440,6 @@ DEFAULT_TARGET_WORD_COUNT_MAX=2500
 USER_CHECKPOINT_TIMEOUT_MS=3600000  # 1 小时，便于测试
 
 # Agent 使用同一模型（节省成本）
-AGENT_ORCHESTRATOR_MODEL_ID=gpt-3.5-turbo
 AGENT_WORLD_BUILDER_MODEL_ID=gpt-3.5-turbo
 AGENT_CHARACTER_DESIGNER_MODEL_ID=gpt-3.5-turbo
 AGENT_PLOT_ARCHITECT_MODEL_ID=gpt-3.5-turbo
@@ -478,7 +466,6 @@ USER_CHECKPOINT_TIMEOUT_MS=86400000  # 24 小时
 STORY_STATE_RETENTION_DAYS=30
 
 # 统一使用 GPT-4
-AGENT_ORCHESTRATOR_MODEL_ID=gpt-4
 AGENT_WORLD_BUILDER_MODEL_ID=gpt-4
 AGENT_CHARACTER_DESIGNER_MODEL_ID=gpt-4
 AGENT_PLOT_ARCHITECT_MODEL_ID=gpt-4
@@ -504,10 +491,6 @@ DEFAULT_TARGET_WORD_COUNT_MAX=3500
 USER_CHECKPOINT_TIMEOUT_MS=86400000
 
 # 使用不同层级的模型（成本优化）
-# 决策协调层 - 使用最强模型
-AGENT_ORCHESTRATOR_MODEL_ID=gpt-4
-AGENT_ORCHESTRATOR_TEMPERATURE=0.7
-
 # 创意生成层 - 使用中高配模型
 AGENT_WORLD_BUILDER_MODEL_ID=gpt-4
 AGENT_CHARACTER_DESIGNER_MODEL_ID=gpt-4

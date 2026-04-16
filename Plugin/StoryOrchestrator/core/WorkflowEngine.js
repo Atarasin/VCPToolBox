@@ -296,6 +296,17 @@ class WorkflowEngine {
       };
     }
 
+    if (story.phase1?.status === 'completed' || story.phase1?.userConfirmed) {
+      console.warn(`[WorkflowEngine] Story ${storyId} has already progressed beyond phase1 (phase1.status=${story.phase1?.status}, userConfirmed=${story.phase1?.userConfirmed}). start() should not be called on existing stories. Use RecoverStoryWorkflow or RetryPhase instead.`);
+      return {
+        status: 'error',
+        error: `Story has already progressed beyond phase1. Current recorded phase: ${story.workflow?.currentPhase}. Use RecoverStoryWorkflow or RetryPhase instead of start().`,
+        currentPhase: story.workflow?.currentPhase,
+        phase1Status: story.phase1?.status,
+        phase1UserConfirmed: story.phase1?.userConfirmed
+      };
+    }
+
     // 3. 生成新的 runToken
     const runToken = uuidv4();
 
@@ -606,8 +617,8 @@ class WorkflowEngine {
         status: 'pending'
       });
     } else if (targetPhase === 'phase2') {
-      // 重启 phase2 需要清除 phase2 和后续阶段的数据，保留 phase1
       await this.stateManager.updatePhase2(storyId, {
+        outline: null,
         chapters: [],
         currentChapter: 0,
         userConfirmed: false,
@@ -634,10 +645,10 @@ class WorkflowEngine {
       });
     }
 
-    // 生成新的 runToken
+    await this.stateManager.clearActiveCheckpoint(storyId);
+
     const recoveryRunToken = uuidv4();
 
-    // 发送恢复开始通知
     await this._notify(storyId, 'workflow_recovery_started', {
       storyId,
       previousState: story.workflow?.state,
@@ -673,21 +684,38 @@ class WorkflowEngine {
       detail: { reason: 'Manual restart via recovery_action=restart_phase' }
     });
 
-    // 执行对应阶段
+    let result;
     if (targetPhase === 'phase1') {
-      return await this._runPhase1(storyId);
-    }
-    if (targetPhase === 'phase2') {
-      return await this._runPhase2(storyId);
-    }
-    if (targetPhase === 'phase3') {
-      return await this._runPhase3(storyId);
+      result = await this._runPhase1(storyId);
+    } else if (targetPhase === 'phase2') {
+      result = await this._runPhase2(storyId);
+    } else if (targetPhase === 'phase3') {
+      result = await this._runPhase3(storyId);
+    } else {
+      return {
+        status: 'error',
+        error: `Unknown phase: ${targetPhase}`
+      };
     }
 
-    return {
-      status: 'error',
-      error: `Unknown phase: ${targetPhase}`
-    };
+    const persistedStory = await this.stateManager.getStory(storyId);
+    if (result.status === 'waiting_checkpoint' && persistedStory) {
+      const hasCheckpointMismatch = persistedStory.workflow?.activeCheckpoint?.id !== result.checkpointId;
+      const hasStatusMismatch = persistedStory.status !== `${targetPhase}_waiting_checkpoint`;
+      if (hasCheckpointMismatch || hasStatusMismatch) {
+        console.error(`[WorkflowEngine] State inconsistency detected after restart_phase for ${storyId}. ` +
+          `Checkpoint: expected ${result.checkpointId}, got ${persistedStory.workflow?.activeCheckpoint?.id}. ` +
+          `Status: expected ${targetPhase}_waiting_checkpoint, got ${persistedStory.status}`);
+        return {
+          status: 'error',
+          error: `State inconsistency after restart_phase: persisted state does not match computed result`,
+          checkpointMismatch: hasCheckpointMismatch,
+          statusMismatch: hasStatusMismatch
+        };
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -864,7 +892,6 @@ class WorkflowEngine {
   async retryPhase(storyId, phaseName, reason) {
     console.log(`[WorkflowEngine] Retrying phase ${phaseName} for story: ${storyId}, reason: ${reason}`);
 
-    // 1. 验证 phaseName
     if (!this.retryConfig.retryOnPhases.includes(phaseName)) {
       return {
         status: 'error',
@@ -873,12 +900,22 @@ class WorkflowEngine {
       };
     }
 
-    // 2. 加载故事
     const story = await this.stateManager.getStory(storyId);
     if (!story) {
       return {
         status: 'error',
         error: `Story not found: ${storyId}`
+      };
+    }
+
+    const phaseState = story[phaseName];
+    if (phaseState?.status === 'completed' || phaseState?.userConfirmed) {
+      return {
+        status: 'error',
+        error: `Cannot retry ${phaseName} because it has already been completed. Use RecoverStoryWorkflow with restart_phase=${phaseName} if you want to regenerate from scratch.`,
+        phase: phaseName,
+        phaseStatus: phaseState?.status,
+        userConfirmed: phaseState?.userConfirmed
       };
     }
 
@@ -1212,54 +1249,53 @@ class WorkflowEngine {
   async _handlePhaseFailed(storyId, phaseName, result) {
     console.error(`[WorkflowEngine] Phase ${phaseName} failed:`, result);
 
-    // 更新 workflow 状态为失败
+    const errorMessage = result instanceof Error
+      ? result.message
+      : (result.error || result.data?.error || 'Unknown error');
+    const errorData = result instanceof Error
+      ? { stack: result.stack, name: result.name }
+      : result.data;
+
     await this.stateManager.updateWorkflow(storyId, {
       state: 'failed',
       retryContext: {
         ...(await this.stateManager.getStory(storyId)).workflow?.retryContext,
-        lastError: result.error || result.data?.error
+        lastError: errorMessage
       }
     });
 
-    // 更新故事状态
     await this.stateManager.updateStory(storyId, {
       status: `${phaseName}_failed`
     });
 
-    // 记录到历史
     await this.stateManager.appendWorkflowHistory(storyId, {
       type: 'phase_failed',
       phase: phaseName,
       detail: {
-        error: result.error || result.data?.error,
-        data: result.data
+        error: errorMessage,
+        data: errorData
       }
     });
 
-    // 发送失败通知
     await this._notify(storyId, 'phase_failed', {
       storyId,
       phase: phaseName,
-      error: result.error || result.data?.error,
-      data: result.data
+      error: errorMessage,
+      data: errorData
     });
 
     return {
       status: 'failed',
       phase: phaseName,
-      error: result.error || result.data?.error,
-      data: result.data
+      error: errorMessage,
+      data: errorData
     };
   }
 
-  /**
-   * 处理 Phase 错误
-   * @private
-   */
   async _handlePhaseError(storyId, phaseName, result) {
-    console.error(`[WorkflowEngine] Phase ${phaseName} error:`, result.error);
+    const errorMessage = result instanceof Error ? result.message : result.error;
+    console.error(`[WorkflowEngine] Phase ${phaseName} error:`, errorMessage);
 
-    // 与失败处理类似
     return await this._handlePhaseFailed(storyId, phaseName, result);
   }
 

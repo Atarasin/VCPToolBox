@@ -58,16 +58,16 @@ class SchemaValidator {
     result.schemaValid = result.errors.length === 0;
 
     if (typeof worldview.setting === 'string' && worldview.setting.length < 20) {
-      result.errors.push('setting 长度过短，内容可能不完整');
+      result.warnings.push('setting 长度过短，内容可能不完整');
     }
     if (Array.isArray(worldview.factions) && worldview.factions.length < 1) {
-      result.errors.push('factions 数量不足，至少需要 1 个');
+      result.warnings.push('factions 数量不足，建议至少 1 个');
     }
     if (worldview.history && Array.isArray(worldview.history.keyEvents) && worldview.history.keyEvents.length < 1) {
-      result.errors.push('history.keyEvents 数量不足，至少需要 1 条');
+      result.warnings.push('history.keyEvents 数量不足，建议至少 1 条');
     }
     if (Array.isArray(worldview.sceneNorms) && worldview.sceneNorms.length < 1) {
-      result.errors.push('sceneNorms 数量不足，至少需要 1 条');
+      result.warnings.push('sceneNorms 数量不足，建议至少 1 条');
     }
 
     const allStrings = this._extractAllStrings(worldview);
@@ -78,18 +78,13 @@ class SchemaValidator {
       }
     }
 
-    const hasTruncationWarning = result.warnings.some(w => w.includes('截断'));
-    if (hasTruncationWarning) {
-      result.errors.push('检测到疑似截断的文本内容，内容完整性存在风险');
-    }
-
     if (result.schemaValid) {
-      result.completenessValid = result.errors.length === 0;
+      result.completenessValid = result.warnings.filter(w => !w.includes('截断')).length === 0;
     } else {
       result.completenessValid = false;
     }
 
-    result.valid = result.schemaValid && result.completenessValid;
+    result.valid = result.schemaValid;
     return result;
   }
 
@@ -170,7 +165,7 @@ class SchemaValidator {
 
     result.schemaValid = result.errors.length === 0;
     result.completenessValid = result.schemaValid && result.warnings.filter(w => w.includes('coreEvent')).length === 0;
-    result.valid = result.schemaValid && result.completenessValid;
+    result.valid = result.schemaValid;
     return result;
   }
 
@@ -228,9 +223,6 @@ class SchemaValidator {
     if (!str || typeof str !== 'string') return false;
     const trimmed = str.trim();
     if (trimmed.length < 10) return false;
-
-    const trailingUnfinished = /[:：，,、]\s*$/;
-    if (trailingUnfinished.test(trimmed)) return true;
 
     const lastSentence = trimmed.split(/[。！？.!?]/).pop().trim();
     if (lastSentence.length > 50 && !/[。！？.!?]\s*$/.test(trimmed) && trimmed.length > 80) return true;

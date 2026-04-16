@@ -117,7 +117,7 @@ class ChapterOperations {
     });
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: options.timeoutMs || 90000,
+      timeoutMs: options.timeoutMs || 300000,
       temporaryContact: true
     });
 
@@ -193,7 +193,7 @@ class ChapterOperations {
     });
 
     const result = await this.agentDispatcher.delegate('detailFiller', prompt, {
-      timeoutMs: options.timeoutMs || 90000,
+      timeoutMs: options.timeoutMs || 300000,
       temporaryContact: true
     });
 
@@ -234,7 +234,7 @@ ${JSON.stringify(outline, null, 2)}
 `;
 
     const result = await this.agentDispatcher.delegate('detailFiller', expansionPrompt, {
-      timeoutMs: 90000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 

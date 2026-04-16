@@ -16,11 +16,6 @@ const StoryOrchestrator = require('../core/StoryOrchestrator');
  * Each agent can have its own model, temperature, and system prompt
  */
 const customAgentConfigs = {
-  AGENT_ORCHESTRATOR_MODEL_ID: 'gpt-4-turbo',
-  AGENT_ORCHESTRATOR_TEMPERATURE: 0.3,
-  AGENT_ORCHESTRATOR_MAX_OUTPUT_TOKENS: 4000,
-  AGENT_ORCHESTRATOR_SYSTEM_PROMPT: 'You are a meticulous story coordinator...',
-
   AGENT_WORLD_BUILDER_MODEL_ID: 'gpt-4-turbo',
   AGENT_WORLD_BUILDER_TEMPERATURE: 0.85,
   AGENT_WORLD_BUILDER_MAX_OUTPUT_TOKENS: 3500,
@@ -200,7 +195,7 @@ async function demonstrateModelRouting() {
   console.log('MODEL ROUTING STRATEGY');
   console.log('-'.repeat(60));
   console.log();
-  console.log('GPT-4 Turbo: Used for high-level reasoning (Orchestrator, PlotArchitect)');
+  console.log('GPT-4 Turbo: Used for planning-heavy generation tasks (WorldBuilder, PlotArchitect)');
   console.log('GPT-4: Used for long-form content (ChapterWriter, DetailFiller)');
   console.log('Claude-3-Sonnet: Used for style/polish tasks');
   console.log();

@@ -80,9 +80,8 @@ class Phase2_OutlineDrafting {
       }
     });
 
-    // 阶段A: 大纲生成
     const outlineResult = await this._generateOutline(storyId);
-    
+
     if (outlineResult.status === 'waiting_checkpoint') {
       return {
         status: 'waiting_checkpoint',
@@ -94,6 +93,10 @@ class Phase2_OutlineDrafting {
           validationResult: outlineResult.validationResult
         }
       };
+    }
+
+    if (outlineResult.status === 'needs_retry') {
+      return outlineResult;
     }
 
     if (outlineResult.status === 'error') {
@@ -240,22 +243,30 @@ class Phase2_OutlineDrafting {
     };
 
     // 计算目标章节数
-    const targetWordCount = config.targetWordCount || { min: 2500, max: 3500 };
+    const targetWordCount = typeof config.targetWordCount === 'number'
+      ? { min: Math.floor(config.targetWordCount * 0.8), max: config.targetWordCount }
+      : (config.targetWordCount || { min: 2500, max: 3500 });
     const storyLength = targetWordCount.min || 2500;
     const estimatedChapters = Math.max(3, Math.min(15, Math.ceil(storyLength / 3000)));
 
     console.log(`[Phase2] Generating outline, estimated ${estimatedChapters} chapters`);
 
-    // 1. 调用 plotArchitect 生成分章大纲
+    let schemaFeedback = '';
+    const lastError = story.workflow?.retryContext?.lastError;
+    if (lastError && lastError.includes('Schema validation failed')) {
+      schemaFeedback = lastError.replace('Schema validation failed: ', '');
+    }
+
     const outlinePrompt = this.promptBuilder.buildOutlinePrompt({
       storyPrompt: config.storyPrompt,
       storyBible,
       targetWordCount,
-      targetChapterCount: estimatedChapters
+      targetChapterCount: estimatedChapters,
+      schemaFeedback
     });
 
     const outlineResult = await this.agentDispatcher.delegate('plotArchitect', outlinePrompt, {
-      timeoutMs: 120000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -288,18 +299,29 @@ class Phase2_OutlineDrafting {
     const outline = this._parseOutline(outlineResult.content, estimatedChapters);
     console.log(`[Phase2] Outline generated with ${outline.chapters?.length || 0} chapters`);
 
-    // 2.5 验证大纲 schema
     const schemaValidation = SchemaValidator.validateOutline(outline);
     if (!schemaValidation.valid) {
-      console.log(`[Phase2] Outline schema invalid: ${schemaValidation.errors.join(', ')}`);
+      const allIssues = [...schemaValidation.errors, ...schemaValidation.warnings];
+      console.log(`[Phase2] Outline schema invalid: ${allIssues.join(', ')}`);
       this.stateManager.repository.updatePhaseAttempt(attemptId, {
         schema_valid: false,
-        error_message: schemaValidation.errors.join('; '),
+        error_message: allIssues.join('; '),
         completed_at: new Date().toISOString()
       });
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'validation_failure', JSON.stringify({
+          stage: 'schema_validation',
+          source: 'generateOutline',
+          verdict: 'FAIL',
+          errors: schemaValidation.errors,
+          warnings: schemaValidation.warnings,
+          parsedOutline: outline,
+          rawContentPreview: (outlineResult.content || '').substring(0, 2000)
+        }, null, 2), 'json');
+      } catch (_) {}
       return {
-        status: 'error',
-        error: 'Outline schema invalid: ' + schemaValidation.errors.join(', ')
+        status: 'needs_retry',
+        error: 'Schema validation failed: ' + allIssues.join('; ')
       };
     }
 
@@ -343,6 +365,18 @@ class Phase2_OutlineDrafting {
 
     if (validationResult.verdict === 'FAIL') {
       console.log(`[Phase2] Outline validation failed, attempting revision`);
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'validation_failure', JSON.stringify({
+          stage: 'logic_validation',
+          source: 'generateOutline',
+          verdict: validationResult.verdict,
+          blockingIssues: validationResult.blockingIssues || [],
+          nonBlockingIssues: validationResult.nonBlockingIssues || [],
+          issues: validationResult.issues || [],
+          suggestions: validationResult.suggestions || [],
+          outline: outline
+        }, null, 2), 'json');
+      } catch (_) {}
       const revisionResult = await this._attemptOutlineRevision(storyId, outline, validationResult, 1, attemptId);
 
       if (revisionResult.status === 'failed') {
@@ -428,7 +462,7 @@ ${JSON.stringify(outline, null, 2)}
 `;
 
     const result = await this.agentDispatcher.delegate('logicValidator', validationPrompt, {
-      timeoutMs: 90000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -465,6 +499,7 @@ ${JSON.stringify(outline, null, 2)}
     });
 
     // 构建修订提示词
+    const chapterCount = outline.chapters?.length || 5;
     const revisionPrompt = `
 【大纲修订任务】
 
@@ -486,11 +521,33 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
 3. 确保各章节之间逻辑通顺
 4. 字数分配合理均衡
 
-请输出修订后的完整大纲。
+=== 输出格式（必须严格遵循，禁止偏离，禁止使用JSON）===
+
+<<<OUTLINE_RESULT开始>>>
+章节总数: ${chapterCount}
+
+【Chapter 1】
+标题: [精确的章节标题]
+核心事件: [一句话描述本章唯一核心事件，不超过25字]
+场景:
+  1. [场景1]
+  2. [场景2]
+出场人物:
+  1. [人物名] - [角色]
+故事功能: [setup | escalation | climax | resolution]
+
+[继续至 Chapter ${chapterCount}]
+
+【关键转折点】
+1. [转折描述]
+
+【伏笔与回收计划】
+- 伏笔X（第A章埋设）→ 回收于第B章：[回收方式]
+<<<OUTLINE_RESULT结束>>>
 `;
 
     const revisionResult = await this.agentDispatcher.delegate('plotArchitect', revisionPrompt, {
-      timeoutMs: 120000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -507,16 +564,32 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
 
     const revisedOutline = this._parseOutline(revisionResult.content, outline.chapters?.length || 5);
 
-    // Schema 验证
     const schemaValidation = SchemaValidator.validateOutline(revisedOutline);
     if (!schemaValidation.valid) {
-      console.log(`[Phase2] Revised outline schema invalid: ${schemaValidation.errors.join(', ')}, retrying`);
+      const allIssues = [...schemaValidation.errors, ...schemaValidation.warnings];
+      console.log(`[Phase2] Revised outline schema invalid: ${allIssues.join(', ')}, retrying`);
       this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
         schema_valid: false,
-        error_message: schemaValidation.errors.join('; '),
+        error_message: allIssues.join('; '),
         completed_at: new Date().toISOString()
       });
-      return this._attemptOutlineRevision(storyId, revisedOutline, validationResult, attemptNumber + 1, parentAttemptId);
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'validation_failure', JSON.stringify({
+          stage: 'schema_validation',
+          source: `attemptOutlineRevision_attempt${attemptNumber}`,
+          verdict: 'FAIL',
+          errors: schemaValidation.errors,
+          warnings: schemaValidation.warnings,
+          parsedOutline: revisedOutline,
+          rawContentPreview: (revisionResult.content || '').substring(0, 2000)
+        }, null, 2), 'json');
+      } catch (_) {}
+      const schemaErrorFeedback = {
+        verdict: 'FAIL',
+        issues: allIssues,
+        suggestions: ['请严格遵循输出格式要求，确保每个章节都有标题和核心事件']
+      };
+      return this._attemptOutlineRevision(storyId, revisedOutline, schemaErrorFeedback, attemptNumber + 1, parentAttemptId);
     }
 
     this.stateManager.repository.updatePhaseAttempt(revisionAttemptId, {
@@ -573,6 +646,18 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
         error_message: `Validation failed: ${reValidation.verdict}`,
         completed_at: new Date().toISOString()
       });
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'validation_failure', JSON.stringify({
+          stage: 'logic_validation',
+          source: `attemptOutlineRevision_attempt${attemptNumber}_revalidation`,
+          verdict: reValidation.verdict,
+          blockingIssues: reValidation.blockingIssues || [],
+          nonBlockingIssues: reValidation.nonBlockingIssues || [],
+          issues: reValidation.issues || [],
+          suggestions: reValidation.suggestions || [],
+          outline: revisedOutline
+        }, null, 2), 'json');
+      } catch (_) {}
       return this._attemptOutlineRevision(storyId, revisedOutline, reValidation, attemptNumber + 1, parentAttemptId);
     }
 
@@ -625,6 +710,7 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
 
     console.log(`[Phase2] Revising outline with user feedback`);
 
+    const chapterCount = currentOutline.chapters?.length || 5;
     const revisionPrompt = `
 【大纲修订任务 - 用户反馈】
 
@@ -642,11 +728,33 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
 3. 确保修订后的各章节之间逻辑通顺
 4. 字数分配合理均衡
 
-请输出修订后的完整大纲。
+=== 输出格式（必须严格遵循，禁止偏离，禁止使用JSON）===
+
+<<<OUTLINE_RESULT开始>>>
+章节总数: ${chapterCount}
+
+【Chapter 1】
+标题: [精确的章节标题]
+核心事件: [一句话描述本章唯一核心事件，不超过25字]
+场景:
+  1. [场景1]
+  2. [场景2]
+出场人物:
+  1. [人物名] - [角色]
+故事功能: [setup | escalation | climax | resolution]
+
+[继续至 Chapter ${chapterCount}]
+
+【关键转折点】
+1. [转折描述]
+
+【伏笔与回收计划】
+- 伏笔X（第A章埋设）→ 回收于第B章：[回收方式]
+<<<OUTLINE_RESULT结束>>>
 `;
 
     const revisionResult = await this.agentDispatcher.delegate('plotArchitect', revisionPrompt, {
-      timeoutMs: 120000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -659,6 +767,17 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     const schemaValidation = SchemaValidator.validateOutline(revisedOutline);
     if (!schemaValidation.valid) {
       console.log(`[Phase2] User revision outline schema invalid: ${schemaValidation.errors.join(', ')}`);
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'validation_failure', JSON.stringify({
+          stage: 'schema_validation',
+          source: 'reviseOutlineWithFeedback',
+          verdict: 'FAIL',
+          errors: schemaValidation.errors,
+          warnings: schemaValidation.warnings,
+          parsedOutline: revisedOutline,
+          rawContentPreview: (revisionResult.content || '').substring(0, 2000)
+        }, null, 2), 'json');
+      } catch (_) {}
       return {
         status: 'error',
         error: 'Outline schema invalid after user revision: ' + schemaValidation.errors.join(', ')
@@ -924,34 +1043,51 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     };
 
     try {
-      // 尝试提取章节列表
-      const chapterMatches = content.match(/第\s*\d+\s*章[^\n]*/gi) || [];
-      
-      if (chapterMatches.length > 0) {
-        // 提取各章节的详细信息
-        const sections = content.split(/第\s*\d+\s*章/);
-        
+      // 策略1：尝试匹配 "【Chapter N】" 格式（PromptBuilder 输出格式）
+      const chapterHeaderRegexCN = /【\s*Chapter\s+(\d+)\s*】/gi;
+      const chapterMatchesCN = content.match(chapterHeaderRegexCN) || [];
+
+      if (chapterMatchesCN.length > 0) {
+        // 用 【Chapter N】 分割，提取各章节内容
+        const sections = content.split(/【\s*Chapter\s+\d+\s*】/i);
+        // sections[0] 是第一个 【Chapter】 之前的内容，跳过
         for (let i = 1; i < sections.length && i <= 20; i++) {
-          const section = sections[i];
-          const chapterInfo = this._parseChapterSection(section, i);
+          const chapterNum = i;
+          const chapterInfo = this._parseChapterSectionStructured(sections[i], chapterNum);
           if (chapterInfo) {
             outline.chapters.push(chapterInfo);
           }
         }
       }
 
-      // 如果没有找到章节，使用默认数量
+      // 策略2：如果策略1未提取到章节，尝试匹配 "第N章" 格式
       if (outline.chapters.length === 0) {
-        for (let i = 1; i <= defaultChapterCount; i++) {
-          outline.chapters.push({
-            number: i,
-            title: `第${i}章`,
-            coreEvent: '待填充',
-            scenes: [],
-            characters: [],
-            wordCountTarget: 2500
-          });
+        const chapterMatchesLegacy = content.match(/第\s*\d+\s*章[^\n]*/gi) || [];
+
+        if (chapterMatchesLegacy.length > 0) {
+          const sections = content.split(/第\s*\d+\s*章/);
+          for (let i = 1; i < sections.length && i <= 20; i++) {
+            const chapterInfo = this._parseChapterSection(sections[i], i);
+            if (chapterInfo) {
+              outline.chapters.push(chapterInfo);
+            }
+          }
         }
+      }
+
+      // 策略3：尝试从 ```json 代码块中解析 JSON 格式
+      if (outline.chapters.length === 0) {
+        const jsonParsed = this._tryParseJsonOutline(content);
+        if (jsonParsed) {
+          outline.chapters = jsonParsed.chapters;
+          outline.structure = jsonParsed.structure || outline.structure;
+          outline.keyTurningPoints = jsonParsed.keyTurningPoints || outline.keyTurningPoints;
+          outline.foreshadowing = jsonParsed.foreshadowing || outline.foreshadowing;
+        }
+      }
+
+      if (outline.chapters.length === 0) {
+        console.warn('[Phase2] _parseOutline: failed to extract any chapters from content, returning empty outline');
       }
 
       // 提取整体结构
@@ -986,7 +1122,118 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
   }
 
   /**
-   * 解析单个章节段落
+   * 尝试从内容中提取并解析 JSON 格式的大纲
+   * 处理 ```json 代码块包裹的响应以及裸 JSON 对象
+   */
+  _tryParseJsonOutline(content) {
+    let jsonStr = null;
+
+    const codeBlockMatch = content.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+    if (codeBlockMatch) {
+      jsonStr = codeBlockMatch[1].trim();
+    }
+
+    if (!jsonStr) {
+      const braceMatch = content.match(/(\{[\s\S]*"chapters"[\s\S]*\})/);
+      if (braceMatch) {
+        jsonStr = braceMatch[1];
+      }
+    }
+
+    if (!jsonStr) return null;
+
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed.chapters || !Array.isArray(parsed.chapters) || parsed.chapters.length === 0) {
+        return null;
+      }
+
+      const normalizedChapters = parsed.chapters.map((ch, idx) => ({
+        number: ch.number || ch.chapterNumber || (idx + 1),
+        title: ch.title || `第${idx + 1}章`,
+        coreEvent: ch.coreEvent || ch.core_event || '',
+        scenes: Array.isArray(ch.scenes)
+          ? ch.scenes.map(s => typeof s === 'string' ? s : (s.action || s.content || JSON.stringify(s)))
+          : [],
+        characters: Array.isArray(ch.characters)
+          ? ch.characters.map(c => typeof c === 'string' ? c : (c.name || String(c)))
+          : [],
+        wordCountTarget: ch.wordCountTarget || ch.wordCount || ch.word_count || 2500,
+        storyFunction: ch.storyFunction || ch.function || ch['function'] || ''
+      }));
+
+      return {
+        chapters: normalizedChapters,
+        structure: parsed.structure || null,
+        keyTurningPoints: parsed.keyTurningPoints || [],
+        foreshadowing: parsed.foreshadowing || []
+      };
+    } catch (e) {
+      console.warn('[Phase2] _tryParseJsonOutline: JSON parse failed:', e.message);
+      return null;
+    }
+  }
+
+  /**
+   * 解析 【Chapter N】 结构化格式的章节段落
+   * 匹配 PromptBuilder.buildOutlinePrompt() 输出的格式：
+   *   标题: xxx
+   *   核心事件: xxx
+   *   场景: ...
+   *   出场人物: ...
+   *   故事功能: xxx
+   */
+  _parseChapterSectionStructured(section, chapterNum) {
+    const chapter = {
+      number: chapterNum,
+      title: `第${chapterNum}章`,
+      coreEvent: '',
+      scenes: [],
+      characters: [],
+      wordCountTarget: 2500,
+      storyFunction: ''
+    };
+
+    const titleMatch = section.match(/标题[：:]\s*([^\n]+)/i);
+    if (titleMatch) {
+      chapter.title = titleMatch[1].trim();
+    }
+
+    const eventMatch = section.match(/核心事件[：:]\s*([^\n]+)/i);
+    if (eventMatch) {
+      chapter.coreEvent = eventMatch[1].trim();
+    }
+
+    const sceneBlock = section.match(/场景[：:]\s*\n([\s\S]*?)(?=\n出场人物|\n故事功能|\n【|$)/i);
+    if (sceneBlock) {
+      chapter.scenes = sceneBlock[1]
+        .split('\n')
+        .map(line => line.replace(/^\s*\d+\.\s*/, '').trim())
+        .filter(s => s.length > 0);
+    }
+
+    const charBlock = section.match(/出场人物[：:]\s*\n([\s\S]*?)(?=\n故事功能|\n【|$)/i);
+    if (charBlock) {
+      chapter.characters = charBlock[1]
+        .split('\n')
+        .map(line => {
+          const clean = line.replace(/^\s*\d+\.\s*/, '').trim();
+          const parts = clean.split(/\s*[-–—]\s*/);
+          return parts[0].trim();
+        })
+        .filter(c => c.length > 0);
+    }
+
+    const funcMatch = section.match(/故事功能[：:]\s*(setup|escalation|climax|resolution)/i);
+    if (funcMatch) {
+      chapter.storyFunction = funcMatch[1].toLowerCase();
+    }
+
+    return chapter;
+  }
+
+  /**
+   * 解析单个章节段落（第N章 格式）
    */
   _parseChapterSection(section, chapterNum) {
     const lines = section.split('\n').filter(l => l.trim());

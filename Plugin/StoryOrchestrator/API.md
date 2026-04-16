@@ -817,13 +817,12 @@ format:「始」markdown「末」
 
 ## 2. Agent Types
 
-The StoryOrchestrator uses 9 specialized agents organized in a hierarchical architecture.
+The StoryOrchestrator uses 8 specialized agents organized by workflow phase.
 
 ### 2.1 Agent Type Constants
 
 ```javascript
 const AGENT_TYPES = {
-  ORCHESTRATOR: 'orchestrator',           // 总控调度
   WORLD_BUILDER: 'worldBuilder',           // 世界观设定
   CHARACTER_DESIGNER: 'characterDesigner', // 人物塑造
   PLOT_ARCHITECT: 'plotArchitect',         // 情节架构
@@ -839,10 +838,6 @@ const AGENT_TYPES = {
 
 ```javascript
 const AGENT_CONFIG_MAP = {
-  [AGENT_TYPES.ORCHESTRATOR]: {
-    configPrefix: 'AGENT_ORCHESTRATOR',
-    defaultName: '总控调度'
-  },
   [AGENT_TYPES.WORLD_BUILDER]: {
     configPrefix: 'AGENT_WORLD_BUILDER',
     defaultName: '世界观设定'
@@ -899,7 +894,6 @@ function getAgentConfig(agentType, globalConfig = {}) {
 
 | Agent Type | Chinese Name | Role |
 |------------|--------------|------|
-| `orchestrator` | 总控调度 | Task decomposition, progress monitoring, conflict resolution |
 | `worldBuilder` | 世界观设定 | Creates setting, rules, factions, history, scene norms |
 | `characterDesigner` | 人物塑造 | Designs protagonists, supporting characters, relationship networks |
 | `plotArchitect` | 情节架构 | Creates chapter outline, turning points, foreshadowing |
@@ -909,19 +903,12 @@ function getAgentConfig(agentType, globalConfig = {}) {
 | `stylePolisher` | 文笔润色 | Polishes prose style, tone, sentence structure |
 | `finalEditor` | 终校定稿 | Final review, format standardization, quality scoring |
 
-### 2.5 Agent Hierarchy
+### 2.5 Agent Layering
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Decision & Coordination Layer          │
-│  ┌─────────────────┐                                        │
-│  │   Orchestrator  │ - Task decomposition & allocation     │
-│  │   (总控调度)    │ - Progress monitoring                 │
-│  │                 │ - Conflict resolution                 │
-│  └─────────────────┘                                        │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
+│                  Workflow-Driven Agent Layers               │
+├─────────────────────────────────────────────────────────────┤
 │                      Creative Generation Layer              │
 │  ┌─────────────────┐  ┌─────────────────┐                  │
 │  │  WorldBuilder   │  │ CharacterDesign │                  │
@@ -1769,12 +1756,6 @@ USER_CHECKPOINT_TIMEOUT_MS=86400000
 STORY_STATE_RETENTION_DAYS=30
 
 # Orchestrator Agent Configuration
-AGENT_ORCHESTRATOR_MODEL_ID=gpt-4
-AGENT_ORCHESTRATOR_CHINESE_NAME=总控调度
-AGENT_ORCHESTRATOR_SYSTEM_PROMPT=你是故事创作的总控调度Agent...
-AGENT_ORCHESTRATOR_MAX_OUTPUT_TOKENS=4000
-AGENT_ORCHESTRATOR_TEMPERATURE=0.7
-
 # WorldBuilder Agent Configuration
 AGENT_WORLD_BUILDER_MODEL_ID=gpt-4
 AGENT_WORLD_BUILDER_CHINESE_NAME=世界观设定

@@ -1,5 +1,4 @@
 const AGENT_TYPES = {
-  ORCHESTRATOR: 'orchestrator',
   WORLD_BUILDER: 'worldBuilder',
   CHARACTER_DESIGNER: 'characterDesigner',
   PLOT_ARCHITECT: 'plotArchitect',
@@ -11,10 +10,6 @@ const AGENT_TYPES = {
 };
 
 const AGENT_CONFIG_MAP = {
-  [AGENT_TYPES.ORCHESTRATOR]: {
-    configPrefix: 'AGENT_ORCHESTRATOR',
-    defaultName: '总控调度'
-  },
   [AGENT_TYPES.WORLD_BUILDER]: {
     configPrefix: 'AGENT_WORLD_BUILDER',
     defaultName: '世界观设定'
@@ -68,7 +63,7 @@ function getAgentConfig(agentType, globalConfig = {}) {
 
 function getAllAgentConfigs(globalConfig = {}) {
   const configs = {};
-  for (const [type, mapping] of Object.entries(AGENT_CONFIG_MAP)) {
+  for (const type of Object.keys(AGENT_CONFIG_MAP)) {
     configs[type] = getAgentConfig(type, globalConfig);
   }
   return configs;

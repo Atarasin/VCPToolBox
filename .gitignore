@@ -230,3 +230,4 @@ Plugin/VCPTaskAssistant/task-center-data.json
 Plugin/RAGDiaryPlugin/folding_store.db-shm
 Plugin/RAGDiaryPlugin/folding_store.db-wal
 Plugin/RAGDiaryPlugin/folding_store.db
+Plugin/VCPTavern/access_logs.json

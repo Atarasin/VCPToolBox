@@ -46,7 +46,7 @@ class AgentDispatcher {
     };
 
     const delegationOptions = {
-      timeoutMs: options.timeoutMs || 120000,
+      timeoutMs: options.timeoutMs || 600000,
       temporaryContact: options.temporaryContact !== false,
       taskDelegation: options.taskDelegation || false,
       ...options

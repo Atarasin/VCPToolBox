@@ -11,12 +11,8 @@ function createConfig(overrides = {}) {
     PORT: 6789,
     VCP_Key: 'config-key',
     AGENT_ASSISTANT_URL: 'http://127.0.0.1:6789',
-    AGENT_ORCHESTRATOR_MODEL_ID: 'model-orchestrator',
-    AGENT_ORCHESTRATOR_SYSTEM_PROMPT: 'You are the orchestrator.',
-    AGENT_ORCHESTRATOR_CHINESE_NAME: '总控调度',
-    AGENT_ORCHESTRATOR_MAX_OUTPUT_TOKENS: '4100',
-    AGENT_ORCHESTRATOR_TEMPERATURE: '0.4',
     AGENT_WORLD_BUILDER_MODEL_ID: 'model-world',
+    AGENT_WORLD_BUILDER_SYSTEM_PROMPT: 'You are the world builder.',
     AGENT_WORLD_BUILDER_CHINESE_NAME: '世界观设定',
     AGENT_WORLD_BUILDER_MAX_OUTPUT_TOKENS: '3200',
     AGENT_WORLD_BUILDER_TEMPERATURE: '0.8',
@@ -116,7 +112,7 @@ describe('AgentDispatcher', () => {
     test('initializes with provided agent definitions and config values', () => {
       const dispatcher = new AgentDispatcher(createConfig(), { state: true });
 
-      assert.strictEqual(dispatcher.config.AGENT_ORCHESTRATOR_MODEL_ID, 'model-orchestrator');
+      assert.strictEqual(dispatcher.config.AGENT_WORLD_BUILDER_MODEL_ID, 'model-world');
       assert.strictEqual(dispatcher.stateManager.state, true);
       assert.strictEqual(dispatcher.agentAssistantUrl, 'http://127.0.0.1:6789');
       assert.strictEqual(dispatcher.vcpKey, 'config-key');
@@ -164,7 +160,7 @@ describe('AgentDispatcher', () => {
       });
 
       const dispatcher = new AgentDispatcher(createConfig(), {});
-      const result = await dispatcher.delegate(AGENT_TYPES.ORCHESTRATOR, 'outline the work');
+      const result = await dispatcher.delegate(AGENT_TYPES.WORLD_BUILDER, 'outline the work');
 
       requestMock.mock.restore();
 
@@ -173,12 +169,12 @@ describe('AgentDispatcher', () => {
       assert.strictEqual(captured.options.path, '/v1/chat/completions');
       assert.strictEqual(captured.options.method, 'POST');
       assert.strictEqual(captured.options.headers.Authorization, 'Bearer config-key');
-      assert.strictEqual(captured.timeoutMs, 120000);
-      assert.strictEqual(captured.payload.model, 'model-orchestrator');
-      assert.strictEqual(captured.payload.messages[0].content, 'You are the orchestrator.');
+      assert.strictEqual(captured.timeoutMs, 600000);
+      assert.strictEqual(captured.payload.model, 'model-world');
+      assert.strictEqual(captured.payload.messages[0].content, 'You are the world builder.');
       assert.strictEqual(captured.payload.messages[1].content, 'outline the work');
-      assert.strictEqual(captured.payload.temperature, 0.4);
-      assert.strictEqual(captured.payload.max_tokens, 4100);
+      assert.strictEqual(captured.payload.temperature, 0.8);
+      assert.strictEqual(captured.payload.max_tokens, 3200);
       assert.strictEqual(result.content, `done ${COMPLETION_MARKERS.COMPLETE}`);
       assert.deepStrictEqual(result.markers, {
         isComplete: true,
@@ -249,10 +245,10 @@ describe('AgentDispatcher', () => {
     });
 
     test('throws when selected agent has no configured model id', async () => {
-      const dispatcher = new AgentDispatcher(createConfig({ AGENT_ORCHESTRATOR_MODEL_ID: '' }), {});
+      const dispatcher = new AgentDispatcher(createConfig({ AGENT_WORLD_BUILDER_MODEL_ID: '' }), {});
 
       await assert.rejects(
-        () => dispatcher.delegate(AGENT_TYPES.ORCHESTRATOR, 'do work'),
+        () => dispatcher.delegate(AGENT_TYPES.WORLD_BUILDER, 'do work'),
         /missing MODEL_ID/
       );
     });
@@ -262,7 +258,7 @@ describe('AgentDispatcher', () => {
       const dispatcher = new AgentDispatcher(createConfig(), {});
 
       await assert.rejects(
-        () => dispatcher.delegate(AGENT_TYPES.ORCHESTRATOR, 'do work'),
+        () => dispatcher.delegate(AGENT_TYPES.WORLD_BUILDER, 'do work'),
         /socket hang up/
       );
 
@@ -275,7 +271,7 @@ describe('AgentDispatcher', () => {
       const dispatcher = new AgentDispatcher(createConfig(), {});
 
       await assert.rejects(
-        () => dispatcher.delegate(AGENT_TYPES.ORCHESTRATOR, 'do work'),
+        () => dispatcher.delegate(AGENT_TYPES.WORLD_BUILDER, 'do work'),
         /Failed to parse response/
       );
 
@@ -287,7 +283,7 @@ describe('AgentDispatcher', () => {
       const dispatcher = new AgentDispatcher(createConfig(), {});
 
       await assert.rejects(
-        () => dispatcher.delegate(AGENT_TYPES.ORCHESTRATOR, 'do work', { taskDelegation: true }),
+        () => dispatcher.delegate(AGENT_TYPES.WORLD_BUILDER, 'do work', { taskDelegation: true }),
         /No delegation ID returned/
       );
 
@@ -299,7 +295,7 @@ describe('AgentDispatcher', () => {
       const dispatcher = new AgentDispatcher(createConfig(), {});
 
       await assert.rejects(
-        () => dispatcher.delegate(AGENT_TYPES.ORCHESTRATOR, 'do work', { timeoutMs: 1234 }),
+        () => dispatcher.delegate(AGENT_TYPES.WORLD_BUILDER, 'do work', { timeoutMs: 1234 }),
         /Request timeout after 1234ms/
       );
 

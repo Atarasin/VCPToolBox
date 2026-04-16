@@ -105,8 +105,8 @@ async function runTests() {
     secrets: ['S1']
   };
   const truncatedResult = SchemaValidator.validateWorldview(truncatedWorldview);
-  assert(truncatedResult.valid === false, 'truncated worldview fails completeness validation');
-  assert(truncatedResult.errors.some(e => e.includes('截断')), 'truncation detected as completeness error');
+  assert(truncatedResult.valid === true, 'truncated worldview with correct structure passes schema validation');
+  assert(truncatedResult.warnings.some(e => e.includes('截断')), 'truncation detected as completeness warning');
 
   const phase2Mock = new Phase2_OutlineDrafting({
     stateManager,

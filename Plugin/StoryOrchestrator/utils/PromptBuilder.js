@@ -288,8 +288,13 @@ ${content}
       storyPrompt,
       storyBible,
       targetWordCount = { min: 2500, max: 3500 },
-      targetChapterCount = 5
+      targetChapterCount = 5,
+      schemaFeedback = ''
     } = params;
+
+    const feedbackSection = schemaFeedback
+      ? `=== 上一次失败的格式问题（必须修正） ===\n${schemaFeedback}\n\n`
+      : '';
 
     return `【大纲生成任务】
 
@@ -311,7 +316,7 @@ ${JSON.stringify(storyBible?.characters || [], null, 2)}
 
 【重要】章节字数分配由编写时自然决定，无需手动均衡。
 
-=== 输出格式（必须严格遵循，禁止偏离）===
+${feedbackSection}=== 输出格式（必须严格遵循，禁止偏离）===
 
 <<<OUTLINE_RESULT开始>>>
 章节总数: ${targetChapterCount}

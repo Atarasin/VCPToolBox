@@ -45,7 +45,9 @@ class StateManager {
       createdAt: now,
       updatedAt: now,
       config: {
-        targetWordCount: config.target_word_count || { min: 2500, max: 3500 },
+        targetWordCount: typeof config.target_word_count === 'number'
+          ? { min: Math.floor(config.target_word_count * 0.8), max: config.target_word_count }
+          : (config.target_word_count || { min: 2500, max: 3500 }),
         genre: config.genre || 'general',
         stylePreference: config.style_preference || '',
         storyPrompt: storyPrompt
@@ -102,7 +104,22 @@ class StateManager {
 
   async getStory(storyId) {
     if (this.cache.has(storyId)) {
-      return this.cache.get(storyId);
+      const cached = this.cache.get(storyId);
+      const row = this.repository.getStory(storyId);
+      if (!row) {
+        this.cache.delete(storyId);
+        return null;
+      }
+      if (cached.version !== undefined && row.version !== undefined && cached.version !== row.version) {
+        this.cache.delete(storyId);
+        const assembled = this._assembleStoryFromSQLite(storyId);
+        if (assembled) {
+          this.cache.set(storyId, assembled);
+          return assembled;
+        }
+        return null;
+      }
+      return cached;
     }
 
     const assembled = this._assembleStoryFromSQLite(storyId);
@@ -283,14 +300,12 @@ class StateManager {
     if (hasSnapshotRefChanges) {
       const reassembled = this._assembleStoryFromSQLite(storyId);
       if (reassembled) {
-        Object.assign(reassembled, {
-          finalOutput: updated.finalOutput !== undefined ? updated.finalOutput : reassembled.finalOutput,
-          workflow: {
-            ...reassembled.workflow,
-            ...updated.workflow,
-            retryContext: updated.workflow?.retryContext || reassembled.workflow.retryContext
-          }
-        });
+        if (updated.finalOutput !== undefined) {
+          reassembled.finalOutput = updated.finalOutput;
+        }
+        if (updated.workflow?.runToken) {
+          reassembled.workflow.runToken = updated.workflow.runToken;
+        }
         reassembled.version = updated.version;
         reassembled.updatedAt = updated.updatedAt;
         await this._saveStory(storyId, reassembled);
@@ -716,6 +731,7 @@ class StateManager {
     const tempPath = `${statePath}.tmp`;
 
     try {
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
       await fs.writeFile(tempPath, JSON.stringify(story, null, 2), 'utf8');
       await fs.rename(tempPath, statePath);
     } catch (error) {

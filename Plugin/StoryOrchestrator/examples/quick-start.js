@@ -35,7 +35,6 @@ const mockConfig = {
   
   // IMPORTANT: These are MOCK values for example purposes
   // In production, set these to real model IDs from your AI provider
-  AGENT_ORCHESTRATOR_MODEL_ID: 'mock-model',
   AGENT_WORLD_BUILDER_MODEL_ID: 'mock-model',
   AGENT_CHARACTER_DESIGNER_MODEL_ID: 'mock-model',
   AGENT_PLOT_ARCHITECT_MODEL_ID: 'mock-model',

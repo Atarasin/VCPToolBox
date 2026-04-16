@@ -302,7 +302,7 @@ class Phase3_Refinement {
       const prompt = this.promptBuilder.buildFinalEditorPrompt(fullContent);
 
       const result = await this.agentDispatcher.delegate('finalEditor', prompt, {
-        timeoutMs: 120000,
+        timeoutMs: 300000,
         temporaryContact: true
       });
 

@@ -3,7 +3,7 @@
   "name": "StoryOrchestrator",
   "version": "1.1.0",
   "displayName": "多智能体故事创作编排器",
-  "description": "九智能体协作的短篇故事创作编排器，支持三阶段工作流、用户检查点确认、章节级生成/审查/修订/润色，以及恢复重试与导出闭环。",
+  "description": "多智能体协作的短篇故事创作编排器，支持三阶段工作流、用户检查点确认、章节级生成/审查/修订/润色，以及恢复重试与导出闭环。",
   "author": "VCPToolBox",
   "pluginType": "hybridservice",
   "entryPoint": {
@@ -32,8 +32,7 @@
     "AGENT_DETAIL_FILLER": "string",
     "AGENT_LOGIC_VALIDATOR": "string",
     "AGENT_STYLE_POLISHER": "string",
-    "AGENT_FINAL_EDITOR": "string",
-    "AGENT_ORCHESTRATOR": "string"
+    "AGENT_FINAL_EDITOR": "string"
   },
   "capabilities": {
     "parameters": {

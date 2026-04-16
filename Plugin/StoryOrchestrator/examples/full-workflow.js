@@ -21,7 +21,6 @@ const mockConfig = {
   STORY_STATE_RETENTION_DAYS: 30,
   MAX_PHASE_RETRY_ATTEMPTS: 3,
   // MOCK - replace with real model IDs
-  AGENT_ORCHESTRATOR_MODEL_ID: 'mock-model',
   AGENT_WORLD_BUILDER_MODEL_ID: 'mock-model',
   AGENT_CHARACTER_DESIGNER_MODEL_ID: 'mock-model',
   AGENT_PLOT_ARCHITECT_MODEL_ID: 'mock-model',

@@ -527,7 +527,11 @@ class StoryOrchestrator {
   }
 
   _getCurrentPhase(story) {
-    if (story.phase3?.userConfirmed) return 4;
+    const workflowPhase = story.workflow?.currentPhase;
+    if (workflowPhase === 'phase1') return 1;
+    if (workflowPhase === 'phase2') return 2;
+    if (workflowPhase === 'phase3') return 3;
+    if (workflowPhase === 'completed' || story.phase3?.userConfirmed) return 4;
     if (story.phase2?.userConfirmed) return 3;
     if (story.phase1?.userConfirmed) return 2;
     return 1;

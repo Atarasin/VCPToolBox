@@ -47,14 +47,25 @@ class Phase1_WorldBuilding {
       }
 
       const { storyPrompt, genre, stylePreference, targetWordCount } = story.config;
-      const targetWords = targetWordCount || { min: 2500, max: 3500 };
+      const targetWords = typeof targetWordCount === 'number'
+        ? { min: Math.floor(targetWordCount * 0.8), max: targetWordCount }
+        : (targetWordCount || { min: 2500, max: 3500 });
+
+      let previousSchemaErrors = [];
+      const lastError = story.workflow?.retryContext?.lastError;
+      if (lastError && lastError.includes('Schema validation failed')) {
+        previousSchemaErrors = lastError.replace('Schema validation failed: ', '').split(';').map(s => s.trim()).filter(Boolean);
+      } else if (lastError && lastError.includes('Revised content failed schema validation')) {
+        previousSchemaErrors = lastError.replace('Revised content failed schema validation: ', '').split(',').map(s => s.trim()).filter(Boolean);
+      }
 
       // 2. 并行执行世界观和人物设计 agents
       const parallelResult = await this._executeParallelAgents({
         storyPrompt,
         genre,
         stylePreference,
-        targetWords
+        targetWords,
+        previousSchemaErrors
       });
 
       if (parallelResult.status === 'failed') {
@@ -117,11 +128,14 @@ class Phase1_WorldBuilding {
         charactersSchemaResult.valid ? 'valid' : 'invalid',
         charactersSchemaResult.errors?.length ? charactersSchemaResult.errors : '');
 
-      // If schema validation fails, do NOT save to phase1
       if (!worldviewSchemaResult.valid || !charactersSchemaResult.valid) {
         const allErrors = [
           ...(worldviewSchemaResult.errors || []),
           ...(charactersSchemaResult.errors || [])
+        ];
+        const allWarnings = [
+          ...(worldviewSchemaResult.warnings || []),
+          ...(charactersSchemaResult.warnings || [])
         ];
 
         this.stateManager.repository.updatePhaseAttempt(attemptId, {
@@ -135,6 +149,7 @@ class Phase1_WorldBuilding {
           worldviewSchemaValid: worldviewSchemaResult.valid,
           charactersSchemaValid: charactersSchemaResult.valid,
           errors: allErrors,
+          warnings: allWarnings,
           repairUsed: repairUsedForWorldview || repairUsedForCharacters
         });
 
@@ -144,8 +159,9 @@ class Phase1_WorldBuilding {
           nextAction: 'retry',
           checkpointId: null,
           data: {
-            error: 'Schema validation failed',
+            error: 'Schema validation failed: ' + allErrors.join('; '),
             schemaErrors: allErrors,
+            schemaWarnings: allWarnings,
             worldviewSchemaWarnings: worldviewSchemaResult.warnings || [],
             charactersSchemaWarnings: charactersSchemaResult.warnings || [],
             repairUsed: repairUsedForWorldview || repairUsedForCharacters
@@ -547,21 +563,22 @@ class Phase1_WorldBuilding {
    * @returns {Object} 执行结果
    */
   async _executeParallelAgents(params) {
-    const { storyPrompt, genre, stylePreference, targetWords } = params;
+    const { storyPrompt, genre, stylePreference, targetWords, previousSchemaErrors = [] } = params;
 
-    // 构建提示词
     const worldviewPrompt = this._buildWorldviewPrompt({
       storyPrompt,
       genre,
       stylePreference,
-      targetWords
+      targetWords,
+      previousSchemaErrors
     });
 
     const charactersPrompt = this._buildCharacterPrompt({
       storyPrompt,
       genre,
       stylePreference,
-      targetWords
+      targetWords,
+      previousSchemaErrors
     });
 
     // 并行执行
@@ -570,7 +587,7 @@ class Phase1_WorldBuilding {
         agentType: AGENT_TYPES.WORLD_BUILDER,
         prompt: worldviewPrompt,
         options: {
-          timeoutMs: 120000,
+          timeoutMs: 300000,
           temporaryContact: true
         }
       },
@@ -578,7 +595,7 @@ class Phase1_WorldBuilding {
         agentType: AGENT_TYPES.CHARACTER_DESIGNER,
         prompt: charactersPrompt,
         options: {
-          timeoutMs: 120000,
+          timeoutMs: 300000,
           temporaryContact: true
         }
       }
@@ -758,7 +775,10 @@ class Phase1_WorldBuilding {
    * @returns {string} 提示词
    */
   _buildWorldviewPrompt(params) {
-    const { storyPrompt, genre, stylePreference, targetWords } = params;
+    const { storyPrompt, genre, stylePreference, targetWords, previousSchemaErrors = [] } = params;
+    const schemaFeedback = previousSchemaErrors.length > 0
+      ? `\n=== 上一次失败的格式问题（必须修正） ===\n${previousSchemaErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}\n请确保修正以上问题，严格遵循下方的JSON格式输出。\n`
+      : '';
 
     return `【世界观设定任务】
 
@@ -775,7 +795,7 @@ ${stylePreference || '保持叙事流畅，注重逻辑严谨'}
 
 === 创作参数 ===
 目标字数：约 ${targetWords.min}-${targetWords.max} 字
-
+${schemaFeedback}
 === 输出要求 ===
 请构建包含以下方面的完整世界观：
 
@@ -805,7 +825,7 @@ ${stylePreference || '保持叙事流畅，注重逻辑严谨'}
 
 请以JSON格式输出，结构如下：
 {
-  "setting": "时代背景与地理环境描述",
+  "setting": "时代背景与地理环境描述（至少50字）",
   "rules": {
     "physical": "物理规则描述",
     "special": "特殊设定描述（如有）",
@@ -833,7 +853,10 @@ ${stylePreference || '保持叙事流畅，注重逻辑严谨'}
    * @returns {string} 提示词
    */
   _buildCharacterPrompt(params) {
-    const { storyPrompt, genre, stylePreference, targetWords } = params;
+    const { storyPrompt, genre, stylePreference, targetWords, previousSchemaErrors = [] } = params;
+    const schemaFeedback = previousSchemaErrors.length > 0
+      ? `\n=== 上一次失败的格式问题（必须修正） ===\n${previousSchemaErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}\n请确保修正以上问题，严格遵循下方的JSON格式输出。\n`
+      : '';
 
     return `【人物塑造任务】
 
@@ -850,11 +873,11 @@ ${stylePreference || '保持叙事流畅，注重人物刻画'}
 
 === 创作参数 ===
 目标字数：约 ${targetWords.min}-${targetWords.max} 字
-
+${schemaFeedback}
 === 输出要求 ===
 请构建包含以下方面的完整人物档案：
 
-1. **主要人物**（2-4人）
+1. **主要人物**（2-4人，至少1人）
    - 姓名与身份
    - 外貌特征
    - 性格特质（MBTI/核心关键词）
@@ -895,7 +918,7 @@ ${stylePreference || '保持叙事流畅，注重人物刻画'}
   "supportingCharacters": [
     {
       "name": "配角姓名",
-      "identity": "身份描述", 
+      "identity": "身份描述",
       "role": "功能定位",
       "relationship": "与主角的关系"
     }
@@ -1112,7 +1135,7 @@ ${JSON.stringify(characters, null, 2)}
         AGENT_TYPES.LOGIC_VALIDATOR,
         validationPrompt,
         {
-          timeoutMs: 90000,
+          timeoutMs: 300000,
           temporaryContact: true
         }
       );
