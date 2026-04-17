@@ -340,6 +340,20 @@ class Phase2_OutlineDrafting {
         status: 'pending_confirmation'
       }, { snapshotType: 'validated' });
 
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'outline_approved', JSON.stringify({
+          source: 'generateOutline_pass_with_warnings',
+          validationResult,
+          outline,
+          chapterCount: outline.chapters?.length || 0,
+          schemaValidation: {
+            valid: true,
+            errors: [],
+            warnings: schemaValidation.warnings || []
+          }
+        }, null, 2), 'json');
+      } catch (_) {}
+
       const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
       await this.stateManager.updatePhase2(storyId, {
         checkpointId
@@ -394,6 +408,21 @@ class Phase2_OutlineDrafting {
       outline,
       status: 'pending_confirmation'
     }, { snapshotType: 'validated' });
+
+    // 4.5 保存成功大纲到 artifacts
+    try {
+      await this.artifactManager.saveArtifact(storyId, 'outline_approved', JSON.stringify({
+        source: 'generateOutline',
+        validationResult,
+        outline,
+        chapterCount: outline.chapters?.length || 0,
+        schemaValidation: {
+          valid: true,
+          errors: [],
+          warnings: schemaValidation.warnings || []
+        }
+      }, null, 2), 'json');
+    } catch (_) {}
 
     // 5. 创建检查点
     const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
@@ -611,6 +640,16 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
         status: 'pending_confirmation'
       }, { snapshotType: 'validated' });
 
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'outline_approved', JSON.stringify({
+          source: `attemptOutlineRevision_attempt${attemptNumber}_pass_with_warnings`,
+          validationResult: reValidation,
+          outline: revisedOutline,
+          chapterCount: revisedOutline.chapters?.length || 0,
+          revisionAttempt: attemptNumber
+        }, null, 2), 'json');
+      } catch (_) {}
+
       const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
       await this.stateManager.updatePhase2(storyId, {
         checkpointId
@@ -665,6 +704,16 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
       outline: revisedOutline,
       status: 'pending_confirmation'
     }, { snapshotType: 'validated' });
+
+    try {
+      await this.artifactManager.saveArtifact(storyId, 'outline_approved', JSON.stringify({
+        source: `attemptOutlineRevision_attempt${attemptNumber}_pass`,
+        validationResult: reValidation,
+        outline: revisedOutline,
+        chapterCount: revisedOutline.chapters?.length || 0,
+        revisionAttempt: attemptNumber
+      }, null, 2), 'json');
+    } catch (_) {}
 
     const checkpointId = `cp-outline-${uuidv4().substring(0, 8)}`;
     await this.stateManager.updatePhase2(storyId, {
@@ -842,7 +891,26 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
         currentChapter: chapterNum
       });
 
-      const chapterResult = await this._produceChapter(storyId, chapterNum, chapters[i]);
+      let chapterResult;
+      try {
+        chapterResult = await this._produceChapter(storyId, chapterNum, chapters[i]);
+      } catch (err) {
+        console.error(`[Phase2] Chapter ${chapterNum} production failed: ${err.message}`);
+        try {
+          await this.artifactManager.saveArtifact(storyId, 'validation_failure', JSON.stringify({
+            stage: 'content_production',
+            source: `produceChapter_chapter${chapterNum}`,
+            error: err.message,
+            stack: err.stack,
+            chapterOutline: chapters[i]
+          }, null, 2), 'json');
+        } catch (_) {}
+        chapterResult = {
+          status: 'failed',
+          error: err.message,
+          chapterNum
+        };
+      }
 
       chapterResults.push({
         chapterNum,
@@ -850,7 +918,7 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
       });
 
       if (chapterResult.status === 'completed') {
-        totalWordCount += chapterResult.wordCount;
+        totalWordCount += chapterResult.wordCount || 0;
       }
 
       // 保存章节到 state
@@ -860,6 +928,17 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     }
 
     const completedChapters = chapterResults.filter(r => r.status === 'completed').length;
+
+    if (completedChapters === 0) {
+      const failedChapters = chapterResults.filter(r => r.status === 'failed');
+      const errors = failedChapters.map(r => `Ch${r.chapterNum}: ${r.error}`).join('; ');
+      return {
+        status: 'error',
+        error: `All chapters failed to produce: ${errors}`,
+        chapterResults
+      };
+    }
+
     const checkpointId = `cp-phase2-content-${storyId}-${Date.now()}`;
 
     await this.stateManager.updatePhase2(storyId, {

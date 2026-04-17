@@ -916,6 +916,7 @@ class ChatCompletionHandler {
                 retryKeepAliveTimer = setInterval(sendRetryKeepAlive, 5000);
               }
             },
+            connectionTimeout: 600000,
           },
         );
       } finally {

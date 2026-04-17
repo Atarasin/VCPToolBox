@@ -39,7 +39,8 @@ class NonStreamHandler {
 
     const shouldShowVCP = SHOW_VCP_OUTPUT || this.context.forceShowVCP;
 
-    const firstArrayBuffer = await firstAiAPIResponse.arrayBuffer();
+    const bodyReadTimeoutMs = 600000;
+    const firstArrayBuffer = await this._readResponseBodyWithTimeout(firstAiAPIResponse, bodyReadTimeoutMs);
     const responseBuffer = Buffer.from(firstArrayBuffer);
     const aiResponseText = responseBuffer.toString('utf-8');
     let firstResponseRawDataForClientAndDiary = aiResponseText;
@@ -299,6 +300,30 @@ class NonStreamHandler {
       res.send(Buffer.from(JSON.stringify(finalJsonResponse)));
     }
     await handleDiaryFromAIResponse(firstResponseRawDataForClientAndDiary);
+  }
+
+  async _readResponseBodyWithTimeout(response, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (response.body && typeof response.body.destroy === 'function') {
+          response.body.destroy();
+        }
+        reject(new Error(`Response body read timed out after ${timeoutMs / 1000}s`));
+      }, timeoutMs);
+
+      const chunks = [];
+      response.body.on('data', chunk => chunks.push(chunk));
+      response.body.on('end', () => {
+        clearTimeout(timer);
+        const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        const result = Buffer.concat(chunks, totalLength);
+        resolve(result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength));
+      });
+      response.body.on('error', err => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
   }
 }
 

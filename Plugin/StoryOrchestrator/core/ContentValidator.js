@@ -13,7 +13,7 @@ class ContentValidator {
     });
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 60000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -38,7 +38,7 @@ class ContentValidator {
     });
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 60000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -81,7 +81,7 @@ ${content}
 }`;
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 60000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 
@@ -165,7 +165,7 @@ ${content.substring(0, 3000)}...
 请输出每项得分及简评。`;
 
     const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 60000,
+      timeoutMs: 300000,
       temporaryContact: true
     });
 

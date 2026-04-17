@@ -552,6 +552,12 @@ class WorkflowEngine {
     }
 
     if (currentPhase === 'phase2') {
+      if (story.phase2?.userConfirmed && story.phase2?.outline &&
+          (!story.phase2?.chapters || story.phase2.chapters.length === 0) &&
+          story.phase2?.status !== 'completed') {
+        console.log(`[WorkflowEngine] Phase2 has approved outline but no chapters, re-entering content production`);
+        return await this._runPhase2(storyId);
+      }
       if (story.phase2?.userConfirmed || story.phase2?.status === 'completed') {
         return await this._runPhase3(storyId);
       }

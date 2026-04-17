@@ -68,7 +68,7 @@ class ChapterOperations {
     });
 
     const result = await this.agentDispatcher.delegate('chapterWriter', prompt, {
-      timeoutMs: options.timeoutMs || 120000,
+      timeoutMs: options.timeoutMs || 300000,
       temporaryContact: true
     });
 
@@ -148,7 +148,7 @@ class ChapterOperations {
     const agentType = maxRewriteRatio > 0.5 ? 'chapterWriter' : 'stylePolisher';
     
     const result = await this.agentDispatcher.delegate(agentType, prompt, {
-      timeoutMs: revisionOptions.timeoutMs || 100000,
+      timeoutMs: revisionOptions.timeoutMs || 300000,
       temporaryContact: true
     });
 
@@ -174,7 +174,7 @@ class ChapterOperations {
     });
 
     const result = await this.agentDispatcher.delegate('stylePolisher', prompt, {
-      timeoutMs: options.timeoutMs || 80000,
+      timeoutMs: options.timeoutMs || 300000,
       temporaryContact: true
     });
 
