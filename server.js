@@ -383,7 +383,9 @@ const cachedEmojiLists = new Map();
 // Authentication middleware for Admin Panel and Admin API
 const adminAuth = (req, res, next) => {
     // This middleware protects both the Admin Panel static files and its API endpoints.
-    const isAdminPath = req.path.startsWith('/admin_api') || req.path.startsWith('/AdminPanel');
+    const isAdminPath = req.path.startsWith('/admin_api') ||
+        req.path.startsWith('/AdminPanel') ||
+        req.path.startsWith('/agent_gateway');
 
     if (isAdminPath) {
         // ========== 新增：允许登录页面和相关资源无需认证 ==========
@@ -551,7 +553,11 @@ app.use('/AdminPanel', (req, res) => {
 // General API authentication (Bearer token) - This was the original one, now adminAuth handles its paths
 app.use((req, res, next) => {
     // Skip bearer token check for admin panel API and static files, as they use basic auth or no auth
-    if (req.path.startsWith('/admin_api') || req.path.startsWith('/AdminPanel')) {
+    if (
+        req.path.startsWith('/admin_api') ||
+        req.path.startsWith('/AdminPanel') ||
+        req.path.startsWith('/agent_gateway')
+    ) {
         return next();
     }
 
@@ -1114,6 +1120,7 @@ const adminPanelRoutes = require('./routes/adminPanelRoutes')(
     }
 );
 const openclawBridgeRoutes = require('./routes/openclawBridgeRoutes')(pluginManager);
+const agentGatewayRoutes = require('./routes/agentGatewayRoutes')(pluginManager);
 
 // 新增：引入 VCP 论坛 API 路由
 const forumApiRoutes = require('./routes/forumApi');
@@ -1200,9 +1207,10 @@ async function initialize() {
     // 在所有服务插件都注册完路由后，再将 adminApiRouter 挂载到主 app 上
     app.use('/admin_api', adminPanelRoutes);
     app.use('/admin_api', openclawBridgeRoutes);
+    app.use('/agent_gateway', agentGatewayRoutes);
     // 挂载 VCP 论坛 API 路由
     app.use('/admin_api/forum', forumApiRoutes);
-    console.log('服务类插件初始化完成，管理面板 API、OpenClaw Bridge 路由和 VCP 论坛 API 路由已挂载。');
+    console.log('服务类插件初始化完成，管理面板 API、OpenClaw Bridge、Native Agent Gateway 路由和 VCP 论坛 API 路由已挂载。');
 
     // --- 新增：通用依赖注入 ---
     // 在所有服务都初始化完毕后，再执行依赖注入，确保 VCPLog 等服务已准备就绪。

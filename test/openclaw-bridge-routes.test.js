@@ -1166,6 +1166,14 @@ test('POST /admin_api/openclaw/memory/write writes durable memory through DailyN
             capturedCall.args.Content,
             /^\[\d{2}:\d{2}\] 需要在 Phase 4 中把 durable memory 写回 VCP 日记系统。\nMeta-sourceEvent: memory\.flush\nMeta-importance: 0\.92$/
         );
+        assert.deepEqual(capturedCall.args.__agentGatewayContext, {
+            runtime: 'openclaw',
+            source: 'openclaw-memory',
+            agentId: 'agent.nova',
+            sessionId: 'sess-memory-write-001',
+            requestId: 'req-memory-write-001',
+            toolName: 'DailyNote'
+        });
         assert.deepEqual(capturedCall.args.__openclawContext, {
             source: 'openclaw-memory',
             agentId: 'agent.nova',
@@ -1696,6 +1704,14 @@ test('POST /admin_api/openclaw/tools/:toolName forwards args with OpenClaw reque
             toolName: 'SciCalculator',
             args: {
                 expression: '1+1',
+                __agentGatewayContext: {
+                    runtime: 'openclaw',
+                    source: 'openclaw',
+                    agentId: 'agent.math',
+                    sessionId: 'sess-001',
+                    requestId: 'req-001',
+                    toolName: 'SciCalculator'
+                },
                 __openclawContext: {
                     source: 'openclaw',
                     agentId: 'agent.math',
@@ -1783,6 +1799,15 @@ test('POST /admin_api/openclaw/tools/vcp_memory_write bridges durable memory wri
         assert.equal(capturedCall.toolName, 'DailyNote');
         assert.equal(capturedCall.args.command, 'create');
         assert.equal(capturedCall.args.Tag, 'Tag: durable-memory, bridge-tool');
+        assert.deepEqual(capturedCall.args.__agentGatewayContext, {
+            runtime: 'openclaw',
+            source: 'openclaw-memory-write',
+            agentId: 'agent.nova',
+            sessionId: 'sess-tool-memory-001',
+            requestId: 'req-tool-memory-001',
+            toolName: 'DailyNote',
+            bridgeToolName: 'vcp_memory_write'
+        });
         assert.deepEqual(capturedCall.args.__openclawContext, {
             source: 'openclaw-memory-write',
             agentId: 'agent.nova',

@@ -1,0 +1,1238 @@
+openapi: 3.0.3
+info:
+  title: VCP Agent Gateway API
+  version: 1.0.0-beta
+  description: |
+    `agent_gateway` 当前对外暴露的 Native Gateway beta OpenAPI 文档。
+
+    说明：
+    - 基于当前 `routes/agentGatewayRoutes.js` 的真实实现导出。
+    - 当前挂载前缀为 `/agent_gateway`。
+    - 当前仍处于过渡鉴权阶段，接口受管理后台鉴权保护，可使用 Basic Auth 或 `admin_auth` Cookie。
+    - `jobs` / `events` / MCP adapter 仍未作为独立 HTTP 端点开放，本文件仅覆盖当前真实存在的 9 个接口。
+servers:
+  - url: http://localhost:3000
+    description: 本地默认端口
+  - url: http://localhost:8080
+    description: 备用端口
+tags:
+  - name: Capabilities
+  - name: Agents
+  - name: Memory
+  - name: Context
+  - name: Tools
+security:
+  - basicAuth: []
+  - adminAuthCookie: []
+paths:
+  /agent_gateway/capabilities:
+    get:
+      tags:
+        - Capabilities
+      summary: 获取当前 agent 可见的 Gateway capabilities
+      operationId: getAgentGatewayCapabilities
+      parameters:
+        - name: agentId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: agent 标识
+        - name: maid
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 可选的 maid/别名
+        - name: includeMemoryTargets
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: requestId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: runtime
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilitiesEnvelope'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/agents:
+    get:
+      tags:
+        - Agents
+      summary: 获取当前 registry 中的 agent 列表
+      operationId: listAgentGatewayAgents
+      parameters:
+        - name: requestId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: runtime
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentListEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/agents/{agentId}:
+    get:
+      tags:
+        - Agents
+      summary: 获取单个 agent 的详细定义
+      operationId: getAgentGatewayAgentDetail
+      parameters:
+        - $ref: '#/components/parameters/AgentIdPath'
+        - name: requestId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: runtime
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDetailEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/agents/{agentId}/render:
+    post:
+      tags:
+        - Agents
+      summary: 将单个 agent 渲染为可消费 prompt
+      operationId: renderAgentGatewayAgent
+      parameters:
+        - $ref: '#/components/parameters/AgentIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRenderRequest'
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRenderEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/memory/targets:
+    get:
+      tags:
+        - Memory
+      summary: 获取当前 agent 可访问的 memory targets
+      operationId: listAgentGatewayMemoryTargets
+      parameters:
+        - name: agentId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: maid
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: requestId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: runtime
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryTargetsEnvelope'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/memory/search:
+    post:
+      tags:
+        - Memory
+      summary: 执行 diary memory 检索
+      operationId: searchAgentGatewayMemory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemorySearchRequest'
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySearchEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/memory/write:
+    post:
+      tags:
+        - Memory
+      summary: 写入 durable memory 到指定 diary
+      operationId: writeAgentGatewayMemory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryWriteRequest'
+      responses:
+        '200':
+          description: 创建成功或命中幂等去重
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryWriteEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/context/assemble:
+    post:
+      tags:
+        - Context
+      summary: 根据 query 或 recentMessages 组装 recall context
+      operationId: assembleAgentGatewayContext
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextAssembleRequest'
+      responses:
+        '200':
+          description: 成功
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent_gateway/tools/{toolName}/invoke:
+    post:
+      tags:
+        - Tools
+      summary: 调用单个 tool
+      operationId: invokeAgentGatewayTool
+      parameters:
+        - $ref: '#/components/parameters/ToolNamePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolInvokeRequest'
+      responses:
+        '200':
+          description: 工具已同步完成
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolInvokeEnvelope'
+        '202':
+          description: 预留给未来 `accepted` job 状态
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolInvokeEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: 工具被 policy 拒绝，或当前需要审批
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-agent-gateway-version:
+              $ref: '#/components/headers/XGatewayVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: 过渡期管理后台 Basic Auth
+    adminAuthCookie:
+      type: apiKey
+      in: cookie
+      name: admin_auth
+      description: 通过 `/admin_api/verify-login` 设置的管理态 Cookie
+  headers:
+    XRequestId:
+      description: 请求 ID
+      schema:
+        type: string
+    XGatewayVersion:
+      description: Agent Gateway 版本
+      schema:
+        type: string
+        example: v1
+  parameters:
+    AgentIdPath:
+      name: agentId
+      in: path
+      required: true
+      schema:
+        type: string
+    ToolNamePath:
+      name: toolName
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    InvalidRequest:
+      description: 请求参数缺失或格式不正确
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationError:
+      description: 请求体校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: 被共享 policy 或当前权限限制拒绝
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: 目标 agent、tool 或资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Timeout:
+      description: 工具执行超时
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: 服务内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    GatewayMeta:
+      type: object
+      properties:
+        requestId:
+          type: string
+        durationMs:
+          type: integer
+        gatewayVersion:
+          type: string
+          example: v1
+        toolStatus:
+          type: string
+          enum:
+            - completed
+            - accepted
+            - waiting_approval
+    ErrorEnvelope:
+      type: object
+      required:
+        - success
+        - error
+        - code
+        - meta
+      properties:
+        success:
+          type: boolean
+          enum:
+            - false
+        error:
+          type: string
+        code:
+          type: string
+          example: AGW_FORBIDDEN
+        details:
+          type: object
+          additionalProperties: true
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    RequestContext:
+      type: object
+      properties:
+        requestId:
+          type: string
+        sessionId:
+          type: string
+        agentId:
+          type: string
+        source:
+          type: string
+        runtime:
+          type: string
+          example: native
+    AuthContext:
+      type: object
+      properties:
+        requestId:
+          type: string
+        sessionId:
+          type: string
+        agentId:
+          type: string
+        maid:
+          type: string
+        source:
+          type: string
+        runtime:
+          type: string
+        adapter:
+          type: string
+        gatewayId:
+          type: string
+        authMode:
+          type: string
+          example: admin_transition
+        authSource:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+    ServerInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        bridgeVersion:
+          type: string
+    ToolDescriptor:
+      type: object
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        pluginType:
+          type: string
+        distributed:
+          type: boolean
+        approvalRequired:
+          type: boolean
+        timeoutMs:
+          type: integer
+        description:
+          type: string
+        inputSchema:
+          type: object
+          additionalProperties: true
+        invocationCommands:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    MemoryTarget:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        type:
+          type: string
+          example: diary
+        allowed:
+          type: boolean
+    MemoryFeatures:
+      type: object
+      properties:
+        timeAware:
+          type: boolean
+        groupAware:
+          type: boolean
+        rerank:
+          type: boolean
+        tagMemo:
+          type: boolean
+        writeBack:
+          type: boolean
+    ContextFeatures:
+      type: object
+      properties:
+        queryFromMessages:
+          type: boolean
+        retrieval:
+          type: boolean
+        timeAware:
+          type: boolean
+        groupAware:
+          type: boolean
+        rerank:
+          type: boolean
+        tagMemo:
+          type: boolean
+        tokenBudget:
+          type: boolean
+        minScore:
+          type: boolean
+        truncation:
+          type: boolean
+    CapabilitiesData:
+      type: object
+      properties:
+        server:
+          $ref: '#/components/schemas/ServerInfo'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolDescriptor'
+        memory:
+          type: object
+          properties:
+            targets:
+              type: array
+              items:
+                $ref: '#/components/schemas/MemoryTarget'
+            features:
+              $ref: '#/components/schemas/MemoryFeatures'
+        context:
+          type: object
+          properties:
+            features:
+              $ref: '#/components/schemas/ContextFeatures'
+        jobs:
+          type: object
+          properties:
+            supported:
+              type: boolean
+        events:
+          type: object
+          properties:
+            supported:
+              type: boolean
+    CapabilitiesEnvelope:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: '#/components/schemas/CapabilitiesData'
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    AgentPolicyHints:
+      type: object
+      properties:
+        toolNames:
+          type: array
+          items:
+            type: string
+        memoryTargetIds:
+          type: array
+          items:
+            type: string
+        contextSupported:
+          type: boolean
+        memoryWriteSupported:
+          type: boolean
+        jobsSupported:
+          type: boolean
+        eventsSupported:
+          type: boolean
+    DefaultPolicies:
+      type: object
+      properties:
+        toolNames:
+          type: array
+          items:
+            type: string
+        memoryTargetIds:
+          type: array
+          items:
+            type: string
+    AgentListItem:
+      type: object
+      properties:
+        agentId:
+          type: string
+        alias:
+          type: string
+        sourceFile:
+          type: string
+        exists:
+          type: boolean
+        mtime:
+          type: string
+          format: date-time
+          nullable: true
+        hash:
+          type: string
+        summary:
+          type: string
+        defaultPolicies:
+          $ref: '#/components/schemas/DefaultPolicies'
+        capabilityHints:
+          $ref: '#/components/schemas/AgentPolicyHints'
+    AgentListEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: object
+          properties:
+            agents:
+              type: array
+              items:
+                $ref: '#/components/schemas/AgentListItem'
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    PlaceholderSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        agents:
+          type: array
+          items:
+            type: string
+        toolboxes:
+          type: array
+          items:
+            type: string
+        variables:
+          type: array
+          items:
+            type: string
+        ragBlocks:
+          type: integer
+        metaThinkingBlocks:
+          type: integer
+        asyncResults:
+          type: integer
+    PromptDependencies:
+      type: object
+      properties:
+        agents:
+          type: array
+          items:
+            type: string
+        toolboxes:
+          type: array
+          items:
+            type: string
+        variables:
+          type: array
+          items:
+            type: string
+        ragBlocks:
+          type: array
+          items:
+            type: string
+        metaThinkingBlocks:
+          type: array
+          items:
+            type: string
+        asyncResults:
+          type: array
+          items:
+            type: object
+            properties:
+              pluginName:
+                type: string
+              requestId:
+                type: string
+    AgentDetail:
+      type: object
+      properties:
+        agentId:
+          type: string
+        alias:
+          type: string
+        sourceFile:
+          type: string
+        exists:
+          type: boolean
+        mtime:
+          type: string
+          format: date-time
+          nullable: true
+        hash:
+          type: string
+        summary:
+          type: string
+        defaultPolicies:
+          $ref: '#/components/schemas/DefaultPolicies'
+        capabilityHints:
+          $ref: '#/components/schemas/AgentPolicyHints'
+        prompt:
+          type: object
+          properties:
+            raw:
+              type: string
+            size:
+              type: integer
+            placeholderSummary:
+              $ref: '#/components/schemas/PlaceholderSummary'
+            dependencies:
+              $ref: '#/components/schemas/PromptDependencies'
+        accessibleTools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolDescriptor'
+        accessibleMemoryTargets:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemoryTarget'
+    AgentDetailEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: '#/components/schemas/AgentDetail'
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    Message:
+      type: object
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+    AgentRenderRequest:
+      type: object
+      properties:
+        requestContext:
+          $ref: '#/components/schemas/RequestContext'
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+        model:
+          type: string
+        maxLength:
+          type: integer
+        context:
+          type: object
+          additionalProperties: true
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+    AgentRenderResult:
+      type: object
+      properties:
+        agentId:
+          type: string
+        alias:
+          type: string
+        sourceFile:
+          type: string
+        renderedPrompt:
+          type: string
+        dependencies:
+          $ref: '#/components/schemas/PromptDependencies'
+        unresolved:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        truncated:
+          type: boolean
+        meta:
+          type: object
+          properties:
+            model:
+              type: string
+              nullable: true
+            rawSize:
+              type: integer
+            renderedSize:
+              type: integer
+            variableKeys:
+              type: array
+              items:
+                type: string
+    AgentRenderEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: '#/components/schemas/AgentRenderResult'
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    MemoryTargetsEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: object
+          properties:
+            targets:
+              type: array
+              items:
+                $ref: '#/components/schemas/MemoryTarget'
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    MemorySearchRequest:
+      type: object
+      required:
+        - query
+        - requestContext
+      properties:
+        query:
+          type: string
+        diary:
+          type: string
+        diaries:
+          type: array
+          items:
+            type: string
+        maid:
+          type: string
+        mode:
+          type: string
+          enum:
+            - rag
+            - hybrid
+            - auto
+        k:
+          type: integer
+        timeAware:
+          type: boolean
+        groupAware:
+          type: boolean
+        rerank:
+          type: boolean
+        tagMemo:
+          type: boolean
+        requestContext:
+          $ref: '#/components/schemas/RequestContext'
+        authContext:
+          $ref: '#/components/schemas/AuthContext'
+    MemorySearchItem:
+      type: object
+      properties:
+        text:
+          type: string
+        score:
+          type: number
+          format: float
+        sourceDiary:
+          type: string
+        sourceFile:
+          type: string
+        sourcePath:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    MemorySearchEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/MemorySearchItem'
+            diagnostics:
+              type: object
+              additionalProperties: true
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    MemoryWriteRequest:
+      type: object
+      required:
+        - target
+        - memory
+        - requestContext
+      properties:
+        target:
+          type: object
+          required:
+            - diary
+          properties:
+            diary:
+              type: string
+            maid:
+              type: string
+        memory:
+          type: object
+          required:
+            - text
+            - tags
+          properties:
+            text:
+              type: string
+            tags:
+              type: array
+              items:
+                type: string
+            metadata:
+              type: object
+              additionalProperties: true
+            timestamp:
+              type: string
+              format: date-time
+        options:
+          type: object
+          properties:
+            deduplicate:
+              type: boolean
+              default: true
+            idempotencyKey:
+              type: string
+            bridgeToolName:
+              type: string
+        requestContext:
+          $ref: '#/components/schemas/RequestContext'
+        authContext:
+          $ref: '#/components/schemas/AuthContext'
+    MemoryWriteEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: object
+          properties:
+            writeStatus:
+              type: string
+              enum:
+                - created
+                - skipped_duplicate
+            diary:
+              type: string
+            entryId:
+              type: string
+            deduplicated:
+              type: boolean
+            filePath:
+              type: string
+            timestamp:
+              type: string
+              format: date-time
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    ContextAssembleRequest:
+      type: object
+      required:
+        - requestContext
+      properties:
+        query:
+          type: string
+        recentMessages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        diary:
+          type: string
+        diaries:
+          type: array
+          items:
+            type: string
+        maid:
+          type: string
+        mode:
+          type: string
+          enum:
+            - rag
+            - hybrid
+            - auto
+        maxBlocks:
+          type: integer
+        tokenBudget:
+          type: integer
+        maxTokenRatio:
+          type: number
+          format: float
+        minScore:
+          type: number
+          format: float
+        timeAware:
+          type: boolean
+        groupAware:
+          type: boolean
+        rerank:
+          type: boolean
+        tagMemo:
+          type: boolean
+        requestContext:
+          $ref: '#/components/schemas/RequestContext'
+        authContext:
+          $ref: '#/components/schemas/AuthContext'
+    RecallBlock:
+      type: object
+      properties:
+        text:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    ContextEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: object
+          properties:
+            recallBlocks:
+              type: array
+              items:
+                $ref: '#/components/schemas/RecallBlock'
+            estimatedTokens:
+              type: integer
+            appliedPolicy:
+              type: object
+              additionalProperties: true
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'
+    ToolInvokeRequest:
+      type: object
+      required:
+        - args
+        - requestContext
+      properties:
+        args:
+          type: object
+          additionalProperties: true
+        maid:
+          type: string
+        requestContext:
+          $ref: '#/components/schemas/RequestContext'
+        authContext:
+          $ref: '#/components/schemas/AuthContext'
+    JobHandle:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum:
+            - accepted
+            - waiting_approval
+            - cancelled
+        operation:
+          type: string
+        target:
+          type: object
+          nullable: true
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        authContext:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+    ToolInvokeEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: object
+          properties:
+            toolName:
+              type: string
+            result:
+              type: object
+              additionalProperties: true
+            audit:
+              type: object
+              additionalProperties: true
+            job:
+              $ref: '#/components/schemas/JobHandle'
+        meta:
+          $ref: '#/components/schemas/GatewayMeta'

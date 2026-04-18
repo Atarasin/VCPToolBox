@@ -1,0 +1,580 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const express = require('express');
+
+const createOpenClawBridgeRoutes = require('../routes/openclawBridgeRoutes');
+const createAgentGatewayRoutes = require('../routes/agentGatewayRoutes');
+
+function cosineSimilarity(vectorA, vectorB) {
+    if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length) {
+        return 0;
+    }
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let index = 0; index < vectorA.length; index += 1) {
+        dot += vectorA[index] * vectorB[index];
+        normA += vectorA[index] * vectorA[index];
+        normB += vectorB[index] * vectorB[index];
+    }
+    if (normA === 0 || normB === 0) {
+        return 0;
+    }
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function createTempAgentDir() {
+    return fs.mkdtemp(path.join(os.tmpdir(), 'agw-native-routes-'));
+}
+
+async function writeAgentFile(baseDir, relativePath, content) {
+    const absolutePath = path.join(baseDir, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, content, 'utf8');
+}
+
+function createAgentManager(agentDir, mappings) {
+    const agentMap = new Map(Object.entries(mappings));
+    return {
+        agentDir,
+        agentMap,
+        isAgent(alias) {
+            return agentMap.has(alias);
+        },
+        async getAgentPrompt(alias) {
+            const sourceFile = agentMap.get(alias);
+            return fs.readFile(path.join(agentDir, sourceFile), 'utf8');
+        },
+        async getAllAgentFiles() {
+            return {
+                files: Array.from(agentMap.values()),
+                folderStructure: {}
+            };
+        }
+    };
+}
+
+function createKnowledgeBaseManager(overrides = {}) {
+    const diaries = overrides.diaries || ['Nova', 'ProjectAlpha', 'SharedMemory'];
+    const metadataByPath = overrides.metadataByPath || {
+        'Nova/2026-03-20.md': {
+            sourceDiary: 'Nova',
+            sourcePath: 'Nova/2026-03-20.md',
+            updatedAt: Date.parse('2026-03-20T10:20:00.000Z'),
+            tags: ['项目', '会议', '桥接']
+        }
+    };
+    const searchResults = overrides.searchResults || {
+        Nova: [
+            {
+                text: '上次A项目会议讨论了接口桥接方案与权限策略。',
+                score: 0.921,
+                sourceFile: '2026-03-20.md',
+                fullPath: 'Nova/2026-03-20.md'
+            }
+        ]
+    };
+    const timeChunksByPath = overrides.timeChunksByPath || {
+        'Nova/2026-03-20.md': {
+            text: '上次A项目会议讨论了接口桥接方案与权限策略。',
+            sourceFile: 'Nova/2026-03-20.md',
+            sourceDiary: 'Nova',
+            vector: [0.9, 0.1, 0.4]
+        }
+    };
+
+    return {
+        config: {
+            apiKey: 'test-key',
+            apiUrl: 'https://example.com/embeddings',
+            model: 'test-embedding-model'
+        },
+        listDiaryNames() {
+            return diaries;
+        },
+        async search(diaryName, queryVector, k) {
+            if (overrides.search) {
+                return overrides.search(diaryName, queryVector, k);
+            }
+            return (searchResults[diaryName] || []).slice(0, k).map((item) => ({ ...item }));
+        },
+        applyTagBoost(vector, tagBoost) {
+            if (overrides.applyTagBoost) {
+                return overrides.applyTagBoost(vector, tagBoost);
+            }
+            return {
+                vector: new Float32Array(vector),
+                info: {
+                    matchedTags: ['项目', '会议'],
+                    boostFactor: tagBoost
+                }
+            };
+        },
+        async deduplicateResults(candidates) {
+            return overrides.deduplicateResults ? overrides.deduplicateResults(candidates) : candidates;
+        },
+        async getChunksByFilePaths(filePaths) {
+            if (overrides.getChunksByFilePaths) {
+                return overrides.getChunksByFilePaths(filePaths);
+            }
+            return filePaths
+                .filter((filePath) => timeChunksByPath[filePath])
+                .map((filePath) => ({ ...timeChunksByPath[filePath] }));
+        },
+        async getOpenClawFileMetadata(sourcePath) {
+            return overrides.getOpenClawFileMetadata
+                ? overrides.getOpenClawFileMetadata(sourcePath)
+                : (metadataByPath[sourcePath] || null);
+        }
+    };
+}
+
+function createRagPlugin(overrides = {}) {
+    return {
+        async getSingleEmbeddingCached(text) {
+            return overrides.getSingleEmbeddingCached ? overrides.getSingleEmbeddingCached(text) : [0.9, 0.1, 0.4];
+        },
+        timeParser: {
+            parse(text) {
+                return overrides.parseTime
+                    ? overrides.parseTime(text)
+                    : (text.includes('上周')
+                        ? [{ start: new Date('2026-03-16T00:00:00.000Z'), end: new Date('2026-03-22T23:59:59.999Z') }]
+                        : []);
+            }
+        },
+        semanticGroups: {
+            detectAndActivateGroups(text) {
+                return overrides.detectAndActivateGroups
+                    ? overrides.detectAndActivateGroups(text)
+                    : (text.includes('项目') ? new Map([['项目', { strength: 1 }]]) : new Map());
+            },
+            async getEnhancedVector(query, activatedGroups, queryVector) {
+                return overrides.getEnhancedVector
+                    ? overrides.getEnhancedVector(query, activatedGroups, queryVector)
+                    : (Array.isArray(queryVector)
+                        ? queryVector.map((value, index) => value + (index === 0 ? 0.01 : 0))
+                        : queryVector);
+            }
+        },
+        async _rerankDocuments(query, documents, originalK) {
+            return overrides.rerankDocuments
+                ? overrides.rerankDocuments(query, documents, originalK)
+                : documents.slice().sort((left, right) => (right.score || 0) - (left.score || 0)).slice(0, originalK);
+        },
+        async _getTimeRangeFilePaths(diaryName) {
+            return overrides.getTimeRangeFilePaths
+                ? overrides.getTimeRangeFilePaths(diaryName)
+                : (diaryName === 'Nova' ? ['Nova/2026-03-20.md'] : []);
+        },
+        cosineSimilarity
+    };
+}
+
+function createPluginManager(overrides = {}) {
+    const plugins = overrides.plugins || new Map([
+        ['SciCalculator', {
+            name: 'SciCalculator',
+            displayName: '科学计算器',
+            description: '执行数学表达式计算。',
+            pluginType: 'synchronous',
+            communication: {
+                protocol: 'stdio',
+                timeout: 15000
+            },
+            capabilities: {
+                invocationCommands: [
+                    {
+                        description: '执行数学表达式计算。\n- `expression`: 表达式文本，必需。\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」SciCalculator「末」,\nexpression:「始」1+1「末」\n<<<[END_TOOL_REQUEST]>>>'
+                    }
+                ]
+            }
+        }],
+        ['RemoteSearch', {
+            name: 'RemoteSearch',
+            displayName: '远程搜索',
+            description: '分布式搜索工具。',
+            pluginType: 'synchronous',
+            isDistributed: true,
+            communication: {
+                protocol: 'stdio',
+                timeout: 20000
+            },
+            capabilities: {
+                invocationCommands: [
+                    {
+                        description: '执行远程搜索。\n- `query`: 查询词，必需。\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」RemoteSearch「末」,\nquery:「始」hello「末」\n<<<[END_TOOL_REQUEST]>>>'
+                    }
+                ]
+            }
+        }],
+        ['DailyNote', {
+            name: 'DailyNote',
+            displayName: '日记写入器',
+            description: '写入 durable memory。',
+            pluginType: 'synchronous',
+            communication: {
+                protocol: 'stdio',
+                timeout: 15000
+            },
+            capabilities: {
+                invocationCommands: [
+                    {
+                        description: '写入日记条目。'
+                    }
+                ]
+            }
+        }]
+    ]);
+
+    return {
+        plugins,
+        vectorDBManager: overrides.vectorDBManager || createKnowledgeBaseManager(),
+        messagePreprocessors: new Map([['RAGDiaryPlugin', overrides.ragPlugin || createRagPlugin()]]),
+        openClawBridgeConfig: overrides.openClawBridgeConfig || {
+            rag: {
+                agentDiaryMap: {
+                    Ariadne: ['Nova', 'SharedMemory']
+                }
+            }
+        },
+        agentManager: overrides.agentManager,
+        agentRegistryRenderPrompt: overrides.agentRegistryRenderPrompt,
+        getPlugin(toolName) {
+            return plugins.get(toolName);
+        },
+        toolApprovalManager: {
+            shouldApprove(toolName) {
+                return toolName === 'ProtectedTool';
+            }
+        },
+        async processToolCall(toolName, args) {
+            if (overrides.processToolCall) {
+                return overrides.processToolCall(toolName, args);
+            }
+            if (toolName === 'DailyNote') {
+                return {
+                    status: 'success',
+                    message: 'Diary saved to /tmp/native-memory.txt'
+                };
+            }
+            return {
+                toolName,
+                receivedArgs: args
+            };
+        },
+        ...overrides
+    };
+}
+
+async function createServer(pluginManager) {
+    const app = express();
+    app.use(express.json());
+
+    const openClawRoutes = createOpenClawBridgeRoutes(pluginManager);
+    const sharedBundle = pluginManager.__agentGatewayServiceBundle;
+    const nativeRoutes = createAgentGatewayRoutes(pluginManager);
+
+    assert.ok(sharedBundle, 'shared bundle should be created by the first adapter');
+    assert.equal(pluginManager.__agentGatewayServiceBundle, sharedBundle, 'native adapter should reuse the same shared bundle');
+
+    app.use('/admin_api', openClawRoutes);
+    app.use('/agent_gateway', nativeRoutes);
+
+    const server = await new Promise((resolve) => {
+        const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+
+    return {
+        baseUrl: `http://127.0.0.1:${server.address().port}`,
+        async close() {
+            await new Promise((resolve, reject) => {
+                server.close((error) => {
+                    if (error) {
+                        reject(error);
+                        return;
+                    }
+                    resolve();
+                });
+            });
+        }
+    };
+}
+
+test('GET /agent_gateway/capabilities returns native envelope and shared capability payload', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/capabilities?agentId=Ariadne&requestId=req-native-cap-001`);
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('x-agent-gateway-version'), 'v1');
+        assert.equal(payload.success, true);
+        assert.equal(payload.meta.requestId, 'req-native-cap-001');
+        assert.equal(payload.meta.gatewayVersion, 'v1');
+        assert.equal(payload.data.server.bridgeVersion, 'v1');
+        assert.deepEqual(payload.data.memory.targets.map((target) => target.id), ['Nova', 'SharedMemory']);
+        assert.deepEqual(payload.data.tools.map((tool) => tool.name), ['DailyNote', 'RemoteSearch', 'SciCalculator']);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('GET /agent_gateway/agents and related detail/render routes expose registry output', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Hello {{VarUserName}} from Ariadne');
+    await writeAgentFile(agentDir, 'roles/Bard.md', 'Bard prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md',
+            Bard: 'roles/Bard.md'
+        }),
+        agentRegistryRenderPrompt: async ({ rawPrompt, renderVariables }) =>
+            rawPrompt.replaceAll('{{VarUserName}}', renderVariables.VarUserName || '')
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const listResponse = await fetch(`${server.baseUrl}/agent_gateway/agents?requestId=req-native-agent-list`);
+        const listPayload = await listResponse.json();
+        assert.equal(listResponse.status, 200);
+        assert.equal(listPayload.success, true);
+        assert.deepEqual(listPayload.data.agents.map((agent) => agent.agentId), ['Ariadne', 'Bard']);
+
+        const detailResponse = await fetch(`${server.baseUrl}/agent_gateway/agents/Ariadne?requestId=req-native-agent-detail`);
+        const detailPayload = await detailResponse.json();
+        assert.equal(detailResponse.status, 200);
+        assert.equal(detailPayload.data.agentId, 'Ariadne');
+        assert.equal(detailPayload.data.prompt.raw.includes('{{VarUserName}}'), true);
+
+        const renderResponse = await fetch(`${server.baseUrl}/agent_gateway/agents/Ariadne/render`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                requestContext: {
+                    requestId: 'req-native-agent-render',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-agent-render'
+                },
+                variables: {
+                    VarUserName: 'Nova'
+                }
+            })
+        });
+        const renderPayload = await renderResponse.json();
+        assert.equal(renderResponse.status, 200);
+        assert.equal(renderPayload.success, true);
+        assert.equal(renderPayload.data.renderedPrompt.includes('Nova'), true);
+        assert.deepEqual(renderPayload.data.meta.variableKeys, ['VarUserName']);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('Native memory and context routes reuse shared runtime services', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const targetsResponse = await fetch(`${server.baseUrl}/agent_gateway/memory/targets?agentId=Ariadne&requestId=req-native-targets`);
+        const targetsPayload = await targetsResponse.json();
+        assert.equal(targetsResponse.status, 200);
+        assert.deepEqual(targetsPayload.data.targets.map((target) => target.id), ['Nova', 'SharedMemory']);
+
+        const searchResponse = await fetch(`${server.baseUrl}/agent_gateway/memory/search`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: '上周项目会议讨论了什么',
+                diary: 'Nova',
+                requestContext: {
+                    requestId: 'req-native-memory-search',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-memory-search'
+                }
+            })
+        });
+        const searchPayload = await searchResponse.json();
+        assert.equal(searchResponse.status, 200);
+        assert.equal(searchPayload.success, true);
+        assert.equal(searchPayload.data.items.length, 1);
+        assert.equal(searchPayload.data.items[0].sourceDiary, 'Nova');
+
+        const contextResponse = await fetch(`${server.baseUrl}/agent_gateway/context/assemble`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                recentMessages: [
+                    {
+                        role: 'user',
+                        content: '上周项目会议讨论了什么'
+                    }
+                ],
+                diary: 'Nova',
+                requestContext: {
+                    requestId: 'req-native-context',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-context'
+                }
+            })
+        });
+        const contextPayload = await contextResponse.json();
+        assert.equal(contextResponse.status, 200);
+        assert.equal(contextPayload.success, true);
+        assert.equal(Array.isArray(contextPayload.data.recallBlocks), true);
+        assert.equal(contextPayload.data.recallBlocks.length > 0, true);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/tools/:toolName/invoke returns native success payload and request meta', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/tools/SciCalculator/invoke`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                args: {
+                    expression: '1+1'
+                },
+                requestContext: {
+                    requestId: 'req-native-tool',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-tool'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.meta.requestId, 'req-native-tool');
+        assert.equal(payload.meta.toolStatus, 'completed');
+        assert.equal(payload.data.toolName, 'SciCalculator');
+        assert.equal(payload.data.result.toolName, 'SciCalculator');
+        assert.equal(payload.data.result.receivedArgs.__agentGatewayContext.runtime, 'native');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('OpenClaw and Native adapters coexist without replacing the shared bundle', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const openClawResponse = await fetch(`${server.baseUrl}/admin_api/openclaw/capabilities?agentId=Ariadne`);
+        const openClawPayload = await openClawResponse.json();
+        const nativeResponse = await fetch(`${server.baseUrl}/agent_gateway/capabilities?agentId=Ariadne`);
+        const nativePayload = await nativeResponse.json();
+
+        assert.equal(openClawResponse.status, 200);
+        assert.equal(nativeResponse.status, 200);
+        assert.deepEqual(
+            openClawPayload.data.tools.map((tool) => tool.name),
+            nativePayload.data.tools.map((tool) => tool.name)
+        );
+        assert.ok(pluginManager.__agentGatewayServiceBundle);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('Native tool route maps shared policy denial to AGW_FORBIDDEN', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        }),
+        openClawBridgeConfig: {
+            policy: {
+                agentPolicyMap: {
+                    Ariadne: {
+                        toolScopes: ['SciCalculator']
+                    }
+                }
+            }
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/tools/RemoteSearch/invoke`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                args: {
+                    query: 'hello'
+                },
+                requestContext: {
+                    requestId: 'req-native-tool-forbidden',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-tool-forbidden'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 403);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'AGW_FORBIDDEN');
+        assert.equal(payload.details.toolName, 'RemoteSearch');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
