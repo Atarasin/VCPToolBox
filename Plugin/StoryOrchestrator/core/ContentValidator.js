@@ -210,7 +210,7 @@ ${content.substring(0, 3000)}...
     if (parsed && typeof parsed === 'object') {
       const verdict = (parsed.verdict || '').toUpperCase();
       const validVerdicts = ['PASS', 'PASS_WITH_WARNINGS', 'FAIL'];
-      const normalizedVerdict = validVerdicts.includes(verdict) ? verdict : this._fallbackVerdictFromText(content);
+      const normalizedVerdict = validVerdicts.includes(verdict) ? verdict : this._parseTextValidationResult(content).verdict;
 
       return {
         verdict: normalizedVerdict,
@@ -228,24 +228,82 @@ ${content.substring(0, 3000)}...
       };
     }
 
+    const textResult = this._parseTextValidationResult(content);
     return {
       ...empty,
-      verdict: this._fallbackVerdictFromText(content)
+      verdict: textResult.verdict,
+      passed: textResult.passed,
+      blockingIssues: textResult.blockingIssues,
+      nonBlockingIssues: textResult.nonBlockingIssues,
+      issues: textResult.issues,
+      suggestions: textResult.suggestions
     };
   }
 
-  _fallbackVerdictFromText(content) {
+  _parseTextValidationResult(content) {
+    const result = {
+      verdict: 'FAIL',
+      passed: false,
+      blockingIssues: [],
+      nonBlockingIssues: [],
+      issues: [],
+      suggestions: []
+    };
+
+    if (!content || content.trim().length === 0) {
+      result.verdict = 'PASS';
+      result.passed = true;
+      return result;
+    }
+
     const normalized = content.toLowerCase();
-    if (normalized.includes('不通过') || normalized.includes('失败')) {
-      return 'FAIL';
+
+    const verdictMatch = content.match(/【验证结果】[\s\n]*(.+?)(?=\n【|$)/s);
+    if (verdictMatch) {
+      const verdictText = verdictMatch[1].trim().toLowerCase();
+      if (verdictText.includes('不通过') || verdictText.includes('失败')) {
+        result.verdict = 'FAIL';
+        result.passed = false;
+      } else if (verdictText.includes('有条件通过') || verdictText.includes('警告')) {
+        result.verdict = 'PASS_WITH_WARNINGS';
+        result.passed = true;
+      } else if (verdictText.includes('通过')) {
+        result.verdict = 'PASS';
+        result.passed = true;
+      }
+    } else {
+      if (normalized.includes('不通过') || normalized.includes('失败')) {
+        result.verdict = 'FAIL';
+      } else if (normalized.includes('有条件通过') || normalized.includes('警告')) {
+        result.verdict = 'PASS_WITH_WARNINGS';
+        result.passed = true;
+      } else if (normalized.includes('通过')) {
+        result.verdict = 'PASS';
+        result.passed = true;
+      }
     }
-    if (normalized.includes('有条件通过') || normalized.includes('警告')) {
-      return 'PASS_WITH_WARNINGS';
+
+    const sections = [
+      { key: 'blockingIssues', patterns: [/【发现的冲突】[\s\n]*([\s\S]*?)(?=【|$)/, /【ooc问题清单】[\s\n]*([\s\S]*?)(?=【|$)/i] },
+      { key: 'suggestions', patterns: [/【修正建议】[\s\n]*([\s\S]*?)(?=【|$)/] }
+    ];
+
+    for (const section of sections) {
+      for (const pattern of section.patterns) {
+        const match = content.match(pattern);
+        if (match) {
+          const lines = match[1]
+            .split('\n')
+            .map(l => l.replace(/^\s*[-•*\d.]+\s*/, '').trim())
+            .filter(l => l.length > 0);
+          result[section.key].push(...lines);
+          break;
+        }
+      }
     }
-    if (normalized.includes('通过')) {
-      return 'PASS';
-    }
-    return 'FAIL';
+
+    result.issues = result.blockingIssues;
+    return result;
   }
 
   _parseQualityScore(content) {

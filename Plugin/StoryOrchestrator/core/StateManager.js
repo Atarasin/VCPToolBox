@@ -587,7 +587,7 @@ class StateManager {
     return story;
   }
 
-  async recordPhaseFeedback(storyId, phaseName, feedback, resolutionStatus = 'approved') {
+  async recordPhaseFeedback(storyId, phaseName, feedback, resolutionStatus = null) {
     const story = await this.getStory(storyId);
     if (!story) {
       throw new Error(`Story not found: ${storyId}`);

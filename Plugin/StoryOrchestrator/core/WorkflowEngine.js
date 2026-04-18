@@ -538,9 +538,9 @@ class WorkflowEngine {
       }
     });
 
-    // 记录反馈如果有的话
+    // 记录反馈如果有的话（不自动批准检查点）
     if (feedback) {
-      await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback);
+      await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback, null);
     }
 
     // 根据当前 phase 继续执行
@@ -552,10 +552,13 @@ class WorkflowEngine {
     }
 
     if (currentPhase === 'phase2') {
+      const chapters = story.phase2?.chapters || [];
+      const hasContentChapter = chapters.some(c => c.status === 'completed' && c.content && c.content.length > 100);
+      const hasEmptyChapter = chapters.some(c => c.status === 'completed' && (!c.content || c.content.length < 100));
+
       if (story.phase2?.userConfirmed && story.phase2?.outline &&
-          (!story.phase2?.chapters || story.phase2.chapters.length === 0) &&
-          story.phase2?.status !== 'completed') {
-        console.log(`[WorkflowEngine] Phase2 has approved outline but no chapters, re-entering content production`);
+          (story.phase2?.status !== 'completed' || hasEmptyChapter)) {
+        console.log(`[WorkflowEngine] Phase2 has empty chapters or not completed, re-entering content production`);
         return await this._runPhase2(storyId);
       }
       if (story.phase2?.userConfirmed || story.phase2?.status === 'completed') {

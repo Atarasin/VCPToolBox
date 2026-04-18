@@ -22,6 +22,7 @@ class AgentDispatcher {
   }
 
   async delegate(agentType, prompt, options = {}) {
+    console.log(`[AgentDispatcher] delegate called for ${agentType}, timeoutMs=${options.timeoutMs}`);
     const agentConfig = getAgentConfig(agentType, this.config);
     
     if (!agentConfig.modelId) {

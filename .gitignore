@@ -1,4 +1,8 @@
 .sisyphus/
+.claude/
+.trae/
+openspec/
+
 VCPAsyncResults/
 issues/
 

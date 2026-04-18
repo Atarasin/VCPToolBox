@@ -917,7 +917,7 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
         ...chapterResult
       });
 
-      if (chapterResult.status === 'completed') {
+      if (chapterResult.status === 'completed' || chapterResult.status === 'completed_with_warnings') {
         totalWordCount += chapterResult.wordCount || 0;
       }
 
@@ -927,7 +927,9 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
       console.log(`[Phase2] Chapter ${chapterNum} ${chapterResult.status}`);
     }
 
-    const completedChapters = chapterResults.filter(r => r.status === 'completed').length;
+    const completedChapters = chapterResults.filter(
+      r => r.status === 'completed' || r.status === 'completed_with_warnings'
+    ).length;
 
     if (completedChapters === 0) {
       const failedChapters = chapterResults.filter(r => r.status === 'failed');
@@ -969,12 +971,24 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     const story = await this.stateManager.getStory(storyId);
     const config = story.config;
 
+    const targetWordCount = typeof config.targetWordCount === 'number'
+      ? { min: Math.floor(config.targetWordCount * 0.8), max: config.targetWordCount }
+      : (config.targetWordCount || { min: 2500, max: 3500 });
+
     // 1. 调用 chapterOperations.createChapterDraft()
     console.log(`[Phase2] Creating draft for chapter ${chapterNum}`);
     let draftResult = await this.chapterOperations.createChapterDraft(storyId, chapterNum, {
-      targetWordCount: config.targetWordCount,
+      targetWordCount: targetWordCount,
       stylePreference: config.stylePreference
     });
+    try {
+      await this.artifactManager.saveArtifact(storyId, 'chapter_draft', JSON.stringify({
+        chapterNum,
+        contentLength: draftResult.content?.length || 0,
+        metrics: draftResult.metrics,
+        wasExpanded: draftResult.wasExpanded
+      }, null, 2), 'json');
+    } catch (_) {}
 
     let content = draftResult.content;
     let metrics = draftResult.metrics;
@@ -984,13 +998,20 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     const detailResult = await this.chapterOperations.fillDetails(storyId, chapterNum, content, {
       focusAreas: ['场景', '感官', '情绪', '心理']
     });
+    try {
+      await this.artifactManager.saveArtifact(storyId, 'chapter_detail', JSON.stringify({
+        chapterNum,
+        originalLength: content.length,
+        detailedLength: detailResult.detailedContent?.length || 0
+      }, null, 2), 'json');
+    } catch (_) {}
 
     // 3. 合并内容（简单实现：先用 detailFiller 结果，如果变化不大则保留）
     if (detailResult.detailedContent && detailResult.detailedContent.length > content.length) {
       const detailMetrics = this.chapterOperations.countChapterLength(
         detailResult.detailedContent,
-        config.targetWordCount?.min || 2500,
-        config.targetWordCount?.max || 3500,
+        targetWordCount.min || 2500,
+        targetWordCount.max || 3500,
         { lengthPolicy: 'min_only' }
       );
 
@@ -1002,9 +1023,9 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     }
 
     // 4. 字数检查（不达标则自动扩充）
-    const targetMin = config.targetWordCount?.min || 2500;
-    const targetMax = config.targetWordCount?.max || 3500;
-    
+    const targetMin = targetWordCount.min || 2500;
+    const targetMax = targetWordCount.max || 3500;
+
     metrics = this.chapterOperations.countChapterLength(content, targetMin, targetMax, { lengthPolicy: 'range' });
 
     if (!metrics.validation.isQualified && metrics.validation.deficit > 200) {
@@ -1016,7 +1037,14 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
         chapterOutline
       );
       content = expanded.content;
-      
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'chapter_expand', JSON.stringify({
+          chapterNum,
+          deficit: metrics.validation.deficit,
+          expandedLength: content.length
+        }, null, 2), 'json');
+      } catch (_) {}
+
       metrics = this.chapterOperations.countChapterLength(content, targetMin, targetMax, { lengthPolicy: 'range' });
     }
 
@@ -1045,8 +1073,15 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
           maxRewriteRatio: 0.35
         }
       );
+      try {
+        await this.artifactManager.saveArtifact(storyId, 'chapter_revise', JSON.stringify({
+          chapterNum,
+          revisedLength: revisionResult.revisedContent?.length || 0,
+          changeSummary: revisionResult.changeSummary
+        }, null, 2), 'json');
+      } catch (_) {}
 
-      if (revisionResult.revisedContent) {
+      if (revisionResult.revisedContent && revisionResult.revisedContent.length > 100) {
         content = revisionResult.revisedContent;
         metrics = this.chapterOperations.countChapterLength(content, targetMin, targetMax, { lengthPolicy: 'range' });
 
@@ -1069,6 +1104,19 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
           revisionAttempts: 1
         };
       }
+    }
+
+    if (!content || content.length < 100) {
+      return {
+        status: 'failed',
+        error: 'Chapter content generation failed: output too short or empty',
+        content: content || '',
+        wordCount: 0,
+        metrics,
+        validation,
+        wasRevised: false,
+        revisionAttempts: 0
+      };
     }
 
     return {

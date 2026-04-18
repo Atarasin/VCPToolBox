@@ -57,25 +57,37 @@ class ChapterOperations {
 
     const previousEnding = options.previousEnding || this._getPreviousChapterEnding(storyState, chapterNum);
 
+    const targetWordCount = typeof options.targetWordCount === 'number'
+      ? { min: Math.floor(options.targetWordCount * 0.8), max: options.targetWordCount }
+      : (options.targetWordCount || { min: 2500, max: 3500 });
+
     const prompt = PromptBuilder.buildChapterWriterPrompt({
       storyBible,
       chapterNum,
       chapterOutline,
       additionalContext: options.outlineContext || '',
       previousChapterEnding: previousEnding,
-      targetWordCount: options.targetWordCount || config.targetWordCount,
+      targetWordCount: targetWordCount,
       stylePreference: config.stylePreference
     });
 
-    const result = await this.agentDispatcher.delegate('chapterWriter', prompt, {
+    let result = await this.agentDispatcher.delegate('chapterWriter', prompt, {
       timeoutMs: options.timeoutMs || 300000,
       temporaryContact: true
     });
 
+    if (!result.content || result.content.trim().length < 1000) {
+      console.warn(`[ChapterOperations] Chapter ${chapterNum} draft too short (${result.content?.length || 0} chars), retrying once`);
+      result = await this.agentDispatcher.delegate('chapterWriter', prompt + '\n\n注意：上一版输出为空或过短，请务必输出完整的章节正文，字数必须达标。', {
+        timeoutMs: options.timeoutMs || 300000,
+        temporaryContact: true
+      });
+    }
+
     const wordCountCheck = this.countChapterLength(
       result.content,
-      config.targetWordCount?.min || 2500,
-      config.targetWordCount?.max || 3500,
+      targetWordCount.min || 2500,
+      targetWordCount.max || 3500,
       { lengthPolicy: 'min_only' }
     );
 
@@ -210,7 +222,7 @@ class ChapterOperations {
     if (!prevChapter || !prevChapter.content) return '';
     
     const content = prevChapter.content;
-    return content.slice(-500);
+    return content.slice(-200);
   }
 
   async _expandChapter(storyId, currentContent, deficit, outline) {
@@ -233,10 +245,18 @@ ${JSON.stringify(outline, null, 2)}
 请输出扩充后的完整章节。
 `;
 
-    const result = await this.agentDispatcher.delegate('detailFiller', expansionPrompt, {
+    let result = await this.agentDispatcher.delegate('detailFiller', expansionPrompt, {
       timeoutMs: 300000,
       temporaryContact: true
     });
+
+    if (!result.content || result.content.trim().length < currentContent.length + 500) {
+      console.warn(`[ChapterOperations] Expand result too short (${result.content?.length || 0} chars), retrying once`);
+      result = await this.agentDispatcher.delegate('detailFiller', expansionPrompt + '\n\n注意：上一版扩充不足，请大幅增加细节描写、对话和心理活动，确保字数达标。', {
+        timeoutMs: 300000,
+        temporaryContact: true
+      });
+    }
 
     return {
       content: result.content,

@@ -20,26 +20,64 @@ class PromptBuilder {
       stylePreference = ''
     } = params;
 
+    const worldview = storyBible?.worldview || {};
+    const worldviewSummary = typeof worldview === 'string'
+      ? worldview.substring(0, 800)
+      : JSON.stringify(worldview, null, 2).substring(0, 800);
+
+    let characterList = [];
+    const rawChars = storyBible?.characters;
+    if (Array.isArray(rawChars)) {
+      characterList = rawChars;
+    } else if (rawChars && typeof rawChars === 'object') {
+      if (Array.isArray(rawChars.protagonists)) characterList.push(...rawChars.protagonists);
+      if (Array.isArray(rawChars.supporting)) characterList.push(...rawChars.supporting);
+      if (Array.isArray(rawChars.characters)) characterList.push(...rawChars.characters);
+    }
+    const characters = characterList
+      .filter(c => {
+        if (!chapterOutline?.characters) return true;
+        return chapterOutline.characters.some(ch => c.name?.includes(ch) || ch.includes(c.name));
+      })
+      .map(c => {
+        let desc = c.personality || c.description || c.identity || '';
+        if (Array.isArray(desc)) desc = desc.join('、');
+        if (typeof desc !== 'string') desc = String(desc);
+        return `- ${c.name}: ${desc.substring(0, 100)}`;
+      })
+      .join('\n') || '（暂无详细人物档案）';
+
+    const outlineSummary = {
+      title: chapterOutline?.title || `第${chapterNum}章`,
+      coreEvent: chapterOutline?.coreEvent || '',
+      scenes: (chapterOutline?.scenes || []).map(s => typeof s === 'string' ? s.substring(0, 200) : JSON.stringify(s).substring(0, 200)),
+      characters: chapterOutline?.characters || [],
+      storyFunction: chapterOutline?.storyFunction || '',
+      wordCountTarget: chapterOutline?.wordCountTarget || 2500
+    };
+
     return `【章节创作任务】
 
-你正在创作第 ${chapterNum} 章。
+你正在创作第 ${chapterNum} 章《${outlineSummary.title}》。
 
-=== 故事圣经 ===
-世界观：
-${JSON.stringify(storyBible?.worldview || {}, null, 2)}
+=== 世界观背景 ===
+${worldviewSummary}
 
-人物档案：
-${JSON.stringify(storyBible?.characters || [], null, 2)}
+=== 本章涉及人物 ===
+${characters}
 
 === 本章大纲 ===
-${JSON.stringify(chapterOutline, null, 2)}
+核心事件：${outlineSummary.coreEvent}
+故事功能：${outlineSummary.storyFunction}
+场景：
+${outlineSummary.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+出场人物：${outlineSummary.characters.join('、')}
 
 ${additionalContext ? `=== 补充上下文 ===
 ${additionalContext}
 
-` : ''}=== 上下文 ===
-上一章结尾：
-${previousChapterEnding || '（本章为开篇）'}
+` : ''}=== 承接上下文 ===
+${previousChapterEnding ? `上一章结尾：\n${previousChapterEnding}` : '（本章为开篇）'}
 
 === 创作要求 ===
 目标字数：${targetWordCount.min}-${targetWordCount.max} 字
@@ -48,11 +86,11 @@ ${previousChapterEnding || '（本章为开篇）'}
 === 输出格式 ===
 请直接输出章节正文，包含：
 1. 章节标题（格式：第X章 标题）
-2. 完整的正文内容
+2. 完整的正文内容（必须达到字数要求）
 3. （可选）章节小结（非正文，仅用于说明本章要点）
 
 注意：
-- 严格遵循大纲要求
+- 严格遵循大纲中的核心事件和场景顺序
 - 保持人物性格一致性
 - 确保与上文连贯
 - 在结尾处设置适当的钩子或过渡
