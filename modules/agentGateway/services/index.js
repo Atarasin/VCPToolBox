@@ -8,5 +8,6 @@ module.exports = {
     jobRuntimeService: require('./jobRuntimeService'),
     memoryRuntimeService: require('./memoryRuntimeService'),
     contextRuntimeService: require('./contextRuntimeService'),
-    toolRuntimeService: require('./toolRuntimeService')
+    toolRuntimeService: require('./toolRuntimeService'),
+    operabilityService: require('./operabilityService')
 };

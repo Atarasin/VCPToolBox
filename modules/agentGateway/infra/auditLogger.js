@@ -26,6 +26,9 @@ function createAuditLogger(options = {}) {
         log(event, payload) {
             emit(event, payload);
         },
+        logGatewayOperation(event, payload, startedAt) {
+            emit(`gateway.${event}`, withDuration(payload, startedAt));
+        },
         logCapability(event, payload, startedAt) {
             emit(`capability.${event}`, withDuration(payload, startedAt));
         },

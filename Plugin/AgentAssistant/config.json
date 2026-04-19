@@ -2,10 +2,6 @@
     "maxHistoryRounds": 5,
     "contextTtlHours": 12,
     "globalSystemPrompt": "",
-    "delegationMaxRounds": 15,
-    "delegationTimeout": 300000,
-    "delegationSystemPrompt": "",
-    "delegationHeartbeatPrompt": "",
     "agents": [
         {
             "baseName": "AEMEATH",
@@ -19,74 +15,15 @@
         {
             "baseName": "AGENT",
             "chineseName": "阿里阿德涅",
-            "modelId": "MiniMax-M2.7",
+            "modelId": "kimi-k2.6",
             "systemPrompt": "{{Ariadne}}",
             "maxOutputTokens": 30000,
             "temperature": 0.7,
             "description": "基于已注册 Agent \"Ariadne\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_11",
-            "chineseName": "赛博织梦者",
-            "modelId": "kimi-k2.5",
-            "systemPrompt": "{{WeChatContentAgent}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.7,
-            "description": "基于已注册 Agent \"Momus\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_8",
-            "chineseName": "欧若拉",
-            "modelId": "kimi-k2.5",
-            "systemPrompt": "{{Aurora}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.7,
-            "description": "基于已注册 Agent \"Aurora\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_9",
-            "chineseName": "阿特拉斯",
-            "modelId": "kimi-k2.5",
-            "systemPrompt": "{{Atlas}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.7,
-            "description": "基于已注册 Agent \"Atlas\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_10",
-            "chineseName": "代达罗斯",
-            "modelId": "kimi-k2.5",
-            "systemPrompt": "{{Daedalus}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.7,
-            "description": "基于已注册 Agent \"Daedalus\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_12",
-            "chineseName": "普罗米修斯",
-            "modelId": "kimi-k2.5",
-            "systemPrompt": "{{Prometheus}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.7,
-            "description": "基于已注册 Agent \"Prometheus\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_13",
-            "chineseName": "克洛托",
-            "modelId": "kimi-k2.5",
-            "systemPrompt": "{{Clotho}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.7,
-            "description": "基于已注册 Agent \"Clotho\" 创建的助手，请补充模型 ID 和更详细的说明。"
-        },
-        {
-            "baseName": "AGENT_14",
-            "chineseName": "奥西里斯",
-            "modelId": "jy-gemini-3.1-pro-preview",
-            "systemPrompt": "{{Osiris}}",
-            "maxOutputTokens": 30000,
-            "temperature": 0.3,
-            "description": "基于已注册 Agent \"Osiris\" 创建的助手，请补充模型 ID 和更详细的说明。"
         }
-    ]
+    ],
+    "delegationMaxRounds": 15,
+    "delegationTimeout": 300000,
+    "delegationSystemPrompt": "",
+    "delegationHeartbeatPrompt": ""
 }

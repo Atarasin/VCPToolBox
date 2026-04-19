@@ -11,6 +11,7 @@ const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
     '/agent_gateway/agents',
     '/agent_gateway/agents/{agentId}',
     '/agent_gateway/agents/{agentId}/render',
+    '/agent_gateway/metrics',
     '/agent_gateway/memory/targets',
     '/agent_gateway/memory/search',
     '/agent_gateway/memory/write',
@@ -29,6 +30,7 @@ const AGENT_GATEWAY_HEADERS = Object.freeze({
     RUNTIME: 'x-agent-gateway-runtime',
     GATEWAY_ID: 'x-agent-gateway-id',
     GATEWAY_KEY: 'x-agent-gateway-key',
+    TRACE_ID: 'x-agent-gateway-trace-id',
     IDEMPOTENCY_KEY: 'idempotency-key'
 });
 

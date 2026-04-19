@@ -42,6 +42,9 @@ const {
 const {
     createToolRuntimeService
 } = require('./services/toolRuntimeService');
+const {
+    createOperabilityService
+} = require('./services/operabilityService');
 const DEFAULT_GATEWAY_VERSION = 'v1';
 const DEFAULT_AUDIT_PREFIX = '[AgentGatewayAudit]';
 const DEFAULT_MEMORY_BRIDGE_TOOL_NAME = 'vcp_memory_write';
@@ -102,6 +105,10 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         toolScopeGuard: ensureToolAllowed,
         jobRuntimeService
     });
+    const operabilityService = createOperabilityService({
+        pluginManager,
+        auditLogger
+    });
     const agentRegistryService = createAgentRegistryService({
         pluginManager,
         agentManager: pluginManager.agentManager,
@@ -125,6 +132,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         memoryRuntimeService,
         contextRuntimeService,
         toolRuntimeService,
+        operabilityService,
         jobStatus: JOB_STATUS,
         gatewayVersion: options.gatewayVersion || DEFAULT_GATEWAY_VERSION,
         memoryBridgeToolName: options.memoryBridgeToolName || DEFAULT_MEMORY_BRIDGE_TOOL_NAME

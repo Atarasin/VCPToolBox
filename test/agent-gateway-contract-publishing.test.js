@@ -69,4 +69,11 @@ test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas 
     assert.ok(document.paths['/agent_gateway/jobs/{jobId}']);
     assert.ok(document.paths['/agent_gateway/events/stream']);
     assert.ok(document.paths['/agent_gateway/tools/{toolName}/invoke'].post.responses['202']);
+    assert.ok(
+        document.components.responses.TooManyRequests.content['application/json'].examples.rateLimited.value.meta.traceId
+    );
+    assert.equal(
+        document.components.responses.PayloadTooLarge.content['application/json'].examples.payloadRejected.value.code,
+        'AGW_PAYLOAD_TOO_LARGE'
+    );
 });

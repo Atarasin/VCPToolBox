@@ -126,6 +126,9 @@ test('responseEnvelope sends success and error envelopes with compatibility head
 test('errorCodes expose stable AGW and OCW mappings', () => {
     assert.equal(AGW_ERROR_CODES.INVALID_REQUEST, 'AGW_INVALID_REQUEST');
     assert.equal(AGW_ERROR_CODES.UNAUTHORIZED, 'AGW_UNAUTHORIZED');
+    assert.equal(AGW_ERROR_CODES.RATE_LIMITED, 'AGW_RATE_LIMITED');
+    assert.equal(AGW_ERROR_CODES.CONCURRENCY_LIMITED, 'AGW_CONCURRENCY_LIMITED');
+    assert.equal(AGW_ERROR_CODES.PAYLOAD_TOO_LARGE, 'AGW_PAYLOAD_TOO_LARGE');
     assert.equal(OPENCLAW_ERROR_CODES.TOOL_TIMEOUT, 'OCW_TOOL_TIMEOUT');
     assert.equal(
         OPENCLAW_TO_AGENT_GATEWAY_CODE[OPENCLAW_ERROR_CODES.TOOL_TIMEOUT],
@@ -157,15 +160,17 @@ test('auditLogger outputs compatible audit events', () => {
         }
     });
 
+    logger.logGatewayOperation('request.started', { traceId: 'trace-a' });
     logger.logSearch('started', { requestId: 'req-a' });
     logger.logContext('completed', { requestId: 'req-b' }, Date.now() - 5);
     logger.logToolInvoke('failed', { requestId: 'req-c' }, Date.now() - 5);
 
-    assert.equal(lines.length, 3);
+    assert.equal(lines.length, 4);
     assert.match(lines[0], /^\[OpenClawBridgeAudit\] /);
-    assert.match(lines[0], /"event":"rag\.search\.started"/);
-    assert.match(lines[1], /"event":"rag\.context\.completed"/);
-    assert.match(lines[2], /"event":"tool\.failed"/);
+    assert.match(lines[0], /"event":"gateway\.request\.started"/);
+    assert.match(lines[1], /"event":"rag\.search\.started"/);
+    assert.match(lines[2], /"event":"rag\.context\.completed"/);
+    assert.match(lines[3], /"event":"tool\.failed"/);
 });
 
 test('errorMapper covers validation, forbidden, timeout, internal and OpenClaw plugin mappings', () => {

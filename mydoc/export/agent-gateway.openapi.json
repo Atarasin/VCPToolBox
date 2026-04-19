@@ -3,7 +3,7 @@
   "info": {
     "title": "VCP Agent Gateway API",
     "version": "1.0.0",
-    "description": "VCP Agent Gateway 的正式 Native published contract。\n\n说明：\n- 当前对外协议版本为 `v1`，发布阶段为 `ga`。\n- 该文档覆盖当前正式开放的 `capabilities / agents / memory / context / tools / jobs / events` 资源。\n- 推荐优先使用独立 Gateway 凭证接入；Basic Auth 与 `admin_auth` Cookie 仅作为过渡兼容链路记录。\n- 该契约与 `routes/agentGatewayRoutes.js`、M7/M8 主 specs 以及 M9 contract validation 保持对齐。",
+    "description": "VCP Agent Gateway 的正式 Native published contract。\n\n说明：\n- 当前对外协议版本为 `v1`，发布阶段为 `ga`。\n- 该文档覆盖当前正式开放的 `capabilities / agents / metrics / memory / context / tools / jobs / events` 资源。\n- 推荐优先使用独立 Gateway 凭证接入；Basic Auth 与 `admin_auth` Cookie 仅作为过渡兼容链路记录。\n- 该契约与 `routes/agentGatewayRoutes.js`、M7-M11 主 specs 以及 contract validation 保持对齐。",
     "contact": {
       "name": "VCP Team"
     },
@@ -27,6 +27,9 @@
     },
     {
       "name": "Agents"
+    },
+    {
+      "name": "Operations"
     },
     {
       "name": "Memory"
@@ -201,6 +204,37 @@
         }
       }
     },
+    "/agent_gateway/metrics": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "读取当前 gateway 实例的运行指标快照",
+        "operationId": "getAgentGatewayMetrics",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SourceQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RuntimeQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/MetricsSuccess"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
     "/agent_gateway/memory/targets": {
       "get": {
         "tags": [
@@ -268,6 +302,9 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
           "500": {
             "$ref": "#/components/responses/InternalError"
           }
@@ -300,6 +337,12 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -336,6 +379,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -380,6 +429,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -502,6 +557,9 @@
           "200": {
             "description": "SSE 事件流",
             "headers": {
+              "x-agent-gateway-trace-id": {
+                "$ref": "#/components/headers/XTraceId"
+              },
               "x-agent-gateway-version": {
                 "$ref": "#/components/headers/XGatewayVersion"
               }
@@ -517,6 +575,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -562,6 +623,13 @@
         "schema": {
           "type": "string",
           "example": "v1"
+        }
+      },
+      "XTraceId": {
+        "description": "Agent Gateway 操作级 trace 标识",
+        "schema": {
+          "type": "string",
+          "example": "agwop_1234567890abcdef123456"
         }
       }
     },
@@ -664,6 +732,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -682,6 +753,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -700,6 +774,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -718,6 +795,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -736,12 +816,36 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/MemoryTargetsEnvelope"
+            }
+          }
+        }
+      },
+      "MetricsSuccess": {
+        "description": "成功",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/XRequestId"
+          },
+          "x-agent-gateway-version": {
+            "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MetricsEnvelope"
             }
           }
         }
@@ -754,6 +858,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -772,6 +879,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -790,6 +900,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -808,6 +921,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -826,6 +942,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -844,6 +963,9 @@
           },
           "x-agent-gateway-version": {
             "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
           }
         },
         "content": {
@@ -870,6 +992,87 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "请求超过当前网关运营保护阈值",
+        "headers": {
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "rateLimited": {
+                "summary": "rate limit rejection",
+                "value": {
+                  "success": false,
+                  "error": "Request rate limit exceeded for this operation",
+                  "code": "AGW_RATE_LIMITED",
+                  "details": {
+                    "operationName": "metrics.read",
+                    "traceId": "agwop_429example1234567890abcd",
+                    "reason": "rate_limited",
+                    "retryAfterMs": 3000,
+                    "limit": 5,
+                    "windowMs": 60000
+                  },
+                  "meta": {
+                    "requestId": "req-metrics-rate-001",
+                    "durationMs": 1,
+                    "gatewayVersion": "v1",
+                    "traceId": "agwop_429example1234567890abcd",
+                    "operationName": "metrics.read",
+                    "retryAfterMs": 3000
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "请求体超过当前 operation 的 payload 上限",
+        "headers": {
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "payloadRejected": {
+                "summary": "payload size rejection",
+                "value": {
+                  "success": false,
+                  "error": "Request payload exceeds the configured operation limit",
+                  "code": "AGW_PAYLOAD_TOO_LARGE",
+                  "details": {
+                    "operationName": "tool.invoke",
+                    "traceId": "agwop_413example1234567890abcd",
+                    "reason": "payload_too_large",
+                    "payloadBytes": 16384,
+                    "maxPayloadBytes": 4096
+                  },
+                  "meta": {
+                    "requestId": "req-tool-payload-001",
+                    "durationMs": 0,
+                    "gatewayVersion": "v1",
+                    "traceId": "agwop_413example1234567890abcd",
+                    "operationName": "tool.invoke",
+                    "retryAfterMs": 0
+                  }
+                }
+              }
             }
           }
         }
@@ -955,6 +1158,17 @@
           "gatewayId": {
             "type": "string",
             "example": "vcp-gateway"
+          },
+          "traceId": {
+            "type": "string",
+            "example": "agwop_1234567890abcdef123456"
+          },
+          "operationName": {
+            "type": "string",
+            "example": "tool.invoke"
+          },
+          "retryAfterMs": {
+            "type": "integer"
           },
           "toolStatus": {
             "type": "string",
@@ -1673,6 +1887,116 @@
           },
           "data": {
             "$ref": "#/components/schemas/MemoryTargetsData"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/GatewayMeta"
+          }
+        }
+      },
+      "GatewayOperationMetric": {
+        "type": "object",
+        "properties": {
+          "operationName": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "active": {
+            "type": "integer"
+          },
+          "totals": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "lastTraceId": {
+            "type": "string"
+          },
+          "lastRequestId": {
+            "type": "string"
+          },
+          "lastOutcome": {
+            "type": "string"
+          },
+          "lastUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "GatewayRecentRejection": {
+        "type": "object",
+        "properties": {
+          "traceId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "operationName": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retryAfterMs": {
+            "type": "integer"
+          },
+          "subjectKey": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MetricsData": {
+        "type": "object",
+        "properties": {
+          "totals": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayOperationMetric"
+            }
+          },
+          "recentRejections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayRecentRejection"
+            }
+          }
+        }
+      },
+      "MetricsEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/MetricsData"
           },
           "meta": {
             "$ref": "#/components/schemas/GatewayMeta"

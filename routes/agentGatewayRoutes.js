@@ -8,6 +8,7 @@ const {
     OPENCLAW_TO_AGENT_GATEWAY_CODE
 } = require('../modules/agentGateway/contracts/errorCodes');
 const {
+    AGENT_GATEWAY_HEADERS,
     NATIVE_GATEWAY_VERSION,
     NATIVE_GATEWAY_VERSION_KEY,
     applyGovernedCapabilitySections,
@@ -56,7 +57,7 @@ function mapNativeErrorCode(code) {
     return OPENCLAW_TO_AGENT_GATEWAY_CODE[code] || code || AGW_ERROR_CODES.INTERNAL_ERROR;
 }
 
-function sendNativeSuccess(res, { status = 200, requestId, startedAt, data, extraMeta }) {
+function sendNativeSuccess(res, { status = 200, requestId, startedAt, data, extraHeaders, extraMeta }) {
     return sendSuccessResponse(res, {
         status,
         requestId,
@@ -64,11 +65,12 @@ function sendNativeSuccess(res, { status = 200, requestId, startedAt, data, extr
         data,
         versionValue: NATIVE_GATEWAY_VERSION,
         versionKey: NATIVE_GATEWAY_VERSION_KEY,
+        extraHeaders,
         extraMeta
     });
 }
 
-function sendNativeError(res, { status = 500, requestId, startedAt, code, error, details, extraMeta }) {
+function sendNativeError(res, { status = 500, requestId, startedAt, code, error, details, extraHeaders, extraMeta }) {
     return sendErrorResponse(res, {
         status,
         requestId,
@@ -78,6 +80,7 @@ function sendNativeError(res, { status = 500, requestId, startedAt, code, error,
         details,
         versionValue: NATIVE_GATEWAY_VERSION,
         versionKey: NATIVE_GATEWAY_VERSION_KEY,
+        extraHeaders,
         extraMeta
     });
 }
@@ -94,6 +97,155 @@ function buildNativeResponseMeta(authContext, extraMeta = {}) {
         gatewayId: authContext.gatewayId,
         ...normalizedExtraMeta
     };
+}
+
+function estimateNativePayloadBytes(body) {
+    if (!body || typeof body !== 'object') {
+        return 0;
+    }
+    try {
+        return Buffer.byteLength(JSON.stringify(body), 'utf8');
+    } catch (error) {
+        return 0;
+    }
+}
+
+function buildNativeOperationMeta(operationControl, extraMeta = {}) {
+    return {
+        ...(operationControl?.traceId ? { traceId: operationControl.traceId } : {}),
+        ...(operationControl?.operationName ? { operationName: operationControl.operationName } : {}),
+        ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {})
+    };
+}
+
+function buildNativeOperationHeaders(operationControl, extraHeaders = {}) {
+    const headers = {
+        ...(extraHeaders && typeof extraHeaders === 'object' ? extraHeaders : {})
+    };
+
+    if (operationControl?.traceId) {
+        headers[AGENT_GATEWAY_HEADERS.TRACE_ID] = operationControl.traceId;
+    }
+    if (operationControl?.rejection?.headers && typeof operationControl.rejection.headers === 'object') {
+        Object.assign(headers, operationControl.rejection.headers);
+    }
+
+    return headers;
+}
+
+function beginNativeOperation(operabilityService, {
+    operationName,
+    requestContext,
+    authContext,
+    payload
+}) {
+    if (!operabilityService || typeof operabilityService.beginRequest !== 'function') {
+        return null;
+    }
+
+    return operabilityService.beginRequest({
+        operationName,
+        requestContext,
+        authContext,
+        payloadBytes: estimateNativePayloadBytes(payload)
+    });
+}
+
+function sendNativeOperationRejection(res, {
+    startedAt,
+    requestContext,
+    authContext,
+    operationControl
+}) {
+    return sendNativeError(res, {
+        status: operationControl.rejection.httpStatus,
+        requestId: requestContext.requestId,
+        startedAt,
+        code: operationControl.rejection.code,
+        error: operationControl.rejection.error,
+        details: operationControl.rejection.details,
+        extraHeaders: buildNativeOperationHeaders(operationControl),
+        extraMeta: buildNativeResponseMeta(
+            authContext,
+            buildNativeOperationMeta(operationControl, {
+                retryAfterMs: operationControl.rejection.details?.retryAfterMs || 0
+            })
+        )
+    });
+}
+
+function sendNativeSuccessWithOperation(res, {
+    status = 200,
+    requestId,
+    startedAt,
+    data,
+    authContext,
+    operationControl,
+    extraMeta
+}) {
+    operationControl?.finish?.({ outcome: 'success' });
+    return sendNativeSuccess(res, {
+        status,
+        requestId,
+        startedAt,
+        data,
+        extraHeaders: buildNativeOperationHeaders(operationControl),
+        extraMeta: buildNativeResponseMeta(authContext, buildNativeOperationMeta(operationControl, extraMeta))
+    });
+}
+
+function sendNativeErrorWithOperation(res, {
+    status = 500,
+    requestId,
+    startedAt,
+    code,
+    error,
+    details,
+    authContext,
+    operationControl,
+    extraMeta
+}) {
+    operationControl?.finish?.({ outcome: 'failure', code });
+    return sendNativeError(res, {
+        status,
+        requestId,
+        startedAt,
+        code,
+        error,
+        details,
+        extraHeaders: buildNativeOperationHeaders(operationControl),
+        extraMeta: buildNativeResponseMeta(authContext, buildNativeOperationMeta(operationControl, extraMeta))
+    });
+}
+
+async function executeNativeOperationSafely({
+    res,
+    startedAt,
+    requestContext,
+    authContext,
+    operationControl,
+    errorCode = AGW_ERROR_CODES.INTERNAL_ERROR,
+    errorMessage = 'Unexpected native gateway failure',
+    buildErrorDetails,
+    handler
+}) {
+    try {
+        return await handler();
+    } catch (error) {
+        const details = typeof buildErrorDetails === 'function'
+            ? buildErrorDetails(error)
+            : { message: error.message };
+        return sendNativeErrorWithOperation(res, {
+            status: 500,
+            requestId: requestContext.requestId,
+            startedAt,
+            code: errorCode,
+            error: errorMessage,
+            details,
+            authContext,
+            operationControl
+        });
+    }
 }
 
 function buildNativeAuthContext({
@@ -170,7 +322,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         jobRuntimeService,
         memoryRuntimeService,
         contextRuntimeService,
-        toolRuntimeService
+        toolRuntimeService,
+        operabilityService
     } = getGatewayServiceBundle(pluginManager, {
         gatewayVersion: NATIVE_GATEWAY_VERSION
     });
@@ -226,15 +379,35 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             maid
         });
         const includeMemoryTargets = parseNativeBoolean(req.query.includeMemoryTargets, true);
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'capabilities.read',
+            requestContext: {
+                ...requestContext,
+                agentId
+            },
+            authContext,
+            payload: req.query
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
 
         if (!agentId) {
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 400,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INVALID_REQUEST,
                 error: 'agentId is required',
-                details: { field: 'agentId' }
+                details: { field: 'agentId' },
+                authContext,
+                operationControl
             });
         }
 
@@ -245,23 +418,85 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 includeMemoryTargets,
                 authContext
             });
-            return sendNativeSuccess(res, {
+            return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
                 data: applyGovernedCapabilitySections(capabilities, {
                     authContext
                 }),
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         } catch (error) {
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 500,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to build native gateway capabilities',
                 details: { message: error.message },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
+            });
+        }
+    });
+
+    router.get('/metrics', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = createNativeRequestContext(req, {
+            requestId: req.query.requestId,
+            source: req.query.source,
+            runtime: req.query.runtime
+        }, 'agent-gateway-metrics');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth
+        });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'metrics.read',
+            requestContext,
+            authContext,
+            payload: req.query
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
+
+        try {
+            return sendNativeSuccessWithOperation(res, {
+                requestId: requestContext.requestId,
+                startedAt,
+                data: operabilityService?.getMetricsSnapshot?.() || {
+                    totals: {
+                        attempted: 0,
+                        succeeded: 0,
+                        failed: 0,
+                        rejected: 0,
+                        active: 0
+                    },
+                    operations: [],
+                    recentRejections: []
+                },
+                authContext,
+                operationControl
+            });
+        } catch (error) {
+            return sendNativeErrorWithOperation(res, {
+                status: 500,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: AGW_ERROR_CODES.INTERNAL_ERROR,
+                error: 'Failed to load gateway metrics',
+                details: { message: error.message },
+                authContext,
+                operationControl
             });
         }
     });
@@ -278,26 +513,43 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             requestContext,
             dedicatedAuth: req.agentGatewayDedicatedAuth
         });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'agents.list',
+            requestContext,
+            authContext,
+            payload: req.query
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
 
         try {
             const agents = await agentRegistryService.listAgents();
-            return sendNativeSuccess(res, {
+            return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
                 data: {
                     agents
                 },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         } catch (error) {
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 500,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to load agent registry',
                 details: { message: error.message },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         }
     });
@@ -314,35 +566,56 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             requestContext,
             dedicatedAuth: req.agentGatewayDedicatedAuth
         });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'agents.detail',
+            requestContext,
+            authContext,
+            payload: {
+                ...req.query,
+                agentId: req.params.agentId
+            }
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
 
         try {
             const agent = await agentRegistryService.getAgentDetail(req.params.agentId);
-            return sendNativeSuccess(res, {
+            return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
                 data: agent,
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         } catch (error) {
             if (error?.code === 'AGENT_NOT_FOUND') {
-                return sendNativeError(res, {
+                return sendNativeErrorWithOperation(res, {
                     status: 404,
                     requestId: requestContext.requestId,
                     startedAt,
                     code: AGW_ERROR_CODES.NOT_FOUND,
                     error: error.message,
                     details: error.details,
-                    extraMeta: buildNativeResponseMeta(authContext)
+                    authContext,
+                    operationControl
                 });
             }
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 500,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to load agent detail',
                 details: { message: error.message },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         }
     });
@@ -356,6 +629,21 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             providedAuthContext: req.body?.authContext,
             dedicatedAuth: req.agentGatewayDedicatedAuth
         });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'agents.render',
+            requestContext,
+            authContext,
+            payload: req.body
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
 
         try {
             const rendered = await agentRegistryService.renderAgent(req.params.agentId, {
@@ -365,32 +653,35 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 context: req.body?.context,
                 messages: req.body?.messages
             });
-            return sendNativeSuccess(res, {
+            return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
                 data: rendered,
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         } catch (error) {
             if (error?.code === 'AGENT_NOT_FOUND') {
-                return sendNativeError(res, {
+                return sendNativeErrorWithOperation(res, {
                     status: 404,
                     requestId: requestContext.requestId,
                     startedAt,
                     code: AGW_ERROR_CODES.NOT_FOUND,
                     error: error.message,
                     details: error.details,
-                    extraMeta: buildNativeResponseMeta(authContext)
+                    authContext,
+                    operationControl
                 });
             }
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 500,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to render agent',
                 details: { message: error.message },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         }
     });
@@ -414,15 +705,35 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid
         });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'memory.targets',
+            requestContext: {
+                ...requestContext,
+                agentId
+            },
+            authContext,
+            payload: req.query
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
 
         if (!agentId) {
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 400,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INVALID_REQUEST,
                 error: 'agentId is required',
-                details: { field: 'agentId' }
+                details: { field: 'agentId' },
+                authContext,
+                operationControl
             });
         }
 
@@ -432,23 +743,25 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 maid,
                 authContext
             });
-            return sendNativeSuccess(res, {
+            return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
                 data: {
                     targets
                 },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         } catch (error) {
-            return sendNativeError(res, {
+            return sendNativeErrorWithOperation(res, {
                 status: 500,
                 requestId: requestContext.requestId,
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to load memory targets',
                 details: { message: error.message },
-                extraMeta: buildNativeResponseMeta(authContext)
+                authContext,
+                operationControl
             });
         }
     });
@@ -463,33 +776,60 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.body?.maid,
         });
-        const result = await contextRuntimeService.search({
-            body: {
-                ...req.body,
-                authContext,
-                requestContext
-            },
-            startedAt,
-            defaultSource: 'agent-gateway-memory-search'
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'memory.search',
+            requestContext,
+            authContext,
+            payload: req.body
         });
 
-        if (!result.success) {
-            return sendNativeError(res, {
-                status: result.status,
-                requestId: result.requestId,
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
                 startedAt,
-                code: result.code,
-                error: result.error,
-                details: result.details,
-                extraMeta: buildNativeResponseMeta(authContext)
+                requestContext,
+                authContext,
+                operationControl
             });
         }
-
-        return sendNativeSuccess(res, {
-            requestId: result.requestId,
+        return executeNativeOperationSafely({
+            res,
             startedAt,
-            data: result.data,
-            extraMeta: buildNativeResponseMeta(authContext)
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to execute gateway memory search',
+            handler: async () => {
+                const result = await contextRuntimeService.search({
+                    body: {
+                        ...req.body,
+                        authContext,
+                        requestContext
+                    },
+                    startedAt,
+                    defaultSource: 'agent-gateway-memory-search'
+                });
+
+                if (!result.success) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: result.status,
+                        requestId: result.requestId,
+                        startedAt,
+                        code: result.code,
+                        error: result.error,
+                        details: result.details,
+                        authContext,
+                        operationControl
+                    });
+                }
+
+                return sendNativeSuccessWithOperation(res, {
+                    requestId: result.requestId,
+                    startedAt,
+                    data: result.data,
+                    authContext,
+                    operationControl
+                });
+            }
         });
     });
 
@@ -504,39 +844,66 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: governedBody.target?.maid
         });
-        const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
-        const result = await memoryRuntimeService.writeMemory({
-            body: {
-                ...governedBody,
-                authContext,
-                requestContext,
-                options: {
-                    ...(governedBody.options || {}),
-                    idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
-                }
-            },
-            startedAt,
-            clientIp,
-            defaultSource: 'agent-gateway-memory-write'
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'memory.write',
+            requestContext,
+            authContext,
+            payload: req.body
         });
 
-        if (!result.success) {
-            return sendNativeError(res, {
-                status: result.status,
-                requestId: result.requestId,
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
                 startedAt,
-                code: result.code,
-                error: result.error,
-                details: result.details,
-                extraMeta: buildNativeResponseMeta(authContext)
+                requestContext,
+                authContext,
+                operationControl
             });
         }
-
-        return sendNativeSuccess(res, {
-            requestId: result.requestId,
+        return executeNativeOperationSafely({
+            res,
             startedAt,
-            data: result.data,
-            extraMeta: buildNativeResponseMeta(authContext)
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to execute gateway memory write',
+            handler: async () => {
+                const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
+                const result = await memoryRuntimeService.writeMemory({
+                    body: {
+                        ...governedBody,
+                        authContext,
+                        requestContext,
+                        options: {
+                            ...(governedBody.options || {}),
+                            idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
+                        }
+                    },
+                    startedAt,
+                    clientIp,
+                    defaultSource: 'agent-gateway-memory-write'
+                });
+
+                if (!result.success) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: result.status,
+                        requestId: result.requestId,
+                        startedAt,
+                        code: result.code,
+                        error: result.error,
+                        details: result.details,
+                        authContext,
+                        operationControl
+                    });
+                }
+
+                return sendNativeSuccessWithOperation(res, {
+                    requestId: result.requestId,
+                    startedAt,
+                    data: result.data,
+                    authContext,
+                    operationControl
+                });
+            }
         });
     });
 
@@ -550,33 +917,60 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.body?.maid,
         });
-        const result = await contextRuntimeService.buildRecallContext({
-            body: {
-                ...req.body,
-                authContext,
-                requestContext
-            },
-            startedAt,
-            defaultSource: 'agent-gateway-context'
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'context.assemble',
+            requestContext,
+            authContext,
+            payload: req.body
         });
 
-        if (!result.success) {
-            return sendNativeError(res, {
-                status: result.status,
-                requestId: result.requestId,
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
                 startedAt,
-                code: result.code,
-                error: result.error,
-                details: result.details,
-                extraMeta: buildNativeResponseMeta(authContext)
+                requestContext,
+                authContext,
+                operationControl
             });
         }
-
-        return sendNativeSuccess(res, {
-            requestId: result.requestId,
+        return executeNativeOperationSafely({
+            res,
             startedAt,
-            data: result.data,
-            extraMeta: buildNativeResponseMeta(authContext)
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to assemble gateway recall context',
+            handler: async () => {
+                const result = await contextRuntimeService.buildRecallContext({
+                    body: {
+                        ...req.body,
+                        authContext,
+                        requestContext
+                    },
+                    startedAt,
+                    defaultSource: 'agent-gateway-context'
+                });
+
+                if (!result.success) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: result.status,
+                        requestId: result.requestId,
+                        startedAt,
+                        code: result.code,
+                        error: result.error,
+                        details: result.details,
+                        authContext,
+                        operationControl
+                    });
+                }
+
+                return sendNativeSuccessWithOperation(res, {
+                    requestId: result.requestId,
+                    startedAt,
+                    data: result.data,
+                    authContext,
+                    operationControl
+                });
+            }
         });
     });
 
@@ -591,50 +985,78 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: governedBody.maid
         });
-        const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
-        const result = await toolRuntimeService.invokeTool({
-            toolName: req.params.toolName,
-            body: {
-                ...governedBody,
-                authContext,
-                requestContext,
-                options: {
-                    ...(governedBody.options || {}),
-                    idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
-                }
-            },
-            startedAt,
-            clientIp,
-            defaultSource: 'agent-gateway-tool'
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'tool.invoke',
+            requestContext,
+            authContext,
+            payload: req.body
         });
 
-        if (
-            result.status === 'completed' ||
-            result.status === 'accepted' ||
-            result.status === 'waiting_approval'
-        ) {
-            return sendNativeSuccess(res, {
-                status: result.httpStatus || (result.status === 'completed' ? 200 : 202),
-                requestId: result.requestId,
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
                 startedAt,
-                data: result.data,
-                extraMeta: buildNativeResponseMeta(authContext, {
-                    toolStatus: result.status
-                })
+                requestContext,
+                authContext,
+                operationControl
             });
         }
-
-        return sendNativeError(res, {
-            status: result.httpStatus,
-            requestId: result.requestId,
+        return executeNativeOperationSafely({
+            res,
             startedAt,
-            code: result.code,
-            error: result.error,
-            details: {
-                ...(result.details || {}),
-                toolStatus: result.status
-            },
-            extraMeta: buildNativeResponseMeta(authContext)
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to execute native gateway tool invocation',
+            handler: async () => {
+                const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
+                const result = await toolRuntimeService.invokeTool({
+                    toolName: req.params.toolName,
+                    body: {
+                        ...governedBody,
+                        authContext,
+                        requestContext,
+                        options: {
+                            ...(governedBody.options || {}),
+                            idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
+                        }
+                    },
+                    startedAt,
+                    clientIp,
+                    defaultSource: 'agent-gateway-tool'
+                });
+
+                if (
+                    result.status === 'completed' ||
+                    result.status === 'accepted' ||
+                    result.status === 'waiting_approval'
+                ) {
+                    return sendNativeSuccessWithOperation(res, {
+                        status: result.httpStatus || (result.status === 'completed' ? 200 : 202),
+                        requestId: result.requestId,
+                        startedAt,
+                        data: result.data,
+                        authContext,
+                        operationControl,
+                        extraMeta: {
+                            toolStatus: result.status
+                        }
+                    });
+                }
+
+                return sendNativeErrorWithOperation(res, {
+                    status: result.httpStatus,
+                    requestId: result.requestId,
+                    startedAt,
+                    code: result.code,
+                    error: result.error,
+                    details: {
+                        ...(result.details || {}),
+                        toolStatus: result.status
+                    },
+                    authContext,
+                    operationControl
+                });
+            }
         });
     });
 
@@ -653,25 +1075,55 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.query.maid
         });
-        const result = jobRuntimeService.pollJob(req.params.jobId, authContext);
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'jobs.read',
+            requestContext,
+            authContext,
+            payload: {
+                ...req.query,
+                jobId: req.params.jobId
+            }
+        });
 
-        if (!result.success) {
-            return sendNativeError(res, {
-                status: result.status,
-                requestId: requestContext.requestId,
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
                 startedAt,
-                code: result.code,
-                error: result.error,
-                details: result.details,
-                extraMeta: buildNativeResponseMeta(authContext)
+                requestContext,
+                authContext,
+                operationControl
             });
         }
-
-        return sendNativeSuccess(res, {
-            requestId: requestContext.requestId,
+        return executeNativeOperationSafely({
+            res,
             startedAt,
-            data: result.data,
-            extraMeta: buildNativeResponseMeta(authContext)
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to poll native gateway job',
+            handler: async () => {
+                const result = jobRuntimeService.pollJob(req.params.jobId, authContext);
+
+                if (!result.success) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: result.status,
+                        requestId: requestContext.requestId,
+                        startedAt,
+                        code: result.code,
+                        error: result.error,
+                        details: result.details,
+                        authContext,
+                        operationControl
+                    });
+                }
+
+                return sendNativeSuccessWithOperation(res, {
+                    requestId: requestContext.requestId,
+                    startedAt,
+                    data: result.data,
+                    authContext,
+                    operationControl
+                });
+            }
         });
     });
 
@@ -685,29 +1137,57 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.body?.maid
         });
-        const result = jobRuntimeService.cancelJob(req.params.jobId, authContext);
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'jobs.cancel',
+            requestContext,
+            authContext,
+            payload: req.body
+        });
 
-        if (!result.success) {
-            return sendNativeError(res, {
-                status: result.status,
-                requestId: requestContext.requestId,
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
                 startedAt,
-                code: result.code,
-                error: result.error,
-                details: result.details,
-                extraMeta: buildNativeResponseMeta(authContext)
+                requestContext,
+                authContext,
+                operationControl
             });
         }
-
-        return sendNativeSuccess(res, {
-            requestId: requestContext.requestId,
+        return executeNativeOperationSafely({
+            res,
             startedAt,
-            data: result.data,
-            extraMeta: buildNativeResponseMeta(authContext)
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to cancel native gateway job',
+            handler: async () => {
+                const result = jobRuntimeService.cancelJob(req.params.jobId, authContext);
+
+                if (!result.success) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: result.status,
+                        requestId: requestContext.requestId,
+                        startedAt,
+                        code: result.code,
+                        error: result.error,
+                        details: result.details,
+                        authContext,
+                        operationControl
+                    });
+                }
+
+                return sendNativeSuccessWithOperation(res, {
+                    requestId: requestContext.requestId,
+                    startedAt,
+                    data: result.data,
+                    authContext,
+                    operationControl
+                });
+            }
         });
     });
 
     router.get('/events/stream', async (req, res) => {
+        const startedAt = Date.now();
         const requestContext = createNativeRequestContext(req, {
             requestId: req.query.requestId,
             agentId: req.query.agentId,
@@ -721,44 +1201,76 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.query.maid
         });
-        const result = jobRuntimeService.listEvents({
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'events.stream',
+            requestContext,
             authContext,
-            filters: createNativeStreamFilters(req.query)
+            payload: req.query
         });
 
-        if (!result.success) {
-            return sendNativeError(res, {
-                status: result.status,
-                requestId: requestContext.requestId,
-                startedAt: Date.now(),
-                code: result.code,
-                error: result.error,
-                details: result.details,
-                extraMeta: buildNativeResponseMeta(authContext)
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
             });
         }
+        return executeNativeOperationSafely({
+            res,
+            startedAt,
+            requestContext,
+            authContext,
+            operationControl,
+            errorMessage: 'Failed to stream native gateway events',
+            handler: async () => {
+                const result = jobRuntimeService.listEvents({
+                    authContext,
+                    filters: createNativeStreamFilters(req.query)
+                });
 
-        res.status(200);
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Agent-Gateway-Version', NATIVE_GATEWAY_VERSION);
-        res.flushHeaders?.();
+                if (!result.success) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: result.status,
+                        requestId: requestContext.requestId,
+                        startedAt,
+                        code: result.code,
+                        error: result.error,
+                        details: result.details,
+                        authContext,
+                        operationControl
+                    });
+                }
 
-        // 先发送稳定的 meta 事件，便于调用方在首帧就拿到 request/gateway 上下文。
-        writeNativeSseEvent(res, 'gateway.meta', {
-            requestId: requestContext.requestId,
-            gatewayVersion: NATIVE_GATEWAY_VERSION,
-            authMode: authContext.authMode,
-            authSource: authContext.authSource,
-            gatewayId: authContext.gatewayId
+                res.status(200);
+                res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+                res.setHeader('Cache-Control', 'no-cache, no-transform');
+                res.setHeader('Connection', 'keep-alive');
+                res.setHeader('X-Agent-Gateway-Version', NATIVE_GATEWAY_VERSION);
+                if (operationControl?.traceId) {
+                    res.setHeader(AGENT_GATEWAY_HEADERS.TRACE_ID, operationControl.traceId);
+                }
+                res.flushHeaders?.();
+
+                // 先发送稳定的 meta 事件，便于调用方在首帧就拿到 request/gateway 上下文。
+                writeNativeSseEvent(res, 'gateway.meta', {
+                    requestId: requestContext.requestId,
+                    gatewayVersion: NATIVE_GATEWAY_VERSION,
+                    traceId: operationControl?.traceId,
+                    operationName: operationControl?.operationName,
+                    authMode: authContext.authMode,
+                    authSource: authContext.authSource,
+                    gatewayId: authContext.gatewayId
+                });
+
+                result.data.events.forEach((event) => {
+                    writeNativeSseEvent(res, event.eventType, event);
+                });
+
+                operationControl?.finish?.({ outcome: 'success' });
+                return res.end();
+            }
         });
-
-        result.data.events.forEach((event) => {
-            writeNativeSseEvent(res, event.eventType, event);
-        });
-
-        return res.end();
     });
 
     return router;

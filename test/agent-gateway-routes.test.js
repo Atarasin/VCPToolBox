@@ -536,6 +536,127 @@ test('POST /agent_gateway/tools/:toolName/invoke returns native success payload 
     }
 });
 
+test('Native gateway surfaces operational trace metadata, payload protection and metrics snapshot', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        }),
+        agentGatewayOperationalConfig: {
+            operations: {
+                'tool.invoke': {
+                    payloadBytes: 200
+                },
+                'metrics.read': {
+                    rateLimit: {
+                        limit: 5,
+                        windowMs: 60000
+                    }
+                }
+            }
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const oversizedBody = {
+            args: {
+                expression: '1+1',
+                notes: 'x'.repeat(512)
+            },
+            requestContext: {
+                requestId: 'req-native-tool-oversized',
+                agentId: 'Ariadne',
+                sessionId: 'sess-native-tool-oversized'
+            }
+        };
+        const toolResponse = await fetch(`${server.baseUrl}/agent_gateway/tools/SciCalculator/invoke`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify(oversizedBody)
+        });
+        const toolPayload = await toolResponse.json();
+
+        assert.equal(toolResponse.status, 413);
+        assert.equal(toolPayload.success, false);
+        assert.equal(toolPayload.code, 'AGW_PAYLOAD_TOO_LARGE');
+        assert.equal(toolPayload.meta.operationName, 'tool.invoke');
+        assert.match(toolPayload.meta.traceId, /^agwop_/);
+        assert.equal(toolResponse.headers.get('x-agent-gateway-trace-id'), toolPayload.meta.traceId);
+
+        const metricsResponse = await fetch(`${server.baseUrl}/agent_gateway/metrics?requestId=req-native-metrics-001`);
+        const metricsPayload = await metricsResponse.json();
+
+        assert.equal(metricsResponse.status, 200);
+        assert.equal(metricsPayload.success, true);
+        assert.equal(metricsPayload.meta.operationName, 'metrics.read');
+        assert.match(metricsPayload.meta.traceId, /^agwop_/);
+        assert.equal(metricsPayload.data.totals.rejected >= 1, true);
+        assert.equal(
+            metricsPayload.data.recentRejections.some((entry) =>
+                entry.operationName === 'tool.invoke' && entry.code === 'AGW_PAYLOAD_TOO_LARGE'),
+            true
+        );
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('Native gateway releases operability state when shared runtime throws unexpectedly', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        }),
+        ragPlugin: createRagPlugin({
+            getSingleEmbeddingCached: async () => []
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/memory/search`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: '上周项目讨论了什么',
+                requestContext: {
+                    requestId: 'req-native-search-throw-001',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-search-throw-001'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 500);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'AGW_INTERNAL_ERROR');
+        assert.equal(payload.meta.operationName, 'memory.search');
+
+        const metricsResponse = await fetch(`${server.baseUrl}/agent_gateway/metrics?requestId=req-native-metrics-throw-001`);
+        const metricsPayload = await metricsResponse.json();
+        const metric = metricsPayload.data.operations.find((entry) => entry.operationName === 'memory.search');
+
+        assert.equal(metricsResponse.status, 200);
+        assert.equal(metric.active, 0);
+        assert.equal(metric.totals.failed, 1);
+        assert.equal(metric.lastOutcome, 'failure');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
 test('Native gateway accepts dedicated gateway auth and rejects invalid credentials', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');

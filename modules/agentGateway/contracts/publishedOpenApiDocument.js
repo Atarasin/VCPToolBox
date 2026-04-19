@@ -30,6 +30,17 @@ function createGatewayMetaSchema() {
                 type: 'string',
                 example: 'vcp-gateway'
             },
+            traceId: {
+                type: 'string',
+                example: 'agwop_1234567890abcdef123456'
+            },
+            operationName: {
+                type: 'string',
+                example: 'tool.invoke'
+            },
+            retryAfterMs: {
+                type: 'integer'
+            },
             toolStatus: {
                 type: 'string',
                 enum: ['completed', 'accepted', 'waiting_approval']
@@ -167,6 +178,53 @@ function createPublishedToolExample() {
     };
 }
 
+function createTooManyRequestsExample() {
+    return {
+        success: false,
+        error: 'Request rate limit exceeded for this operation',
+        code: 'AGW_RATE_LIMITED',
+        details: {
+            operationName: 'metrics.read',
+            traceId: 'agwop_429example1234567890abcd',
+            reason: 'rate_limited',
+            retryAfterMs: 3000,
+            limit: 5,
+            windowMs: 60000
+        },
+        meta: {
+            requestId: 'req-metrics-rate-001',
+            durationMs: 1,
+            gatewayVersion: NATIVE_GATEWAY_VERSION,
+            traceId: 'agwop_429example1234567890abcd',
+            operationName: 'metrics.read',
+            retryAfterMs: 3000
+        }
+    };
+}
+
+function createPayloadTooLargeExample() {
+    return {
+        success: false,
+        error: 'Request payload exceeds the configured operation limit',
+        code: 'AGW_PAYLOAD_TOO_LARGE',
+        details: {
+            operationName: 'tool.invoke',
+            traceId: 'agwop_413example1234567890abcd',
+            reason: 'payload_too_large',
+            payloadBytes: 16384,
+            maxPayloadBytes: 4096
+        },
+        meta: {
+            requestId: 'req-tool-payload-001',
+            durationMs: 0,
+            gatewayVersion: NATIVE_GATEWAY_VERSION,
+            traceId: 'agwop_413example1234567890abcd',
+            operationName: 'tool.invoke',
+            retryAfterMs: 0
+        }
+    };
+}
+
 function createDocumentInfo() {
     return {
         title: 'VCP Agent Gateway API',
@@ -176,9 +234,9 @@ function createDocumentInfo() {
             '',
             '说明：',
             `- 当前对外协议版本为 \`${NATIVE_GATEWAY_VERSION}\`，发布阶段为 \`${NATIVE_GATEWAY_RELEASE_STAGE}\`。`,
-            '- 该文档覆盖当前正式开放的 `capabilities / agents / memory / context / tools / jobs / events` 资源。',
+            '- 该文档覆盖当前正式开放的 `capabilities / agents / metrics / memory / context / tools / jobs / events` 资源。',
             '- 推荐优先使用独立 Gateway 凭证接入；Basic Auth 与 `admin_auth` Cookie 仅作为过渡兼容链路记录。',
-            '- 该契约与 `routes/agentGatewayRoutes.js`、M7/M8 主 specs 以及 M9 contract validation 保持对齐。'
+            '- 该契约与 `routes/agentGatewayRoutes.js`、M7-M11 主 specs 以及 contract validation 保持对齐。'
         ].join('\n'),
         contact: {
             name: 'VCP Team'
@@ -200,6 +258,7 @@ function createPublishedOpenApiDocument() {
         tags: [
             { name: 'Capabilities' },
             { name: 'Agents' },
+            { name: 'Operations' },
             { name: 'Memory' },
             { name: 'Context' },
             { name: 'Tools' },
@@ -292,6 +351,23 @@ function createPublishedOpenApiDocument() {
                     }
                 }
             },
+            '/agent_gateway/metrics': {
+                get: {
+                    tags: ['Operations'],
+                    summary: '读取当前 gateway 实例的运行指标快照',
+                    operationId: 'getAgentGatewayMetrics',
+                    parameters: [
+                        { $ref: '#/components/parameters/RequestIdQuery' },
+                        { $ref: '#/components/parameters/SourceQuery' },
+                        { $ref: '#/components/parameters/RuntimeQuery' }
+                    ],
+                    responses: {
+                        200: { $ref: '#/components/responses/MetricsSuccess' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
+                        500: { $ref: '#/components/responses/InternalError' }
+                    }
+                }
+            },
             '/agent_gateway/memory/targets': {
                 get: {
                     tags: ['Memory'],
@@ -326,6 +402,7 @@ function createPublishedOpenApiDocument() {
                     },
                     responses: {
                         200: { $ref: '#/components/responses/MemorySearchSuccess' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
                         400: { $ref: '#/components/responses/ValidationError' },
                         403: { $ref: '#/components/responses/Forbidden' },
                         404: { $ref: '#/components/responses/NotFound' },
@@ -348,6 +425,8 @@ function createPublishedOpenApiDocument() {
                     },
                     responses: {
                         200: { $ref: '#/components/responses/MemoryWriteSuccess' },
+                        413: { $ref: '#/components/responses/PayloadTooLarge' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
                         400: { $ref: '#/components/responses/ValidationError' },
                         403: { $ref: '#/components/responses/Forbidden' },
                         500: { $ref: '#/components/responses/InternalError' }
@@ -369,6 +448,8 @@ function createPublishedOpenApiDocument() {
                     },
                     responses: {
                         200: { $ref: '#/components/responses/ContextSuccess' },
+                        413: { $ref: '#/components/responses/PayloadTooLarge' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
                         400: { $ref: '#/components/responses/ValidationError' },
                         403: { $ref: '#/components/responses/Forbidden' },
                         404: { $ref: '#/components/responses/NotFound' },
@@ -393,6 +474,8 @@ function createPublishedOpenApiDocument() {
                     responses: {
                         200: { $ref: '#/components/responses/ToolInvokeSuccess' },
                         202: { $ref: '#/components/responses/ToolInvokeAccepted' },
+                        413: { $ref: '#/components/responses/PayloadTooLarge' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
                         400: { $ref: '#/components/responses/ValidationError' },
                         403: { $ref: '#/components/responses/Forbidden' },
                         404: { $ref: '#/components/responses/NotFound' },
@@ -461,6 +544,9 @@ function createPublishedOpenApiDocument() {
                         200: {
                             description: 'SSE 事件流',
                             headers: {
+                                'x-agent-gateway-trace-id': {
+                                    $ref: '#/components/headers/XTraceId'
+                                },
                                 'x-agent-gateway-version': {
                                     $ref: '#/components/headers/XGatewayVersion'
                                 }
@@ -474,6 +560,7 @@ function createPublishedOpenApiDocument() {
                                 }
                             }
                         },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
                         401: { $ref: '#/components/responses/Unauthorized' },
                         500: { $ref: '#/components/responses/InternalError' }
                     }
@@ -515,6 +602,13 @@ function createPublishedOpenApiDocument() {
                     schema: {
                         type: 'string',
                         example: NATIVE_GATEWAY_VERSION
+                    }
+                },
+                XTraceId: {
+                    description: 'Agent Gateway 操作级 trace 标识',
+                    schema: {
+                        type: 'string',
+                        example: 'agwop_1234567890abcdef123456'
                     }
                 }
             },
@@ -591,7 +685,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -603,7 +698,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -615,7 +711,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -627,7 +724,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -639,7 +737,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -647,11 +746,25 @@ function createPublishedOpenApiDocument() {
                         }
                     }
                 },
+                MetricsSuccess: {
+                    description: '成功',
+                    headers: {
+                        'x-request-id': { $ref: '#/components/headers/XRequestId' },
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
+                    },
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/MetricsEnvelope' }
+                        }
+                    }
+                },
                 MemorySearchSuccess: {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -663,7 +776,8 @@ function createPublishedOpenApiDocument() {
                     description: '创建成功或命中幂等去重',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -675,7 +789,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -687,7 +802,8 @@ function createPublishedOpenApiDocument() {
                     description: '工具已同步完成',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -699,7 +815,8 @@ function createPublishedOpenApiDocument() {
                     description: '工具调用已进入 deferred runtime',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -711,7 +828,8 @@ function createPublishedOpenApiDocument() {
                     description: '成功',
                     headers: {
                         'x-request-id': { $ref: '#/components/headers/XRequestId' },
-                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' }
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
                     },
                     content: {
                         'application/json': {
@@ -732,6 +850,40 @@ function createPublishedOpenApiDocument() {
                     content: {
                         'application/json': {
                             schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+                        }
+                    }
+                },
+                TooManyRequests: {
+                    description: '请求超过当前网关运营保护阈值',
+                    headers: {
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
+                    },
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/ErrorEnvelope' },
+                            examples: {
+                                rateLimited: {
+                                    summary: 'rate limit rejection',
+                                    value: createTooManyRequestsExample()
+                                }
+                            }
+                        }
+                    }
+                },
+                PayloadTooLarge: {
+                    description: '请求体超过当前 operation 的 payload 上限',
+                    headers: {
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
+                    },
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/ErrorEnvelope' },
+                            examples: {
+                                payloadRejected: {
+                                    summary: 'payload size rejection',
+                                    value: createPayloadTooLargeExample()
+                                }
+                            }
                         }
                     }
                 },
@@ -1078,6 +1230,58 @@ function createPublishedOpenApiDocument() {
                 },
                 MemoryTargetsEnvelope: createSuccessEnvelopeSchema({
                     $ref: '#/components/schemas/MemoryTargetsData'
+                }),
+                GatewayOperationMetric: {
+                    type: 'object',
+                    properties: {
+                        operationName: { type: 'string' },
+                        policy: {
+                            type: 'object',
+                            additionalProperties: true
+                        },
+                        active: { type: 'integer' },
+                        totals: {
+                            type: 'object',
+                            additionalProperties: { type: 'integer' }
+                        },
+                        lastTraceId: { type: 'string' },
+                        lastRequestId: { type: 'string' },
+                        lastOutcome: { type: 'string' },
+                        lastUpdatedAt: { type: 'string', format: 'date-time', nullable: true }
+                    }
+                },
+                GatewayRecentRejection: {
+                    type: 'object',
+                    properties: {
+                        traceId: { type: 'string' },
+                        requestId: { type: 'string' },
+                        operationName: { type: 'string' },
+                        code: { type: 'string' },
+                        reason: { type: 'string' },
+                        retryAfterMs: { type: 'integer' },
+                        subjectKey: { type: 'string' },
+                        timestamp: { type: 'string', format: 'date-time' }
+                    }
+                },
+                MetricsData: {
+                    type: 'object',
+                    properties: {
+                        totals: {
+                            type: 'object',
+                            additionalProperties: { type: 'integer' }
+                        },
+                        operations: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/GatewayOperationMetric' }
+                        },
+                        recentRejections: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/GatewayRecentRejection' }
+                        }
+                    }
+                },
+                MetricsEnvelope: createSuccessEnvelopeSchema({
+                    $ref: '#/components/schemas/MetricsData'
                 }),
                 MemorySearchRequest: {
                     type: 'object',
