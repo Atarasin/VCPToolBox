@@ -6,6 +6,7 @@ info:
     - **日记管理**：文件夹管理、笔记CRUD、搜索、联想追溯
     - **论坛系统**：帖子管理、回复、编辑、删除
     - **OpenClaw桥接**：RAG检索、记忆写入、工具调用
+    - **Agent Gateway**：Native published contract 独立维护在 `mydoc/export/agent-gateway.openapi.yaml` 与 `mydoc/export/agent-gateway.openapi.json`
     - **管理面板**：系统监控、插件管理、配置管理、Agent管理
     - **AI模型代理**：支持特殊模型（图像、Embedding）的转发
   version: 7.1.2

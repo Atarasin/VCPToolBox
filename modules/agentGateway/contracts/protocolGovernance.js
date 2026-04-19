@@ -5,6 +5,21 @@ const {
 
 const NATIVE_GATEWAY_VERSION = 'v1';
 const NATIVE_GATEWAY_VERSION_KEY = 'gatewayVersion';
+const NATIVE_GATEWAY_RELEASE_STAGE = 'ga';
+const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
+    '/agent_gateway/capabilities',
+    '/agent_gateway/agents',
+    '/agent_gateway/agents/{agentId}',
+    '/agent_gateway/agents/{agentId}/render',
+    '/agent_gateway/memory/targets',
+    '/agent_gateway/memory/search',
+    '/agent_gateway/memory/write',
+    '/agent_gateway/context/assemble',
+    '/agent_gateway/tools/{toolName}/invoke',
+    '/agent_gateway/jobs/{jobId}',
+    '/agent_gateway/jobs/{jobId}/cancel',
+    '/agent_gateway/events/stream'
+]);
 
 const AGENT_GATEWAY_HEADERS = Object.freeze({
     REQUEST_ID: 'x-request-id',
@@ -183,8 +198,10 @@ module.exports = {
     AGENT_GATEWAY_AUTH_MODES,
     AGENT_GATEWAY_HEADERS,
     GATEWAY_CAPABILITY_SECTIONS,
+    NATIVE_GATEWAY_RELEASE_STAGE,
     NATIVE_GATEWAY_VERSION,
     NATIVE_GATEWAY_VERSION_KEY,
+    PUBLISHED_NATIVE_GATEWAY_PATHS,
     applyGovernedCapabilitySections,
     getHeaderValue,
     getProtocolGovernanceConfig,
