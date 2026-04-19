@@ -27,13 +27,16 @@ const MCP_RESOURCE_KINDS = Object.freeze({
 });
 
 const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
+    AGENT_RENDER: 'gateway_agent_render',
     MEMORY_SEARCH: 'gateway_memory_search',
     CONTEXT_ASSEMBLE: 'gateway_context_assemble',
-    MEMORY_WRITE: 'gateway_memory_write'
+    MEMORY_WRITE: 'gateway_memory_write',
+    MEMORY_COMMIT_FOR_CODING: 'gateway_memory_commit_for_coding',
+    RECALL_FOR_CODING: 'gateway_recall_for_coding'
 });
 
 /**
- * MCP v1 只开放最小能力面：
+ * MCP v1 当前开放的最小能力面：
  * - tools/list
  * - tools/call
  * - resources/list
@@ -111,8 +114,42 @@ function buildMcpToolDescriptor(tool) {
     };
 }
 
-function createGatewayMemoryToolDescriptors() {
+// Gateway-managed MCP tools map directly onto canonical Gateway Core capabilities.
+function createGatewayManagedToolDescriptors() {
     return [
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
+            title: 'Gateway Agent Render',
+            description: 'Render a canonical Agent Gateway prompt through the shared agent registry service.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['agentId'],
+                properties: {
+                    agentId: { type: 'string' },
+                    variables: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    model: { type: 'string' },
+                    maxLength: {
+                        type: 'integer',
+                        minimum: 1
+                    },
+                    context: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    messages: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            additionalProperties: true
+                        }
+                    }
+                }
+            }
+        }),
         createGatewayToolDescriptor({
             name: MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH,
             title: 'Gateway Memory Search',
@@ -216,6 +253,286 @@ function createGatewayMemoryToolDescriptors() {
                     },
                     maid: { type: 'string' },
                     idempotencyKey: { type: 'string' },
+                    options: {
+                        type: 'object',
+                        additionalProperties: true
+                    }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING,
+            title: 'Gateway Memory Commit For Coding',
+            description: 'Commit coding-oriented durable memory through shared Gateway Core write behavior.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['task'],
+                allOf: [
+                    {
+                        anyOf: [
+                            {
+                                required: ['summary']
+                            },
+                            {
+                                required: ['constraints']
+                            },
+                            {
+                                required: ['outcome']
+                            },
+                            {
+                                required: ['result']
+                            },
+                            {
+                                required: ['notes']
+                            },
+                            {
+                                required: ['pitfalls']
+                            },
+                            {
+                                required: ['files']
+                            },
+                            {
+                                required: ['symbols']
+                            }
+                        ]
+                    },
+                    {
+                        anyOf: [
+                            {
+                                required: ['diary']
+                            },
+                            {
+                                required: ['target']
+                            }
+                        ]
+                    }
+                ],
+                properties: {
+                    task: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    summary: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    implementation: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    outcome: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    result: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    notes: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    constraints: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'array',
+                                items: { type: 'string' }
+                            }
+                        ]
+                    },
+                    pitfalls: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'array',
+                                items: { type: 'string' }
+                            }
+                        ]
+                    },
+                    repository: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    workspaceRoot: { type: 'string' },
+                    target: {
+                        type: 'object',
+                        additionalProperties: true,
+                        required: ['diary'],
+                        properties: {
+                            diary: { type: 'string' },
+                            maid: { type: 'string' }
+                        }
+                    },
+                    diary: { type: 'string' },
+                    maid: { type: 'string' },
+                    files: {
+                        type: 'array',
+                        items: {
+                            oneOf: [
+                                { type: 'string' },
+                                {
+                                    type: 'object',
+                                    additionalProperties: true
+                                }
+                            ]
+                        }
+                    },
+                    symbols: {
+                        type: 'array',
+                        items: {
+                            oneOf: [
+                                { type: 'string' },
+                                {
+                                    type: 'object',
+                                    additionalProperties: true
+                                }
+                            ]
+                        }
+                    },
+                    recommendedTags: {
+                        type: 'array',
+                        items: { type: 'string' }
+                    },
+                    tags: {
+                        type: 'array',
+                        items: { type: 'string' }
+                    },
+                    metadata: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    idempotencyKey: { type: 'string' },
+                    timestamp: {
+                        oneOf: [
+                            { type: 'string' },
+                            { type: 'number' }
+                        ]
+                    },
+                    options: {
+                        type: 'object',
+                        additionalProperties: true
+                    }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING,
+            title: 'Gateway Recall For Coding',
+            description: 'Build coding-oriented recall context through shared Gateway Core memory behavior.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['task'],
+                anyOf: [
+                    {
+                        required: ['files']
+                    },
+                    {
+                        required: ['symbols']
+                    },
+                    {
+                        required: ['recentMessages']
+                    }
+                ],
+                properties: {
+                    task: {
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'object',
+                                additionalProperties: true
+                            }
+                        ]
+                    },
+                    repository: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    workspaceRoot: { type: 'string' },
+                    files: {
+                        type: 'array',
+                        items: {
+                            oneOf: [
+                                { type: 'string' },
+                                {
+                                    type: 'object',
+                                    additionalProperties: true
+                                }
+                            ]
+                        }
+                    },
+                    symbols: {
+                        type: 'array',
+                        items: {
+                            oneOf: [
+                                { type: 'string' },
+                                {
+                                    type: 'object',
+                                    additionalProperties: true
+                                }
+                            ]
+                        }
+                    },
+                    recentMessages: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            additionalProperties: true
+                        }
+                    },
+                    diary: { type: 'string' },
+                    diaries: {
+                        type: 'array',
+                        items: { type: 'string' }
+                    },
+                    maxBlocks: { type: 'integer', minimum: 1 },
+                    tokenBudget: { type: 'integer', minimum: 1 },
+                    minScore: { type: 'number' },
+                    mode: {
+                        type: 'string',
+                        enum: ['rag', 'hybrid', 'auto']
+                    },
+                    timeAware: { type: 'boolean' },
+                    groupAware: { type: 'boolean' },
+                    rerank: { type: 'boolean' },
+                    tagMemo: { type: 'boolean' },
                     options: {
                         type: 'object',
                         additionalProperties: true
@@ -331,6 +648,19 @@ function createDeferredResult(result) {
     };
 }
 
+function createGatewayManagedContent(name, data) {
+    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER && data && typeof data.renderedPrompt === 'string') {
+        return createMcpTextContent(data.renderedPrompt);
+    }
+    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING && data && typeof data.committedMemory === 'string') {
+        return createMcpTextContent(data.committedMemory);
+    }
+    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING && data && typeof data.codingContext === 'string') {
+        return createMcpTextContent(data.codingContext);
+    }
+    return createMcpTextContent(data);
+}
+
 function createGatewayManagedSuccessResult(name, result) {
     return {
         isError: false,
@@ -342,7 +672,7 @@ function createGatewayManagedSuccessResult(name, result) {
             result: result.data,
             audit: result.audit || {}
         },
-        content: createMcpTextContent(result.data)
+        content: createGatewayManagedContent(name, result.data)
     };
 }
 
@@ -394,7 +724,40 @@ function isGatewayManagedTool(name) {
 function buildManagedToolContextInput(input, args) {
     return {
         ...input,
+        agentId: input.agentId || args.agentId || args.target?.agentId || input.requestContext?.agentId,
+        sessionId: input.sessionId || args.sessionId || input.requestContext?.sessionId,
+        requestContext: (args.requestContext && typeof args.requestContext === 'object')
+            ? {
+                ...args.requestContext,
+                ...((input.requestContext && typeof input.requestContext === 'object') ? input.requestContext : {})
+            }
+            : input.requestContext,
+        authContext: input.authContext || args.authContext,
         maid: input.maid || args.maid || args.target?.maid || input.requestContext?.maid
+    };
+}
+
+function mapAgentRegistryError(error, requestContext) {
+    if (error?.code === 'AGENT_NOT_FOUND') {
+        return {
+            success: false,
+            status: 404,
+            code: AGW_ERROR_CODES.NOT_FOUND,
+            error: error.message,
+            requestId: requestContext.requestId,
+            details: error.details || {}
+        };
+    }
+
+    return {
+        success: false,
+        status: 500,
+        code: AGW_ERROR_CODES.INTERNAL_ERROR,
+        error: 'Failed to render agent',
+        requestId: requestContext.requestId,
+        details: {
+            message: error?.message || 'Unknown render failure'
+        }
     };
 }
 
@@ -455,9 +818,12 @@ function ensureAgentAndSession(requestContext, operation) {
 async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     const contextInput = buildManagedToolContextInput(input, args);
     const source = {
+        [MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER]: 'mcp-agent-render',
         [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
         [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write'
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write',
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING]: 'mcp-coding-memory-writeback',
+        [MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING]: 'mcp-coding-recall'
     }[name] || 'mcp';
     const { maid, requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
     ensureAgentAndSession(requestContext, `tools/call:${name}`);
@@ -472,6 +838,33 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             ...((input.options && typeof input.options === 'object') ? input.options : {})
         }
     };
+
+    // Render remains the high-level MCP entry point and reuses the shared registry contract.
+    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
+        ensureAgentId(requestContext, `tools/call:${name}`);
+
+        try {
+            const renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
+                variables: args.variables,
+                model: args.model,
+                maxLength: args.maxLength,
+                context: args.context,
+                messages: args.messages
+            });
+
+            return mapGatewayManagedResultToMcp(name, {
+                success: true,
+                requestId: requestContext.requestId,
+                data: renderResult,
+                audit: {
+                    runtime: requestContext.runtime,
+                    source: requestContext.source
+                }
+            });
+        } catch (error) {
+            return mapGatewayManagedResultToMcp(name, mapAgentRegistryError(error, requestContext));
+        }
+    }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
         const result = await bundle.contextRuntimeService.search({
@@ -503,6 +896,25 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             },
             startedAt: Date.now(),
             clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
+            defaultSource: source
+        });
+        return mapGatewayManagedResultToMcp(name, result);
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING) {
+        const result = await bundle.codingMemoryWritebackService.commitForCoding({
+            body,
+            startedAt: Date.now(),
+            clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
+            defaultSource: source
+        });
+        return mapGatewayManagedResultToMcp(name, result);
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING) {
+        const result = await bundle.codingRecallService.recallForCoding({
+            body,
+            startedAt: Date.now(),
             defaultSource: source
         });
         return mapGatewayManagedResultToMcp(name, result);
@@ -540,11 +952,14 @@ function createMcpAdapter(pluginManager, options = {}) {
     const bundle = options.gatewayServiceBundle || getGatewayServiceBundle(pluginManager);
     const {
         capabilityService,
+        agentRegistryService,
         contextRuntimeService,
         memoryRuntimeService,
+        codingMemoryWritebackService,
+        codingRecallService,
         toolRuntimeService
     } = bundle;
-    const gatewayMemoryTools = createGatewayMemoryToolDescriptors();
+    const gatewayManagedTools = createGatewayManagedToolDescriptors();
 
     return {
         supportedResourceTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES,
@@ -562,7 +977,7 @@ function createMcpAdapter(pluginManager, options = {}) {
             return {
                 tools: [
                     ...(capabilities.tools || []).map(buildMcpToolDescriptor),
-                    ...gatewayMemoryTools
+                    ...gatewayManagedTools
                 ].sort((left, right) => left.name.localeCompare(right.name)),
                 meta: {
                     requestId: requestContext.requestId,
@@ -574,8 +989,6 @@ function createMcpAdapter(pluginManager, options = {}) {
         async callTool(input = {}) {
             const name = normalizeMcpString(input.name);
             const args = normalizeMcpArguments(input.arguments);
-            const { requestContext, authContext } = buildMcpContexts(bundle, input, 'mcp-tools-call');
-            ensureAgentAndSession(requestContext, 'tools/call');
 
             if (!name) {
                 throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'tools/call requires tool name', {
@@ -590,10 +1003,16 @@ function createMcpAdapter(pluginManager, options = {}) {
             if (isGatewayManagedTool(name)) {
                 return executeGatewayManagedTool({
                     ...bundle,
+                    agentRegistryService,
                     contextRuntimeService,
-                    memoryRuntimeService
+                    memoryRuntimeService,
+                    codingMemoryWritebackService,
+                    codingRecallService
                 }, name, args, input);
             }
+
+            const { requestContext, authContext } = buildMcpContexts(bundle, input, 'mcp-tools-call');
+            ensureAgentAndSession(requestContext, 'tools/call');
 
             const result = await toolRuntimeService.invokeTool({
                 toolName: name,

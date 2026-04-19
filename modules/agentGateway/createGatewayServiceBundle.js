@@ -40,6 +40,12 @@ const {
     createContextRuntimeService
 } = require('./services/contextRuntimeService');
 const {
+    createCodingRecallService
+} = require('./services/codingRecallService');
+const {
+    createCodingMemoryWritebackService
+} = require('./services/codingMemoryWritebackService');
+const {
     createToolRuntimeService
 } = require('./services/toolRuntimeService');
 const {
@@ -93,6 +99,14 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         agentPolicyResolver,
         diaryScopeGuard: ensureDiaryAllowed
     });
+    const codingRecallService = createCodingRecallService({
+        contextRuntimeService,
+        auditLogger
+    });
+    const codingMemoryWritebackService = createCodingMemoryWritebackService({
+        memoryRuntimeService,
+        auditLogger
+    });
     const toolRuntimeService = createToolRuntimeService({
         pluginManager,
         schemaRegistry,
@@ -131,6 +145,8 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         jobRuntimeService,
         memoryRuntimeService,
         contextRuntimeService,
+        codingRecallService,
+        codingMemoryWritebackService,
         toolRuntimeService,
         operabilityService,
         jobStatus: JOB_STATUS,
