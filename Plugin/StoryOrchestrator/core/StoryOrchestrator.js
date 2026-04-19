@@ -91,6 +91,8 @@ class StoryOrchestrator {
           return await this.recoverStoryWorkflow(args);
         case 'RetryPhase':
           return await this.retryPhase(args);
+        case 'RetryChapter':
+          return await this.retryChapter(args);
         default:
           return {
             status: 'error',
@@ -171,15 +173,15 @@ class StoryOrchestrator {
   async userConfirmCheckpoint(args) {
     if (args.approval === 'true') args.approval = true;
     if (args.approval === 'false') args.approval = false;
-    
+
     const validation = validateInput('userConfirmCheckpoint', args);
     if (!validation.valid) {
       return { status: 'error', error: validation.errors.join(', ') };
     }
 
-    const { story_id, checkpoint_id, approval, feedback } = args;
+    const { story_id, checkpoint_id, approval, feedback, chapter_number } = args;
     const story = await this.stateManager.getStory(story_id);
-    
+
     if (!story) {
       return { status: 'error', error: 'Story not found' };
     }
@@ -187,7 +189,8 @@ class StoryOrchestrator {
     const result = await this.workflowEngine.resume(story_id, {
       checkpointId: checkpoint_id,
       approval,
-      feedback
+      feedback,
+      chapter_number: chapter_number || null
     });
 
     return {
@@ -443,6 +446,30 @@ class StoryOrchestrator {
         result
       };
     }
+
+    return {
+      status: result.status === 'error' ? 'error' : 'success',
+      result
+    };
+  }
+
+  async retryChapter(args) {
+    const validation = validateInput('retryChapter', args);
+    if (!validation.valid) {
+      return { status: 'error', error: validation.errors.join(', ') };
+    }
+
+    const { story_id, chapter_number, phase_name, feedback } = args;
+    const story = await this.stateManager.getStory(story_id);
+    if (!story) {
+      return { status: 'error', error: 'Story not found' };
+    }
+
+    const result = await this.workflowEngine.handleChapterRetry(story_id, {
+      phase: phase_name,
+      chapter_number,
+      feedback
+    });
 
     return {
       status: result.status === 'error' ? 'error' : 'success',

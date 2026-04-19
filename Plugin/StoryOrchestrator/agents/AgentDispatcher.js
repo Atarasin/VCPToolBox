@@ -90,6 +90,9 @@ class AgentDispatcher {
           try {
             const responseData = JSON.parse(data);
             const content = responseData.choices?.[0]?.message?.content || '';
+            const finishReason = responseData.choices?.[0]?.finish_reason || 'unknown';
+            const usage = responseData.usage || {};
+            console.log(`[AgentDispatcher] Response for ${payload.model || 'unknown'}: len=${content.length}, finish_reason=${finishReason}, usage=${JSON.stringify(usage)}, preview="${content.substring(0, 200).replace(/\n/g, '\\n')}"`);
             resolve({
               content,
               raw: responseData,

@@ -141,6 +141,34 @@ class Phase2_OutlineDrafting {
     console.log(`[Phase2] Continuing from checkpoint: ${checkpointId}, decision: ${decision}, status: ${phase2Status}`);
 
     if (phase2Status === 'content_pending_confirmation') {
+      const checkpointType = story.workflow?.activeCheckpoint?.type;
+      if (checkpointType === 'phase2_chapter_retry_confirmation') {
+        if (decision === 'approve') {
+          // Chapter retry approved - continue to next phase or stay in phase2
+          await this.stateManager.updatePhase2(storyId, {
+            userConfirmed: true,
+            checkpointId: null,
+            status: 'completed'
+          });
+          await this.stateManager.updateStory(storyId, {
+            status: 'phase2_completed'
+          });
+          return {
+            status: 'completed',
+            phase: 'phase2',
+            nextAction: 'phase3_ready',
+            data: {
+              chaptersCompleted: story.phase2.chapters?.length || 0,
+              totalWordCount: story.phase2.totalWordCount || 0
+            }
+          };
+        } else {
+          // Chapter retry rejected - retry the same chapter again
+          const chapterNumber = story.workflow?.activeCheckpoint?.chapterNumber || 1;
+          return await this.retryChapter(storyId, chapterNumber, feedback);
+        }
+      }
+
       if (decision === 'approve') {
         await this.stateManager.updatePhase2(storyId, {
           userConfirmed: true,
@@ -227,6 +255,107 @@ class Phase2_OutlineDrafting {
         }
       };
     }
+  }
+
+  /**
+   * 重试单章（用户指定某一章回退重新生成）
+   * @param {string} storyId - 故事ID
+   * @param {number} chapterNumber - 章节号（从1开始）
+   * @param {string} feedback - 用户反馈
+   * @returns {Object}
+   */
+  async retryChapter(storyId, chapterNumber, feedback) {
+    console.log(`[Phase2] Retrying chapter ${chapterNumber} for story: ${storyId}`);
+
+    const story = await this.stateManager.getStory(storyId);
+    if (!story) {
+      throw new Error(`Story not found: ${storyId}`);
+    }
+
+    const chapters = story.phase2?.chapters || [];
+    const chapterIndex = chapterNumber - 1;
+
+    if (chapterIndex < 0 || chapterIndex >= chapters.length) {
+      throw new Error(`Chapter ${chapterNumber} not found. Total chapters: ${chapters.length}`);
+    }
+
+    const updatedChapters = [...chapters];
+    updatedChapters[chapterIndex] = {
+      ...updatedChapters[chapterIndex],
+      status: 'retrying',
+      retryFeedback: feedback || '',
+      retryAttempts: (updatedChapters[chapterIndex].retryAttempts || 0) + 1,
+      lastRetriedAt: new Date().toISOString()
+    };
+
+    await this.stateManager.updatePhase2(storyId, {
+      chapters: updatedChapters,
+      status: 'content_production'
+    });
+
+    const chapterResult = await this._produceChapter(
+      storyId,
+      chapterNumber,
+      updatedChapters[chapterIndex],
+      {
+        isRetry: true,
+        feedback: feedback || ''
+      }
+    );
+
+    updatedChapters[chapterIndex] = {
+      ...updatedChapters[chapterIndex],
+      content: chapterResult.content,
+      metrics: chapterResult.metrics,
+      status: 'completed',
+      revisedAt: new Date().toISOString(),
+      revisionFeedback: feedback || ''
+    };
+
+    await this.stateManager.updatePhase2(storyId, {
+      chapters: updatedChapters,
+      currentChapter: chapterNumber,
+      status: 'content_pending_confirmation',
+      checkpointId: `cp-2-chapter-${chapterNumber}-retry-${Date.now()}`
+    });
+
+    await this.stateManager.setActiveCheckpoint(storyId, {
+      id: `cp-2-chapter-${chapterNumber}-retry-${Date.now()}`,
+      phase: 'phase2',
+      type: 'phase2_chapter_retry_confirmation',
+      status: 'pending',
+      chapterNumber,
+      feedback: feedback || ''
+    });
+
+    const totalWordCount = updatedChapters.reduce((sum, ch) => sum + (ch.metrics?.wordCount || 0), 0);
+
+    return {
+      status: 'waiting_checkpoint',
+      phase: 'phase2',
+      nextAction: 'chapter_retry_confirmation',
+      checkpointId: `cp-2-chapter-${chapterNumber}-retry-${Date.now()}`,
+      checkpointType: 'phase2_chapter_retry_confirmation',
+      data: {
+        chapterNumber,
+        chaptersCompleted: updatedChapters.filter(ch => ch.status === 'completed').length,
+        totalChapters: updatedChapters.length,
+        totalWordCount,
+        chapterContent: updatedChapters[chapterIndex]?.content || '',
+        chapterTitle: updatedChapters[chapterIndex]?.title || `第${chapterNumber}章`,
+        allChapters: updatedChapters.map(ch => ({
+          number: ch.number,
+          title: ch.title || `第${ch.number}章`,
+          wordCount: ch.metrics?.wordCount || 0,
+          status: ch.status
+        })),
+        chapterResult: {
+          chapterNumber: chapterResult.chapterNumber,
+          wordCount: chapterResult.metrics?.wordCount || 0,
+          qualityScore: chapterResult.metrics?.qualityScore || 0
+        }
+      }
+    };
   }
 
   // ==================== 私有方法 ====================
@@ -859,7 +988,8 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
   /**
    * 正文生产阶段
    */
-  async _produceContent(storyId) {
+  async _produceContent(storyId, options = {}) {
+    const { startFromChapter = 1, onlyChapter = null } = options;
     const story = await this.stateManager.getStory(storyId);
     const outline = story.phase2?.outline;
     const chapters = outline?.chapters || [];
@@ -882,7 +1012,8 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     });
 
     // 逐章撰写（串行）
-    for (let i = 0; i < chapters.length; i++) {
+    const startIndex = onlyChapter ? onlyChapter - 1 : (startFromChapter ? startFromChapter - 1 : 0);
+    for (let i = startIndex; i < chapters.length; i++) {
       const chapterNum = i + 1;
       console.log(`[Phase2] Producing chapter ${chapterNum}/${chapters.length}`);
 
@@ -925,6 +1056,10 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
       await this._saveChapterToState(storyId, chapterNum, chapterResult);
 
       console.log(`[Phase2] Chapter ${chapterNum} ${chapterResult.status}`);
+
+      if (onlyChapter) {
+        break;
+      }
     }
 
     const completedChapters = chapterResults.filter(
@@ -967,7 +1102,8 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
   /**
    * 生产单个章节
    */
-  async _produceChapter(storyId, chapterNum, chapterOutline) {
+  async _produceChapter(storyId, chapterNum, chapterOutline, options = {}) {
+    const { isRetry = false, feedback = '' } = options;
     const story = await this.stateManager.getStory(storyId);
     const config = story.config;
 
@@ -979,7 +1115,9 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     console.log(`[Phase2] Creating draft for chapter ${chapterNum}`);
     let draftResult = await this.chapterOperations.createChapterDraft(storyId, chapterNum, {
       targetWordCount: targetWordCount,
-      stylePreference: config.stylePreference
+      stylePreference: config.stylePreference,
+      isRetry,
+      feedback: feedback || ''
     });
     try {
       await this.artifactManager.saveArtifact(storyId, 'chapter_draft', JSON.stringify({

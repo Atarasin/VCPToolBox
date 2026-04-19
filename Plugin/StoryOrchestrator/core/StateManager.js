@@ -513,38 +513,33 @@ class StateManager {
     let snapshotId = checkpoint.snapshot_id || null;
     if (!snapshotId && checkpoint.phase) {
       const phase = checkpoint.phase;
-      const validatedSnapshots = this.repository.getSnapshotsByStory(storyId, phase, 'validated');
-      if (validatedSnapshots && validatedSnapshots.length > 0) {
-        snapshotId = validatedSnapshots[0].snapshot_id;
-      } else {
-        if (phase === 'phase1' && story.phase1) {
-          snapshotId = this.repository.createSnapshot({
-            story_id: storyId,
-            phase_name: 'phase1',
-            snapshot_type: 'validated',
-            payload_json: story.phase1,
-            schema_version: 'phase1.v1',
-            schema_valid: true
-          });
-        } else if (phase === 'phase2' && story.phase2) {
-          snapshotId = this.repository.createSnapshot({
-            story_id: storyId,
-            phase_name: 'phase2',
-            snapshot_type: 'validated',
-            payload_json: story.phase2,
-            schema_version: 'phase2.v1',
-            schema_valid: true
-          });
-        } else if (phase === 'phase3' && story.phase3) {
-          snapshotId = this.repository.createSnapshot({
-            story_id: storyId,
-            phase_name: 'phase3',
-            snapshot_type: 'validated',
-            payload_json: story.phase3,
-            schema_version: 'phase3.v1',
-            schema_valid: true
-          });
-        }
+      if (phase === 'phase1' && story.phase1) {
+        snapshotId = this.repository.createSnapshot({
+          story_id: storyId,
+          phase_name: 'phase1',
+          snapshot_type: 'validated',
+          payload_json: story.phase1,
+          schema_version: 'phase1.v1',
+          schema_valid: true
+        });
+      } else if (phase === 'phase2' && story.phase2) {
+        snapshotId = this.repository.createSnapshot({
+          story_id: storyId,
+          phase_name: 'phase2',
+          snapshot_type: 'validated',
+          payload_json: story.phase2,
+          schema_version: 'phase2.v1',
+          schema_valid: true
+        });
+      } else if (phase === 'phase3' && story.phase3) {
+        snapshotId = this.repository.createSnapshot({
+          story_id: storyId,
+          phase_name: 'phase3',
+          snapshot_type: 'validated',
+          payload_json: story.phase3,
+          schema_version: 'phase3.v1',
+          schema_valid: true
+        });
       }
     }
 
@@ -600,11 +595,14 @@ class StateManager {
       story.workflow.activeCheckpoint.status = resolutionStatus;
       story.workflow.activeCheckpoint.resolvedAt = now;
 
-      this.repository.updateCheckpoint(story.workflow.activeCheckpoint.id, {
-        status: resolutionStatus,
+      const checkpointUpdates = {
         feedback: feedback,
         resolved_at: now
-      });
+      };
+      if (resolutionStatus !== null) {
+        checkpointUpdates.status = resolutionStatus;
+      }
+      this.repository.updateCheckpoint(story.workflow.activeCheckpoint.id, checkpointUpdates);
     }
 
     if (story[phaseName]) {

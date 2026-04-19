@@ -28,7 +28,8 @@ const ValidationSchemas = {
     story_id: { type: 'string', required: true },
     checkpoint_id: { type: 'string', required: true },
     approval: { type: 'boolean', required: true },
-    feedback: { type: 'string', required: false, maxLength: 2000 }
+    feedback: { type: 'string', required: false, maxLength: 2000 },
+    chapter_number: { type: 'number', required: false, min: 1 }
   },
 
   /**
@@ -137,6 +138,13 @@ const ValidationSchemas = {
       required: false,
       maxLength: 2000
     }
+  },
+
+  retryChapter: {
+    story_id: { type: 'string', required: true, pattern: /^story-[a-zA-Z0-9]+$/ },
+    chapter_number: { type: 'number', required: true, min: 1 },
+    phase_name: { type: 'string', required: true, enum: ['phase2', 'phase3'] },
+    feedback: { type: 'string', required: false, maxLength: 2000 }
   }
 };
 

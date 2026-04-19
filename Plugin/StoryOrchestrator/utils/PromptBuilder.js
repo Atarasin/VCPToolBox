@@ -200,6 +200,35 @@ ${keepList || '（保持主线情节和关键设定不变）'}
   }
 
   /**
+   * 构建单章重试提示词（用于Phase2单章回退重新生成）
+   * @param {Object} params
+   * @param {string} params.storyBible - 故事设定
+   * @param {number} params.chapterNum - 章节号
+   * @param {string} params.chapterOutline - 章节大纲
+   * @param {number} params.targetWordCount - 目标字数
+   * @param {string} params.genre - 类型
+   * @param {string} params.stylePreference - 风格偏好
+   * @param {string} params.previousChapterContent - 前一章内容
+   * @param {string} params.feedback - 用户反馈
+   * @returns {string}
+   */
+  static buildSingleChapterRetryPrompt(params) {
+    const { storyBible, chapterNum, chapterOutline, targetWordCount, genre, stylePreference, previousChapterContent, feedback } = params;
+    
+    const basePrompt = this.buildChapterWriterPrompt({
+      storyBible,
+      chapterNum,
+      chapterOutline,
+      targetWordCount,
+      genre,
+      stylePreference,
+      previousChapterContent
+    });
+
+    return `${basePrompt}\n\n【用户反馈与修改要求】\n${feedback}\n\n请根据以上反馈，重新生成第${chapterNum}章。保持故事整体一致性，重点解决用户指出的问题，同时保持原有的叙事风格和节奏。`;
+  }
+
+  /**
    * 构建文笔润色Agent的提示词
    * @param {Object} params 
    * @returns {string}
@@ -213,10 +242,7 @@ ${keepList || '（保持主线情节和关键设定不变）'}
 
     return `【文笔润色任务】
 
-请对以下章节进行文笔优化。
-
-=== 原始章节 ===
-${chapterContent}
+请对以下章节进行文笔优化，直接输出完整的润色后正文，不要输出改进说明或其他额外内容。
 
 === 文风要求 ===
 ${storyStyle || '保持叙事流畅，描写生动，对话自然'}
@@ -232,12 +258,29 @@ ${polishFocus}
 5. 改善对话的自然度
 6. 控制叙事节奏
 
-=== 输出格式 ===
-【改进说明】
-列出主要的改进点（3-5点）
+=== 原始章节 ===
+${chapterContent}`;
+  }
 
-【润色后正文】
-（输出完整的润色后章节内容）`;
+  /**
+   * 构建单章重新润色提示词（用于Phase3单章回退重新润色）
+   * @param {Object} params
+   * @param {string} params.chapterContent - 章节内容
+   * @param {string} params.storyStyle - 故事风格
+   * @param {string} params.polishFocus - 润色重点
+   * @param {string} params.feedback - 用户反馈
+   * @returns {string}
+   */
+  static buildSingleChapterPolishPrompt(params) {
+    const { chapterContent, storyStyle, polishFocus, feedback } = params;
+    
+    const basePrompt = this.buildStylePolisherPrompt({
+      chapterContent,
+      storyStyle,
+      polishFocus
+    });
+
+    return `${basePrompt}\n\n【用户反馈与修改要求】\n${feedback}\n\n请根据以上反馈，对该章节进行针对性润色。保持与前后章节的风格一致性，重点解决用户指出的问题。`;
   }
 
   /**

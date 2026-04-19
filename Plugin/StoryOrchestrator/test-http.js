@@ -5,7 +5,7 @@ async function testHttpCall() {
   console.log('=' .repeat(60));
   
   const payload = JSON.stringify({
-    model: 'volc-doubao-seed-2.0-pro',
+    model: 'kimi-k2.6',
     messages: [
       { role: 'system', content: '你是专业的世界观设定师。' },
       { role: 'user', content: '请为一个科幻故事生成世界观设定。故事梗概：一个关于AI觉醒的故事。' }

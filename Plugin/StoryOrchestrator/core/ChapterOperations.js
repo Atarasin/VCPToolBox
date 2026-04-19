@@ -179,23 +179,92 @@ class ChapterOperations {
       throw new Error(`Story not found: ${storyId}`);
     }
 
-    const prompt = PromptBuilder.buildStylePolisherPrompt({
-      chapterContent,
-      storyStyle: storyState.config.stylePreference,
-      polishFocus: options.polishFocus || '文风统一、句式优化、节奏控制'
-    });
+    const polishFocus = options.polishFocus || '文风统一、句式优化、节奏控制';
+    const storyStyle = storyState.config.stylePreference;
 
-    const result = await this.agentDispatcher.delegate('stylePolisher', prompt, {
-      timeoutMs: options.timeoutMs || 300000,
-      temporaryContact: true
-    });
+    if (chapterContent.length <= 3000) {
+      const prompt = PromptBuilder.buildStylePolisherPrompt({
+        chapterContent,
+        storyStyle,
+        polishFocus
+      });
+
+      const result = await this.agentDispatcher.delegate('stylePolisher', prompt, {
+        timeoutMs: options.timeoutMs || 300000,
+        temporaryContact: true
+      });
+
+      return {
+        polishedContent: result.content,
+        improvements: this._extractImprovements(result.content),
+        metrics: this.countChapterLength(result.content),
+        agentResponse: result
+      };
+    }
+
+    console.log(`[ChapterOperations] polishChapter using segmented polish for ch=${chapterNum}, totalLength=${chapterContent.length}`);
+
+    const segments = this._splitContentIntoSegments(chapterContent, 2500);
+    const polishedSegments = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      const contextPrefix = i > 0 ? `（接上文）\n\n` : '';
+      const contextSuffix = i < segments.length - 1 ? `\n\n（下文待续）` : '';
+      const segmentWithContext = contextPrefix + segment + contextSuffix;
+
+      const prompt = PromptBuilder.buildStylePolisherPrompt({
+        chapterContent: segmentWithContext,
+        storyStyle,
+        polishFocus
+      });
+
+      const result = await this.agentDispatcher.delegate('stylePolisher', prompt, {
+        timeoutMs: options.timeoutMs || 300000,
+        temporaryContact: true
+      });
+
+      let polishedSegment = result.content || '';
+      polishedSegment = polishedSegment.replace(/^（接上文）\s*\n*/i, '');
+      polishedSegment = polishedSegment.replace(/\n*\s*（下文待续）\s*$/i, '');
+
+      polishedSegments.push(polishedSegment);
+      console.log(`[ChapterOperations] Segment ${i + 1}/${segments.length} polished: ${segment.length} -> ${polishedSegment.length}`);
+    }
+
+    const fullPolishedContent = polishedSegments.join('\n\n');
 
     return {
-      polishedContent: result.content,
-      improvements: this._extractImprovements(result.content),
-      metrics: this.countChapterLength(result.content),
-      agentResponse: result
+      polishedContent: fullPolishedContent,
+      improvements: this._extractImprovements(fullPolishedContent),
+      metrics: this.countChapterLength(fullPolishedContent),
+      agentResponse: { content: fullPolishedContent, segmented: true, segmentCount: segments.length }
     };
+  }
+
+  _splitContentIntoSegments(content, maxSegmentLength) {
+    const paragraphs = content.split(/\n\n+/);
+    const segments = [];
+    let currentSegment = '';
+
+    for (const paragraph of paragraphs) {
+      if (!paragraph.trim()) continue;
+
+      if (currentSegment.length + paragraph.length + 2 <= maxSegmentLength) {
+        currentSegment += (currentSegment ? '\n\n' : '') + paragraph;
+      } else {
+        if (currentSegment) {
+          segments.push(currentSegment);
+        }
+        currentSegment = paragraph;
+      }
+    }
+
+    if (currentSegment) {
+      segments.push(currentSegment);
+    }
+
+    return segments;
   }
 
   async fillDetails(storyId, chapterNum, chapterContent, options = {}) {

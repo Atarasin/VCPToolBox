@@ -5,7 +5,7 @@ async function testIpv4() {
   console.log('=' .repeat(60));
   
   const payload = JSON.stringify({
-    model: 'volc-doubao-seed-2.0-pro',
+    model: 'kimi-k2.6',
     messages: [{ role: 'user', content: '你好' }],
     stream: false
   });

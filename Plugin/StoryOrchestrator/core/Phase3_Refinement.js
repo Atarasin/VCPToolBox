@@ -144,14 +144,148 @@ class Phase3_Refinement {
     }
 
     const checkpointId = story.phase3?.checkpointId;
+    const checkpointType = story.workflow?.activeCheckpoint?.type;
+
+    if (checkpointType === 'phase3_chapter_retry_confirmation') {
+      if (decision === 'approve') {
+        return await this._handleApproval(storyId, checkpointId);
+      } else {
+        const chapterNumber = story.workflow?.activeCheckpoint?.chapterNumber || 1;
+        return await this.retryChapter(storyId, chapterNumber, feedback);
+      }
+    }
     
     if (decision === 'approve') {
-      // ===== 批准：标记完成，生成终稿 =====
       return await this._handleApproval(storyId, checkpointId);
     } else {
-      // ===== 拒绝：记录反馈，重新运行 Phase 3 =====
       return await this._handleRejection(storyId, checkpointId, feedback);
     }
+  }
+
+  /**
+   * 重试单章润色（用户指定某一章重新润色）
+   * @param {string} storyId - 故事ID
+   * @param {number} chapterNumber - 章节号（从1开始）
+   * @param {string} feedback - 用户反馈
+   * @returns {Promise<Object>}
+   */
+  async retryChapter(storyId, chapterNumber, feedback) {
+    console.log(`[Phase3_Refinement] Retrying polish for chapter ${chapterNumber}, story: ${storyId}`);
+
+    const story = await this.stateManager.getStory(storyId);
+    if (!story) {
+      return {
+        status: 'error',
+        error: `Story not found: ${storyId}`
+      };
+    }
+
+    const polishedChapters = story.phase3?.polishedChapters || [];
+    const chapterIndex = chapterNumber - 1;
+
+    if (chapterIndex < 0 || chapterIndex >= polishedChapters.length) {
+      return {
+        status: 'error',
+        error: `Chapter ${chapterNumber} not found. Total polished chapters: ${polishedChapters.length}`
+      };
+    }
+
+    const targetChapter = polishedChapters[chapterIndex];
+
+    // Update chapter status
+    const updatedChapters = [...polishedChapters];
+    updatedChapters[chapterIndex] = {
+      ...updatedChapters[chapterIndex],
+      status: 'repolishing',
+      retryFeedback: feedback || '',
+      retryAttempts: (updatedChapters[chapterIndex].retryAttempts || 0) + 1,
+      lastRetriedAt: new Date().toISOString()
+    };
+
+    await this.stateManager.updatePhase3(storyId, {
+      polishedChapters: updatedChapters,
+      status: 'repolishing'
+    });
+
+    // Re-polish the specific chapter with feedback
+    const polishResult = await this._polishSingleChapter(
+      storyId,
+      targetChapter,
+      story.phase1,
+      { 
+        isRetry: true, 
+        feedback: feedback || '' 
+      }
+    );
+
+    // Update the chapter with new polished content
+    updatedChapters[chapterIndex] = {
+      ...updatedChapters[chapterIndex],
+      content: polishResult.polishedContent,
+      originalContent: targetChapter.content,
+      metrics: polishResult.metrics,
+      improvements: polishResult.improvements,
+      status: 'completed',
+      repolishedAt: new Date().toISOString(),
+      repolishFeedback: feedback || ''
+    };
+
+    await this.stateManager.updatePhase3(storyId, {
+      polishedChapters: updatedChapters,
+      status: 'final_acceptance_pending',
+      checkpointId: `cp-3-chapter-${chapterNumber}-retry-${Date.now()}`
+    });
+
+    // Run validation on the updated manuscript
+    const fullContent = updatedChapters.map(ch => ch.content).join('\n\n');
+    let validationResult = { overall: { passed: true, hasCriticalIssues: false, criticalCount: 0 }, allIssues: [] };
+    try {
+      validationResult = await this.contentValidator.comprehensiveValidation(
+        storyId,
+        0,
+        fullContent,
+        story.phase1
+      );
+    } catch (error) {
+      console.error(`[Phase3_Refinement] Validation failed after chapter retry:`, error);
+    }
+
+    // Quality score
+    let qualityResult = { average: 0, scores: {}, rawReport: '' };
+    try {
+      qualityResult = await this.contentValidator.qualityScore(fullContent);
+    } catch (error) {
+      console.error(`[Phase3_Refinement] Quality scoring failed after chapter retry:`, error);
+    }
+
+    // Create checkpoint for chapter retry review
+    const checkpointId = `cp-3-chapter-${chapterNumber}-retry-${Date.now()}`;
+    await this.stateManager.setActiveCheckpoint(storyId, {
+      id: checkpointId,
+      phase: 'phase3',
+      type: 'phase3_chapter_retry_confirmation',
+      status: 'pending',
+      chapterNumber,
+      feedback: feedback || ''
+    });
+
+    return {
+      status: 'waiting_checkpoint',
+      phase: 'phase3',
+      nextAction: 'chapter_retry_confirmation',
+      checkpointId,
+      checkpointType: 'phase3_chapter_retry_confirmation',
+      data: {
+        chapterNumber,
+        polishedChapters: updatedChapters.length,
+        qualityScore: qualityResult.average,
+        validationResult: validationResult.overall,
+        chapterContent: updatedChapters[chapterIndex]?.content || '',
+        chapterTitle: updatedChapters[chapterIndex]?.title || `第${chapterNumber}章`,
+        fullManuscript: updatedChapters.map(ch => `=== 第${ch.number}章 ${ch.title || ''} ===\n\n${ch.content}`).join('\n\n'),
+        message: `第${chapterNumber}章已根据反馈重新润色，请验收`
+      }
+    };
   }
 
   // ===== 私有方法 =====
@@ -287,6 +421,54 @@ class Phase3_Refinement {
   }
 
   /**
+   * 润色单章
+   * @private
+   * @param {string} storyId - 故事ID
+   * @param {Object} chapter - 章节对象 {number, title, content, metrics}
+   * @param {Object} storyBible - 故事设定
+   * @param {Object} options - 选项 {isRetry, feedback}
+   * @returns {Promise<Object>}
+   */
+  async _polishSingleChapter(storyId, chapter, storyBible, options = {}) {
+    const { isRetry = false, feedback = '' } = options;
+    
+    console.log(`[Phase3_Refinement] Polishing single chapter ${chapter.number}, isRetry: ${isRetry}`);
+
+    try {
+      const polishOptions = { 
+        polishFocus: '文风统一、句式优化、节奏控制、描写生动' 
+      };
+
+      if (isRetry && feedback) {
+        polishOptions.polishFocus += `。特别注意用户反馈：${feedback}`;
+      }
+
+      const polishResult = await this.chapterOperations.polishChapter(
+        storyId,
+        chapter.number,
+        chapter.content,
+        polishOptions
+      );
+
+      return {
+        polishedContent: polishResult.polishedContent,
+        metrics: polishResult.metrics,
+        improvements: polishResult.improvements,
+        chapterNumber: chapter.number
+      };
+    } catch (error) {
+      console.error(`[Phase3_Refinement] Polish chapter ${chapter.number} failed:`, error);
+      return {
+        polishedContent: chapter.content,
+        metrics: chapter.metrics,
+        improvements: [],
+        chapterNumber: chapter.number,
+        polishError: error.message
+      };
+    }
+  }
+
+  /**
    * 运行终校编辑器
    * @private
    */
@@ -343,8 +525,43 @@ class Phase3_Refinement {
     console.log(`[Phase3_Refinement] Handling approval for checkpoint: ${checkpointId}`);
     
     const story = await this.stateManager.getStory(storyId);
+    const checkpointType = story.workflow?.activeCheckpoint?.type;
     
-    // 生成最终输出
+    if (checkpointType === 'phase3_chapter_retry_confirmation') {
+      await this.stateManager.clearActiveCheckpoint(storyId);
+      await this.stateManager.updatePhase3(storyId, {
+        checkpointId: `cp-3-final-${Date.now()}`,
+        status: 'final_acceptance_pending'
+      });
+      
+      const polishedChapters = story.phase3?.polishedChapters || [];
+      const fullContent = polishedChapters.map(ch => ch.content).join('\n\n');
+      
+      const newCheckpointId = `cp-3-final-${Date.now()}`;
+      await this.stateManager.setActiveCheckpoint(storyId, {
+        id: newCheckpointId,
+        phase: 'phase3',
+        type: 'final_acceptance',
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + (this.config?.USER_CHECKPOINT_TIMEOUT_MS || 86400000)).toISOString(),
+        autoContinueOnTimeout: true
+      });
+
+      return {
+        status: 'waiting_checkpoint',
+        phase: 'phase3',
+        nextAction: 'final_acceptance',
+        checkpointId: newCheckpointId,
+        checkpointType: 'final_acceptance',
+        data: {
+          polishedChapters: polishedChapters.length,
+          fullContent,
+          message: '单章润色已完成，请验收完整终稿'
+        }
+      };
+    }
+    
     const finalOutput = this._generateFinalOutput(story);
     
     // 更新状态

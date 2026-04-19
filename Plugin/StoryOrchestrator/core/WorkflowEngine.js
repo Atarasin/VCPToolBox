@@ -352,9 +352,10 @@ class WorkflowEngine {
    * @param {boolean} decision.approval - 是否批准
    * @param {string} decision.feedback - 反馈信息
    * @param {string} decision.reason - 原因
+   * @param {number} decision.chapter_number - 章节号（用于章节级拒绝）
    * @returns {Object} 恢复结果
    */
-  async resume(storyId, { checkpointId, approval, feedback, reason }) {
+  async resume(storyId, { checkpointId, approval, feedback, reason, chapter_number }) {
     console.log(`[WorkflowEngine] Resuming workflow for story: ${storyId}`);
     console.log(`[WorkflowEngine] Checkpoint: ${checkpointId}, approval: ${approval}`);
 
@@ -446,6 +447,10 @@ class WorkflowEngine {
     if (approval) {
       return await this._handleApproval(storyId, currentPhase, checkpointId, feedback);
     } else {
+      // 如果提供了 chapter_number 且是拒绝，则使用章节级拒绝处理
+      if (chapter_number !== null && chapter_number !== undefined) {
+        return await this._handleChapterRejection(storyId, currentPhase, checkpointId, chapter_number, feedback);
+      }
       return await this._handleRejection(storyId, currentPhase, checkpointId, feedback, reason);
     }
   }
@@ -1452,7 +1457,48 @@ class WorkflowEngine {
     }
 
     if (currentPhase === 'phase3') {
-      // Phase3 批准后完成
+      if (checkpointType === 'phase3_chapter_retry_confirmation') {
+        console.log(`[WorkflowEngine] Phase3 chapter retry checkpoint approved, creating final acceptance checkpoint`);
+        const newCheckpointId = `cp-3-final-${Date.now()}`;
+        const timeoutMs = this.config.USER_CHECKPOINT_TIMEOUT_MS || 86400000;
+        await this.stateManager.setActiveCheckpoint(storyId, {
+          id: newCheckpointId,
+          phase: 'phase3',
+          type: 'final_acceptance',
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+          autoContinueOnTimeout: true
+        });
+        await this.stateManager.updatePhase3(storyId, {
+          checkpointId: newCheckpointId,
+          status: 'final_acceptance_pending'
+        });
+        await this.stateManager.updateWorkflow(storyId, {
+          state: 'waiting_checkpoint',
+          currentPhase: 'phase3',
+          currentStep: 'checkpoint'
+        });
+        await this.stateManager.updateStory(storyId, {
+          status: 'phase3_waiting_checkpoint'
+        });
+        await this.stateManager.appendWorkflowHistory(storyId, {
+          type: 'checkpoint_created',
+          phase: 'phase3',
+          detail: {
+            checkpointId: newCheckpointId,
+            data: { message: 'Chapter retry approved, full manuscript review' }
+          }
+        });
+        return {
+          status: 'waiting_checkpoint',
+          phase: 'phase3',
+          nextAction: 'final_acceptance',
+          checkpointId: newCheckpointId,
+          checkpointType: 'final_acceptance',
+          message: 'Chapter retry approved, please review the full manuscript'
+        };
+      }
       return await this._markCompleted(storyId);
     }
 
@@ -1574,6 +1620,97 @@ class WorkflowEngine {
         data: { error: error.message }
       });
     }
+  }
+
+  async _handleChapterRejection(storyId, currentPhase, checkpointId, chapterNumber, feedback) {
+    console.log(`[WorkflowEngine] Handling chapter rejection for ${currentPhase}, chapter ${chapterNumber}`);
+    console.log(`[WorkflowEngine] Feedback: ${feedback}`);
+
+    await this.stateManager.recordPhaseFeedback(storyId, currentPhase, feedback || `Chapter ${chapterNumber} rejected`, 'chapter_rejected');
+
+    await this.stateManager.appendWorkflowHistory(storyId, {
+      type: 'chapter_checkpoint_rejected',
+      phase: currentPhase,
+      detail: { checkpointId, chapterNumber, feedback }
+    });
+
+    await this._notify(storyId, 'chapter_checkpoint_rejected', {
+      storyId,
+      phase: currentPhase,
+      checkpointId,
+      chapterNumber,
+      feedback
+    });
+
+    await this.stateManager.clearActiveCheckpoint(storyId);
+
+    await this.stateManager.updateWorkflow(storyId, {
+      state: 'running',
+      currentPhase,
+      currentStep: `retrying_chapter_${chapterNumber}`,
+      retryContext: {
+        ...(await this.stateManager.getStory(storyId)).workflow?.retryContext,
+        lastError: feedback || `Chapter ${chapterNumber} rejected by user`
+      }
+    });
+
+    await this.stateManager.updateStory(storyId, {
+      status: `${currentPhase}_retrying_chapter_${chapterNumber}`
+    });
+
+    void this._retryChapterInBackground(storyId, currentPhase, chapterNumber, feedback);
+
+    return {
+      status: 'retrying_chapter',
+      phase: currentPhase,
+      chapterNumber,
+      background: true,
+      checkpointId,
+      message: `Checkpoint ${checkpointId} rejected for chapter ${chapterNumber}, re-running chapter`
+    };
+  }
+
+  async _retryChapterInBackground(storyId, currentPhase, chapterNumber, feedback) {
+    try {
+      if (currentPhase === 'phase2') {
+        if (this.phases.phase2 && typeof this.phases.phase2.retryChapter === 'function') {
+          const result = await this.phases.phase2.retryChapter(storyId, chapterNumber, feedback);
+          return await this._processPhaseResult(storyId, 'phase2', result);
+        } else {
+          console.warn(`[WorkflowEngine] Phase2 does not support retryChapter, falling back to full phase retry`);
+          await this._runPhase2(storyId);
+        }
+        return;
+      }
+      if (currentPhase === 'phase3') {
+        if (this.phases.phase3 && typeof this.phases.phase3.retryChapter === 'function') {
+          const result = await this.phases.phase3.retryChapter(storyId, chapterNumber, feedback);
+          return await this._processPhaseResult(storyId, 'phase3', result);
+        } else {
+          console.warn(`[WorkflowEngine] Phase3 does not support retryChapter, falling back to full phase retry`);
+          await this._runPhase3(storyId);
+        }
+        return;
+      }
+    } catch (error) {
+      console.error(`[WorkflowEngine] Background chapter retry failed for ${storyId}/${currentPhase}/chapter${chapterNumber}:`, error);
+      await this._handlePhaseError(storyId, currentPhase, {
+        status: 'error',
+        phase: currentPhase,
+        error: error.message,
+        data: { error: error.message, chapterNumber }
+      });
+    }
+  }
+
+  async handleChapterRetry(storyId, args) {
+    const { phase, chapter_number, feedback } = args;
+    const story = await this.stateManager.getStory(storyId);
+    if (!story) {
+      return { status: 'error', error: 'Story not found' };
+    }
+    const checkpointId = story.workflow?.activeCheckpoint?.id || `manual-retry-${Date.now()}`;
+    return await this._handleChapterRejection(storyId, phase, checkpointId, chapter_number, feedback);
   }
 
   /**
