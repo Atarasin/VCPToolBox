@@ -127,3 +127,56 @@ test('JobRuntimeService enforces canonical job ownership on poll and cancel', ()
     assert.equal(forbiddenCancelResult.success, false);
     assert.equal(forbiddenCancelResult.code, 'AGW_FORBIDDEN');
 });
+
+test('JobRuntimeService filters runtime events by ownership and rejects terminal-state cancellation', () => {
+    const service = createJobRuntimeService();
+    const ownerAuthContext = {
+        requestId: 'req-job-004',
+        sessionId: 'sess-job-004',
+        agentId: 'agent.owner',
+        source: 'native',
+        runtime: 'native',
+        gatewayId: 'gw-owner'
+    };
+    const job = service.createAcceptedJob({
+        operation: 'coding.recall',
+        authContext: ownerAuthContext,
+        metadata: {
+            toolName: 'gateway_recall_for_coding'
+        }
+    });
+
+    const completionResult = service.completeJob(job.jobId, {
+        completedBy: 'job-runtime-test'
+    });
+    const terminalCancelResult = service.cancelJob(job.jobId, ownerAuthContext);
+    const ownerEventsResult = service.listEvents({
+        authContext: ownerAuthContext,
+        filters: {
+            jobId: job.jobId
+        }
+    });
+    const foreignEventsResult = service.listEvents({
+        authContext: {
+            agentId: 'agent.other',
+            sessionId: 'sess-other',
+            gatewayId: 'gw-owner'
+        },
+        filters: {
+            jobId: job.jobId
+        }
+    });
+
+    assert.equal(completionResult.success, true);
+    assert.equal(completionResult.data.job.status, JOB_STATUS.COMPLETED);
+    assert.equal(terminalCancelResult.success, false);
+    assert.equal(terminalCancelResult.code, 'AGW_VALIDATION_ERROR');
+    assert.equal(terminalCancelResult.details.status, JOB_STATUS.COMPLETED);
+    assert.equal(ownerEventsResult.success, true);
+    assert.deepEqual(
+        ownerEventsResult.data.events.map((event) => event.eventType),
+        ['job.accepted', 'job.completed']
+    );
+    assert.equal(foreignEventsResult.success, true);
+    assert.deepEqual(foreignEventsResult.data.events, []);
+});

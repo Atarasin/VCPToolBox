@@ -195,6 +195,51 @@ function createDefaultRenderContext(pluginManager, overrides = {}) {
     };
 }
 
+function buildAgentProfile(detail) {
+    return {
+        agentId: detail.agentId,
+        alias: detail.alias,
+        summary: detail.summary,
+        sourceFile: detail.sourceFile,
+        exists: detail.exists,
+        mtime: detail.mtime,
+        hash: detail.hash,
+        defaultPolicies: detail.defaultPolicies,
+        capabilityHints: detail.capabilityHints,
+        accessibleTools: Array.isArray(detail.accessibleTools)
+            ? detail.accessibleTools.map((tool) => ({
+                name: normalizeRegistryString(tool?.name),
+                approvalRequired: Boolean(tool?.approvalRequired)
+            }))
+            : [],
+        accessibleMemoryTargets: Array.isArray(detail.accessibleMemoryTargets)
+            ? detail.accessibleMemoryTargets.map((target) => ({
+                id: normalizeRegistryString(target?.id),
+                name: normalizeRegistryString(target?.name),
+                writable: Boolean(target?.writable)
+            }))
+            : []
+    };
+}
+
+function buildPromptTemplatePreview(detail) {
+    return {
+        agentId: detail.agentId,
+        alias: detail.alias,
+        sourceFile: detail.sourceFile,
+        exists: detail.exists,
+        mtime: detail.mtime,
+        hash: detail.hash,
+        summary: detail.summary,
+        prompt: {
+            raw: detail.prompt?.raw || '',
+            size: Number.isFinite(detail.prompt?.size) ? detail.prompt.size : 0,
+            placeholderSummary: detail.prompt?.placeholderSummary || {},
+            dependencies: detail.prompt?.dependencies || {}
+        }
+    };
+}
+
 /**
  * AgentRegistryService 以 agent-first 视角导出定义信息，不暴露后台目录管理语义。
  */
@@ -278,16 +323,18 @@ function createAgentRegistryService(deps = {}) {
         };
     }
 
-    async function buildCapabilityMetadata(agentId) {
+    async function buildCapabilityMetadata(agentId, options = {}) {
         const [capabilities, memoryTargets] = await Promise.all([
             capabilityService.getCapabilities({
                 agentId,
-                maid: agentId,
-                includeMemoryTargets: false
+                maid: options.maid || agentId,
+                includeMemoryTargets: false,
+                authContext: options.authContext
             }),
             capabilityService.getMemoryTargets({
                 agentId,
-                maid: agentId
+                maid: options.maid || agentId,
+                authContext: options.authContext
             })
         ]);
 
@@ -309,9 +356,9 @@ function createAgentRegistryService(deps = {}) {
         };
     }
 
-    async function buildListRecord(agentId) {
+    async function buildListRecord(agentId, options = {}) {
         const source = await loadAgentSource(agentId);
-        const capabilityMetadata = await buildCapabilityMetadata(agentId);
+        const capabilityMetadata = await buildCapabilityMetadata(agentId, options);
 
         return {
             agentId: source.agentId,
@@ -327,16 +374,16 @@ function createAgentRegistryService(deps = {}) {
     }
 
     return {
-        async listAgents() {
+        async listAgents(options = {}) {
             await ensureAgentState();
             const entries = getAgentEntries();
-            return Promise.all(entries.map((entry) => buildListRecord(entry.alias)));
+            return Promise.all(entries.map((entry) => buildListRecord(entry.alias, options)));
         },
 
-        async getAgentDetail(agentId) {
+        async getAgentDetail(agentId, options = {}) {
             const [source, capabilityMetadata] = await Promise.all([
                 loadAgentSource(agentId),
-                buildCapabilityMetadata(agentId)
+                buildCapabilityMetadata(agentId, options)
             ]);
             const dependencies = collectPromptDependencies(source.rawPrompt, agentManager);
             const placeholderSummary = buildPlaceholderSummary(source.rawPrompt, agentManager);
@@ -360,6 +407,16 @@ function createAgentRegistryService(deps = {}) {
                 accessibleTools: capabilityMetadata.accessibleTools,
                 accessibleMemoryTargets: capabilityMetadata.accessibleMemoryTargets
             };
+        },
+
+        async getAgentProfile(agentId, options = {}) {
+            const detail = await this.getAgentDetail(agentId, options);
+            return buildAgentProfile(detail);
+        },
+
+        async getPromptTemplatePreview(agentId, options = {}) {
+            const detail = await this.getAgentDetail(agentId, options);
+            return buildPromptTemplatePreview(detail);
         },
 
         async renderAgent(agentId, options = {}) {

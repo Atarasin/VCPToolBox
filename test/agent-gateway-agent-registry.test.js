@@ -153,6 +153,42 @@ test('AgentRegistryService returns detail with prompt dependencies and accessibl
     assert.deepEqual(detail.accessibleMemoryTargets.map((target) => target.id), ['Nova', 'SharedMemory']);
 });
 
+test('AgentRegistryService derives governed profile and prompt-template preview shapes from shared detail', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(
+        agentDir,
+        'Ariadne.md',
+        [
+            'Ariadne system prompt',
+            '{{agent:Bard}}',
+            '{{VarUserName}}'
+        ].join('\n')
+    );
+    await writeAgentFile(agentDir, 'roles/Bard.md', 'Bard prompt');
+
+    const service = createAgentRegistryService({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md',
+            Bard: 'roles/Bard.md'
+        }),
+        capabilityService: createCapabilityServiceStub(),
+        renderPrompt: async ({ rawPrompt }) => rawPrompt
+    });
+
+    const profile = await service.getAgentProfile('Ariadne');
+    const preview = await service.getPromptTemplatePreview('Ariadne');
+
+    assert.equal(profile.agentId, 'Ariadne');
+    assert.equal(profile.summary, 'Ariadne system prompt');
+    assert.deepEqual(profile.accessibleTools.map((tool) => tool.name), ['SciCalculator', 'RemoteSearch']);
+    assert.deepEqual(profile.accessibleMemoryTargets.map((target) => target.id), ['Nova', 'SharedMemory']);
+
+    assert.equal(preview.agentId, 'Ariadne');
+    assert.equal(preview.prompt.raw.includes('{{VarUserName}}'), true);
+    assert.deepEqual(preview.prompt.dependencies.agents, ['Bard']);
+    assert.deepEqual(preview.prompt.placeholderSummary.variables, ['VarUserName']);
+});
+
 test('AgentRegistryService renders agents with variables, unresolved warnings, and truncation metadata', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(

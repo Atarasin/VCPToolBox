@@ -10,6 +10,13 @@ const {
     OPENCLAW_ERROR_CODES,
     AGW_ERROR_CODES
 } = require('../contracts/errorCodes');
+const {
+    beginGatewayManagedOperation,
+    buildGatewayManagedClientPayload,
+    buildGatewayManagedOperationRejection,
+    buildOperabilityMetadata,
+    finishGatewayManagedOperation
+} = require('./mcpGatewayOperability');
 
 const MCP_ERROR_CODES = Object.freeze({
     INVALID_REQUEST: 'MCP_INVALID_REQUEST',
@@ -23,11 +30,16 @@ const MCP_ERROR_CODES = Object.freeze({
 
 const MCP_RESOURCE_KINDS = Object.freeze({
     CAPABILITIES: 'capabilities',
-    MEMORY_TARGETS: 'memory-targets'
+    MEMORY_TARGETS: 'memory-targets',
+    AGENT_PROFILE: 'agent-profile',
+    AGENT_PROMPT_TEMPLATE: 'agent-prompt-template',
+    JOB_EVENTS: 'job-events'
 });
 
 const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
     AGENT_RENDER: 'gateway_agent_render',
+    JOB_GET: 'gateway_job_get',
+    JOB_CANCEL: 'gateway_job_cancel',
     MEMORY_SEARCH: 'gateway_memory_search',
     CONTEXT_ASSEMBLE: 'gateway_context_assemble',
     MEMORY_WRITE: 'gateway_memory_write',
@@ -35,8 +47,14 @@ const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
     RECALL_FOR_CODING: 'gateway_recall_for_coding'
 });
 
+const MCP_GATEWAY_PROMPT_NAMES = Object.freeze({
+    AGENT_RENDER: MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER
+});
+
 /**
  * MCP v1 当前开放的最小能力面：
+ * - prompts/list
+ * - prompts/get
  * - tools/list
  * - tools/call
  * - resources/list
@@ -45,12 +63,19 @@ const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
  * 支持的只读资源仅包括：
  * - `vcp://agent-gateway/capabilities/<agentId>`
  * - `vcp://agent-gateway/memory-targets/<agentId>`
+ * - `vcp://agent-gateway/agents/<agentId>/profile`
+ * - `vcp://agent-gateway/agents/<agentId>/prompt-template`
+ * - `vcp://agent-gateway/jobs/<jobId>/events`
  *
- * prompts / jobs / events / write resources 明确不在当前里程碑范围内。
+ * prompt publication 仍保持 completion-oriented；
+ * job / event runtime 仅承接 tool 与只读 event inspection 语义。
  */
 const MCP_SUPPORTED_RESOURCE_TEMPLATES = Object.freeze([
     'vcp://agent-gateway/capabilities/{agentId}',
-    'vcp://agent-gateway/memory-targets/{agentId}'
+    'vcp://agent-gateway/memory-targets/{agentId}',
+    'vcp://agent-gateway/agents/{agentId}/profile',
+    'vcp://agent-gateway/agents/{agentId}/prompt-template',
+    'vcp://agent-gateway/jobs/{jobId}/events'
 ]);
 
 function normalizeMcpString(value, maxLength = 128) {
@@ -99,6 +124,42 @@ function createGatewayToolDescriptor({
     };
 }
 
+function createGatewayPromptDescriptor({
+    name,
+    title,
+    description,
+    arguments: promptArguments
+}) {
+    return {
+        name,
+        title,
+        description,
+        arguments: Array.isArray(promptArguments) ? promptArguments : []
+    };
+}
+
+function createPromptArgumentDescriptor({
+    name,
+    description,
+    required = false
+}) {
+    return {
+        name,
+        description,
+        required: Boolean(required)
+    };
+}
+
+function createMcpPromptTextMessage(text) {
+    return {
+        role: 'system',
+        content: [{
+            type: 'text',
+            text: typeof text === 'string' ? text : String(text || '')
+        }]
+    };
+}
+
 function buildMcpToolDescriptor(tool) {
     return {
         name: tool.name,
@@ -112,6 +173,43 @@ function buildMcpToolDescriptor(tool) {
             pluginType: tool.pluginType
         }
     };
+}
+
+function createGatewayManagedPromptDescriptors() {
+    return [
+        createGatewayPromptDescriptor({
+            name: MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER,
+            title: 'Gateway Agent Render Prompt',
+            description: 'Fetch the final canonical Agent Gateway rendered prompt as a prompt-oriented MCP surface.',
+            arguments: [
+                createPromptArgumentDescriptor({
+                    name: 'agentId',
+                    description: 'Stable agent identifier for the render target.',
+                    required: true
+                }),
+                createPromptArgumentDescriptor({
+                    name: 'variables',
+                    description: 'Optional render variables applied before final prompt compilation.'
+                }),
+                createPromptArgumentDescriptor({
+                    name: 'model',
+                    description: 'Optional model identifier forwarded to the shared render behavior.'
+                }),
+                createPromptArgumentDescriptor({
+                    name: 'maxLength',
+                    description: 'Optional rendered prompt truncation limit.'
+                }),
+                createPromptArgumentDescriptor({
+                    name: 'context',
+                    description: 'Optional additional render context forwarded to the shared render behavior.'
+                }),
+                createPromptArgumentDescriptor({
+                    name: 'messages',
+                    description: 'Optional recent message context used by the shared render behavior.'
+                })
+            ]
+        })
+    ];
 }
 
 // Gateway-managed MCP tools map directly onto canonical Gateway Core capabilities.
@@ -147,6 +245,32 @@ function createGatewayManagedToolDescriptors() {
                             additionalProperties: true
                         }
                     }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.JOB_GET,
+            title: 'Gateway Job Get',
+            description: 'Read canonical Agent Gateway job status through the shared job runtime service.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['jobId'],
+                properties: {
+                    jobId: { type: 'string' }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL,
+            title: 'Gateway Job Cancel',
+            description: 'Cancel a cancellable Agent Gateway job through the shared job runtime service.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['jobId'],
+                properties: {
+                    jobId: { type: 'string' }
                 }
             }
         }),
@@ -547,12 +671,41 @@ function encodeResourceAgentId(agentId) {
     return encodeURIComponent(String(agentId || '').trim());
 }
 
+function buildJobEventsResourceUri(jobId) {
+    return `vcp://agent-gateway/jobs/${encodeResourceAgentId(jobId)}/events`;
+}
+
 function buildResourceUri(kind, agentId) {
+    if (kind === MCP_RESOURCE_KINDS.AGENT_PROFILE) {
+        return `vcp://agent-gateway/agents/${encodeResourceAgentId(agentId)}/profile`;
+    }
+    if (kind === MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE) {
+        return `vcp://agent-gateway/agents/${encodeResourceAgentId(agentId)}/prompt-template`;
+    }
+    if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
+        return buildJobEventsResourceUri(agentId);
+    }
     return `vcp://agent-gateway/${kind}/${encodeResourceAgentId(agentId)}`;
 }
 
 function parseResourceUri(uri) {
     const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
+    const agentResourceMatch = normalizedUri.match(/^vcp:\/\/agent-gateway\/agents\/([^/]+)\/(profile|prompt-template)$/);
+    if (agentResourceMatch) {
+        return {
+            kind: agentResourceMatch[2] === 'profile'
+                ? MCP_RESOURCE_KINDS.AGENT_PROFILE
+                : MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE,
+            agentId: decodeURIComponent(agentResourceMatch[1])
+        };
+    }
+    const jobEventMatch = normalizedUri.match(/^vcp:\/\/agent-gateway\/jobs\/([^/]+)\/events$/);
+    if (jobEventMatch) {
+        return {
+            kind: MCP_RESOURCE_KINDS.JOB_EVENTS,
+            jobId: decodeURIComponent(jobEventMatch[1])
+        };
+    }
     const match = normalizedUri.match(/^vcp:\/\/agent-gateway\/([^/]+)\/([^/]+)$/);
     if (!match) {
         return null;
@@ -582,7 +735,11 @@ function mapGatewayFailureToMcpErrorCode(code) {
     }
 }
 
-function createFailureResult(result) {
+function createFailureResult(result, options = {}) {
+    const operability = options.operability && typeof options.operability === 'object'
+        ? options.operability
+        : {};
+
     return {
         isError: true,
         status: 'failed',
@@ -594,6 +751,11 @@ function createFailureResult(result) {
                 gatewayCode: result?.code || '',
                 requestId: result?.requestId || '',
                 gatewayStatus: typeof result?.status === 'number' ? result.status : undefined,
+                ...(operability.traceId ? { traceId: operability.traceId } : {}),
+                ...(operability.operationName ? { operationName: operability.operationName } : {}),
+                ...(operability.retryAfterMs > 0 ? { retryAfterMs: operability.retryAfterMs } : {}),
+                ...(operability.category ? { rejectionCategory: operability.category } : {}),
+                ...(operability.category ? { retryable: operability.retryable } : {}),
                 ...((result?.details && typeof result.details === 'object') ? result.details : {})
             }
         },
@@ -603,13 +765,21 @@ function createFailureResult(result) {
             requestId: result?.requestId || '',
             details: {
                 gatewayStatus: typeof result?.status === 'number' ? result.status : undefined,
+                ...(operability.traceId ? { traceId: operability.traceId } : {}),
+                ...(operability.operationName ? { operationName: operability.operationName } : {}),
+                ...(operability.retryAfterMs > 0 ? { retryAfterMs: operability.retryAfterMs } : {}),
+                ...(operability.category ? { rejectionCategory: operability.category } : {}),
+                ...(operability.category ? { retryable: operability.retryable } : {}),
                 ...(result?.details || {})
             }
         })
     };
 }
 
-function createSuccessResult(result) {
+function createSuccessResult(result, options = {}) {
+    const operability = options.operability && typeof options.operability === 'object'
+        ? options.operability
+        : {};
     return {
         isError: false,
         status: 'completed',
@@ -618,32 +788,75 @@ function createSuccessResult(result) {
             requestId: result.requestId,
             toolName: result.data.toolName,
             result: result.data.result,
-            audit: result.data.audit
+            audit: result.data.audit,
+            operability
         },
         content: createMcpTextContent(result.data.result)
     };
 }
 
 function createDeferredResult(result) {
+    return createDeferredResultEnvelope({
+        requestId: result.requestId,
+        status: result.status,
+        toolName: result.data?.toolName || '',
+        runtime: result.data?.runtime || {},
+        job: result.data?.job || null,
+        audit: result.data?.audit || {},
+        operability: {}
+    });
+}
+
+function buildDeferredRuntime(runtime, job) {
+    const normalizedRuntime = runtime && typeof runtime === 'object'
+        ? { ...runtime }
+        : {};
+    const eventResourceUri = job?.jobId ? buildJobEventsResourceUri(job.jobId) : '';
+
+    return {
+        ...normalizedRuntime,
+        deferred: true,
+        status: normalizedRuntime.status || normalizeMcpString(job?.status, 64),
+        ...(eventResourceUri ? { eventResourceUri } : {})
+    };
+}
+
+function createDeferredResultEnvelope({
+    requestId,
+    status,
+    toolName,
+    runtime,
+    job,
+    audit,
+    operability
+}) {
+    const shapedRuntime = buildDeferredRuntime(runtime, job);
+    const shapedOperability = operability && typeof operability === 'object'
+        ? operability
+        : {};
+
     return {
         isError: false,
-        status: result.status,
+        status,
         deferred: true,
         structuredContent: {
-            status: result.status,
-            requestId: result.requestId,
-            toolName: result.data?.toolName || '',
-            runtime: result.data?.runtime || {},
-            job: result.data?.job || null,
-            audit: result.data?.audit || {}
+            status,
+            requestId,
+            toolName,
+            runtime: shapedRuntime,
+            job: job || null,
+            audit: audit || {},
+            operability: shapedOperability
         },
         content: createMcpTextContent({
-            status: result.status,
-            requestId: result.requestId,
-            job: result.data?.job || null,
-            message: result.status === 'waiting_approval'
+            status,
+            requestId,
+            job: job || null,
+            runtime: shapedRuntime,
+            message: status === 'waiting_approval'
                 ? 'Tool approval is required before execution can continue.'
-                : 'Tool execution was accepted for deferred processing.'
+                : 'Tool execution was accepted for deferred processing.',
+            ...(shapedOperability.traceId ? { traceId: shapedOperability.traceId } : {})
         })
     };
 }
@@ -661,7 +874,10 @@ function createGatewayManagedContent(name, data) {
     return createMcpTextContent(data);
 }
 
-function createGatewayManagedSuccessResult(name, result) {
+function createGatewayManagedSuccessResult(name, result, options = {}) {
+    const operability = options.operability && typeof options.operability === 'object'
+        ? options.operability
+        : {};
     return {
         isError: false,
         status: 'completed',
@@ -670,10 +886,50 @@ function createGatewayManagedSuccessResult(name, result) {
             requestId: result.requestId,
             toolName: name,
             result: result.data,
-            audit: result.audit || {}
+            audit: result.audit || {},
+            operability
         },
         content: createGatewayManagedContent(name, result.data)
     };
+}
+
+function createGatewayManagedDeferredResult(name, result, options = {}) {
+    const operability = options.operability && typeof options.operability === 'object'
+        ? options.operability
+        : {};
+    return createDeferredResultEnvelope({
+        requestId: result.requestId,
+        status: result.status,
+        toolName: name,
+        runtime: result.data?.runtime || {},
+        job: result.data?.job || null,
+        audit: result.audit || {},
+        operability
+    });
+}
+
+function createPromptErrorDetails(result, operability = {}) {
+    return {
+        canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result?.code] || result?.code || '',
+        gatewayCode: result?.code || '',
+        requestId: result?.requestId || '',
+        gatewayStatus: typeof result?.status === 'number' ? result.status : undefined,
+        ...(operability.traceId ? { traceId: operability.traceId } : {}),
+        ...(operability.operationName ? { operationName: operability.operationName } : {}),
+        ...(operability.retryAfterMs > 0 ? { retryAfterMs: operability.retryAfterMs } : {}),
+        ...(operability.category ? { rejectionCategory: operability.category } : {}),
+        ...(operability.category ? { retryable: operability.retryable } : {}),
+        ...((result?.details && typeof result.details === 'object') ? result.details : {})
+    };
+}
+
+function throwGatewayManagedMcpError(result, operationControl = null) {
+    const operability = buildOperabilityMetadata(operationControl, result);
+    throw createMcpError(
+        mapGatewayFailureToMcpErrorCode(result?.code),
+        result?.error || 'MCP prompt request failed',
+        createPromptErrorDetails(result, operability)
+    );
 }
 
 function mapToolRuntimeResultToMcp(result) {
@@ -695,7 +951,7 @@ function mapToolRuntimeResultToMcp(result) {
     return createFailureResult(result);
 }
 
-function mapGatewayManagedResultToMcp(name, result) {
+function mapGatewayManagedResultToMcp(name, result, operationControl = null) {
     if (!result || typeof result !== 'object') {
         return createFailureResult({
             error: 'Gateway runtime returned an invalid result',
@@ -703,11 +959,23 @@ function mapGatewayManagedResultToMcp(name, result) {
         });
     }
 
-    if (result.success) {
-        return createGatewayManagedSuccessResult(name, result);
+    const operability = buildOperabilityMetadata(operationControl, result);
+
+    if (result.success && (result.status === 'waiting_approval' || result.status === 'accepted')) {
+        return createGatewayManagedDeferredResult(name, result, {
+            operability
+        });
     }
 
-    return createFailureResult(result);
+    if (result.success) {
+        return createGatewayManagedSuccessResult(name, result, {
+            operability
+        });
+    }
+
+    return createFailureResult(result, {
+        operability
+    });
 }
 
 function normalizeMcpArguments(args) {
@@ -815,18 +1083,54 @@ function ensureAgentAndSession(requestContext, operation) {
     }
 }
 
-async function executeGatewayManagedTool(bundle, name, args, input = {}) {
+function ensureJobIdentity(requestContext, authContext, operation) {
+    const resolvedAgentId = normalizeMcpString(requestContext?.agentId || authContext?.agentId);
+    const resolvedSessionId = normalizeMcpString(requestContext?.sessionId || authContext?.sessionId);
+    const resolvedGatewayId = normalizeMcpString(requestContext?.gatewayId || authContext?.gatewayId);
+
+    if (resolvedAgentId || resolvedSessionId || resolvedGatewayId) {
+        return;
+    }
+
+    throw createMcpError(
+        MCP_ERROR_CODES.INVALID_REQUEST,
+        `${operation} requires canonical job visibility identity`,
+        {
+            fields: ['agentId', 'sessionId', 'gatewayId']
+        }
+    );
+}
+
+function attachRequestId(result, requestId) {
+    if (!result || typeof result !== 'object') {
+        return result;
+    }
+    return {
+        ...result,
+        requestId: result.requestId || requestId || ''
+    };
+}
+
+async function executeGatewayManagedOperation({
+    bundle,
+    name,
+    operationName,
+    args,
+    input,
+    source,
+    requiresAgentOnly = false,
+    requiresJobIdentity = false,
+    execute
+}) {
     const contextInput = buildManagedToolContextInput(input, args);
-    const source = {
-        [MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER]: 'mcp-agent-render',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
-        [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING]: 'mcp-coding-memory-writeback',
-        [MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING]: 'mcp-coding-recall'
-    }[name] || 'mcp';
     const { maid, requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
-    ensureAgentAndSession(requestContext, `tools/call:${name}`);
+    if (requiresJobIdentity) {
+        ensureJobIdentity(requestContext, authContext, `tools/call:${name}`);
+    } else if (requiresAgentOnly) {
+        ensureAgentId(requestContext, `tools/call:${name}`);
+    } else {
+        ensureAgentAndSession(requestContext, `tools/call:${name}`);
+    }
 
     const body = {
         ...args,
@@ -838,86 +1142,305 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             ...((input.options && typeof input.options === 'object') ? input.options : {})
         }
     };
+    const operationControl = beginGatewayManagedOperation(bundle.operabilityService, {
+        operationName,
+        requestContext,
+        authContext,
+        // Align payload governance with native routes by measuring the client-visible MCP payload,
+        // not the adapter-enriched internal body.
+        payload: buildGatewayManagedClientPayload(input, args)
+    });
+
+    if (operationControl && !operationControl.allowed) {
+        return mapGatewayManagedResultToMcp(
+            name,
+            buildGatewayManagedOperationRejection(operationControl, requestContext.requestId),
+            operationControl
+        );
+    }
+
+    let result;
+    try {
+        result = await execute({
+            body,
+            maid,
+            requestContext,
+            authContext,
+            operationControl
+        });
+    } catch (error) {
+        result = {
+            success: false,
+            requestId: requestContext.requestId,
+            status: 500,
+            code: AGW_ERROR_CODES.INTERNAL_ERROR,
+            error: 'Gateway-managed MCP operation failed',
+            details: {
+                message: error?.message || 'Unknown gateway-managed MCP operation failure'
+            }
+        };
+    }
+
+    finishGatewayManagedOperation(operationControl, result);
+    return mapGatewayManagedResultToMcp(name, result, operationControl);
+}
+
+async function executeGatewayManagedPromptGet({
+    bundle,
+    name,
+    args,
+    input = {}
+}) {
+    if (name !== MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER) {
+        throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported MCP prompt', {
+            field: 'name',
+            name
+        });
+    }
+
+    const contextInput = buildManagedToolContextInput(input, args);
+    const { requestContext, authContext } = buildMcpContexts(bundle, contextInput, 'mcp-prompts-get');
+    ensureAgentId(requestContext, `prompts/get:${name}`);
+
+    const operationControl = beginGatewayManagedOperation(bundle.operabilityService, {
+        operationName: 'agents.render',
+        requestContext,
+        authContext,
+        payload: buildGatewayManagedClientPayload(input, args)
+    });
+
+    if (operationControl && !operationControl.allowed) {
+        throwGatewayManagedMcpError(
+            buildGatewayManagedOperationRejection(operationControl, requestContext.requestId),
+            operationControl
+        );
+    }
+
+    let renderResult;
+    try {
+        renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
+            variables: args.variables,
+            model: args.model,
+            maxLength: args.maxLength,
+            context: args.context,
+            messages: args.messages
+        });
+    } catch (error) {
+        const mapped = mapAgentRegistryError(error, requestContext);
+        finishGatewayManagedOperation(operationControl, mapped);
+        throwGatewayManagedMcpError(mapped, operationControl);
+    }
+
+    const successResult = {
+        success: true,
+        requestId: requestContext.requestId,
+        data: renderResult
+    };
+    finishGatewayManagedOperation(operationControl, successResult);
+
+    return {
+        name,
+        description: 'Final rendered Agent Gateway prompt published through the MCP prompt surface.',
+        messages: [
+            createMcpPromptTextMessage(renderResult.renderedPrompt)
+        ],
+        meta: {
+            requestId: requestContext.requestId,
+            agentId: requestContext.agentId,
+            renderMeta: renderResult.renderMeta,
+            warnings: renderResult.warnings,
+            unresolved: renderResult.unresolved,
+            truncated: renderResult.truncated,
+            operability: buildOperabilityMetadata(operationControl, successResult)
+        }
+    };
+}
+
+async function executeGatewayManagedTool(bundle, name, args, input = {}) {
+    const source = {
+        [MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER]: 'mcp-agent-render',
+        [MCP_GATEWAY_TOOL_NAMES.JOB_GET]: 'mcp-job-get',
+        [MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL]: 'mcp-job-cancel',
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
+        [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write',
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING]: 'mcp-coding-memory-writeback',
+        [MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING]: 'mcp-coding-recall'
+    }[name] || 'mcp';
 
     // Render remains the high-level MCP entry point and reuses the shared registry contract.
     if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
-        ensureAgentId(requestContext, `tools/call:${name}`);
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'agents.render',
+            args,
+            input,
+            source,
+            requiresAgentOnly: true,
+            async execute({ requestContext }) {
+                try {
+                    const renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
+                        variables: args.variables,
+                        model: args.model,
+                        maxLength: args.maxLength,
+                        context: args.context,
+                        messages: args.messages
+                    });
 
-        try {
-            const renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
-                variables: args.variables,
-                model: args.model,
-                maxLength: args.maxLength,
-                context: args.context,
-                messages: args.messages
-            });
+                    if (renderResult?.success && (renderResult.status === 'accepted' || renderResult.status === 'waiting_approval')) {
+                        return attachRequestId(renderResult, requestContext.requestId);
+                    }
 
-            return mapGatewayManagedResultToMcp(name, {
-                success: true,
-                requestId: requestContext.requestId,
-                data: renderResult,
-                audit: {
-                    runtime: requestContext.runtime,
-                    source: requestContext.source
+                    return {
+                        success: true,
+                        requestId: requestContext.requestId,
+                        data: renderResult,
+                        audit: {
+                            runtime: requestContext.runtime,
+                            source: requestContext.source
+                        }
+                    };
+                } catch (error) {
+                    return mapAgentRegistryError(error, requestContext);
                 }
-            });
-        } catch (error) {
-            return mapGatewayManagedResultToMcp(name, mapAgentRegistryError(error, requestContext));
-        }
+            }
+        });
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.JOB_GET) {
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'jobs.read',
+            args,
+            input,
+            source,
+            requiresJobIdentity: true,
+            async execute({ requestContext, authContext }) {
+                return attachRequestId(
+                    bundle.jobRuntimeService.pollJob(args.jobId, authContext),
+                    requestContext.requestId
+                );
+            }
+        });
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL) {
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'jobs.cancel',
+            args,
+            input,
+            source,
+            requiresJobIdentity: true,
+            async execute({ requestContext, authContext }) {
+                return attachRequestId(
+                    bundle.jobRuntimeService.cancelJob(args.jobId, authContext),
+                    requestContext.requestId
+                );
+            }
+        });
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
-        const result = await bundle.contextRuntimeService.search({
-            body,
-            startedAt: Date.now(),
-            defaultSource: source
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'memory.search',
+            args,
+            input,
+            source,
+            async execute({ body }) {
+                return bundle.contextRuntimeService.search({
+                    body,
+                    startedAt: Date.now(),
+                    defaultSource: source
+                });
+            }
         });
-        return mapGatewayManagedResultToMcp(name, result);
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
-        const result = await bundle.contextRuntimeService.buildRecallContext({
-            body,
-            startedAt: Date.now(),
-            defaultSource: source
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'context.assemble',
+            args,
+            input,
+            source,
+            async execute({ body }) {
+                return bundle.contextRuntimeService.buildRecallContext({
+                    body,
+                    startedAt: Date.now(),
+                    defaultSource: source
+                });
+            }
         });
-        return mapGatewayManagedResultToMcp(name, result);
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
-        const result = await bundle.memoryRuntimeService.writeMemory({
-            body: {
-                ...body,
-                idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey,
-                options: {
-                    ...body.options,
-                    idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey
-                }
-            },
-            startedAt: Date.now(),
-            clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
-            defaultSource: source
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'memory.write',
+            args,
+            input,
+            source,
+            async execute({ body }) {
+                return bundle.memoryRuntimeService.writeMemory({
+                    body: {
+                        ...body,
+                        idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey,
+                        options: {
+                            ...body.options,
+                            idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey
+                        }
+                    },
+                    startedAt: Date.now(),
+                    clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
+                    defaultSource: source
+                });
+            }
         });
-        return mapGatewayManagedResultToMcp(name, result);
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING) {
-        const result = await bundle.codingMemoryWritebackService.commitForCoding({
-            body,
-            startedAt: Date.now(),
-            clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
-            defaultSource: source
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'coding.memory_writeback',
+            args,
+            input,
+            source,
+            async execute({ body }) {
+                return bundle.codingMemoryWritebackService.commitForCoding({
+                    body,
+                    startedAt: Date.now(),
+                    clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
+                    defaultSource: source
+                });
+            }
         });
-        return mapGatewayManagedResultToMcp(name, result);
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING) {
-        const result = await bundle.codingRecallService.recallForCoding({
-            body,
-            startedAt: Date.now(),
-            defaultSource: source
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'coding.recall',
+            args,
+            input,
+            source,
+            async execute({ body }) {
+                return bundle.codingRecallService.recallForCoding({
+                    body,
+                    startedAt: Date.now(),
+                    defaultSource: source
+                });
+            }
         });
-        return mapGatewayManagedResultToMcp(name, result);
     }
 
     throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
@@ -944,6 +1467,33 @@ function createMemoryTargetsResource(agentId) {
     };
 }
 
+function createAgentProfileResource(agentId) {
+    return {
+        uri: buildResourceUri(MCP_RESOURCE_KINDS.AGENT_PROFILE, agentId),
+        name: `Agent Gateway profile for ${agentId}`,
+        description: 'Governed agent profile metadata derived from the shared agent registry contract.',
+        mimeType: 'application/json'
+    };
+}
+
+function createAgentPromptTemplateResource(agentId) {
+    return {
+        uri: buildResourceUri(MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE, agentId),
+        name: `Agent Gateway prompt template preview for ${agentId}`,
+        description: 'Preview-oriented prompt template metadata derived from the shared agent registry contract.',
+        mimeType: 'application/json'
+    };
+}
+
+function createJobEventsResource(jobId) {
+    return {
+        uri: buildResourceUri(MCP_RESOURCE_KINDS.JOB_EVENTS, jobId),
+        name: `Agent Gateway job runtime events for ${jobId}`,
+        description: 'Read-only runtime event snapshots for a canonical Gateway Core job.',
+        mimeType: 'application/json'
+    };
+}
+
 function createMcpAdapter(pluginManager, options = {}) {
     if (!pluginManager) {
         throw new Error('[McpAdapter] pluginManager is required');
@@ -957,12 +1507,15 @@ function createMcpAdapter(pluginManager, options = {}) {
         memoryRuntimeService,
         codingMemoryWritebackService,
         codingRecallService,
-        toolRuntimeService
+        toolRuntimeService,
+        jobRuntimeService
     } = bundle;
     const gatewayManagedTools = createGatewayManagedToolDescriptors();
+    const gatewayManagedPrompts = createGatewayManagedPromptDescriptors();
 
     return {
         supportedResourceTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES,
+        supportedPromptNames: gatewayManagedPrompts.map((prompt) => prompt.name),
         async listTools(input = {}) {
             const { maid, requestContext, authContext } = buildMcpContexts(bundle, input, 'mcp-tools-list');
             ensureAgentId(requestContext, 'tools/list');
@@ -986,6 +1539,44 @@ function createMcpAdapter(pluginManager, options = {}) {
             };
         },
 
+        async listPrompts(input = {}) {
+            const { requestContext } = buildMcpContexts(bundle, input, 'mcp-prompts-list');
+
+            return {
+                prompts: gatewayManagedPrompts,
+                meta: {
+                    requestId: requestContext.requestId,
+                    ...(requestContext.agentId ? { agentId: requestContext.agentId } : {})
+                }
+            };
+        },
+
+        async getPrompt(input = {}) {
+            const name = normalizeMcpString(input.name);
+            const args = normalizeMcpArguments(input.arguments);
+
+            if (!name) {
+                throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'prompts/get requires prompt name', {
+                    field: 'name'
+                });
+            }
+            if (!args) {
+                throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'prompts/get requires an arguments object', {
+                    field: 'arguments'
+                });
+            }
+
+            return executeGatewayManagedPromptGet({
+                bundle: {
+                    ...bundle,
+                    agentRegistryService
+                },
+                name,
+                args,
+                input
+            });
+        },
+
         async callTool(input = {}) {
             const name = normalizeMcpString(input.name);
             const args = normalizeMcpArguments(input.arguments);
@@ -1007,7 +1598,8 @@ function createMcpAdapter(pluginManager, options = {}) {
                     contextRuntimeService,
                     memoryRuntimeService,
                     codingMemoryWritebackService,
-                    codingRecallService
+                    codingRecallService,
+                    jobRuntimeService
                 }, name, args, input);
             }
 
@@ -1038,7 +1630,9 @@ function createMcpAdapter(pluginManager, options = {}) {
             return {
                 resources: [
                     createCapabilitiesResource(requestContext.agentId),
-                    createMemoryTargetsResource(requestContext.agentId)
+                    createMemoryTargetsResource(requestContext.agentId),
+                    createAgentProfileResource(requestContext.agentId),
+                    createAgentPromptTemplateResource(requestContext.agentId)
                 ],
                 meta: {
                     requestId: requestContext.requestId,
@@ -1060,46 +1654,119 @@ function createMcpAdapter(pluginManager, options = {}) {
                 );
             }
 
-            const { kind, agentId } = parsed;
+            const resourceAgentId = parsed.agentId || input.agentId || input.requestContext?.agentId;
+            const { kind, agentId, jobId } = parsed;
             const { maid, requestContext, authContext } = buildMcpContexts(bundle, {
                 ...input,
-                agentId
+                ...(resourceAgentId ? { agentId: resourceAgentId } : {})
             }, 'mcp-resources-read');
+            if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
+                ensureJobIdentity(requestContext, authContext, 'resources/read');
+            } else {
+                ensureAgentId(requestContext, 'resources/read');
+            }
 
             let payload;
-            if (kind === MCP_RESOURCE_KINDS.CAPABILITIES) {
-                payload = await capabilityService.getCapabilities({
-                    agentId,
-                    maid,
-                    includeMemoryTargets: true,
-                    authContext
-                });
-            } else if (kind === MCP_RESOURCE_KINDS.MEMORY_TARGETS) {
-                payload = await capabilityService.getMemoryTargets({
-                    agentId,
-                    maid,
-                    authContext
-                });
-            } else {
-                throw createMcpError(
-                    MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
-                    'Unsupported resource URI',
-                    {
-                        uri: input.uri,
-                        supportedTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES
+            try {
+                if (kind === MCP_RESOURCE_KINDS.CAPABILITIES) {
+                    payload = await capabilityService.getCapabilities({
+                        agentId,
+                        maid,
+                        includeMemoryTargets: true,
+                        authContext
+                    });
+                } else if (kind === MCP_RESOURCE_KINDS.MEMORY_TARGETS) {
+                    payload = await capabilityService.getMemoryTargets({
+                        agentId,
+                        maid,
+                        authContext
+                    });
+                } else if (kind === MCP_RESOURCE_KINDS.AGENT_PROFILE) {
+                    payload = await agentRegistryService.getAgentProfile(agentId, {
+                        maid,
+                        authContext
+                    });
+                } else if (kind === MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE) {
+                    payload = await agentRegistryService.getPromptTemplatePreview(agentId, {
+                        maid,
+                        authContext
+                    });
+                } else if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
+                    const jobResult = attachRequestId(
+                        jobRuntimeService.pollJob(jobId, authContext),
+                        requestContext.requestId
+                    );
+                    if (!jobResult.success) {
+                        throw createMcpError(
+                            mapGatewayFailureToMcpErrorCode(jobResult.code),
+                            jobResult.error || 'Failed to read Gateway job runtime events',
+                            {
+                                canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[jobResult.code] || jobResult.code || '',
+                                gatewayCode: jobResult.code || '',
+                                requestId: jobResult.requestId || requestContext.requestId,
+                                ...(jobResult.details && typeof jobResult.details === 'object' ? jobResult.details : {})
+                            }
+                        );
                     }
-                );
+                    const eventResult = attachRequestId(
+                        jobRuntimeService.listEvents({
+                            authContext,
+                            filters: {
+                                jobId
+                            }
+                        }),
+                        requestContext.requestId
+                    );
+                    if (!eventResult.success) {
+                        throw createMcpError(
+                            mapGatewayFailureToMcpErrorCode(eventResult.code),
+                            eventResult.error || 'Failed to list Gateway job runtime events',
+                            {
+                                canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[eventResult.code] || eventResult.code || '',
+                                gatewayCode: eventResult.code || '',
+                                requestId: eventResult.requestId || requestContext.requestId,
+                                ...(eventResult.details && typeof eventResult.details === 'object' ? eventResult.details : {})
+                            }
+                        );
+                    }
+                    payload = {
+                        jobId,
+                        job: jobResult.data?.job || null,
+                        events: eventResult.data?.events || []
+                    };
+                } else {
+                    throw createMcpError(
+                        MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
+                        'Unsupported resource URI',
+                        {
+                            uri: input.uri,
+                            supportedTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES
+                        }
+                    );
+                }
+            } catch (error) {
+                if (error?.code === 'AGENT_NOT_FOUND') {
+                    throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, error.message, {
+                        canonicalCode: AGW_ERROR_CODES.NOT_FOUND,
+                        requestId: requestContext.requestId,
+                        ...(error.details && typeof error.details === 'object' ? error.details : {})
+                    });
+                }
+                throw error;
             }
 
             return {
                 contents: [{
-                    uri: buildResourceUri(kind, agentId),
+                    uri: kind === MCP_RESOURCE_KINDS.JOB_EVENTS
+                        ? createJobEventsResource(jobId).uri
+                        : buildResourceUri(kind, agentId),
                     mimeType: 'application/json',
                     text: serializeMcpValue(payload)
                 }],
                 meta: {
                     requestId: requestContext.requestId,
-                    agentId
+                    ...(agentId ? { agentId } : {}),
+                    ...(jobId ? { jobId } : {})
                 }
             };
         }
@@ -1130,6 +1797,12 @@ function createMcpServerHarness(pluginManager, options = {}) {
             try {
                 let result;
                 switch (request.method) {
+                case 'prompts/list':
+                    result = await adapter.listPrompts(params);
+                    break;
+                case 'prompts/get':
+                    result = await adapter.getPrompt(params);
+                    break;
                 case 'tools/list':
                     result = await adapter.listTools(params);
                     break;
