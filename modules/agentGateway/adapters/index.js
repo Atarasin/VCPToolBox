@@ -1,4 +1,6 @@
 /**
- * M1 先预留 adapters 目录入口，OpenClaw / Native / MCP adapter 在后续里程碑继续收敛。
+ * Gateway adapters 统一从这里导出，便于 Native / MCP 等边界层按需复用。
  */
-module.exports = {};
+module.exports = {
+    mcpAdapter: require('./mcpAdapter')
+};
