@@ -1,6 +1,9 @@
 const {
     sanitizeRequestContextValue
 } = require('../contracts/requestContext');
+const {
+    AGENT_GATEWAY_AUTH_MODES
+} = require('../contracts/protocolGovernance');
 
 function normalizeAuthString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
@@ -37,8 +40,8 @@ function buildAgentAliases(agentId, maid) {
 }
 
 /**
- * 将过渡期 requestContext 提升为统一 authContext。
- * 这里不强依赖未来独立 gateway key，仅记录当前身份与过渡认证模式。
+ * 将 requestContext 提升为统一 authContext。
+ * 兼容过渡期 shared-admin-auth，同时允许 dedicated gateway-auth 输入。
  */
 function resolveAuthContext(input = {}, options = {}) {
     const requestContext = input.requestContext && typeof input.requestContext === 'object'
@@ -84,15 +87,18 @@ function resolveAuthContext(input = {}, options = {}) {
         providedAuthContext.authMode ||
         input.authMode ||
         options.authMode ||
-        'admin_transition',
+        AGENT_GATEWAY_AUTH_MODES.ADMIN_TRANSITION,
         64
     );
     const authSource = normalizeAuthString(
         providedAuthContext.authSource || input.authSource || options.authSource || 'shared-admin-auth',
         128
     );
+    const defaultRoles = authMode === AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY
+        ? ['gateway_client']
+        : ['admin_transition'];
     const roles = normalizeAuthStringArray(
-        providedAuthContext.roles || input.roles || options.roles || ['admin_transition']
+        providedAuthContext.roles || input.roles || options.roles || defaultRoles
     );
 
     return {
@@ -107,7 +113,8 @@ function resolveAuthContext(input = {}, options = {}) {
         authMode,
         authSource,
         roles,
-        isTransitionalAuth: authMode === 'admin_transition',
+        isTransitionalAuth: authMode === AGENT_GATEWAY_AUTH_MODES.ADMIN_TRANSITION,
+        isDedicatedGatewayAuth: authMode === AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY,
         gatewayIdentity: {
             id: gatewayId,
             adapter,

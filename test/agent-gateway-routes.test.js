@@ -324,9 +324,13 @@ test('GET /agent_gateway/capabilities returns native envelope and shared capabil
         assert.equal(payload.success, true);
         assert.equal(payload.meta.requestId, 'req-native-cap-001');
         assert.equal(payload.meta.gatewayVersion, 'v1');
+        assert.equal(payload.meta.authMode, 'admin_transition');
         assert.equal(payload.data.server.bridgeVersion, 'v1');
+        assert.deepEqual(payload.data.sections, ['tools', 'memory', 'context', 'jobs', 'events']);
         assert.deepEqual(payload.data.memory.targets.map((target) => target.id), ['Nova', 'SharedMemory']);
         assert.deepEqual(payload.data.tools.map((tool) => tool.name), ['DailyNote', 'RemoteSearch', 'SciCalculator']);
+        assert.equal(payload.data.jobs.supported, false);
+        assert.equal(payload.data.events.supported, false);
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
@@ -491,9 +495,130 @@ test('POST /agent_gateway/tools/:toolName/invoke returns native success payload 
         assert.equal(payload.success, true);
         assert.equal(payload.meta.requestId, 'req-native-tool');
         assert.equal(payload.meta.toolStatus, 'completed');
+        assert.equal(payload.meta.authMode, 'admin_transition');
         assert.equal(payload.data.toolName, 'SciCalculator');
         assert.equal(payload.data.result.toolName, 'SciCalculator');
         assert.equal(payload.data.result.receivedArgs.__agentGatewayContext.runtime, 'native');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('Native gateway accepts dedicated gateway auth and rejects invalid credentials', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentGatewayProtocolConfig: {
+            gatewayKey: 'gw-secret'
+        },
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const unauthorizedResponse = await fetch(`${server.baseUrl}/agent_gateway/capabilities?agentId=Ariadne`, {
+            headers: {
+                'x-agent-gateway-key': 'wrong-secret'
+            }
+        });
+        const unauthorizedPayload = await unauthorizedResponse.json();
+        assert.equal(unauthorizedResponse.status, 401);
+        assert.equal(unauthorizedPayload.code, 'AGW_UNAUTHORIZED');
+
+        const authorizedResponse = await fetch(`${server.baseUrl}/agent_gateway/capabilities?agentId=Ariadne`, {
+            headers: {
+                'x-agent-gateway-key': 'gw-secret',
+                'x-agent-gateway-id': 'gw-ariadne'
+            }
+        });
+        const authorizedPayload = await authorizedResponse.json();
+        assert.equal(authorizedResponse.status, 200);
+        assert.equal(authorizedPayload.success, true);
+        assert.equal(authorizedPayload.meta.authMode, 'gateway_key');
+        assert.equal(authorizedPayload.meta.gatewayId, 'gw-ariadne');
+        assert.equal(authorizedPayload.data.auth.authMode, 'gateway_key');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('Native tool invoke replays governed idempotent requests', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    let invocationCount = 0;
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        }),
+        async processToolCall(toolName, args) {
+            invocationCount += 1;
+            if (toolName === 'DailyNote') {
+                return {
+                    status: 'success',
+                    message: 'Diary saved to /tmp/native-memory.txt'
+                };
+            }
+            return {
+                toolName,
+                invocationCount,
+                receivedArgs: args
+            };
+        }
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const requestBody = {
+            args: {
+                expression: '1+1'
+            },
+            requestContext: {
+                requestId: 'req-native-tool-idem-001',
+                agentId: 'Ariadne',
+                sessionId: 'sess-native-tool-idem-001'
+            }
+        };
+
+        const firstResponse = await fetch(`${server.baseUrl}/agent_gateway/tools/SciCalculator/invoke`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'idempotency-key': 'idem-native-tool-001'
+            },
+            body: JSON.stringify(requestBody)
+        });
+        const firstPayload = await firstResponse.json();
+
+        const secondResponse = await fetch(`${server.baseUrl}/agent_gateway/tools/SciCalculator/invoke`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'idempotency-key': 'idem-native-tool-001'
+            },
+            body: JSON.stringify({
+                ...requestBody,
+                requestContext: {
+                    ...requestBody.requestContext,
+                    requestId: 'req-native-tool-idem-002',
+                    sessionId: 'sess-native-tool-idem-002'
+                }
+            })
+        });
+        const secondPayload = await secondResponse.json();
+
+        assert.equal(firstResponse.status, 200);
+        assert.equal(secondResponse.status, 200);
+        assert.equal(firstPayload.data.result.invocationCount, 1);
+        assert.equal(secondPayload.data.result.invocationCount, 1);
+        assert.equal(secondPayload.data.idempotentReplay, true);
+        assert.equal(secondPayload.meta.requestId, 'req-native-tool-idem-002');
+        assert.equal(invocationCount, 1);
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });

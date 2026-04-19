@@ -1,8 +1,5 @@
 const express = require('express');
 const {
-    normalizeRequestContext
-} = require('../modules/agentGateway/contracts/requestContext');
-const {
     sendSuccessResponse,
     sendErrorResponse
 } = require('../modules/agentGateway/contracts/responseEnvelope');
@@ -11,10 +8,16 @@ const {
     OPENCLAW_TO_AGENT_GATEWAY_CODE
 } = require('../modules/agentGateway/contracts/errorCodes');
 const {
+    NATIVE_GATEWAY_VERSION,
+    NATIVE_GATEWAY_VERSION_KEY,
+    applyGovernedCapabilitySections,
+    resolveDedicatedGatewayAuth,
+    resolveGovernedIdempotencyKey,
+    resolveNativeRequestContext
+} = require('../modules/agentGateway/contracts/protocolGovernance');
+const {
     getGatewayServiceBundle
 } = require('../modules/agentGateway/createGatewayServiceBundle');
-
-const NATIVE_GATEWAY_VERSION = 'v1';
 
 function normalizeNativeString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -39,8 +42,10 @@ function parseNativeBoolean(value, defaultValue = false) {
     return defaultValue;
 }
 
-function createNativeRequestContext(input, defaultSource) {
-    return normalizeRequestContext(input, {
+function createNativeRequestContext(req, input, defaultSource) {
+    return resolveNativeRequestContext(input, {
+        headers: req.headers,
+        query: req.query,
         defaultSource,
         defaultRuntime: 'native',
         requestIdPrefix: 'agw'
@@ -58,7 +63,7 @@ function sendNativeSuccess(res, { status = 200, requestId, startedAt, data, extr
         startedAt,
         data,
         versionValue: NATIVE_GATEWAY_VERSION,
-        versionKey: 'gatewayVersion',
+        versionKey: NATIVE_GATEWAY_VERSION_KEY,
         extraMeta
     });
 }
@@ -72,9 +77,67 @@ function sendNativeError(res, { status = 500, requestId, startedAt, code, error,
         error,
         details,
         versionValue: NATIVE_GATEWAY_VERSION,
-        versionKey: 'gatewayVersion',
+        versionKey: NATIVE_GATEWAY_VERSION_KEY,
         extraMeta
     });
+}
+
+function buildNativeResponseMeta(authContext, extraMeta = {}) {
+    const normalizedExtraMeta = extraMeta && typeof extraMeta === 'object' ? extraMeta : {};
+    if (!authContext || typeof authContext !== 'object') {
+        return normalizedExtraMeta;
+    }
+
+    return {
+        authMode: authContext.authMode,
+        authSource: authContext.authSource,
+        gatewayId: authContext.gatewayId,
+        ...normalizedExtraMeta
+    };
+}
+
+function buildNativeAuthContext({
+    authContextResolver,
+    requestContext,
+    providedAuthContext,
+    dedicatedAuth,
+    maid
+}) {
+    return authContextResolver({
+        authContext: {
+            ...(providedAuthContext && typeof providedAuthContext === 'object' ? providedAuthContext : {}),
+            authMode: dedicatedAuth?.authMode,
+            authSource: dedicatedAuth?.authSource,
+            gatewayId: dedicatedAuth?.gatewayId,
+            roles: dedicatedAuth?.roles
+        },
+        requestContext,
+        agentId: requestContext.agentId,
+        maid,
+        adapter: 'native'
+    });
+}
+
+function createGovernedRequestBody(req, pluginManager, requestContext) {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const options = body.options && typeof body.options === 'object' ? body.options : {};
+    const idempotencyKey = resolveGovernedIdempotencyKey({
+        body,
+        headers: req.headers,
+        pluginManager
+    });
+
+    return {
+        ...body,
+        requestContext,
+        idempotencyKey: idempotencyKey || normalizeNativeString(body.idempotencyKey),
+        options: idempotencyKey
+            ? {
+                ...options,
+                idempotencyKey
+            }
+            : options
+    };
 }
 
 /**
@@ -98,9 +161,40 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         gatewayVersion: NATIVE_GATEWAY_VERSION
     });
 
+    router.use((req, res, next) => {
+        const dedicatedAuth = resolveDedicatedGatewayAuth({
+            headers: req.headers,
+            pluginManager
+        });
+
+        req.agentGatewayDedicatedAuth = dedicatedAuth;
+
+        if (dedicatedAuth.provided && !dedicatedAuth.authenticated) {
+            const requestContext = createNativeRequestContext(
+                req,
+                req.body?.requestContext || req.query,
+                'agent-gateway-auth'
+            );
+
+            return sendNativeError(res, {
+                status: 401,
+                requestId: requestContext.requestId,
+                startedAt: Date.now(),
+                code: AGW_ERROR_CODES.UNAUTHORIZED,
+                error: 'Invalid agent gateway credentials',
+                details: {
+                    authSource: dedicatedAuth.authSource
+                },
+                extraMeta: buildNativeResponseMeta(dedicatedAuth)
+            });
+        }
+
+        return next();
+    });
+
     router.get('/capabilities', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext({
+        const requestContext = createNativeRequestContext(req, {
             requestId: req.query.requestId,
             agentId: req.query.agentId,
             source: req.query.source,
@@ -108,11 +202,14 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         }, 'agent-gateway-capabilities');
         const agentId = normalizeNativeString(req.query.agentId || requestContext.agentId);
         const maid = normalizeNativeString(req.query.maid);
-        const authContext = authContextResolver({
-            requestContext,
-            agentId,
-            maid,
-            adapter: 'native'
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext: {
+                ...requestContext,
+                agentId
+            },
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid
         });
         const includeMemoryTargets = parseNativeBoolean(req.query.includeMemoryTargets, true);
 
@@ -137,7 +234,10 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             return sendNativeSuccess(res, {
                 requestId: requestContext.requestId,
                 startedAt,
-                data: capabilities
+                data: applyGovernedCapabilitySections(capabilities, {
+                    authContext
+                }),
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         } catch (error) {
             return sendNativeError(res, {
@@ -146,18 +246,24 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to build native gateway capabilities',
-                details: { message: error.message }
+                details: { message: error.message },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
     });
 
     router.get('/agents', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext({
+        const requestContext = createNativeRequestContext(req, {
             requestId: req.query.requestId,
             source: req.query.source,
             runtime: req.query.runtime
         }, 'agent-gateway-registry');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth
+        });
 
         try {
             const agents = await agentRegistryService.listAgents();
@@ -166,7 +272,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 data: {
                     agents
-                }
+                },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         } catch (error) {
             return sendNativeError(res, {
@@ -175,25 +282,32 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to load agent registry',
-                details: { message: error.message }
+                details: { message: error.message },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
     });
 
     router.get('/agents/:agentId', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext({
+        const requestContext = createNativeRequestContext(req, {
             requestId: req.query.requestId,
             source: req.query.source,
             runtime: req.query.runtime
         }, 'agent-gateway-registry');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth
+        });
 
         try {
             const agent = await agentRegistryService.getAgentDetail(req.params.agentId);
             return sendNativeSuccess(res, {
                 requestId: requestContext.requestId,
                 startedAt,
-                data: agent
+                data: agent,
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         } catch (error) {
             if (error?.code === 'AGENT_NOT_FOUND') {
@@ -203,7 +317,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                     startedAt,
                     code: AGW_ERROR_CODES.NOT_FOUND,
                     error: error.message,
-                    details: error.details
+                    details: error.details,
+                    extraMeta: buildNativeResponseMeta(authContext)
                 });
             }
             return sendNativeError(res, {
@@ -212,14 +327,21 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to load agent detail',
-                details: { message: error.message }
+                details: { message: error.message },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
     });
 
     router.post('/agents/:agentId/render', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req.body?.requestContext, 'agent-gateway-agent-render');
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-agent-render');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            providedAuthContext: req.body?.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth
+        });
 
         try {
             const rendered = await agentRegistryService.renderAgent(req.params.agentId, {
@@ -232,7 +354,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             return sendNativeSuccess(res, {
                 requestId: requestContext.requestId,
                 startedAt,
-                data: rendered
+                data: rendered,
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         } catch (error) {
             if (error?.code === 'AGENT_NOT_FOUND') {
@@ -242,7 +365,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                     startedAt,
                     code: AGW_ERROR_CODES.NOT_FOUND,
                     error: error.message,
-                    details: error.details
+                    details: error.details,
+                    extraMeta: buildNativeResponseMeta(authContext)
                 });
             }
             return sendNativeError(res, {
@@ -251,14 +375,15 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to render agent',
-                details: { message: error.message }
+                details: { message: error.message },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
     });
 
     router.get('/memory/targets', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext({
+        const requestContext = createNativeRequestContext(req, {
             requestId: req.query.requestId,
             agentId: req.query.agentId,
             source: req.query.source,
@@ -266,11 +391,14 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         }, 'agent-gateway-memory');
         const agentId = normalizeNativeString(req.query.agentId || requestContext.agentId);
         const maid = normalizeNativeString(req.query.maid);
-        const authContext = authContextResolver({
-            requestContext,
-            agentId,
-            maid,
-            adapter: 'native'
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext: {
+                ...requestContext,
+                agentId
+            },
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid
         });
 
         if (!agentId) {
@@ -295,7 +423,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 data: {
                     targets
-                }
+                },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         } catch (error) {
             return sendNativeError(res, {
@@ -304,19 +433,21 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: AGW_ERROR_CODES.INTERNAL_ERROR,
                 error: 'Failed to load memory targets',
-                details: { message: error.message }
+                details: { message: error.message },
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
     });
 
     router.post('/memory/search', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req.body?.requestContext, 'agent-gateway-memory-search');
-        const authContext = authContextResolver({
-            authContext: req.body?.authContext,
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-memory-search');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
             requestContext,
+            providedAuthContext: req.body?.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.body?.maid,
-            adapter: 'native'
         });
         const result = await contextRuntimeService.search({
             body: {
@@ -335,32 +466,40 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: result.code,
                 error: result.error,
-                details: result.details
+                details: result.details,
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
 
         return sendNativeSuccess(res, {
             requestId: result.requestId,
             startedAt,
-            data: result.data
+            data: result.data,
+            extraMeta: buildNativeResponseMeta(authContext)
         });
     });
 
     router.post('/memory/write', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req.body?.requestContext, 'agent-gateway-memory-write');
-        const authContext = authContextResolver({
-            authContext: req.body?.authContext,
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-memory-write');
+        const governedBody = createGovernedRequestBody(req, pluginManager, requestContext);
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
             requestContext,
-            maid: req.body?.target?.maid,
-            adapter: 'native'
+            providedAuthContext: governedBody.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid: governedBody.target?.maid
         });
         const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
         const result = await memoryRuntimeService.writeMemory({
             body: {
-                ...req.body,
+                ...governedBody,
                 authContext,
-                requestContext
+                requestContext,
+                options: {
+                    ...(governedBody.options || {}),
+                    idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
+                }
             },
             startedAt,
             clientIp,
@@ -374,25 +513,28 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: result.code,
                 error: result.error,
-                details: result.details
+                details: result.details,
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
 
         return sendNativeSuccess(res, {
             requestId: result.requestId,
             startedAt,
-            data: result.data
+            data: result.data,
+            extraMeta: buildNativeResponseMeta(authContext)
         });
     });
 
     router.post('/context/assemble', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req.body?.requestContext, 'agent-gateway-context');
-        const authContext = authContextResolver({
-            authContext: req.body?.authContext,
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-context');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
             requestContext,
+            providedAuthContext: req.body?.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
             maid: req.body?.maid,
-            adapter: 'native'
         });
         const result = await contextRuntimeService.buildRecallContext({
             body: {
@@ -411,33 +553,41 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 startedAt,
                 code: result.code,
                 error: result.error,
-                details: result.details
+                details: result.details,
+                extraMeta: buildNativeResponseMeta(authContext)
             });
         }
 
         return sendNativeSuccess(res, {
             requestId: result.requestId,
             startedAt,
-            data: result.data
+            data: result.data,
+            extraMeta: buildNativeResponseMeta(authContext)
         });
     });
 
     router.post('/tools/:toolName/invoke', async (req, res) => {
         const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req.body?.requestContext, 'agent-gateway-tool');
-        const authContext = authContextResolver({
-            authContext: req.body?.authContext,
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-tool');
+        const governedBody = createGovernedRequestBody(req, pluginManager, requestContext);
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
             requestContext,
-            maid: req.body?.maid,
-            adapter: 'native'
+            providedAuthContext: governedBody.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid: governedBody.maid
         });
         const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
         const result = await toolRuntimeService.invokeTool({
             toolName: req.params.toolName,
             body: {
-                ...req.body,
+                ...governedBody,
                 authContext,
-                requestContext
+                requestContext,
+                options: {
+                    ...(governedBody.options || {}),
+                    idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
+                }
             },
             startedAt,
             clientIp,
@@ -450,9 +600,9 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 requestId: result.requestId,
                 startedAt,
                 data: result.data,
-                extraMeta: {
+                extraMeta: buildNativeResponseMeta(authContext, {
                     toolStatus: result.status
-                }
+                })
             });
         }
 
@@ -465,7 +615,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             details: {
                 ...(result.details || {}),
                 toolStatus: result.status
-            }
+            },
+            extraMeta: buildNativeResponseMeta(authContext)
         });
     });
 

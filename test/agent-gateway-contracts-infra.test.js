@@ -16,6 +16,14 @@ const {
     OPENCLAW_TO_AGENT_GATEWAY_CODE
 } = require('../modules/agentGateway/contracts/errorCodes');
 const {
+    AGENT_GATEWAY_AUTH_MODES,
+    AGENT_GATEWAY_HEADERS,
+    GATEWAY_CAPABILITY_SECTIONS,
+    resolveDedicatedGatewayAuth,
+    resolveGovernedIdempotencyKey,
+    resolveNativeRequestContext
+} = require('../modules/agentGateway/contracts/protocolGovernance');
+const {
     reuseRequestId,
     getDurationMs
 } = require('../modules/agentGateway/infra/trace');
@@ -117,6 +125,7 @@ test('responseEnvelope sends success and error envelopes with compatibility head
 
 test('errorCodes expose stable AGW and OCW mappings', () => {
     assert.equal(AGW_ERROR_CODES.INVALID_REQUEST, 'AGW_INVALID_REQUEST');
+    assert.equal(AGW_ERROR_CODES.UNAUTHORIZED, 'AGW_UNAUTHORIZED');
     assert.equal(OPENCLAW_ERROR_CODES.TOOL_TIMEOUT, 'OCW_TOOL_TIMEOUT');
     assert.equal(
         OPENCLAW_TO_AGENT_GATEWAY_CODE[OPENCLAW_ERROR_CODES.TOOL_TIMEOUT],
@@ -177,4 +186,57 @@ test('errorMapper covers validation, forbidden, timeout, internal and OpenClaw p
         plugin_error: 'approval required and cannot proceed'
     })));
     assert.equal(toolForbidden.code, OPENCLAW_ERROR_CODES.TOOL_APPROVAL_REQUIRED);
+});
+
+test('protocolGovernance resolves dedicated auth, native request context and idempotency input', () => {
+    const dedicatedAuth = resolveDedicatedGatewayAuth({
+        headers: {
+            [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: 'gw-secret',
+            [AGENT_GATEWAY_HEADERS.GATEWAY_ID]: 'vcp-test-gateway'
+        },
+        pluginManager: {
+            agentGatewayProtocolConfig: {
+                gatewayKey: 'gw-secret'
+            }
+        }
+    });
+
+    assert.equal(dedicatedAuth.provided, true);
+    assert.equal(dedicatedAuth.authenticated, true);
+    assert.equal(dedicatedAuth.authMode, AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY);
+    assert.equal(dedicatedAuth.gatewayId, 'vcp-test-gateway');
+
+    const requestContext = resolveNativeRequestContext({
+        agentId: 'Ariadne'
+    }, {
+        headers: {
+            [AGENT_GATEWAY_HEADERS.REQUEST_ID]: 'req-governed-001',
+            [AGENT_GATEWAY_HEADERS.SESSION_ID]: 'sess-governed-001',
+            [AGENT_GATEWAY_HEADERS.SOURCE]: 'native-client'
+        },
+        defaultSource: 'agent-gateway-test',
+        defaultRuntime: 'native',
+        requestIdPrefix: 'agw'
+    });
+
+    assert.deepEqual(requestContext, {
+        requestId: 'req-governed-001',
+        sessionId: 'sess-governed-001',
+        agentId: 'Ariadne',
+        source: 'native-client',
+        runtime: 'native'
+    });
+
+    const idempotencyKey = resolveGovernedIdempotencyKey({
+        body: {
+            options: {
+                idempotencyKey: 'tool-idem-001'
+            }
+        },
+        headers: {},
+        pluginManager: {}
+    });
+
+    assert.equal(idempotencyKey, 'tool-idem-001');
+    assert.deepEqual(GATEWAY_CAPABILITY_SECTIONS, ['tools', 'memory', 'context', 'jobs', 'events']);
 });

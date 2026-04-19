@@ -116,6 +116,9 @@ const FileFetcherServer = require('./FileFetcherServer.js'); // 引入新的 Fil
 const vcpInfoHandler = require('./vcpInfoHandler.js'); // 引入新的 VCP 信息处理器
 const basicAuth = require('basic-auth');
 const cors = require('cors'); // 引入 cors 模块
+const {
+    resolveDedicatedGatewayAuth
+} = require('./modules/agentGateway/contracts/protocolGovernance');
 
 const BLACKLIST_FILE = path.join(__dirname, 'ip_blacklist.json');
 const MAX_API_ERRORS = 5;
@@ -386,6 +389,7 @@ const adminAuth = (req, res, next) => {
     const isAdminPath = req.path.startsWith('/admin_api') ||
         req.path.startsWith('/AdminPanel') ||
         req.path.startsWith('/agent_gateway');
+    const isAgentGatewayPath = req.path.startsWith('/agent_gateway');
 
     if (isAdminPath) {
         // ========== 新增：允许登录页面和相关资源无需认证 ==========
@@ -416,6 +420,25 @@ const adminAuth = (req, res, next) => {
             return next(); // 直接放行登录页面相关资源
         }
         // ========== 新增结束 ==========
+
+        if (isAgentGatewayPath) {
+            const dedicatedGatewayAuth = resolveDedicatedGatewayAuth({
+                headers: req.headers,
+                pluginManager
+            });
+
+            if (dedicatedGatewayAuth.provided) {
+                if (dedicatedGatewayAuth.authenticated) {
+                    return next();
+                }
+
+                return res.status(401).json({
+                    error: 'Unauthorized',
+                    code: 'AGW_UNAUTHORIZED',
+                    authSource: dedicatedGatewayAuth.authSource
+                });
+            }
+        }
 
         let clientIp = req.ip;
         if (clientIp && clientIp.substr(0, 7) === "::ffff:") {

@@ -122,6 +122,39 @@ function createAgentGatewayContext(requestContext, extra = {}) {
     };
 }
 
+function getToolInvocationStore(pluginManager) {
+    if (!pluginManager.__agentGatewayToolInvocationStore) {
+        pluginManager.__agentGatewayToolInvocationStore = new Map();
+    }
+    return pluginManager.__agentGatewayToolInvocationStore;
+}
+
+function createToolInvocationStoreKey(toolName, idempotencyKey) {
+    const normalizedToolName = normalizeToolRuntimeString(toolName);
+    const normalizedIdempotencyKey = normalizeToolRuntimeString(idempotencyKey);
+    if (!normalizedToolName || !normalizedIdempotencyKey) {
+        return '';
+    }
+    return `${normalizedToolName}::${normalizedIdempotencyKey}`;
+}
+
+function cloneToolInvocationResult(result, requestId) {
+    if (!result || typeof result !== 'object') {
+        return result;
+    }
+
+    return {
+        ...result,
+        requestId,
+        details: result.details && typeof result.details === 'object'
+            ? { ...result.details }
+            : result.details,
+        data: result.data && typeof result.data === 'object'
+            ? { ...result.data, idempotentReplay: true }
+            : result.data
+    };
+}
+
 function createBridgeRequestBody(args, requestContext, bridgeToolName) {
     return {
         target: {
@@ -196,6 +229,10 @@ function createToolRuntimeService(deps = {}) {
             const agentId = requestContext.agentId;
             const sessionId = requestContext.sessionId;
             const source = requestContext.source;
+            const options = body?.options && typeof body.options === 'object' ? body.options : {};
+            const idempotencyKey = normalizeToolRuntimeString(options.idempotencyKey || body?.idempotencyKey);
+            const invocationStore = getToolInvocationStore(pluginManager);
+            const invocationStoreKey = createToolInvocationStoreKey(normalizedToolName, idempotencyKey);
 
             if (!normalizedToolName) {
                 return {
@@ -229,6 +266,18 @@ function createToolRuntimeService(deps = {}) {
                     error: 'requestContext.agentId and requestContext.sessionId are required',
                     details: { toolName: normalizedToolName }
                 };
+            }
+
+            if (invocationStoreKey && invocationStore.has(invocationStoreKey)) {
+                const previousResult = invocationStore.get(invocationStoreKey);
+                auditLogger.logToolInvoke('invoke.duplicate', {
+                    requestId,
+                    toolName: normalizedToolName,
+                    source,
+                    agentId,
+                    sessionId
+                }, startedAt);
+                return cloneToolInvocationResult(previousResult, requestId);
             }
 
             if (normalizedToolName === memoryBridgeToolName) {
@@ -386,7 +435,7 @@ function createToolRuntimeService(deps = {}) {
                     distributed: Boolean(plugin.isDistributed)
                 }, startedAt);
 
-                return {
+                const completedResult = {
                     success: true,
                     status: 'completed',
                     requestId,
@@ -399,6 +448,10 @@ function createToolRuntimeService(deps = {}) {
                         }
                     }
                 };
+                if (invocationStoreKey) {
+                    invocationStore.set(invocationStoreKey, completedResult);
+                }
+                return completedResult;
             } catch (error) {
                 const mappedError = mapToolExecutionError(normalizedToolName, error);
                 auditLogger.logToolInvoke('invoke.failed', {

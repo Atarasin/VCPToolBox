@@ -40,6 +40,33 @@ test('authContextResolver builds canonical transitional auth context', () => {
     assert.equal(authContext.gatewayIdentity.adapter, 'native');
 });
 
+test('authContextResolver builds canonical dedicated gateway auth context', () => {
+    const authContext = resolveAuthContext({
+        requestContext: {
+            requestId: 'req-auth-001b',
+            sessionId: 'sess-auth-001b',
+            agentId: 'agent.nova',
+            source: 'agent-gateway-tool',
+            runtime: 'native'
+        },
+        authContext: {
+            authMode: 'gateway_key',
+            authSource: 'x-agent-gateway-key',
+            gatewayId: 'gw-nova',
+            roles: ['gateway_client']
+        },
+        maid: 'Nova',
+        adapter: 'native'
+    });
+
+    assert.equal(authContext.authMode, 'gateway_key');
+    assert.equal(authContext.authSource, 'x-agent-gateway-key');
+    assert.equal(authContext.gatewayId, 'gw-nova');
+    assert.equal(authContext.isTransitionalAuth, false);
+    assert.equal(authContext.isDedicatedGatewayAuth, true);
+    assert.deepEqual(authContext.roles, ['gateway_client']);
+});
+
 test('agentPolicyResolver returns shared tool and diary scopes with guards', async () => {
     const pluginManager = createPluginManager({
         openClawBridgeConfig: {

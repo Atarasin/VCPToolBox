@@ -290,6 +290,79 @@ test('ToolRuntimeService maps timeout failures through failed status', async () 
     assert.equal(result.error, 'Tool execution timed out');
 });
 
+test('ToolRuntimeService replays supported idempotent invoke results by tool and key', async () => {
+    let invocationCount = 0;
+    const pluginManager = createPluginManager({
+        async processToolCall(toolName, args) {
+            invocationCount += 1;
+            return {
+                toolName,
+                invocationCount,
+                receivedArgs: args
+            };
+        }
+    });
+    const service = createToolRuntimeService({
+        pluginManager,
+        schemaRegistry: createSchemaRegistry(),
+        memoryRuntimeService: {
+            async writeMemory() {
+                throw new Error('memory bridge should not be used');
+            }
+        }
+    });
+
+    const firstResult = await service.invokeTool({
+        toolName: 'SciCalculator',
+        body: {
+            args: {
+                expression: '1+1'
+            },
+            options: {
+                idempotencyKey: 'tool-idem-001'
+            },
+            requestContext: {
+                source: 'native',
+                agentId: 'agent.math',
+                sessionId: 'sess-tool-idem-001',
+                requestId: 'req-tool-idem-001'
+            }
+        },
+        startedAt: Date.now(),
+        clientIp: '127.0.0.1',
+        defaultSource: 'native'
+    });
+
+    const secondResult = await service.invokeTool({
+        toolName: 'SciCalculator',
+        body: {
+            args: {
+                expression: '1+1'
+            },
+            options: {
+                idempotencyKey: 'tool-idem-001'
+            },
+            requestContext: {
+                source: 'native',
+                agentId: 'agent.math',
+                sessionId: 'sess-tool-idem-002',
+                requestId: 'req-tool-idem-002'
+            }
+        },
+        startedAt: Date.now(),
+        clientIp: '127.0.0.1',
+        defaultSource: 'native'
+    });
+
+    assert.equal(firstResult.success, true);
+    assert.equal(secondResult.success, true);
+    assert.equal(firstResult.data.result.invocationCount, 1);
+    assert.equal(secondResult.data.result.invocationCount, 1);
+    assert.equal(secondResult.data.idempotentReplay, true);
+    assert.equal(secondResult.requestId, 'req-tool-idem-002');
+    assert.equal(invocationCount, 1);
+});
+
 test('ToolRuntimeService routes vcp_memory_write through MemoryRuntimeService bridge', async () => {
     let capturedBridgeRequest = null;
     const pluginManager = createPluginManager();
