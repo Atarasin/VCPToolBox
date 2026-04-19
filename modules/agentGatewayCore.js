@@ -1769,9 +1769,13 @@ module.exports = function createAgentGatewayCore(pluginManager) {
                 defaultSource: 'openclaw'
             });
 
-            if (result.status === 'completed' || result.status === 'accepted') {
+            if (
+                result.status === 'completed' ||
+                result.status === 'accepted' ||
+                result.status === 'waiting_approval'
+            ) {
                 return sendOpenClawSuccess(res, {
-                    status: result.httpStatus || (result.status === 'accepted' ? 202 : 200),
+                    status: result.httpStatus || (result.status === 'completed' ? 200 : 202),
                     requestId: result.requestId,
                     startedAt,
                     data: result.data

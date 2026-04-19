@@ -93,7 +93,7 @@ test('ToolRuntimeService completes tool invocation with unified and legacy conte
     );
 });
 
-test('ToolRuntimeService returns waiting_approval without invoking protected tools', async () => {
+test('ToolRuntimeService returns deferred waiting_approval job data without invoking protected tools', async () => {
     let invocationCount = 0;
     const pluginManager = createPluginManager({
         getPlugin(toolName) {
@@ -152,12 +152,14 @@ test('ToolRuntimeService returns waiting_approval without invoking protected too
         defaultSource: 'openclaw'
     });
 
-    assert.equal(result.success, false);
+    assert.equal(result.success, true);
     assert.equal(result.status, 'waiting_approval');
-    assert.equal(result.httpStatus, 403);
+    assert.equal(result.httpStatus, 202);
     assert.equal(result.code, 'OCW_TOOL_APPROVAL_REQUIRED');
-    assert.equal(typeof result.details.job.jobId, 'string');
-    assert.equal(result.details.job.status, 'waiting_approval');
+    assert.equal(typeof result.data.job.jobId, 'string');
+    assert.equal(result.data.job.status, 'waiting_approval');
+    assert.equal(result.data.runtime.deferred, true);
+    assert.equal(result.data.audit.approvalUsed, true);
     assert.equal(invocationCount, 0);
 });
 

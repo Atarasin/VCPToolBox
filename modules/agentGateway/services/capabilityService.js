@@ -400,10 +400,14 @@ function createCapabilityService(deps = {}) {
                     knowledgeBaseManager
                 }),
                 jobs: {
-                    supported: false
+                    supported: true,
+                    states: ['accepted', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'],
+                    actions: ['poll', 'cancel']
                 },
                 events: {
-                    supported: false
+                    supported: true,
+                    transports: ['sse'],
+                    filters: ['jobId', 'agentId', 'sessionId']
                 }
             };
         }

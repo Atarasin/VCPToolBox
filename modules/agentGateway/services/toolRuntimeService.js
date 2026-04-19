@@ -355,6 +355,19 @@ function createToolRuntimeService(deps = {}) {
             }
 
             if (pluginManager.toolApprovalManager?.shouldApprove?.(normalizedToolName)) {
+                const approvalJob = jobRuntimeService
+                    ? jobRuntimeService.createWaitingApprovalJob({
+                        operation: 'tool.invoke',
+                        authContext,
+                        target: {
+                            type: 'tool',
+                            id: normalizedToolName
+                        },
+                        metadata: {
+                            toolName: normalizedToolName
+                        }
+                    })
+                    : null;
                 auditLogger.logToolInvoke('approval_required', {
                     requestId,
                     toolName: normalizedToolName,
@@ -363,28 +376,28 @@ function createToolRuntimeService(deps = {}) {
                     sessionId
                 });
                 return {
-                    success: false,
+                    success: true,
                     status: 'waiting_approval',
                     requestId,
-                    httpStatus: 403,
-                    code: OPENCLAW_ERROR_CODES.TOOL_APPROVAL_REQUIRED,
-                    error: 'Tool approval required',
+                    httpStatus: 202,
+                    data: {
+                        toolName: normalizedToolName,
+                        job: approvalJob,
+                        runtime: {
+                            deferred: true,
+                            status: 'waiting_approval'
+                        },
+                        audit: {
+                            approvalUsed: true,
+                            distributed: Boolean(plugin.isDistributed)
+                        }
+                    },
                     details: {
                         toolName: normalizedToolName,
-                        job: jobRuntimeService
-                            ? jobRuntimeService.createWaitingApprovalJob({
-                                operation: 'tool.invoke',
-                                authContext,
-                                target: {
-                                    type: 'tool',
-                                    id: normalizedToolName
-                                },
-                                metadata: {
-                                    toolName: normalizedToolName
-                                }
-                            })
-                            : null
-                    }
+                        job: approvalJob
+                    },
+                    code: OPENCLAW_ERROR_CODES.TOOL_APPROVAL_REQUIRED,
+                    error: 'Tool approval required'
                 };
             }
 

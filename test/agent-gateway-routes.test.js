@@ -270,6 +270,35 @@ function createPluginManager(overrides = {}) {
     };
 }
 
+function createProtectedToolPluginManager(overrides = {}) {
+    const basePluginManager = createPluginManager(overrides);
+    return {
+        ...basePluginManager,
+        getPlugin(toolName) {
+            if (toolName === 'ProtectedTool') {
+                return {
+                    name: 'ProtectedTool',
+                    displayName: '受保护工具',
+                    description: '需要审批。',
+                    pluginType: 'synchronous',
+                    communication: {
+                        protocol: 'stdio',
+                        timeout: 1000
+                    },
+                    capabilities: {
+                        invocationCommands: [
+                            {
+                                description: '执行受保护操作。'
+                            }
+                        ]
+                    }
+                };
+            }
+            return basePluginManager.getPlugin(toolName);
+        }
+    };
+}
+
 async function createServer(pluginManager) {
     const app = express();
     app.use(express.json());
@@ -329,8 +358,10 @@ test('GET /agent_gateway/capabilities returns native envelope and shared capabil
         assert.deepEqual(payload.data.sections, ['tools', 'memory', 'context', 'jobs', 'events']);
         assert.deepEqual(payload.data.memory.targets.map((target) => target.id), ['Nova', 'SharedMemory']);
         assert.deepEqual(payload.data.tools.map((tool) => tool.name), ['DailyNote', 'RemoteSearch', 'SciCalculator']);
-        assert.equal(payload.data.jobs.supported, false);
-        assert.equal(payload.data.events.supported, false);
+        assert.equal(payload.data.jobs.supported, true);
+        assert.deepEqual(payload.data.jobs.actions, ['poll', 'cancel']);
+        assert.equal(payload.data.events.supported, true);
+        assert.deepEqual(payload.data.events.transports, ['sse']);
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
@@ -619,6 +650,88 @@ test('Native tool invoke replays governed idempotent requests', async () => {
         assert.equal(secondPayload.data.idempotentReplay, true);
         assert.equal(secondPayload.meta.requestId, 'req-native-tool-idem-002');
         assert.equal(invocationCount, 1);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('Native deferred tool flow exposes job poll, cancel and SSE event stream', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createProtectedToolPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const invokeResponse = await fetch(`${server.baseUrl}/agent_gateway/tools/ProtectedTool/invoke`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                args: {
+                    task: 'dangerous'
+                },
+                requestContext: {
+                    requestId: 'req-native-protected-tool',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-protected-tool'
+                }
+            })
+        });
+        const invokePayload = await invokeResponse.json();
+        const jobId = invokePayload.data.job.jobId;
+
+        assert.equal(invokeResponse.status, 202);
+        assert.equal(invokePayload.success, true);
+        assert.equal(invokePayload.meta.toolStatus, 'waiting_approval');
+        assert.equal(invokePayload.data.job.status, 'waiting_approval');
+
+        const pollResponse = await fetch(
+            `${server.baseUrl}/agent_gateway/jobs/${jobId}?requestId=req-native-job-poll&agentId=Ariadne&sessionId=sess-native-protected-tool`
+        );
+        const pollPayload = await pollResponse.json();
+
+        assert.equal(pollResponse.status, 200);
+        assert.equal(pollPayload.success, true);
+        assert.equal(pollPayload.data.job.jobId, jobId);
+        assert.equal(pollPayload.data.job.status, 'waiting_approval');
+
+        const cancelResponse = await fetch(`${server.baseUrl}/agent_gateway/jobs/${jobId}/cancel`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                requestContext: {
+                    requestId: 'req-native-job-cancel',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-protected-tool'
+                }
+            })
+        });
+        const cancelPayload = await cancelResponse.json();
+
+        assert.equal(cancelResponse.status, 200);
+        assert.equal(cancelPayload.success, true);
+        assert.equal(cancelPayload.data.job.status, 'cancelled');
+
+        const eventResponse = await fetch(
+            `${server.baseUrl}/agent_gateway/events/stream?requestId=req-native-events&agentId=Ariadne&sessionId=sess-native-protected-tool&jobId=${jobId}`
+        );
+        const eventText = await eventResponse.text();
+
+        assert.equal(eventResponse.status, 200);
+        assert.equal(eventResponse.headers.get('content-type').includes('text/event-stream'), true);
+        assert.equal(eventText.includes('event: gateway.meta'), true);
+        assert.equal(eventText.includes('event: job.waiting_approval'), true);
+        assert.equal(eventText.includes('event: job.cancelled'), true);
+        assert.equal(eventText.includes(`"jobId":"${jobId}"`), true);
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });

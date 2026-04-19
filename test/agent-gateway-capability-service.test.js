@@ -37,8 +37,16 @@ test('CapabilityService builds compatible capabilities and scope-filtered target
     assert.deepEqual(capabilities.memory.targets.map((target) => target.id), ['Nova', 'SharedMemory']);
     assert.equal(capabilities.context.features.queryFromMessages, true);
     assert.equal(capabilities.context.features.truncation, true);
-    assert.deepEqual(capabilities.jobs, { supported: false });
-    assert.deepEqual(capabilities.events, { supported: false });
+    assert.deepEqual(capabilities.jobs, {
+        supported: true,
+        states: ['accepted', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'],
+        actions: ['poll', 'cancel']
+    });
+    assert.deepEqual(capabilities.events, {
+        supported: true,
+        transports: ['sse'],
+        filters: ['jobId', 'agentId', 'sessionId']
+    });
 
     const chromeBridge = capabilities.tools.find((tool) => tool.name === 'ChromeBridge');
     assert.equal(Array.isArray(chromeBridge.inputSchema.oneOf), true);

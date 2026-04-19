@@ -140,6 +140,19 @@ function createGovernedRequestBody(req, pluginManager, requestContext) {
     };
 }
 
+function createNativeStreamFilters(query = {}) {
+    return {
+        jobId: normalizeNativeString(query.jobId),
+        agentId: normalizeNativeString(query.agentId),
+        sessionId: normalizeNativeString(query.sessionId)
+    };
+}
+
+function writeNativeSseEvent(res, eventName, payload) {
+    res.write(`event: ${eventName}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 /**
  * Native Agent Gateway beta adapter。
  * 路由层只负责协议适配，所有核心能力都委托给共享 Gateway Core services。
@@ -154,6 +167,7 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         authContextResolver,
         capabilityService,
         agentRegistryService,
+        jobRuntimeService,
         memoryRuntimeService,
         contextRuntimeService,
         toolRuntimeService
@@ -594,9 +608,13 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             defaultSource: 'agent-gateway-tool'
         });
 
-        if (result.status === 'completed' || result.status === 'accepted') {
+        if (
+            result.status === 'completed' ||
+            result.status === 'accepted' ||
+            result.status === 'waiting_approval'
+        ) {
             return sendNativeSuccess(res, {
-                status: result.httpStatus || (result.status === 'accepted' ? 202 : 200),
+                status: result.httpStatus || (result.status === 'completed' ? 200 : 202),
                 requestId: result.requestId,
                 startedAt,
                 data: result.data,
@@ -618,6 +636,129 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
             },
             extraMeta: buildNativeResponseMeta(authContext)
         });
+    });
+
+    router.get('/jobs/:jobId', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = createNativeRequestContext(req, {
+            requestId: req.query.requestId,
+            agentId: req.query.agentId,
+            sessionId: req.query.sessionId,
+            source: req.query.source,
+            runtime: req.query.runtime
+        }, 'agent-gateway-job');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid: req.query.maid
+        });
+        const result = jobRuntimeService.pollJob(req.params.jobId, authContext);
+
+        if (!result.success) {
+            return sendNativeError(res, {
+                status: result.status,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: result.code,
+                error: result.error,
+                details: result.details,
+                extraMeta: buildNativeResponseMeta(authContext)
+            });
+        }
+
+        return sendNativeSuccess(res, {
+            requestId: requestContext.requestId,
+            startedAt,
+            data: result.data,
+            extraMeta: buildNativeResponseMeta(authContext)
+        });
+    });
+
+    router.post('/jobs/:jobId/cancel', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-job-cancel');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            providedAuthContext: req.body?.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid: req.body?.maid
+        });
+        const result = jobRuntimeService.cancelJob(req.params.jobId, authContext);
+
+        if (!result.success) {
+            return sendNativeError(res, {
+                status: result.status,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: result.code,
+                error: result.error,
+                details: result.details,
+                extraMeta: buildNativeResponseMeta(authContext)
+            });
+        }
+
+        return sendNativeSuccess(res, {
+            requestId: requestContext.requestId,
+            startedAt,
+            data: result.data,
+            extraMeta: buildNativeResponseMeta(authContext)
+        });
+    });
+
+    router.get('/events/stream', async (req, res) => {
+        const requestContext = createNativeRequestContext(req, {
+            requestId: req.query.requestId,
+            agentId: req.query.agentId,
+            sessionId: req.query.sessionId,
+            source: req.query.source,
+            runtime: req.query.runtime
+        }, 'agent-gateway-events');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid: req.query.maid
+        });
+        const result = jobRuntimeService.listEvents({
+            authContext,
+            filters: createNativeStreamFilters(req.query)
+        });
+
+        if (!result.success) {
+            return sendNativeError(res, {
+                status: result.status,
+                requestId: requestContext.requestId,
+                startedAt: Date.now(),
+                code: result.code,
+                error: result.error,
+                details: result.details,
+                extraMeta: buildNativeResponseMeta(authContext)
+            });
+        }
+
+        res.status(200);
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Agent-Gateway-Version', NATIVE_GATEWAY_VERSION);
+        res.flushHeaders?.();
+
+        // 先发送稳定的 meta 事件，便于调用方在首帧就拿到 request/gateway 上下文。
+        writeNativeSseEvent(res, 'gateway.meta', {
+            requestId: requestContext.requestId,
+            gatewayVersion: NATIVE_GATEWAY_VERSION,
+            authMode: authContext.authMode,
+            authSource: authContext.authSource,
+            gatewayId: authContext.gatewayId
+        });
+
+        result.data.events.forEach((event) => {
+            writeNativeSseEvent(res, event.eventType, event);
+        });
+
+        return res.end();
     });
 
     return router;
