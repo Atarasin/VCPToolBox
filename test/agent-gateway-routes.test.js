@@ -370,7 +370,7 @@ test('GET /agent_gateway/capabilities returns native envelope and shared capabil
 
 test('GET /agent_gateway/agents and related detail/render routes expose registry output', async () => {
     const agentDir = await createTempAgentDir();
-    await writeAgentFile(agentDir, 'Ariadne.md', 'Hello {{VarUserName}} from Ariadne');
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Hello {{VarUserName}} from Ariadne\n[[阿里阿德涅日记本::Time::TagMemo]]');
     await writeAgentFile(agentDir, 'roles/Bard.md', 'Bard prompt');
 
     const pluginManager = createPluginManager({
@@ -416,6 +416,9 @@ test('GET /agent_gateway/agents and related detail/render routes expose registry
         assert.equal(renderResponse.status, 200);
         assert.equal(renderPayload.success, true);
         assert.equal(renderPayload.data.renderedPrompt.includes('Nova'), true);
+        assert.equal(renderPayload.data.renderMeta.memoryRecallApplied, false);
+        assert.deepEqual(renderPayload.data.renderMeta.recallSources, []);
+        assert.equal(renderPayload.data.renderMeta.filteredByPolicy, false);
         assert.deepEqual(renderPayload.data.meta.variableKeys, ['VarUserName']);
     } finally {
         await server.close();

@@ -26,6 +26,12 @@ const MCP_RESOURCE_KINDS = Object.freeze({
     MEMORY_TARGETS: 'memory-targets'
 });
 
+const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
+    MEMORY_SEARCH: 'gateway_memory_search',
+    CONTEXT_ASSEMBLE: 'gateway_context_assemble',
+    MEMORY_WRITE: 'gateway_memory_write'
+});
+
 /**
  * MCP v1 只开放最小能力面：
  * - tools/list
@@ -73,6 +79,23 @@ function createMcpTextContent(value) {
     }];
 }
 
+function createGatewayToolDescriptor({
+    name,
+    title,
+    description,
+    inputSchema
+}) {
+    return {
+        name,
+        title,
+        description,
+        inputSchema,
+        annotations: {
+            gatewayManaged: true
+        }
+    };
+}
+
 function buildMcpToolDescriptor(tool) {
     return {
         name: tool.name,
@@ -86,6 +109,121 @@ function buildMcpToolDescriptor(tool) {
             pluginType: tool.pluginType
         }
     };
+}
+
+function createGatewayMemoryToolDescriptors() {
+    return [
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH,
+            title: 'Gateway Memory Search',
+            description: 'Execute canonical Agent Gateway memory search through Gateway Core.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['query'],
+                properties: {
+                    query: { type: 'string' },
+                    diary: { type: 'string' },
+                    diaries: {
+                        type: 'array',
+                        items: { type: 'string' }
+                    },
+                    maid: { type: 'string' },
+                    mode: {
+                        type: 'string',
+                        enum: ['rag', 'hybrid', 'auto']
+                    },
+                    k: { type: 'integer', minimum: 1 },
+                    timeAware: { type: 'boolean' },
+                    groupAware: { type: 'boolean' },
+                    rerank: { type: 'boolean' },
+                    tagMemo: { type: 'boolean' },
+                    options: {
+                        type: 'object',
+                        additionalProperties: true
+                    }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE,
+            title: 'Gateway Context Assemble',
+            description: 'Assemble canonical Agent Gateway recall context through Gateway Core.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    query: { type: 'string' },
+                    recentMessages: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            additionalProperties: true
+                        }
+                    },
+                    diary: { type: 'string' },
+                    diaries: {
+                        type: 'array',
+                        items: { type: 'string' }
+                    },
+                    maid: { type: 'string' },
+                    maxBlocks: { type: 'integer', minimum: 1 },
+                    tokenBudget: { type: 'integer', minimum: 1 },
+                    minScore: { type: 'number' },
+                    mode: {
+                        type: 'string',
+                        enum: ['rag', 'hybrid', 'auto']
+                    },
+                    timeAware: { type: 'boolean' },
+                    groupAware: { type: 'boolean' },
+                    rerank: { type: 'boolean' },
+                    tagMemo: { type: 'boolean' }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE,
+            title: 'Gateway Memory Write',
+            description: 'Persist durable memory through the canonical Agent Gateway write path.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['target', 'memory'],
+                properties: {
+                    target: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    memory: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    metadata: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    tags: {
+                        type: 'array',
+                        items: { type: 'string' }
+                    },
+                    diary: { type: 'string' },
+                    text: { type: 'string' },
+                    timestamp: {
+                        oneOf: [
+                            { type: 'string' },
+                            { type: 'number' }
+                        ]
+                    },
+                    maid: { type: 'string' },
+                    idempotencyKey: { type: 'string' },
+                    options: {
+                        type: 'object',
+                        additionalProperties: true
+                    }
+                }
+            }
+        })
+    ];
 }
 
 function encodeResourceAgentId(agentId) {
@@ -138,6 +276,7 @@ function createFailureResult(result) {
                 canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result?.code] || result?.code || '',
                 gatewayCode: result?.code || '',
                 requestId: result?.requestId || '',
+                gatewayStatus: typeof result?.status === 'number' ? result.status : undefined,
                 ...((result?.details && typeof result.details === 'object') ? result.details : {})
             }
         },
@@ -145,7 +284,10 @@ function createFailureResult(result) {
             error: result?.error || 'MCP tool call failed',
             code: mapGatewayFailureToMcpErrorCode(result?.code),
             requestId: result?.requestId || '',
-            details: result?.details || {}
+            details: {
+                gatewayStatus: typeof result?.status === 'number' ? result.status : undefined,
+                ...(result?.details || {})
+            }
         })
     };
 }
@@ -189,6 +331,21 @@ function createDeferredResult(result) {
     };
 }
 
+function createGatewayManagedSuccessResult(name, result) {
+    return {
+        isError: false,
+        status: 'completed',
+        structuredContent: {
+            status: 'completed',
+            requestId: result.requestId,
+            toolName: name,
+            result: result.data,
+            audit: result.audit || {}
+        },
+        content: createMcpTextContent(result.data)
+    };
+}
+
 function mapToolRuntimeResultToMcp(result) {
     if (!result || typeof result !== 'object') {
         return createFailureResult({
@@ -208,11 +365,37 @@ function mapToolRuntimeResultToMcp(result) {
     return createFailureResult(result);
 }
 
+function mapGatewayManagedResultToMcp(name, result) {
+    if (!result || typeof result !== 'object') {
+        return createFailureResult({
+            error: 'Gateway runtime returned an invalid result',
+            code: OPENCLAW_ERROR_CODES.INTERNAL_ERROR
+        });
+    }
+
+    if (result.success) {
+        return createGatewayManagedSuccessResult(name, result);
+    }
+
+    return createFailureResult(result);
+}
+
 function normalizeMcpArguments(args) {
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
         return null;
     }
     return args;
+}
+
+function isGatewayManagedTool(name) {
+    return Object.values(MCP_GATEWAY_TOOL_NAMES).includes(name);
+}
+
+function buildManagedToolContextInput(input, args) {
+    return {
+        ...input,
+        maid: input.maid || args.maid || args.target?.maid || input.requestContext?.maid
+    };
 }
 
 function buildMcpContexts(bundle, input = {}, defaultSource) {
@@ -269,6 +452,68 @@ function ensureAgentAndSession(requestContext, operation) {
     }
 }
 
+async function executeGatewayManagedTool(bundle, name, args, input = {}) {
+    const contextInput = buildManagedToolContextInput(input, args);
+    const source = {
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
+        [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write'
+    }[name] || 'mcp';
+    const { maid, requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
+    ensureAgentAndSession(requestContext, `tools/call:${name}`);
+
+    const body = {
+        ...args,
+        authContext,
+        requestContext,
+        maid,
+        options: {
+            ...((args.options && typeof args.options === 'object') ? args.options : {}),
+            ...((input.options && typeof input.options === 'object') ? input.options : {})
+        }
+    };
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
+        const result = await bundle.contextRuntimeService.search({
+            body,
+            startedAt: Date.now(),
+            defaultSource: source
+        });
+        return mapGatewayManagedResultToMcp(name, result);
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
+        const result = await bundle.contextRuntimeService.buildRecallContext({
+            body,
+            startedAt: Date.now(),
+            defaultSource: source
+        });
+        return mapGatewayManagedResultToMcp(name, result);
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
+        const result = await bundle.memoryRuntimeService.writeMemory({
+            body: {
+                ...body,
+                idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey,
+                options: {
+                    ...body.options,
+                    idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey
+                }
+            },
+            startedAt: Date.now(),
+            clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
+            defaultSource: source
+        });
+        return mapGatewayManagedResultToMcp(name, result);
+    }
+
+    throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
+        field: 'name',
+        name
+    });
+}
+
 function createCapabilitiesResource(agentId) {
     return {
         uri: buildResourceUri(MCP_RESOURCE_KINDS.CAPABILITIES, agentId),
@@ -295,8 +540,11 @@ function createMcpAdapter(pluginManager, options = {}) {
     const bundle = options.gatewayServiceBundle || getGatewayServiceBundle(pluginManager);
     const {
         capabilityService,
+        contextRuntimeService,
+        memoryRuntimeService,
         toolRuntimeService
     } = bundle;
+    const gatewayMemoryTools = createGatewayMemoryToolDescriptors();
 
     return {
         supportedResourceTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES,
@@ -312,7 +560,10 @@ function createMcpAdapter(pluginManager, options = {}) {
             });
 
             return {
-                tools: (capabilities.tools || []).map(buildMcpToolDescriptor),
+                tools: [
+                    ...(capabilities.tools || []).map(buildMcpToolDescriptor),
+                    ...gatewayMemoryTools
+                ].sort((left, right) => left.name.localeCompare(right.name)),
                 meta: {
                     requestId: requestContext.requestId,
                     agentId: requestContext.agentId
@@ -335,6 +586,13 @@ function createMcpAdapter(pluginManager, options = {}) {
                 throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'tools/call requires an arguments object', {
                     field: 'arguments'
                 });
+            }
+            if (isGatewayManagedTool(name)) {
+                return executeGatewayManagedTool({
+                    ...bundle,
+                    contextRuntimeService,
+                    memoryRuntimeService
+                }, name, args, input);
             }
 
             const result = await toolRuntimeService.invokeTool({

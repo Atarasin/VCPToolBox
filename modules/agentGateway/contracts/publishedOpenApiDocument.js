@@ -225,6 +225,50 @@ function createPayloadTooLargeExample() {
     };
 }
 
+function createAgentRenderExample() {
+    return {
+        success: true,
+        data: {
+            agentId: 'Ariadne',
+            alias: 'Ariadne',
+            sourceFile: 'Agent/Ariadne.txt',
+            renderedPrompt: '你是阿里阿德涅，当前项目是 VCPToolBox。\n记忆片段：上周完成了 gateway render contract 收口。',
+            dependencies: {
+                agents: [],
+                toolboxes: [],
+                variables: ['VarSystemInfo'],
+                ragBlocks: ['[[阿里阿德涅日记本::Time::TagMemo]]'],
+                metaThinkingBlocks: [],
+                asyncResults: []
+            },
+            unresolved: [],
+            warnings: [],
+            truncated: false,
+            renderMeta: {
+                memoryRecallApplied: true,
+                recallSources: ['tagmemo'],
+                truncated: false,
+                filteredByPolicy: false,
+                unresolvedCount: 0,
+                variableKeys: ['VarSystemInfo']
+            },
+            meta: {
+                model: 'gpt-4.1',
+                rawSize: 2400,
+                renderedSize: 2800,
+                variableKeys: ['VarSystemInfo']
+            }
+        },
+        meta: {
+            requestId: 'req-agent-render-001',
+            durationMs: 12,
+            gatewayVersion: NATIVE_GATEWAY_VERSION,
+            traceId: 'agwop_renderexample1234567890',
+            operationName: 'agents.render'
+        }
+    };
+}
+
 function createDocumentInfo() {
     return {
         title: 'VCP Agent Gateway API',
@@ -729,7 +773,13 @@ function createPublishedOpenApiDocument() {
                     },
                     content: {
                         'application/json': {
-                            schema: { $ref: '#/components/schemas/AgentRenderEnvelope' }
+                            schema: { $ref: '#/components/schemas/AgentRenderEnvelope' },
+                            examples: {
+                                renderedPrompt: {
+                                    summary: 'final rendered prompt output',
+                                    value: createAgentRenderExample()
+                                }
+                            }
                         }
                     }
                 },
@@ -1210,9 +1260,27 @@ function createPublishedOpenApiDocument() {
                         unresolved: { type: 'array', items: { type: 'string' } },
                         warnings: { type: 'array', items: { type: 'string' } },
                         truncated: { type: 'boolean' },
+                        renderMeta: { $ref: '#/components/schemas/AgentRenderMeta' },
                         meta: {
                             type: 'object',
                             additionalProperties: true
+                        }
+                    }
+                },
+                AgentRenderMeta: {
+                    type: 'object',
+                    properties: {
+                        memoryRecallApplied: { type: 'boolean' },
+                        recallSources: {
+                            type: 'array',
+                            items: { type: 'string' }
+                        },
+                        truncated: { type: 'boolean' },
+                        filteredByPolicy: { type: 'boolean' },
+                        unresolvedCount: { type: 'integer' },
+                        variableKeys: {
+                            type: 'array',
+                            items: { type: 'string' }
                         }
                     }
                 },

@@ -68,7 +68,28 @@ curl -X POST "http://localhost:3000/agent_gateway/memory/search" \
   }'
 ```
 
-### 4.3 Tool Invoke
+### 4.3 Agent Render
+
+`POST /agent_gateway/agents/:agentId/render` 返回的是最终 rendered prompt，而不是原始 `Agent/*.txt` 模板文件。若底层模板在渲染时展开了日记本或 `TagMemo` 语法，最终 prompt 可能已经包含记忆召回后的内容。调用方应优先消费 `data.renderedPrompt`，并结合 `data.renderMeta` 判断是否发生了记忆注入、截断或其他稳定的 render 状态。
+
+```bash
+curl -X POST "http://localhost:3000/agent_gateway/agents/Ariadne/render" \
+  -H "content-type: application/json" \
+  -H "x-agent-gateway-key: gw-secret" \
+  -d '{
+    "requestContext": {
+      "requestId": "req-render-001",
+      "agentId": "Ariadne",
+      "sessionId": "sess-render-001",
+      "runtime": "native"
+    },
+    "variables": {
+      "VarUserName": "Nova"
+    }
+  }'
+```
+
+### 4.4 Tool Invoke
 
 ```bash
 curl -X POST "http://localhost:3000/agent_gateway/tools/SciCalculator/invoke" \

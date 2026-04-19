@@ -66,9 +66,15 @@ test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas 
     assert.ok(document.components.schemas.GatewayMeta);
     assert.ok(document.components.schemas.JobObject);
     assert.ok(document.components.schemas.RuntimeEvent);
+    assert.ok(document.components.schemas.AgentRenderMeta);
     assert.ok(document.paths['/agent_gateway/jobs/{jobId}']);
     assert.ok(document.paths['/agent_gateway/events/stream']);
     assert.ok(document.paths['/agent_gateway/tools/{toolName}/invoke'].post.responses['202']);
+    assert.equal(
+        document.components.responses.AgentRenderSuccess.content['application/json'].examples.renderedPrompt.value
+            .data.renderMeta.memoryRecallApplied,
+        true
+    );
     assert.ok(
         document.components.responses.TooManyRequests.content['application/json'].examples.rateLimited.value.meta.traceId
     );

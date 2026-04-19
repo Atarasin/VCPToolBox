@@ -184,7 +184,44 @@ test('AgentRegistryService renders agents with variables, unresolved warnings, a
     assert.equal(rendered.warnings.includes('render output still contains unresolved prompt constructs'), true);
     assert.equal(rendered.warnings.includes('render output was truncated to the requested maxLength'), true);
     assert.deepEqual(rendered.meta.variableKeys, ['VarUserName']);
+    assert.equal(rendered.renderMeta.memoryRecallApplied, false);
+    assert.deepEqual(rendered.renderMeta.recallSources, []);
+    assert.equal(rendered.renderMeta.truncated, true);
+    assert.equal(rendered.renderMeta.filteredByPolicy, false);
+    assert.equal(rendered.renderMeta.unresolvedCount, 1);
+    assert.deepEqual(rendered.renderMeta.variableKeys, ['VarUserName']);
     assert.equal(rendered.renderedPrompt, 'Hello Nova and {{Unkn...');
+});
+
+test('AgentRegistryService marks memory recall applied only after render consumes memory syntax', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(
+        agentDir,
+        'Ariadne.md',
+        'Hello {{VarUserName}}\n[[阿里阿德涅日记本::Time::TagMemo]]'
+    );
+
+    const service = createAgentRegistryService({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        }),
+        capabilityService: createCapabilityServiceStub(),
+        renderPrompt: async ({ rawPrompt, renderVariables }) =>
+            rawPrompt
+                .replaceAll('{{VarUserName}}', renderVariables.VarUserName || '')
+                .replace('[[阿里阿德涅日记本::Time::TagMemo]]', '记忆片段：上周完成了 gateway render contract 收口。')
+    });
+
+    const rendered = await service.renderAgent('Ariadne', {
+        variables: {
+            VarUserName: 'Nova'
+        }
+    });
+
+    assert.equal(rendered.renderedPrompt.includes('记忆片段'), true);
+    assert.equal(rendered.renderMeta.memoryRecallApplied, true);
+    assert.deepEqual(rendered.renderMeta.recallSources, ['tagmemo']);
+    assert.equal(rendered.renderMeta.unresolvedCount, 0);
 });
 
 test('AgentRegistryService throws AGENT_NOT_FOUND for unknown aliases', async () => {

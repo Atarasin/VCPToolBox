@@ -65,6 +65,51 @@ function createProtectedToolPluginManager(overrides = {}) {
     };
 }
 
+function createMemoryPluginManager(overrides = {}) {
+    const pluginManager = createPluginManager(overrides);
+    const dailyNotePlugin = {
+        name: 'DailyNote',
+        displayName: '日记写入器',
+        description: '写入 durable memory 到日记本。',
+        pluginType: 'synchronous',
+        communication: {
+            protocol: 'stdio',
+            timeout: 1000
+        },
+        capabilities: {
+            invocationCommands: [
+                {
+                    description: '创建日记条目。'
+                }
+            ]
+        }
+    };
+    const baseGetPlugin = pluginManager.getPlugin.bind(pluginManager);
+    const baseProcessToolCall = pluginManager.processToolCall.bind(pluginManager);
+
+    return {
+        ...pluginManager,
+        getPlugin(toolName) {
+            if (toolName === 'DailyNote') {
+                return dailyNotePlugin;
+            }
+            return baseGetPlugin(toolName);
+        },
+        async processToolCall(toolName, args) {
+            if (toolName === 'DailyNote') {
+                const diaryName = typeof args?.maid === 'string' && args.maid.startsWith('[')
+                    ? args.maid.slice(1).split(']')[0]
+                    : 'UnknownDiary';
+                return {
+                    ok: true,
+                    filePath: `${diaryName}/${args.Date}.md`
+                };
+            }
+            return baseProcessToolCall(toolName, args);
+        }
+    };
+}
+
 test('MCP adapter lists policy-filtered tools from the shared capability service', async () => {
     const pluginManager = createPluginManager({
         openClawBridgeConfig: {
@@ -89,10 +134,20 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(result.meta.requestId, 'req-mcp-tools-list');
     assert.deepEqual(
         result.tools.map((tool) => tool.name),
-        ['ChromeBridge', 'SciCalculator']
+        [
+            'ChromeBridge',
+            'gateway_context_assemble',
+            'gateway_memory_search',
+            'gateway_memory_write',
+            'SciCalculator'
+        ]
     );
-    assert.ok(result.tools[0].inputSchema);
-    assert.equal(result.tools[0].annotations.pluginType, 'hybridservice');
+    const chromeBridgeTool = result.tools.find((tool) => tool.name === 'ChromeBridge');
+    const memorySearchTool = result.tools.find((tool) => tool.name === 'gateway_memory_search');
+    assert.ok(chromeBridgeTool && chromeBridgeTool.inputSchema);
+    assert.equal(chromeBridgeTool.annotations.pluginType, 'hybridservice');
+    assert.ok(memorySearchTool && memorySearchTool.inputSchema);
+    assert.equal(memorySearchTool.annotations.gatewayManaged, true);
 });
 
 test('MCP adapter routes tool invocation through shared runtime with MCP request context', async () => {
@@ -243,6 +298,153 @@ test('MCP adapter lists and reads the supported read-only resource subset', asyn
     );
 });
 
+test('MCP adapter executes canonical memory and context tools with MCP request context', async () => {
+    const pluginManager = createMemoryPluginManager({
+        openClawBridgeConfig: {
+            policy: {
+                agentPolicyMap: {
+                    Ariadne: {
+                        diaryScopes: ['Nova', 'SharedMemory']
+                    }
+                }
+            }
+        }
+    });
+    const adapter = createMcpAdapter(pluginManager);
+
+    const searchResult = await adapter.callTool({
+        name: 'gateway_memory_search',
+        arguments: {
+            query: '上周项目会议讨论了什么',
+            diary: 'Nova'
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-memory-search',
+        requestContext: {
+            requestId: 'req-mcp-memory-search'
+        }
+    });
+    const contextResult = await adapter.callTool({
+        name: 'gateway_context_assemble',
+        arguments: {
+            recentMessages: [
+                {
+                    role: 'user',
+                    content: '上周项目会议讨论了什么'
+                }
+            ],
+            diary: 'Nova'
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-context',
+        requestContext: {
+            requestId: 'req-mcp-context'
+        }
+    });
+    const writeResult = await adapter.callTool({
+        name: 'gateway_memory_write',
+        arguments: {
+            target: {
+                diary: 'Nova'
+            },
+            memory: {
+                text: '记录本次 MCP memory core 的实现结论。',
+                tags: ['实现', 'MCP']
+            },
+            options: {
+                idempotencyKey: 'idem-mcp-memory-write-001'
+            }
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-memory-write',
+        requestContext: {
+            requestId: 'req-mcp-memory-write'
+        }
+    });
+    const duplicateWriteResult = await adapter.callTool({
+        name: 'gateway_memory_write',
+        arguments: {
+            target: {
+                diary: 'Nova'
+            },
+            memory: {
+                text: '记录本次 MCP memory core 的实现结论。',
+                tags: ['实现', 'MCP']
+            },
+            options: {
+                idempotencyKey: 'idem-mcp-memory-write-001'
+            }
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-memory-write',
+        requestContext: {
+            requestId: 'req-mcp-memory-write-dup'
+        }
+    });
+
+    assert.equal(searchResult.isError, false);
+    assert.equal(searchResult.structuredContent.requestId, 'req-mcp-memory-search');
+    assert.equal(searchResult.structuredContent.result.items[0].sourceDiary, 'Nova');
+    assert.equal(contextResult.isError, false);
+    assert.equal(Array.isArray(contextResult.structuredContent.result.recallBlocks), true);
+    assert.equal(contextResult.structuredContent.result.recallBlocks.length > 0, true);
+    assert.equal(writeResult.isError, false);
+    assert.equal(writeResult.structuredContent.result.writeStatus, 'created');
+    assert.equal(duplicateWriteResult.isError, false);
+    assert.equal(duplicateWriteResult.structuredContent.result.writeStatus, 'skipped_duplicate');
+});
+
+test('MCP memory adapter keeps canonical failure identity for validation and policy errors', async () => {
+    const pluginManager = createMemoryPluginManager({
+        openClawBridgeConfig: {
+            policy: {
+                agentPolicyMap: {
+                    Ariadne: {
+                        diaryScopes: ['Nova']
+                    }
+                }
+            }
+        }
+    });
+    const adapter = createMcpAdapter(pluginManager);
+
+    const invalidSearch = await adapter.callTool({
+        name: 'gateway_memory_search',
+        arguments: {
+            diary: 'Nova'
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-invalid-search',
+        requestContext: {
+            requestId: 'req-mcp-invalid-search'
+        }
+    });
+    const forbiddenWrite = await adapter.callTool({
+        name: 'gateway_memory_write',
+        arguments: {
+            target: {
+                diary: 'ProjectAlpha'
+            },
+            memory: {
+                text: '不应被允许的写入。',
+                tags: ['拒绝']
+            }
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-forbidden-write',
+        requestContext: {
+            requestId: 'req-mcp-forbidden-write'
+        }
+    });
+
+    assert.equal(invalidSearch.isError, true);
+    assert.equal(invalidSearch.error.code, 'MCP_INVALID_ARGUMENTS');
+    assert.equal(invalidSearch.error.details.canonicalCode, 'AGW_VALIDATION_ERROR');
+    assert.equal(forbiddenWrite.isError, true);
+    assert.equal(forbiddenWrite.error.code, 'MCP_FORBIDDEN');
+    assert.equal(forbiddenWrite.error.details.canonicalCode, 'AGW_FORBIDDEN');
+});
+
 test('MCP server harness exposes a representative client flow', async () => {
     const pluginManager = createPluginManager();
     const harness = createMcpServerHarness(pluginManager);
@@ -370,6 +572,264 @@ test('MCP adapter remains semantically aligned with representative native tool f
         assert.equal(mcpForbidden.isError, true);
         assert.ok(mcpForbidden.isError && mcpForbidden.error);
         assert.equal(mcpForbidden.error.details.canonicalCode, 'AGW_FORBIDDEN');
+    } finally {
+        await server.close();
+    }
+});
+
+test('MCP memory adapter remains semantically aligned with representative native memory flows', async () => {
+    const pluginManager = createMemoryPluginManager({
+        openClawBridgeConfig: {
+            policy: {
+                agentPolicyMap: {
+                    Ariadne: {
+                        diaryScopes: ['Nova', 'SharedMemory']
+                    }
+                }
+            }
+        }
+    });
+    const adapter = createMcpAdapter(pluginManager);
+    const server = await createNativeServer(pluginManager);
+
+    try {
+        const nativeTargetsResponse = await fetch(
+            `${server.baseUrl}/agent_gateway/memory/targets?agentId=Ariadne&requestId=req-native-mcp-targets`
+        );
+        const nativeTargetsPayload = await nativeTargetsResponse.json();
+        const listed = await adapter.listResources({
+            agentId: 'Ariadne',
+            requestContext: {
+                requestId: 'req-mcp-targets-list'
+            }
+        });
+        const mcpTargets = await adapter.readResource({
+            uri: listed.resources.find((resource) => resource.uri.includes('/memory-targets/')).uri,
+            requestContext: {
+                requestId: 'req-mcp-targets-read'
+            }
+        });
+
+        const nativeSearchResponse = await fetch(`${server.baseUrl}/agent_gateway/memory/search`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: '上周项目会议讨论了什么',
+                diary: 'Nova',
+                requestContext: {
+                    requestId: 'req-native-mcp-memory-search',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-mcp-memory-search'
+                }
+            })
+        });
+        const nativeSearchPayload = await nativeSearchResponse.json();
+        const mcpSearch = await adapter.callTool({
+            name: 'gateway_memory_search',
+            arguments: {
+                query: '上周项目会议讨论了什么',
+                diary: 'Nova'
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-native-mcp-memory-search',
+            requestContext: {
+                requestId: 'req-mcp-memory-search-parity'
+            }
+        });
+
+        const nativeContextResponse = await fetch(`${server.baseUrl}/agent_gateway/context/assemble`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                recentMessages: [
+                    {
+                        role: 'user',
+                        content: '上周项目会议讨论了什么'
+                    }
+                ],
+                diary: 'Nova',
+                requestContext: {
+                    requestId: 'req-native-mcp-context',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-mcp-context'
+                }
+            })
+        });
+        const nativeContextPayload = await nativeContextResponse.json();
+        const mcpContext = await adapter.callTool({
+            name: 'gateway_context_assemble',
+            arguments: {
+                recentMessages: [
+                    {
+                        role: 'user',
+                        content: '上周项目会议讨论了什么'
+                    }
+                ],
+                diary: 'Nova'
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-native-mcp-context',
+            requestContext: {
+                requestId: 'req-mcp-context-parity'
+            }
+        });
+
+        const nativeWriteResponse = await fetch(`${server.baseUrl}/agent_gateway/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'idempotency-key': 'idem-native-mcp-write-001'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '记录 parity test 的写入结果。',
+                    tags: ['parity', 'mcp']
+                },
+                requestContext: {
+                    requestId: 'req-native-mcp-write',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-mcp-write'
+                }
+            })
+        });
+        const nativeWritePayload = await nativeWriteResponse.json();
+        const nativeDuplicateWriteResponse = await fetch(`${server.baseUrl}/agent_gateway/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'idempotency-key': 'idem-native-mcp-write-001'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '记录 parity test 的写入结果。',
+                    tags: ['parity', 'mcp']
+                },
+                requestContext: {
+                    requestId: 'req-native-mcp-write-dup',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-mcp-write'
+                }
+            })
+        });
+        const nativeDuplicateWritePayload = await nativeDuplicateWriteResponse.json();
+        const mcpWrite = await adapter.callTool({
+            name: 'gateway_memory_write',
+            arguments: {
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '记录 parity test 的写入结果。',
+                    tags: ['parity', 'mcp']
+                },
+                options: {
+                    idempotencyKey: 'idem-mcp-write-001'
+                }
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-native-mcp-write',
+            requestContext: {
+                requestId: 'req-mcp-write-parity'
+            }
+        });
+        const mcpDuplicateWrite = await adapter.callTool({
+            name: 'gateway_memory_write',
+            arguments: {
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: '记录 parity test 的写入结果。',
+                    tags: ['parity', 'mcp']
+                },
+                options: {
+                    idempotencyKey: 'idem-mcp-write-001'
+                }
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-native-mcp-write',
+            requestContext: {
+                requestId: 'req-mcp-write-parity-dup'
+            }
+        });
+
+        const nativeForbiddenWriteResponse = await fetch(`${server.baseUrl}/agent_gateway/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                target: {
+                    diary: 'ProjectAlpha'
+                },
+                memory: {
+                    text: '不应被允许的写入。',
+                    tags: ['forbidden']
+                },
+                requestContext: {
+                    requestId: 'req-native-mcp-write-forbidden',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-mcp-write-forbidden'
+                }
+            })
+        });
+        const nativeForbiddenWritePayload = await nativeForbiddenWriteResponse.json();
+        const mcpForbiddenWrite = await adapter.callTool({
+            name: 'gateway_memory_write',
+            arguments: {
+                target: {
+                    diary: 'ProjectAlpha'
+                },
+                memory: {
+                    text: '不应被允许的写入。',
+                    tags: ['forbidden']
+                }
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-native-mcp-write-forbidden',
+            requestContext: {
+                requestId: 'req-mcp-write-forbidden'
+            }
+        });
+
+        assert.equal(nativeTargetsResponse.status, 200);
+        assert.deepEqual(
+            nativeTargetsPayload.data.targets.map((target) => target.id),
+            JSON.parse(mcpTargets.contents[0].text).map((target) => target.id)
+        );
+
+        assert.equal(nativeSearchResponse.status, 200);
+        assert.equal(mcpSearch.isError, false);
+        assert.equal(nativeSearchPayload.data.items[0].sourceDiary, mcpSearch.structuredContent.result.items[0].sourceDiary);
+
+        assert.equal(nativeContextResponse.status, 200);
+        assert.equal(mcpContext.isError, false);
+        assert.equal(nativeContextPayload.data.recallBlocks.length > 0, true);
+        assert.equal(mcpContext.structuredContent.result.recallBlocks.length > 0, true);
+
+        assert.equal(nativeWriteResponse.status, 200);
+        assert.equal(nativeWritePayload.data.writeStatus, 'created');
+        assert.equal(nativeDuplicateWriteResponse.status, 200);
+        assert.equal(nativeDuplicateWritePayload.data.writeStatus, 'skipped_duplicate');
+        assert.equal(mcpWrite.isError, false);
+        assert.equal(mcpWrite.structuredContent.result.writeStatus, 'created');
+        assert.equal(mcpDuplicateWrite.isError, false);
+        assert.equal(mcpDuplicateWrite.structuredContent.result.writeStatus, 'skipped_duplicate');
+
+        assert.equal(nativeForbiddenWriteResponse.status, 403);
+        assert.equal(nativeForbiddenWritePayload.code, 'AGW_FORBIDDEN');
+        assert.equal(mcpForbiddenWrite.isError, true);
+        assert.equal(mcpForbiddenWrite.error.details.canonicalCode, 'AGW_FORBIDDEN');
     } finally {
         await server.close();
     }

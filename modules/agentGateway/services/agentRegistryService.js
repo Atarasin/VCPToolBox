@@ -130,6 +130,23 @@ function collectPromptDependencies(text, agentManager) {
     };
 }
 
+function createRenderMeta({ dependencies, renderedDependencies, unresolved, truncated, renderVariables }) {
+    const sourceRagBlockCount = Array.isArray(dependencies?.ragBlocks) ? dependencies.ragBlocks.length : 0;
+    const renderedRagBlockCount = Array.isArray(renderedDependencies?.ragBlocks) ? renderedDependencies.ragBlocks.length : 0;
+    const memoryRecallApplied = sourceRagBlockCount > 0 && renderedRagBlockCount < sourceRagBlockCount;
+
+    return {
+        memoryRecallApplied,
+        recallSources: memoryRecallApplied
+            ? ['tagmemo']
+            : [],
+        truncated: Boolean(truncated),
+        filteredByPolicy: false,
+        unresolvedCount: Array.isArray(unresolved) ? unresolved.length : 0,
+        variableKeys: Object.keys(renderVariables || {})
+    };
+}
+
 function collectUnresolvedConstructs(text) {
     return [
         ...collectPlaceholderMatches(text, /\{\{[^{}]+\}\}/g).map((match) => match[0]),
@@ -374,6 +391,8 @@ function createAgentRegistryService(deps = {}) {
             const truncatedPrompt = truncateRegistryText(normalizedRenderedText, maxLength);
             const truncated = truncatedPrompt.length !== normalizedRenderedText.length;
             const warnings = [];
+            const dependencies = collectPromptDependencies(source.rawPrompt, agentManager);
+            const renderedDependencies = collectPromptDependencies(normalizedRenderedText, agentManager);
 
             if (unresolved.length > 0) {
                 warnings.push('render output still contains unresolved prompt constructs');
@@ -387,10 +406,17 @@ function createAgentRegistryService(deps = {}) {
                 alias: source.alias,
                 sourceFile: source.sourceFile,
                 renderedPrompt: truncatedPrompt,
-                dependencies: collectPromptDependencies(source.rawPrompt, agentManager),
+                dependencies,
                 unresolved,
                 warnings,
                 truncated,
+                renderMeta: createRenderMeta({
+                    dependencies,
+                    renderedDependencies,
+                    unresolved,
+                    truncated,
+                    renderVariables
+                }),
                 meta: {
                     model,
                     rawSize: source.rawPrompt.length,
