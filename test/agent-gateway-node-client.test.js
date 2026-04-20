@@ -111,3 +111,46 @@ test('AgentGatewayClient can prepare an SSE request for the published event stre
     assert.equal(eventStreamRequest.headers.authorization, 'Bearer gw-secret');
     assert.equal(eventStreamRequest.headers['x-agent-gateway-id'], 'gw-prod');
 });
+
+test('AgentGatewayClient exposes canonical coding recall and writeback routes', async () => {
+    const requests = [];
+    const client = new AgentGatewayClient({
+        baseUrl: 'http://localhost:3000',
+        fetchImpl: async (url, options) => {
+            requests.push({ url, options });
+            return new Response(JSON.stringify({
+                success: true,
+                data: {
+                    ok: true
+                },
+                meta: {
+                    requestId: 'req-coding-route-001',
+                    durationMs: 1,
+                    gatewayVersion: 'v1'
+                }
+            }), {
+                status: 200,
+                headers: {
+                    'content-type': 'application/json'
+                }
+            });
+        }
+    });
+
+    await client.recallForCoding({
+        task: {
+            description: 'continue coding recall'
+        }
+    });
+    await client.commitMemoryForCoding({
+        task: {
+            description: 'commit coding writeback'
+        },
+        summary: 'backend-only proxy'
+    });
+
+    assert.equal(requests[0].url, 'http://localhost:3000/agent_gateway/coding/recall');
+    assert.equal(requests[0].options.method, 'POST');
+    assert.equal(requests[1].url, 'http://localhost:3000/agent_gateway/coding/memory-writeback');
+    assert.equal(requests[1].options.method, 'POST');
+});

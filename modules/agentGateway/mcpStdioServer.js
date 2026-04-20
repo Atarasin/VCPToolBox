@@ -1,9 +1,11 @@
-const path = require('node:path');
 const readline = require('node:readline');
 
 const {
-    createMcpServerHarness
-} = require('./adapters/mcpAdapter');
+    createBackendProxyMcpServerHarness
+} = require('./adapters/mcpBackendProxyAdapter');
+const {
+    GatewayBackendClient
+} = require('./GatewayBackendClient');
 
 const runtimeState = {
     initializePromise: null,
@@ -37,7 +39,19 @@ function createJsonRpcErrorResponse(id, code, message, data) {
     };
 }
 
-async function initializeDefaultAgentGatewayMcpRuntime(options = {}) {
+function resolveRequiredEnv(name, fallbackValue = '') {
+    const normalizedValue = typeof fallbackValue === 'string' ? fallbackValue.trim() : '';
+    const envValue = typeof process.env[name] === 'string' ? process.env[name].trim() : '';
+    const value = envValue || normalizedValue;
+
+    if (!value) {
+        throw new Error(`${name} is required for backend-only MCP transport.`);
+    }
+
+    return value;
+}
+
+async function initializeBackendProxyMcpRuntime(options = {}) {
     if (runtimeState.context) {
         return runtimeState.context;
     }
@@ -45,31 +59,26 @@ async function initializeDefaultAgentGatewayMcpRuntime(options = {}) {
         return runtimeState.initializePromise;
     }
 
-    const projectBasePath = options.projectBasePath || path.resolve(__dirname, '../..');
-    const pluginManager = options.pluginManager || require('../../Plugin');
-    const knowledgeBaseManager = options.knowledgeBaseManager || require('../../KnowledgeBaseManager.js');
-
     runtimeState.initializePromise = (async () => {
-        if (!knowledgeBaseManager.initialized) {
-            await knowledgeBaseManager.initialize();
-        }
-
-        if (typeof pluginManager.setProjectBasePath === 'function') {
-            pluginManager.setProjectBasePath(projectBasePath);
-        }
-        if (typeof pluginManager.setVectorDBManager === 'function') {
-            pluginManager.setVectorDBManager(knowledgeBaseManager);
-        }
-
-        if (!pluginManager.__agentGatewayMcpTransportPluginsLoaded) {
-            await pluginManager.loadPlugins();
-            pluginManager.__agentGatewayMcpTransportPluginsLoaded = true;
-        }
+        const backendClient = options.backendClient || new GatewayBackendClient({
+            baseUrl: options.backendUrl || resolveRequiredEnv('VCP_MCP_BACKEND_URL'),
+            gatewayKey: options.gatewayKey || process.env.VCP_MCP_BACKEND_KEY,
+            gatewayId: options.gatewayId || process.env.VCP_MCP_BACKEND_GATEWAY_ID,
+            bearerToken: options.bearerToken || process.env.VCP_MCP_BACKEND_BEARER_TOKEN
+        });
+        const defaultAgentId = typeof options.defaultAgentId === 'string'
+            ? options.defaultAgentId.trim()
+            : (typeof process.env.VCP_MCP_DEFAULT_AGENT_ID === 'string'
+                ? process.env.VCP_MCP_DEFAULT_AGENT_ID.trim()
+                : '');
 
         runtimeState.context = {
-            pluginManager,
-            knowledgeBaseManager,
-            harness: createMcpServerHarness(pluginManager)
+            backendClient,
+            harness: createBackendProxyMcpServerHarness({
+                backendClient,
+                defaultAgentId,
+                includeAgentRender: options.includeAgentRender !== false
+            })
         };
         return runtimeState.context;
     })().catch((error) => {
@@ -80,33 +89,17 @@ async function initializeDefaultAgentGatewayMcpRuntime(options = {}) {
     return runtimeState.initializePromise;
 }
 
-async function shutdownDefaultAgentGatewayMcpRuntime() {
-    const context = runtimeState.context;
+async function shutdownBackendProxyMcpRuntime() {
     runtimeState.context = null;
     runtimeState.initializePromise = null;
-
-    if (!context) {
-        return;
-    }
-
-    const { pluginManager, knowledgeBaseManager } = context;
-    if (pluginManager && typeof pluginManager.shutdownAllPlugins === 'function') {
-        await pluginManager.shutdownAllPlugins();
-    }
-    if (knowledgeBaseManager && knowledgeBaseManager.initialized && typeof knowledgeBaseManager.shutdown === 'function') {
-        await knowledgeBaseManager.shutdown();
-    }
-    if (pluginManager) {
-        delete pluginManager.__agentGatewayMcpTransportPluginsLoaded;
-    }
 }
 
 async function startStdioMcpServer(options = {}) {
     const stdin = options.stdin || process.stdin;
     const stdout = options.stdout || process.stdout;
     const stderr = options.stderr || process.stderr;
-    const initializeRuntime = options.initializeRuntime || initializeDefaultAgentGatewayMcpRuntime;
-    const shutdownRuntime = options.shutdownRuntime || shutdownDefaultAgentGatewayMcpRuntime;
+    const initializeRuntime = options.initializeRuntime || initializeBackendProxyMcpRuntime;
+    const shutdownRuntime = options.shutdownRuntime || shutdownBackendProxyMcpRuntime;
     const runtimeContext = await initializeRuntime(options);
     const harness = options.harness || runtimeContext?.harness;
 
@@ -205,7 +198,7 @@ async function startStdioMcpServer(options = {}) {
 
 module.exports = {
     createJsonRpcErrorResponse,
-    initializeDefaultAgentGatewayMcpRuntime,
-    shutdownDefaultAgentGatewayMcpRuntime,
+    initializeBackendProxyMcpRuntime,
+    shutdownBackendProxyMcpRuntime,
     startStdioMcpServer
 };

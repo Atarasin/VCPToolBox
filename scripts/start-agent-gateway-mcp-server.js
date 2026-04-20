@@ -29,16 +29,16 @@ installStderrConsoleBridge();
 
 const {
     startStdioMcpServer,
-    initializeDefaultAgentGatewayMcpRuntime,
-    shutdownDefaultAgentGatewayMcpRuntime
+    initializeBackendProxyMcpRuntime,
+    shutdownBackendProxyMcpRuntime
 } = require('../modules/agentGateway/mcpStdioServer');
 
 async function resolveRuntimeHooks() {
     const factoryPath = process.env.VCP_MCP_TRANSPORT_FACTORY;
     if (!factoryPath) {
         return {
-            initializeRuntime: initializeDefaultAgentGatewayMcpRuntime,
-            shutdownRuntime: shutdownDefaultAgentGatewayMcpRuntime
+            initializeRuntime: initializeBackendProxyMcpRuntime,
+            shutdownRuntime: shutdownBackendProxyMcpRuntime
         };
     }
 

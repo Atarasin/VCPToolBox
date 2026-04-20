@@ -270,7 +270,13 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     const chromeBridgeTool = result.tools.find((tool) => tool.name === 'ChromeBridge');
     const agentRenderTool = result.tools.find((tool) => tool.name === 'gateway_agent_render');
     const memorySearchTool = result.tools.find((tool) => tool.name === 'gateway_memory_search');
+    assert.equal(
+        result.tools.every((tool) => tool.inputSchema && tool.inputSchema.type === 'object'),
+        true
+    );
     assert.ok(chromeBridgeTool && chromeBridgeTool.inputSchema);
+    assert.equal(chromeBridgeTool.inputSchema.type, 'object');
+    assert.equal(Array.isArray(chromeBridgeTool.inputSchema.oneOf), true);
     assert.equal(chromeBridgeTool.annotations.pluginType, 'hybridservice');
     assert.ok(agentRenderTool && agentRenderTool.inputSchema);
     assert.equal(agentRenderTool.annotations.gatewayManaged, true);
@@ -1536,6 +1542,103 @@ test('MCP server harness exposes a representative client flow', async () => {
     } finally {
         await fs.rm(agentDir, { recursive: true, force: true });
     }
+});
+
+test('MCP server harness supports the base lifecycle handshake expected by MCP clients', async () => {
+    const pluginManager = createPluginManager();
+    const harness = createMcpServerHarness(pluginManager);
+
+    const initializeResponse = await harness.handleRequest({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: {
+                name: 'trae',
+                version: '1.0.0'
+            }
+        }
+    });
+    const pingResponse = await harness.handleRequest({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'ping'
+    });
+    const initializedNotificationResponse = await harness.handleRequest({
+        jsonrpc: '2.0',
+        method: 'notifications/initialized'
+    });
+
+    assert.equal(initializeResponse.jsonrpc, '2.0');
+    assert.equal(initializeResponse.result.protocolVersion, '2025-06-18');
+    assert.equal(initializeResponse.result.serverInfo.name, 'vcp-agent-gateway');
+    assert.equal(typeof initializeResponse.result.serverInfo.version, 'string');
+    assert.deepEqual(initializeResponse.result.capabilities.prompts, { listChanged: false });
+    assert.deepEqual(initializeResponse.result.capabilities.resources, { listChanged: false });
+    assert.deepEqual(initializeResponse.result.capabilities.tools, { listChanged: false });
+    assert.deepEqual(pingResponse.result, {});
+    assert.equal(initializedNotificationResponse.jsonrpc, '2.0');
+    assert.equal(initializedNotificationResponse.id, null);
+    assert.equal(initializedNotificationResponse.result, null);
+});
+
+test('MCP discovery tolerates agent-less list requests from standard MCP clients', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Hello {{VarUserName}} from Ariadne');
+    const pluginManager = createRenderPluginManager(agentDir);
+    const harness = createMcpServerHarness(pluginManager);
+
+    try {
+        const toolsResponse = await harness.handleRequest({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/list'
+        });
+        const resourcesResponse = await harness.handleRequest({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'resources/list'
+        });
+
+        assert.equal(toolsResponse.jsonrpc, '2.0');
+        assert.equal(toolsResponse.result.meta.agentId, 'Ariadne');
+        assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'SciCalculator'), true);
+        assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_render'), true);
+        assert.equal(resourcesResponse.jsonrpc, '2.0');
+        assert.equal(resourcesResponse.result.meta.agentId, 'Ariadne');
+        assert.equal(resourcesResponse.result.resources.some((resource) => resource.uri === 'vcp://agent-gateway/agents/Ariadne/profile'), true);
+    } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('MCP discovery falls back to global gateway-managed tools when no default agent can be inferred', async () => {
+    const pluginManager = createRenderPluginManager('/tmp/non-existent-agent-dir', {
+        agentMappings: {
+            Boreas: 'Boreas.md'
+        }
+    });
+    const harness = createMcpServerHarness(pluginManager);
+
+    const toolsResponse = await harness.handleRequest({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list'
+    });
+    const resourcesResponse = await harness.handleRequest({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'resources/list'
+    });
+
+    assert.equal(toolsResponse.jsonrpc, '2.0');
+    assert.equal(toolsResponse.result.meta.agentId, undefined);
+    assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_render'), true);
+    assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'SciCalculator'), false);
+    assert.deepEqual(resourcesResponse.result.resources, []);
+    assert.equal(resourcesResponse.result.meta.agentId, undefined);
 });
 
 test('Gateway-managed MCP tools reuse one deferred runtime envelope for render, recall, and coding writeback', async () => {
