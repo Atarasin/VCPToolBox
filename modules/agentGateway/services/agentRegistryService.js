@@ -7,6 +7,8 @@ const { createCapabilityService } = require('./capabilityService');
 
 const DEFAULT_SUMMARY_LENGTH = 160;
 const DEFAULT_RENDER_MAX_LENGTH = 12000;
+const DEFAULT_RENDER_VARIABLE_PASSES = 3;
+const DEFAULT_RENDER_QUERY_LENGTH = 1200;
 
 function normalizeRegistryString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -195,6 +197,124 @@ function createDefaultRenderContext(pluginManager, overrides = {}) {
     };
 }
 
+function extractMessageText(message) {
+    if (!message || typeof message !== 'object') {
+        return '';
+    }
+    if (typeof message.content === 'string') {
+        return message.content;
+    }
+    if (!Array.isArray(message.content)) {
+        return '';
+    }
+    return message.content
+        .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('\n')
+        .trim();
+}
+
+function findLatestMessageText(messages, role) {
+    if (!Array.isArray(messages)) {
+        return '';
+    }
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message?.role !== role) {
+            continue;
+        }
+        const text = extractMessageText(message);
+        if (text) {
+            return text;
+        }
+    }
+    return '';
+}
+
+function stripPromptControlSyntax(text) {
+    return String(text || '')
+        .replace(/\{\{[^{}]+\}\}/g, ' ')
+        .replace(/\[\[[^\]]+\]\]/g, ' ')
+        .replace(/<<[^>]+>>/g, ' ')
+        .replace(/《《[^》]+》》/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function unwrapMultilineBracePayloads(text) {
+    // Some legacy static placeholders may expand into rich multiline text while
+    // still being wrapped by outer {{...}} braces. Multiline payloads are never
+    // valid VCP placeholder identifiers, so unwrap them before unresolved checks.
+    return String(text || '').replace(/\{\{([\s\S]*?\n[\s\S]*?)\}\}/g, '$1');
+}
+
+function buildFallbackRenderQuery(text, agentId) {
+    const normalized = stripPromptControlSyntax(text);
+    if (normalized) {
+        return normalized.slice(0, DEFAULT_RENDER_QUERY_LENGTH);
+    }
+    return `Render the canonical prompt for agent ${normalizeRegistryString(agentId) || 'unknown-agent'}.`;
+}
+
+async function renderVariablePasses(text, model, renderContext) {
+    let currentText = String(text || '');
+    for (let pass = 0; pass < DEFAULT_RENDER_VARIABLE_PASSES; pass += 1) {
+        const nextText = unwrapMultilineBracePayloads(
+            await messageProcessor.replaceAgentVariables(currentText, model, 'system', renderContext)
+        );
+        if (nextText === currentText) {
+            return nextText;
+        }
+        currentText = nextText;
+    }
+    return unwrapMultilineBracePayloads(currentText);
+}
+
+function buildRagRenderMessages(renderedText, renderContext, agentId) {
+    const sourceMessages = Array.isArray(renderContext?.messages) ? renderContext.messages : [];
+    const latestUserText = findLatestMessageText(sourceMessages, 'user');
+    const latestAssistantText = findLatestMessageText(sourceMessages, 'assistant');
+    const messages = [{
+        role: 'system',
+        content: renderedText
+    }];
+
+    // When host-side prompts/get has no conversation context yet, use a synthetic
+    // query so diary recall and meta-thinking can still compile into final prompt text.
+    messages.push({
+        role: 'user',
+        content: latestUserText || buildFallbackRenderQuery(renderedText, agentId)
+    });
+
+    if (latestAssistantText) {
+        messages.push({
+            role: 'assistant',
+            content: latestAssistantText
+        });
+    }
+
+    return messages;
+}
+
+async function renderRagPromptPass(renderedText, renderContext, agentId) {
+    const ragPlugin = renderContext?.pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
+    if (!ragPlugin || typeof ragPlugin.processMessages !== 'function') {
+        return renderedText;
+    }
+    if (!/(\[\[.*日记本.*\]\]|<<.*日记本.*>>|《《.*日记本.*》》|\{\{.*日记本.*\}\}|\[\[VCP元思考.*\]\]|\[\[AIMemo=True\]\])/.test(renderedText)) {
+        return renderedText;
+    }
+
+    const processedMessages = await ragPlugin.processMessages(
+        buildRagRenderMessages(renderedText, renderContext, agentId),
+        {}
+    );
+    const systemMessage = Array.isArray(processedMessages) ? processedMessages[0] : null;
+    return typeof systemMessage?.content === 'string'
+        ? systemMessage.content
+        : renderedText;
+}
+
 function buildAgentProfile(detail) {
     return {
         agentId: detail.agentId,
@@ -258,9 +378,10 @@ function createAgentRegistryService(deps = {}) {
 
     const renderPrompt = typeof deps.renderPrompt === 'function'
         ? deps.renderPrompt
-        : async ({ rawPrompt, model, renderVariables, renderContext }) => {
+        : async ({ agentId, rawPrompt, model, renderVariables, renderContext }) => {
             const promptWithVariables = applyRenderVariables(rawPrompt, renderVariables);
-            return messageProcessor.replaceAgentVariables(promptWithVariables, model, 'system', renderContext);
+            const variableRenderedPrompt = await renderVariablePasses(promptWithVariables, model, renderContext);
+            return renderRagPromptPass(variableRenderedPrompt, renderContext, agentId);
         };
 
     async function ensureAgentState() {

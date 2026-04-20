@@ -260,6 +260,71 @@ test('AgentRegistryService marks memory recall applied only after render consume
     assert.equal(rendered.renderMeta.unresolvedCount, 0);
 });
 
+test('AgentRegistryService default render resolves nested variables and passes prompt through RAG system rendering', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(
+        agentDir,
+        'Nexus.md',
+        [
+            '天气：{{TarSysPrompt}}',
+            '[[VCP元思考::Auto::Group]]',
+            '个人记忆:[[Nexus日记本::Time::TagMemo]]'
+        ].join('\n')
+    );
+
+    const ragPlugin = {
+        async processMessages(messages) {
+            const cloned = JSON.parse(JSON.stringify(messages));
+            cloned[0].content = cloned[0].content
+                .replace('[[VCP元思考::Auto::Group]]', '元思考结果：保持结构化推理。')
+                .replace('[[Nexus日记本::Time::TagMemo]]', '记忆片段：沉淀了可复用的调试方法。');
+            return cloned;
+        }
+    };
+    const pluginManager = {
+        messagePreprocessors: new Map([['RAGDiaryPlugin', ragPlugin]]),
+        getAllPlaceholderValues() {
+            return new Map([
+                ['{{VCPWeatherInfo}}', { value: '⚠️天气预警\n晴 25C' }]
+            ]);
+        },
+        getIndividualPluginDescriptions() {
+            return new Map();
+        },
+        getResolvedPluginConfigValue() {
+            return '';
+        }
+    };
+
+    const service = createAgentRegistryService({
+        pluginManager,
+        agentManager: createAgentManager(agentDir, {
+            Nexus: 'Nexus.md'
+        }),
+        capabilityService: createCapabilityServiceStub()
+    });
+    const previousTarSysPrompt = process.env.TarSysPrompt;
+
+    try {
+        process.env.TarSysPrompt = '当前天气是{{VCPWeatherInfo}}。';
+        const rendered = await service.renderAgent('Nexus');
+
+        assert.equal(rendered.renderedPrompt.includes('天气：当前天气是⚠️天气预警\n晴 25C。'), true);
+        assert.equal(rendered.renderedPrompt.includes('元思考结果：保持结构化推理。'), true);
+        assert.equal(rendered.renderedPrompt.includes('记忆片段：沉淀了可复用的调试方法。'), true);
+        assert.equal(rendered.renderedPrompt.includes('{{⚠️天气预警'), false);
+        assert.equal(rendered.unresolved.length, 0);
+        assert.equal(rendered.renderMeta.memoryRecallApplied, true);
+        assert.deepEqual(rendered.renderMeta.recallSources, ['tagmemo']);
+    } finally {
+        if (typeof previousTarSysPrompt === 'string') {
+            process.env.TarSysPrompt = previousTarSysPrompt;
+        } else {
+            delete process.env.TarSysPrompt;
+        }
+    }
+});
+
 test('AgentRegistryService throws AGENT_NOT_FOUND for unknown aliases', async () => {
     const agentDir = await createTempAgentDir();
     const service = createAgentRegistryService({
