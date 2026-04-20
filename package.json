@@ -5,8 +5,10 @@
   "scripts": {
     "test": "node --test test/rag-params/*.test.js",
     "export:agent-gateway-openapi": "node scripts/exportAgentGatewayOpenApi.js",
+    "start:mcp-agent-gateway": "node scripts/start-agent-gateway-mcp-server.js",
     "test:rag-params": "node --test test/rag-params/*.test.js",
     "test:agent-gateway-contracts": "node --test test/agent-gateway-contract-publishing.test.js test/agent-gateway-node-client.test.js",
+    "test:agent-gateway-mcp-transport": "node --test test/agent-gateway-mcp-transport.test.js",
     "eval:mock:baseline": "node eval/mock-run-eval.js baseline",
     "eval:mock:candidate": "node eval/mock-run-eval.js candidate",
     "eval:real:baseline": "node eval/real-run-eval.js baseline",
