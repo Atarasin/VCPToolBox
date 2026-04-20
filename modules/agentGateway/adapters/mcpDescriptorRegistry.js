@@ -135,7 +135,7 @@ function createGatewayManagedPromptDescriptors({ includeAgentRender = true } = {
         createGatewayPromptDescriptor({
             name: MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER,
             title: 'Gateway Agent Render Prompt',
-            description: 'Fetch the final canonical Agent Gateway rendered prompt as a prompt-oriented MCP surface.',
+            description: 'Fetch the final canonical Agent Gateway rendered prompt as the primary MCP prompt surface for host-side agent injection.',
             arguments: [
                 createPromptArgumentDescriptor({
                     name: 'agentId',
@@ -168,46 +168,9 @@ function createGatewayManagedPromptDescriptors({ includeAgentRender = true } = {
 }
 
 function createGatewayManagedToolDescriptors({
-    includeAgentRender = true,
     diaryRagLoopOnly = false
 } = {}) {
     const tools = [];
-
-    if (includeAgentRender) {
-        tools.push(createGatewayToolDescriptor({
-            name: MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
-            title: 'Gateway Agent Render',
-            description: 'Render a canonical Agent Gateway prompt through the shared agent registry service.',
-            inputSchema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['agentId'],
-                properties: {
-                    agentId: { type: 'string' },
-                    variables: {
-                        type: 'object',
-                        additionalProperties: true
-                    },
-                    model: { type: 'string' },
-                    maxLength: {
-                        type: 'integer',
-                        minimum: 1
-                    },
-                    context: {
-                        type: 'object',
-                        additionalProperties: true
-                    },
-                    messages: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            additionalProperties: true
-                        }
-                    }
-                }
-            }
-        }));
-    }
 
     tools.push(
         createGatewayToolDescriptor({
@@ -354,26 +317,6 @@ function createGatewayManagedToolDescriptors({
                 type: 'object',
                 additionalProperties: false,
                 required: ['task'],
-                allOf: [
-                    {
-                        anyOf: [
-                            { required: ['summary'] },
-                            { required: ['constraints'] },
-                            { required: ['outcome'] },
-                            { required: ['result'] },
-                            { required: ['notes'] },
-                            { required: ['pitfalls'] },
-                            { required: ['files'] },
-                            { required: ['symbols'] }
-                        ]
-                    },
-                    {
-                        anyOf: [
-                            { required: ['diary'] },
-                            { required: ['target'] }
-                        ]
-                    }
-                ],
                 properties: {
                     task: {
                         oneOf: [
@@ -526,11 +469,6 @@ function createGatewayManagedToolDescriptors({
                 type: 'object',
                 additionalProperties: false,
                 required: ['task'],
-                anyOf: [
-                    { required: ['files'] },
-                    { required: ['symbols'] },
-                    { required: ['recentMessages'] }
-                ],
                 properties: {
                     task: {
                         oneOf: [

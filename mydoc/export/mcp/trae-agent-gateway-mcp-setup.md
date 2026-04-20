@@ -101,11 +101,10 @@ node scripts/start-agent-gateway-mcp-server.js
 - `resources/list`
 - `resources/read`
 
-第一阶段 published capability 收口为 diary RAG 闭环：
+第一阶段 published capability 收口为 diary RAG 闭环与 prompt-first agent injection：
 
 - prompt: `gateway_agent_render`
 - tools:
-  - `gateway_agent_render`
   - `gateway_memory_search`
   - `gateway_context_assemble`
   - `gateway_recall_for_coding`
@@ -119,11 +118,26 @@ node scripts/start-agent-gateway-mcp-server.js
 
 这些 MCP 能力会分别代理到 backend native route，例如：
 
+- `prompts/get(name = gateway_agent_render)` -> `POST /agent_gateway/agents/:agentId/render`
 - `gateway_recall_for_coding` -> `POST /agent_gateway/coding/recall`
 - `gateway_memory_commit_for_coding` -> `POST /agent_gateway/coding/memory-writeback`
 - `gateway_memory_search` -> `POST /agent_gateway/memory/search`
 - `gateway_context_assemble` -> `POST /agent_gateway/context/assemble`
 - `gateway_memory_write` -> `POST /agent_gateway/memory/write`
+
+## Prompt Injection
+
+Trae 注入 VCP agent 时，应直接消费：
+
+- `prompts/get(name = gateway_agent_render)` 返回的 `messages[0].content[*].text`
+
+其中：
+
+- 这段 message content 就是 inject-ready prompt body
+- `meta.hostHints.primarySurface = prompts/get` 表示该 prompt 是主注入路径
+- `meta.hostHints.fallbackToolSurfaceAvailable = false` 表示不应再通过 `tools/call(name = gateway_agent_render)` 获取注入 prompt
+
+也就是说，Trae 不应把 `gateway_agent_render` 当作一个 tool 去调用，而应把它当作一个 prompt 去获取。
 
 ## 诊断说明
 
@@ -136,7 +150,8 @@ node scripts/start-agent-gateway-mcp-server.js
 
 完成配置后，建议至少在 Trae 中验证以下 3 件事：
 
-1. 能看到 `gateway_agent_render` prompt，以及 diary RAG 闭环相关 tools。
-2. 能成功执行一次 `gateway_recall_for_coding`，确认请求走通 `Trae -> MCP -> backend -> diary RAG`。
-3. 能成功执行一次 `gateway_memory_commit_for_coding` 或 `gateway_memory_write`，确认 writeback 也走 backend canonical route。
-4. 出现启动错误时，Trae 不会收到被日志污染的协议输出。
+1. 能看到 `gateway_agent_render` prompt，且 `tools/list` 中不再把它作为 tool 暴露。
+2. 能成功执行一次 `prompts/get(name = gateway_agent_render)`，并确认返回的 message content 可直接作为 Trae 注入 prompt 使用。
+3. 能成功执行一次 `gateway_recall_for_coding`，确认请求走通 `Trae -> MCP -> backend -> diary RAG`。
+4. 能成功执行一次 `gateway_memory_commit_for_coding` 或 `gateway_memory_write`，确认 writeback 也走 backend canonical route。
+5. 出现启动错误时，Trae 不会收到被日志污染的协议输出。

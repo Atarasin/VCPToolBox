@@ -412,6 +412,14 @@ function buildPromptMeta(result, agentId) {
         warnings: result.data?.warnings,
         unresolved: result.data?.unresolved,
         truncated: result.data?.truncated,
+        hostHints: {
+            injectionMode: 'prompt_message_content',
+            primarySurface: 'prompts/get',
+            fallbackToolSurfaceAvailable: false,
+            resolvedAgentId: agentId,
+            promptName: MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER,
+            useMessageContentAsPromptBody: true
+        },
         operability: buildOperabilityMetadata(result.meta)
     };
 }
@@ -426,7 +434,6 @@ function createBackendProxyMcpAdapter({
     }
 
     const gatewayManagedTools = createGatewayManagedToolDescriptors({
-        includeAgentRender,
         diaryRagLoopOnly: true
     });
     const gatewayManagedPrompts = createGatewayManagedPromptDescriptors({
@@ -537,19 +544,7 @@ function createBackendProxyMcpAdapter({
             }
 
             let response;
-            if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
-                const agentId = ensureAgentId({
-                    ...input,
-                    agentId: args.agentId || input.agentId
-                }, `tools/call:${name}`, defaultAgentId);
-                response = await backendClient.renderAgent(agentId, buildBody({
-                    ...input,
-                    agentId
-                }, args, {
-                    requireSession: false,
-                    defaultAgentId
-                }));
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
+            if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
                 response = await backendClient.searchMemory(buildBody(input, args, { defaultAgentId }));
             } else if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
                 response = await backendClient.assembleContext(buildBody(input, args, { defaultAgentId }));
@@ -568,6 +563,16 @@ function createBackendProxyMcpAdapter({
                     requireSession: false,
                     defaultAgentId
                 }));
+            } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
+                throw createMcpError(
+                    MCP_ERROR_CODES.NOT_FOUND,
+                    'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
+                    {
+                        field: 'name',
+                        name,
+                        primarySurface: 'prompts/get'
+                    }
+                );
             } else {
                 throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
                     field: 'name',

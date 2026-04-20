@@ -26,7 +26,7 @@ async function writeAgentFile(baseDir, relativePath, content) {
 
 function createAgentManager(agentDir) {
     const mapping = new Map([
-        ['Ariadne', 'Ariadne.txt']
+        ['Ariadne', 'Ariadne.md']
     ]);
 
     return {
@@ -46,6 +46,14 @@ function createAgentManager(agentDir) {
             };
         }
     };
+}
+
+function createTransportPluginManager(agentDir) {
+    return createPluginManager({
+        agentManager: createAgentManager(agentDir),
+        agentRegistryRenderPrompt: async ({ rawPrompt, renderVariables }) =>
+            rawPrompt.replaceAll('{{VarUserName}}', renderVariables.VarUserName || '')
+    });
 }
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -188,10 +196,8 @@ function sendMessage(child, payload) {
 
 test('stdio MCP transport serves capability discovery and representative tool calls', async () => {
     const agentDir = await createTempAgentDir();
-    await writeAgentFile(agentDir, 'Ariadne.txt', 'You are Ariadne. Hello {{VarUserName}}.');
-    const pluginManager = createPluginManager({
-        agentManager: createAgentManager(agentDir)
-    });
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    const pluginManager = createTransportPluginManager(agentDir);
     const server = await createNativeServer(pluginManager);
     const { child, stdout, stderr } = spawnFixtureServer({
         VCP_MCP_BACKEND_URL: server.baseUrl,
@@ -239,6 +245,20 @@ test('stdio MCP transport serves capability discovery and representative tool ca
         sendMessage(child, {
             jsonrpc: '2.0',
             id: 6,
+            method: 'prompts/get',
+            params: {
+                name: 'gateway_agent_render',
+                arguments: {
+                    agentId: 'Ariadne',
+                    variables: {
+                        VarUserName: 'Nova'
+                    }
+                }
+            }
+        });
+        sendMessage(child, {
+            jsonrpc: '2.0',
+            id: 7,
             method: 'tools/call',
             params: {
                 name: 'gateway_recall_for_coding',
@@ -261,14 +281,15 @@ test('stdio MCP transport serves capability discovery and representative tool ca
         const prompts = await stdout.waitFor((message) => message.id === 3);
         const tools = await stdout.waitFor((message) => message.id === 4);
         const resources = await stdout.waitFor((message) => message.id === 5);
-        const toolCall = await stdout.waitFor((message) => message.id === 6);
+        const promptGet = await stdout.waitFor((message) => message.id === 6);
+        const toolCall = await stdout.waitFor((message) => message.id === 7);
 
         assert.equal(initialize.result.protocolVersion, '2025-06-18');
         assert.equal(initialize.result.serverInfo.name, 'vcp-agent-gateway');
         assert.deepEqual(ping.result, {});
         assert.deepEqual(prompts.result.prompts.map((prompt) => prompt.name), ['gateway_agent_render']);
         assert.equal(tools.result.meta.agentId, 'Ariadne');
-        assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_agent_render'), true);
+        assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_agent_render'), false);
         assert.equal(tools.result.tools.some((tool) => tool.name === 'SciCalculator'), false);
         assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_recall_for_coding'), true);
         assert.equal(resources.result.meta.agentId, 'Ariadne');
@@ -276,6 +297,11 @@ test('stdio MCP transport serves capability discovery and representative tool ca
             resources.result.resources.map((resource) => resource.uri),
             ['vcp://agent-gateway/memory-targets/Ariadne']
         );
+        assert.equal(promptGet.result.name, 'gateway_agent_render');
+        assert.equal(promptGet.result.messages[0].content[0].text.includes('Hello Nova'), true);
+        assert.equal(promptGet.result.meta.agentId, 'Ariadne');
+        assert.equal(promptGet.result.meta.hostHints.primarySurface, 'prompts/get');
+        assert.equal(promptGet.result.meta.hostHints.fallbackToolSurfaceAvailable, false);
         assert.equal(toolCall.result.isError, false);
         assert.equal(toolCall.result.structuredContent.toolName, 'gateway_recall_for_coding');
         assert.equal(toolCall.result.structuredContent.result.recallBlocks.length > 0, true);
@@ -288,12 +314,44 @@ test('stdio MCP transport serves capability discovery and representative tool ca
     }
 });
 
+test('stdio MCP transport rejects gateway_agent_render as a tool and points clients to prompts/get', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    const pluginManager = createTransportPluginManager(agentDir);
+    const server = await createNativeServer(pluginManager);
+    const { child, stdout } = spawnFixtureServer({
+        VCP_MCP_BACKEND_URL: server.baseUrl,
+        VCP_MCP_DEFAULT_AGENT_ID: 'Ariadne'
+    });
+
+    try {
+        sendMessage(child, {
+            jsonrpc: '2.0',
+            id: 11,
+            method: 'tools/call',
+            params: {
+                name: 'gateway_agent_render',
+                arguments: {
+                    agentId: 'Ariadne'
+                }
+            }
+        });
+
+        const failure = await stdout.waitFor((message) => message.id === 11);
+        assert.equal(failure.error.code, -32000);
+        assert.equal(failure.error.data.code, 'MCP_NOT_FOUND');
+        assert.equal(failure.error.data.primarySurface, 'prompts/get');
+    } finally {
+        await stopChild(child);
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
 test('stdio MCP transport returns parse errors and keeps boot logs off stdout', async () => {
     const agentDir = await createTempAgentDir();
-    await writeAgentFile(agentDir, 'Ariadne.txt', 'You are Ariadne. Hello {{VarUserName}}.');
-    const pluginManager = createPluginManager({
-        agentManager: createAgentManager(agentDir)
-    });
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    const pluginManager = createTransportPluginManager(agentDir);
     const server = await createNativeServer(pluginManager);
     const { child, stdout, stderr } = spawnFixtureServer({
         VCP_MCP_BACKEND_URL: server.baseUrl,
@@ -330,10 +388,8 @@ test('stdio MCP transport returns parse errors and keeps boot logs off stdout', 
 
 test('stdio MCP transport maps backend failures without polluting stdout', async () => {
     const agentDir = await createTempAgentDir();
-    await writeAgentFile(agentDir, 'Ariadne.txt', 'You are Ariadne. Hello {{VarUserName}}.');
-    const pluginManager = createPluginManager({
-        agentManager: createAgentManager(agentDir)
-    });
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    const pluginManager = createTransportPluginManager(agentDir);
     const bundle = getGatewayServiceBundle(pluginManager);
     bundle.codingMemoryWritebackService.commitForCoding = async ({ body }) => ({
         success: false,
@@ -388,10 +444,8 @@ test('stdio MCP transport maps backend failures without polluting stdout', async
 
 test('stdio MCP transport preserves deferred job continuation and job-event resource shaping', async () => {
     const agentDir = await createTempAgentDir();
-    await writeAgentFile(agentDir, 'Ariadne.txt', 'You are Ariadne. Hello {{VarUserName}}.');
-    const pluginManager = createPluginManager({
-        agentManager: createAgentManager(agentDir)
-    });
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    const pluginManager = createTransportPluginManager(agentDir);
     const bundle = getGatewayServiceBundle(pluginManager);
     bundle.codingRecallService.recallForCoding = async ({ body }) => ({
         success: true,
