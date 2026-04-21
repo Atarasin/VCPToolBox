@@ -170,10 +170,11 @@ Phase 3: Async / Observability / Operability Expansion
 
 ### 5.2 建议新增能力
 
-- `tool`: `gateway_agent_render`
-- `tool`: `gateway_recall_for_coding`
-- `tool`: `gateway_memory_commit_for_coding`
-- 可选：`prompt`: `coding_recall_context`
+- `prompt`: `gateway_agent_render`
+- `tool`: `gateway_agent_bootstrap`
+- `tool`: `gateway_memory_search`
+- `tool`: `gateway_context_assemble`
+- `tool`: `gateway_memory_write`
 
 ### 5.3 核心工作
 
@@ -183,9 +184,10 @@ Phase 3: Async / Observability / Operability Expansion
   - 相关文件路径
   - 相关符号名
   - 最近对话或编辑上下文
-- 在 MCP 中实现 `tool: gateway_agent_render`，作为编码工具的高层主入口
-- 将 `gateway_agent_render` 设计成高层入口，使编码工具可以直接获取“已注入环境、变量和记忆召回结果”的 prompt
-- 为 `gateway_agent_render` 设计可观察元数据
+- 在 MCP 中保留 `prompt: gateway_agent_render` 作为主入口
+- 新增 `tool: gateway_agent_bootstrap` 作为 tool-only 宿主的正式降级入口
+- 让 `gateway_memory_search` / `gateway_context_assemble` 成为显式的记忆召回工具面
+- 为 agent render / bootstrap 设计可观察元数据
   - 是否启用了记忆召回
   - 命中了哪些 recall source
   - 是否发生截断或策略过滤
@@ -196,7 +198,7 @@ Phase 3: Async / Observability / Operability Expansion
   - 已知坑点
   - 相关文件线索
   - 推荐回写标签
-- 为 coding recall 增加项目/仓库维度隔离语义，避免跨项目记忆污染
+- 为 `gateway_memory_search` / `gateway_context_assemble` 增加项目/仓库维度隔离语义，避免跨项目记忆污染
 - 设计“实现后写回”的轻量能力，用于沉淀修改摘要、设计理由、关键约束
 - 评估 prompts 与 tools 的职责边界，确保编码工具体验自然
 

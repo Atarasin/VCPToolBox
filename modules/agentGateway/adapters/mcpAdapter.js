@@ -18,6 +18,10 @@ const {
     finishGatewayManagedOperation
 } = require('./mcpGatewayOperability');
 const {
+    areDiaryNamesEquivalent,
+    resolveConfiguredAgentMemoryPolicy
+} = require('../policy/mcpAgentMemoryPolicy');
+const {
     MCP_RESOURCE_KINDS,
     MCP_GATEWAY_TOOL_NAMES,
     MCP_GATEWAY_PROMPT_NAMES,
@@ -234,11 +238,8 @@ function createGatewayManagedContent(name, data) {
     if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER && data && typeof data.renderedPrompt === 'string') {
         return createMcpTextContent(data.renderedPrompt);
     }
-    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING && data && typeof data.committedMemory === 'string') {
-        return createMcpTextContent(data.committedMemory);
-    }
-    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING && data && typeof data.codingContext === 'string') {
-        return createMcpTextContent(data.codingContext);
+    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP && data && typeof data.renderedPrompt === 'string') {
+        return createMcpTextContent(data.renderedPrompt);
     }
     return createMcpTextContent(data);
 }
@@ -371,6 +372,142 @@ function buildManagedToolContextInput(input, args) {
             : input.requestContext,
         authContext: input.authContext || args.authContext,
         maid: input.maid || args.maid || args.target?.maid || input.requestContext?.maid
+    };
+}
+
+function normalizeDiarySelectionArgs(args) {
+    const diary = normalizeMcpString(args?.diary, 256);
+    const diaries = Array.isArray(args?.diaries)
+        ? args.diaries
+            .map((value) => normalizeMcpString(value, 256))
+            .filter(Boolean)
+        : [];
+    return {
+        diary,
+        diaries: diary && !diaries.includes(diary) ? [diary, ...diaries] : diaries
+    };
+}
+
+function buildBootstrapSummary(renderResult, agentId) {
+    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || 'unknown-agent';
+    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
+    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
+    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId}`];
+
+    if (renderedPrompt) {
+        fragments.push(`length=${renderedPrompt.length}`);
+    }
+    if (renderResult?.truncated) {
+        fragments.push('truncated=true');
+    }
+    if (warnings.length > 0) {
+        fragments.push(`warnings=${warnings.length}`);
+    }
+
+    return fragments.join('; ');
+}
+
+function buildBootstrapResult(renderResult, agentId) {
+    return {
+        ...renderResult,
+        agentId: normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId,
+        summary: buildBootstrapSummary(renderResult, agentId)
+    };
+}
+
+function applyAgentDiaryPolicyToGatewayArgs(name, args, input = {}) {
+    if (name !== MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH && name !== MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
+        return {
+            args,
+            rejection: null
+        };
+    }
+
+    const contextInput = buildManagedToolContextInput(input, args);
+    const agentId = normalizeMcpString(
+        contextInput.agentId || contextInput.requestContext?.agentId || process.env.VCP_MCP_DEFAULT_AGENT_ID,
+        256
+    );
+    const maid = normalizeMcpString(
+        contextInput.maid || contextInput.requestContext?.maid || agentId,
+        256
+    );
+    const policy = resolveConfiguredAgentMemoryPolicy({ agentId, maid });
+
+    if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
+        return {
+            args,
+            rejection: null
+        };
+    }
+
+    const requestId = normalizeMcpString(input?.requestContext?.requestId, 128);
+    const { diary, diaries } = normalizeDiarySelectionArgs(args);
+    const requestedDiaries = diaries;
+    const allowedDiaries = policy.allowedDiaryNames;
+    const defaultDiaries = policy.defaultDiaryNames.length > 0
+        ? policy.defaultDiaryNames
+        : policy.allowedDiaryNames;
+
+    if (requestedDiaries.length > 0) {
+        const forbiddenDiaries = requestedDiaries.filter(
+            (requestedDiary) => !allowedDiaries.some((allowedDiary) => areDiaryNamesEquivalent(requestedDiary, allowedDiary))
+        );
+        if (forbiddenDiaries.length > 0) {
+            return {
+                args,
+                rejection: {
+                    success: false,
+                    requestId,
+                    status: 403,
+                    code: AGW_ERROR_CODES.FORBIDDEN,
+                    error: 'Requested diary target is not allowed for this agent',
+                    details: {
+                        diary: forbiddenDiaries[0],
+                        diaries: forbiddenDiaries,
+                        agentId,
+                        allowedDiaries
+                    }
+                }
+            };
+        }
+
+        return {
+            args: {
+                ...args,
+                diary: diary || requestedDiaries[0] || '',
+                diaries: requestedDiaries
+            },
+            rejection: null
+        };
+    }
+
+    if (defaultDiaries.length === 0) {
+        return {
+            args,
+            rejection: {
+                success: false,
+                requestId,
+                status: 403,
+                code: AGW_ERROR_CODES.FORBIDDEN,
+                error: 'No default diary targets are configured for this agent',
+                details: {
+                    agentId,
+                    allowedDiaries,
+                    defaultDiaries
+                }
+            }
+        };
+    }
+
+    return {
+        args: {
+            ...args,
+            diary: defaultDiaries[0],
+            diaries: defaultDiaries,
+            __defaultDiaryPolicyApplied: true
+        },
+        rejection: null
     };
 }
 
@@ -533,6 +670,7 @@ async function executeGatewayManagedOperation({
     name,
     operationName,
     args,
+    clientPayloadArgs = args,
     input,
     source,
     requiresAgentOnly = false,
@@ -565,7 +703,7 @@ async function executeGatewayManagedOperation({
         authContext,
         // Align payload governance with native routes by measuring the client-visible MCP payload,
         // not the adapter-enriched internal body.
-        payload: buildGatewayManagedClientPayload(input, args)
+        payload: buildGatewayManagedClientPayload(input, clientPayloadArgs)
     });
 
     if (operationControl && !operationControl.allowed) {
@@ -676,13 +814,12 @@ async function executeGatewayManagedPromptGet({
 async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     const source = {
         [MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER]: 'mcp-agent-render',
+        [MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP]: 'mcp-agent-bootstrap',
         [MCP_GATEWAY_TOOL_NAMES.JOB_GET]: 'mcp-job-get',
         [MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL]: 'mcp-job-cancel',
         [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
         [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING]: 'mcp-coding-memory-writeback',
-        [MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING]: 'mcp-coding-recall'
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write'
     }[name] || 'mcp';
 
     // Render remains the high-level MCP entry point and reuses the shared registry contract.
@@ -713,6 +850,45 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
                         success: true,
                         requestId: requestContext.requestId,
                         data: renderResult,
+                        audit: {
+                            runtime: requestContext.runtime,
+                            source: requestContext.source
+                        }
+                    };
+                } catch (error) {
+                    return mapAgentRegistryError(error, requestContext);
+                }
+            }
+        });
+    }
+
+    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'agents.render',
+            args,
+            input,
+            source,
+            requiresAgentOnly: true,
+            async execute({ requestContext }) {
+                try {
+                    const renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
+                        variables: args.variables,
+                        model: args.model,
+                        maxLength: args.maxLength,
+                        context: args.context,
+                        messages: args.messages
+                    });
+
+                    if (renderResult?.success && (renderResult.status === 'accepted' || renderResult.status === 'waiting_approval')) {
+                        return attachRequestId(renderResult, requestContext.requestId);
+                    }
+
+                    return {
+                        success: true,
+                        requestId: requestContext.requestId,
+                        data: buildBootstrapResult(renderResult, requestContext.agentId),
                         audit: {
                             runtime: requestContext.runtime,
                             source: requestContext.source
@@ -762,11 +938,16 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
+        const scopedArgs = applyAgentDiaryPolicyToGatewayArgs(name, args, input);
+        if (scopedArgs.rejection) {
+            return mapGatewayManagedResultToMcp(name, scopedArgs.rejection);
+        }
         return executeGatewayManagedOperation({
             bundle,
             name,
             operationName: 'memory.search',
-            args,
+            args: scopedArgs.args,
+            clientPayloadArgs: args,
             input,
             source,
             async execute({ body }) {
@@ -780,11 +961,16 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     }
 
     if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
+        const scopedArgs = applyAgentDiaryPolicyToGatewayArgs(name, args, input);
+        if (scopedArgs.rejection) {
+            return mapGatewayManagedResultToMcp(name, scopedArgs.rejection);
+        }
         return executeGatewayManagedOperation({
             bundle,
             name,
             operationName: 'context.assemble',
-            args,
+            args: scopedArgs.args,
+            clientPayloadArgs: args,
             input,
             source,
             async execute({ body }) {
@@ -823,43 +1009,6 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
         });
     }
 
-    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'coding.memory_writeback',
-            args,
-            input,
-            source,
-            async execute({ body }) {
-                return bundle.codingMemoryWritebackService.commitForCoding({
-                    body,
-                    startedAt: Date.now(),
-                    clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
-                    defaultSource: source
-                });
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'coding.recall',
-            args,
-            input,
-            source,
-            async execute({ body }) {
-                return bundle.codingRecallService.recallForCoding({
-                    body,
-                    startedAt: Date.now(),
-                    defaultSource: source
-                });
-            }
-        });
-    }
-
     throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
         field: 'name',
         name
@@ -877,8 +1026,6 @@ function createMcpAdapter(pluginManager, options = {}) {
         agentRegistryService,
         contextRuntimeService,
         memoryRuntimeService,
-        codingMemoryWritebackService,
-        codingRecallService,
         toolRuntimeService,
         jobRuntimeService
     } = bundle;
@@ -974,8 +1121,6 @@ function createMcpAdapter(pluginManager, options = {}) {
                     agentRegistryService,
                     contextRuntimeService,
                     memoryRuntimeService,
-                    codingMemoryWritebackService,
-                    codingRecallService,
                     jobRuntimeService
                 }, name, args, input);
             }

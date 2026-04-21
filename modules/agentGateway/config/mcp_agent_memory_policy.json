@@ -1,0 +1,99 @@
+{
+  "agents": {
+    "Ariadne": {
+      "allowedDiaries": [
+        "阿里阿德涅日记本",
+        "阿里阿德涅的知识日记本"
+      ],
+      "defaultDiaries": [
+        "阿里阿德涅日记本",
+        "阿里阿德涅的知识日记本"
+      ]
+    },
+    "Aemeath": {
+      "allowedDiaries": [
+        "爱弥斯",
+        "爱弥斯的日常日记本",
+        "爱弥斯的知识日记本"
+      ],
+      "defaultDiaries": [
+        "爱弥斯",
+        "爱弥斯的日常日记本"
+      ]
+    },
+    "Aurora": {
+      "allowedDiaries": [
+        "欧若拉的访谈手记日记本",
+        "欧若拉的网文类型库日记本"
+      ],
+      "defaultDiaries": [
+        "欧若拉的访谈手记日记本",
+        "欧若拉的网文类型库日记本"
+      ]
+    },
+    "Atlas": {
+      "allowedDiaries": [
+        "阿特拉斯的创世手记日记本",
+        "阿特拉斯的法则图谱日记本"
+      ],
+      "defaultDiaries": [
+        "阿特拉斯的创世手记日记本",
+        "阿特拉斯的法则图谱日记本"
+      ]
+    },
+    "Prometheus": {
+      "allowedDiaries": [
+        "普罗米修斯的雕刻手记日记本",
+        "普罗米修斯的人性图谱日记本"
+      ],
+      "defaultDiaries": [
+        "普罗米修斯的雕刻手记日记本",
+        "普罗米修斯的人性图谱日记本"
+      ]
+    },
+    "Daedalus": {
+      "allowedDiaries": [
+        "代达罗斯的命运手记日记本",
+        "代达罗斯的叙事图谱日记本"
+      ],
+      "defaultDiaries": [
+        "代达罗斯的命运手记日记本",
+        "代达罗斯的叙事图谱日记本"
+      ]
+    },
+    "Clotho": {
+      "allowedDiaries": [
+        "克洛托的纺纱手记日记本",
+        "克洛托的冲突图谱日记本"
+      ],
+      "defaultDiaries": [
+        "克洛托的纺纱手记日记本",
+        "克洛托的冲突图谱日记本"
+      ]
+    },
+    "Osiris": {
+      "allowedDiaries": [
+        "奥西里斯的悖论库日记本",
+        "奥西里斯日记本"
+      ],
+      "defaultDiaries": [
+        "奥西里斯的悖论库日记本",
+        "奥西里斯日记本"
+      ]
+    },
+    "Nexus": {
+      "allowedDiaries": [
+        "Nexus日记本",
+        "Nexus架构设计日记本",
+        "Nexus工程方法论日记本",
+        "Nexus避坑指南日记本"
+      ],
+      "defaultDiaries": [
+        "Nexus日记本",
+        "Nexus架构设计日记本",
+        "Nexus工程方法论日记本",
+        "Nexus避坑指南日记本"
+      ]
+    }
+  }
+}

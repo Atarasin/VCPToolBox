@@ -14,9 +14,34 @@ const {
     createMcpServerHarness
 } = require('../modules/agentGateway/adapters/mcpAdapter');
 const {
-    createKnowledgeBaseManager,
     createPluginManager
 } = require('./helpers/agent-gateway-test-helpers');
+
+let previousMemoryPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+
+test.before(async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agw-mcp-policy-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+
+    await fs.writeFile(policyPath, JSON.stringify({
+        agents: {
+            Ariadne: {
+                allowedDiaries: ['Nova', 'SharedMemory'],
+                defaultDiaries: ['Nova']
+            }
+        }
+    }, null, 2), 'utf8');
+
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+});
+
+test.after(() => {
+    if (previousMemoryPolicyPath === undefined) {
+        delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        return;
+    }
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousMemoryPolicyPath;
+});
 
 async function createNativeServer(pluginManager) {
     const app = express();
@@ -179,21 +204,6 @@ function createDelayedRenderPluginManager(agentDir, delayMs = 25, overrides = {}
     });
 }
 
-function createCodingRecallPluginManager(overrides = {}) {
-    return createPluginManager({
-        openClawBridgeConfig: {
-            rag: {
-                agentDiaryMap: {
-                    Ariadne: ['Nova']
-                },
-                allowCrossRoleAccess: false
-            },
-            ...(overrides.openClawBridgeConfig || {})
-        },
-        ...overrides
-    });
-}
-
 function createDeferredGatewayResult(jobRuntimeService, {
     status,
     operation,
@@ -256,19 +266,17 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
         result.tools.map((tool) => tool.name),
         [
             'ChromeBridge',
-            'gateway_agent_render',
+            'gateway_agent_bootstrap',
             'gateway_context_assemble',
             'gateway_job_cancel',
             'gateway_job_get',
-            'gateway_memory_commit_for_coding',
             'gateway_memory_search',
             'gateway_memory_write',
-            'gateway_recall_for_coding',
             'SciCalculator'
         ]
     );
     const chromeBridgeTool = result.tools.find((tool) => tool.name === 'ChromeBridge');
-    const agentRenderTool = result.tools.find((tool) => tool.name === 'gateway_agent_render');
+    const bootstrapTool = result.tools.find((tool) => tool.name === 'gateway_agent_bootstrap');
     const memorySearchTool = result.tools.find((tool) => tool.name === 'gateway_memory_search');
     assert.equal(
         result.tools.every((tool) => tool.inputSchema && tool.inputSchema.type === 'object'),
@@ -278,74 +286,46 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(chromeBridgeTool.inputSchema.type, 'object');
     assert.equal(Array.isArray(chromeBridgeTool.inputSchema.oneOf), true);
     assert.equal(chromeBridgeTool.annotations.pluginType, 'hybridservice');
-    assert.ok(agentRenderTool && agentRenderTool.inputSchema);
-    assert.equal(agentRenderTool.annotations.gatewayManaged, true);
+    assert.ok(bootstrapTool && bootstrapTool.inputSchema);
+    assert.equal(bootstrapTool.annotations.gatewayManaged, true);
     assert.ok(memorySearchTool && memorySearchTool.inputSchema);
     assert.equal(memorySearchTool.annotations.gatewayManaged, true);
 });
 
-test('MCP adapter executes coding recall through shared Gateway Core behavior', async () => {
-    const pluginManager = createCodingRecallPluginManager({
-        vectorDBManager: createKnowledgeBaseManager({
-            metadataByPath: {
-                'Nova/2026-03-20.md': {
-                    sourceDiary: 'Nova',
-                    sourcePath: 'Nova/2026-03-20.md',
-                    updatedAt: Date.parse('2026-03-20T10:20:00.000Z'),
-                    tags: ['repo:vcp-toolbox', 'gateway', 'coding']
-                },
-                'Nova/2026-03-21.md': {
-                    sourceDiary: 'Nova',
-                    sourcePath: 'Nova/2026-03-21.md',
-                    updatedAt: Date.parse('2026-03-21T10:20:00.000Z'),
-                    tags: ['repo:other-project', 'deploy']
-                }
-            },
-            searchResults: {
-                Nova: [
-                    {
-                        text: 'VCPToolBox 最近完成了 gateway coding recall contract 收口。',
-                        score: 0.951,
-                        fullPath: 'Nova/2026-03-20.md'
-                    },
-                    {
-                        text: 'OtherProject 发布回滚记录，需要补环境变量。',
-                        score: 0.882,
-                        fullPath: 'Nova/2026-03-21.md'
-                    }
-                ]
-            }
-        })
-    });
+test('MCP adapter executes agent bootstrap through shared render behavior and returns a concise summary', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(
+        agentDir,
+        'Ariadne.md',
+        'Hello {{VarUserName}} from Ariadne\n[[阿里阿德涅日记本::Time::TagMemo]]'
+    );
+    const pluginManager = createRenderPluginManager(agentDir);
     const adapter = createMcpAdapter(pluginManager);
 
-    const result = await adapter.callTool({
-        name: 'gateway_recall_for_coding',
-        arguments: {
-            task: {
-                description: '继续实现 gateway coding recall'
+    try {
+        const result = await adapter.callTool({
+            name: 'gateway_agent_bootstrap',
+            arguments: {
+                agentId: 'Ariadne',
+                variables: {
+                    VarUserName: 'Nova'
+                }
             },
-            repository: {
-                repositoryId: 'vcp-toolbox',
-                tags: ['repo:vcp-toolbox']
-            },
-            files: ['modules/agentGateway/adapters/mcpAdapter.js'],
-            symbols: ['createMcpAdapter']
-        },
-        agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-recall',
-        requestContext: {
-            requestId: 'req-mcp-coding-recall'
-        }
-    });
+            requestContext: {
+                requestId: 'req-mcp-agent-bootstrap'
+            }
+        });
 
-    assert.equal(result.isError, false);
-    assert.equal(result.structuredContent.requestId, 'req-mcp-coding-recall');
-    assert.equal(result.structuredContent.toolName, 'gateway_recall_for_coding');
-    assert.equal(result.structuredContent.result.scope.mode, 'repository_terms');
-    assert.equal(result.structuredContent.result.scope.matchCount, 1);
-    assert.equal(result.structuredContent.result.recallBlocks.length, 1);
-    assert.equal(result.content[0].text, result.structuredContent.result.codingContext);
+        assert.equal(result.isError, false);
+        assert.equal(result.structuredContent.requestId, 'req-mcp-agent-bootstrap');
+        assert.equal(result.structuredContent.toolName, 'gateway_agent_bootstrap');
+        assert.equal(result.structuredContent.result.renderedPrompt.includes('Hello Nova from Ariadne'), true);
+        assert.equal(result.structuredContent.result.renderedPrompt.includes('记忆片段'), true);
+        assert.equal(result.structuredContent.result.summary.includes('Bootstrap prompt ready for Ariadne'), true);
+        assert.equal(result.content[0].text, result.structuredContent.result.renderedPrompt);
+    } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
 });
 
 test('Gateway-managed MCP tools expose additive operability trace metadata without replacing business payloads', async () => {
@@ -397,148 +377,78 @@ test('Gateway-managed MCP tools expose additive operability trace metadata witho
     assert.equal(result.structuredContent.result.writeStatus, 'created');
 });
 
-test('MCP adapter executes coding memory writeback through shared Gateway Core behavior', async () => {
-    const pluginManager = createMemoryPluginManager({
-        openClawBridgeConfig: {
-            policy: {
-                agentPolicyMap: {
-                    Ariadne: {
-                        diaryScopes: ['Nova']
-                    }
-                }
-            }
-        }
-    });
+test('MCP adapter no longer publishes coding recall and coding memory writeback as callable tools', async () => {
+    const pluginManager = createMemoryPluginManager();
     const adapter = createMcpAdapter(pluginManager);
 
-    const created = await adapter.callTool({
-        name: 'gateway_memory_commit_for_coding',
+    const recall = await adapter.callTool({
+        name: 'gateway_recall_for_coding',
         arguments: {
             task: {
-                description: '实现 coding memory writeback'
-            },
-            summary: '新增 shared service，并把 MCP 作为 thin adapter。',
-            repository: {
-                repositoryId: 'vcp-toolbox',
-                workspaceRoot: '/home/zh/projects/VCP/VCPToolBox',
-                tags: ['repo:vcp-toolbox']
-            },
-            files: ['modules/agentGateway/adapters/mcpAdapter.js'],
-            symbols: ['createMcpAdapter'],
-            recommendedTags: ['gateway', 'mcp'],
-            diary: 'Nova',
-            options: {
-                idempotencyKey: 'idem-mcp-coding-writeback-001'
+                description: '继续实现 gateway coding recall'
             }
         },
         agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-writeback',
+        sessionId: 'sess-mcp-coding-recall-removed',
         requestContext: {
-            requestId: 'req-mcp-coding-writeback'
+            requestId: 'req-mcp-coding-recall-removed'
         }
     });
-    const duplicate = await adapter.callTool({
+    const writeback = await adapter.callTool({
         name: 'gateway_memory_commit_for_coding',
         arguments: {
             task: {
-                description: '实现 coding memory writeback'
-            },
-            summary: '新增 shared service，并把 MCP 作为 thin adapter。',
-            repository: {
-                repositoryId: 'vcp-toolbox',
-                workspaceRoot: '/home/zh/projects/VCP/VCPToolBox',
-                tags: ['repo:vcp-toolbox']
-            },
-            files: ['modules/agentGateway/adapters/mcpAdapter.js'],
-            symbols: ['createMcpAdapter'],
-            recommendedTags: ['gateway', 'mcp'],
-            diary: 'Nova',
-            options: {
-                idempotencyKey: 'idem-mcp-coding-writeback-001'
+                description: '提交 coding memory writeback'
             }
         },
         agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-writeback',
+        sessionId: 'sess-mcp-coding-writeback-removed',
         requestContext: {
-            requestId: 'req-mcp-coding-writeback-duplicate'
+            requestId: 'req-mcp-coding-writeback-removed'
         }
     });
 
-    assert.equal(created.isError, false);
-    assert.equal(created.structuredContent.requestId, 'req-mcp-coding-writeback');
-    assert.equal(created.structuredContent.toolName, 'gateway_memory_commit_for_coding');
-    assert.equal(created.structuredContent.result.writeStatus, 'created');
-    assert.equal(created.structuredContent.result.target.diary, 'Nova');
-    assert.equal(created.structuredContent.result.target.scopeMode, 'repository_targeted');
-    assert.equal(created.content[0].text, created.structuredContent.result.committedMemory);
-    assert.equal(duplicate.isError, false);
-    assert.equal(duplicate.structuredContent.result.writeStatus, 'skipped_duplicate');
-    assert.equal(duplicate.structuredContent.result.deduplicated, true);
+    assert.equal(recall.isError, true);
+    assert.equal(recall.error.code, 'MCP_NOT_FOUND');
+    assert.equal(writeback.isError, true);
+    assert.equal(writeback.error.code, 'MCP_NOT_FOUND');
 });
 
-test('MCP coding memory writeback accepts implementation summary aliases published by the tool schema', async () => {
-    const pluginManager = createMemoryPluginManager({
-        openClawBridgeConfig: {
-            policy: {
-                agentPolicyMap: {
-                    Ariadne: {
-                        diaryScopes: ['Nova']
-                    }
-                }
-            }
-        }
-    });
+test('MCP bootstrap tool exposes additive summary metadata without replacing the business payload', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Hello {{VarUserName}} from Ariadne');
+    const pluginManager = createRenderPluginManager(agentDir);
     const adapter = createMcpAdapter(pluginManager);
 
-    const result = await adapter.callTool({
-        name: 'gateway_memory_commit_for_coding',
-        arguments: {
-            task: {
-                description: '验证 implementation alias'
+    try {
+        const result = await adapter.callTool({
+            name: 'gateway_agent_bootstrap',
+            arguments: {
+                agentId: 'Ariadne',
+                variables: {
+                    VarUserName: 'Nova'
+                }
             },
-            implementation: '通过 implementation 字段提交 coding writeback 总结。',
-            diary: 'Nova'
-        },
-        agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-writeback-implementation-alias',
-        requestContext: {
-            requestId: 'req-mcp-coding-writeback-implementation-alias'
-        }
-    });
+            requestContext: {
+                requestId: 'req-mcp-bootstrap-summary'
+            }
+        });
 
-    assert.equal(result.isError, false);
-    assert.equal(result.structuredContent.result.writeStatus, 'created');
-    assert.equal(
-        result.structuredContent.result.memoryText.includes('Implementation summary: 通过 implementation 字段提交 coding writeback 总结。'),
-        true
-    );
+        assert.equal(result.isError, false);
+        assert.equal(result.structuredContent.result.summary.includes('Bootstrap prompt ready for Ariadne'), true);
+        assert.equal(result.structuredContent.result.renderedPrompt.includes('Hello Nova from Ariadne'), true);
+        assert.match(result.structuredContent.operability.traceId, /^agwop_/);
+        assert.equal(result.structuredContent.operability.operationName, 'agents.render');
+    } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
 });
 
-test('MCP coding recall keeps validation failures machine-readable and explicit scope behavior visible', async () => {
-    const pluginManager = createCodingRecallPluginManager({
-        vectorDBManager: createKnowledgeBaseManager({
-            metadataByPath: {
-                'Nova/2026-03-20.md': {
-                    sourceDiary: 'Nova',
-                    sourcePath: 'Nova/2026-03-20.md',
-                    updatedAt: Date.parse('2026-03-20T10:20:00.000Z'),
-                    tags: ['repo:vcp-toolbox', 'gateway']
-                }
-            },
-            searchResults: {
-                Nova: [
-                    {
-                        text: 'VCPToolBox 最近完成了 gateway coding recall contract 收口。',
-                        score: 0.951,
-                        fullPath: 'Nova/2026-03-20.md'
-                    }
-                ]
-            }
-        })
-    });
+test('Removed coding MCP tools return machine-readable not-found failures', async () => {
+    const pluginManager = createMemoryPluginManager();
     const adapter = createMcpAdapter(pluginManager);
 
-    const invalid = await adapter.callTool({
+    const recall = await adapter.callTool({
         name: 'gateway_recall_for_coding',
         arguments: {},
         agentId: 'Ariadne',
@@ -547,104 +457,54 @@ test('MCP coding recall keeps validation failures machine-readable and explicit 
             requestId: 'req-mcp-coding-recall-invalid'
         }
     });
-    const taskOnlyInvalid = await adapter.callTool({
-        name: 'gateway_recall_for_coding',
-        arguments: {
-            task: {
-                description: '只有 task，没有额外 coding signal'
-            }
-        },
-        agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-recall-task-only',
-        requestContext: {
-            requestId: 'req-mcp-coding-recall-task-only'
-        }
-    });
-    const scopedNoMatch = await adapter.callTool({
-        name: 'gateway_recall_for_coding',
-        arguments: {
-            task: '排查另一个仓库的问题',
-            repository: {
-                repositoryId: 'missing-repo',
-                tags: ['repo:missing-repo']
-            },
-            recentMessages: [
-                {
-                    role: 'user',
-                    content: '帮我回忆这个仓库之前踩过的坑'
-                }
-            ]
-        },
-        agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-recall-no-match',
-        requestContext: {
-            requestId: 'req-mcp-coding-recall-no-match'
-        }
-    });
-
-    assert.equal(invalid.isError, true);
-    assert.equal(invalid.error.code, 'MCP_INVALID_ARGUMENTS');
-    assert.equal(invalid.error.details.canonicalCode, 'AGW_VALIDATION_ERROR');
-    assert.equal(taskOnlyInvalid.isError, true);
-    assert.equal(taskOnlyInvalid.error.code, 'MCP_INVALID_ARGUMENTS');
-    assert.equal(taskOnlyInvalid.error.details.canonicalCode, 'AGW_VALIDATION_ERROR');
-    assert.equal(taskOnlyInvalid.error.details.field, 'task+(files|symbols|recentMessages)');
-    assert.equal(scopedNoMatch.isError, false);
-    assert.equal(scopedNoMatch.structuredContent.result.scope.mode, 'repository_terms_no_match');
-    assert.equal(scopedNoMatch.structuredContent.result.recallBlocks.length, 0);
-});
-
-test('MCP coding memory writeback keeps validation and policy failures machine-readable', async () => {
-    const pluginManager = createMemoryPluginManager({
-        openClawBridgeConfig: {
-            policy: {
-                agentPolicyMap: {
-                    Ariadne: {
-                        diaryScopes: ['Nova']
-                    }
-                }
-            }
-        }
-    });
-    const adapter = createMcpAdapter(pluginManager);
-
-    const invalid = await adapter.callTool({
+    const writeback = await adapter.callTool({
         name: 'gateway_memory_commit_for_coding',
-        arguments: {
-            task: {
-                description: '只有 task，没有其他 writeback signal'
-            },
-            diary: 'Nova'
-        },
+        arguments: {},
         agentId: 'Ariadne',
         sessionId: 'sess-mcp-coding-writeback-invalid',
         requestContext: {
             requestId: 'req-mcp-coding-writeback-invalid'
         }
     });
-    const forbidden = await adapter.callTool({
-        name: 'gateway_memory_commit_for_coding',
+
+    assert.equal(recall.isError, true);
+    assert.equal(recall.error.code, 'MCP_NOT_FOUND');
+    assert.equal(writeback.isError, true);
+    assert.equal(writeback.error.code, 'MCP_NOT_FOUND');
+});
+
+test('MCP memory search and context assembly enforce agent diary policy and use default diaries when omitted', async () => {
+    const pluginManager = createMemoryPluginManager();
+    const adapter = createMcpAdapter(pluginManager);
+
+    const defaultSearch = await adapter.callTool({
+        name: 'gateway_memory_search',
         arguments: {
-            task: {
-                description: '尝试写到不允许的 diary'
-            },
-            summary: '这次应该被 policy 拒绝。',
+            query: '查询最近讨论'
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-memory-default',
+        requestContext: {
+            requestId: 'req-mcp-memory-default'
+        }
+    });
+    const forbiddenSearch = await adapter.callTool({
+        name: 'gateway_memory_search',
+        arguments: {
+            query: '查询不允许的 diary',
             diary: 'ProjectAlpha'
         },
         agentId: 'Ariadne',
-        sessionId: 'sess-mcp-coding-writeback-forbidden',
+        sessionId: 'sess-mcp-memory-forbidden',
         requestContext: {
-            requestId: 'req-mcp-coding-writeback-forbidden'
+            requestId: 'req-mcp-memory-forbidden'
         }
     });
 
-    assert.equal(invalid.isError, true);
-    assert.equal(invalid.error.code, 'MCP_INVALID_ARGUMENTS');
-    assert.equal(invalid.error.details.canonicalCode, 'AGW_VALIDATION_ERROR');
-    assert.equal(invalid.error.details.field, 'task+(summary|implementation|outcome|result|notes|constraints|pitfalls|files|symbols)');
-    assert.equal(forbidden.isError, true);
-    assert.equal(forbidden.error.code, 'MCP_FORBIDDEN');
-    assert.equal(forbidden.error.details.canonicalCode, 'AGW_FORBIDDEN');
+    assert.equal(defaultSearch.isError, false);
+    assert.deepEqual(defaultSearch.structuredContent.result.diagnostics.targetDiaries.includes('Nova'), true);
+    assert.equal(forbiddenSearch.isError, true);
+    assert.equal(forbiddenSearch.error.code, 'MCP_FORBIDDEN');
 });
 
 test('Gateway-managed MCP tools preserve rate-limit and payload operability rejections as machine-readable metadata', async () => {
@@ -1135,11 +995,11 @@ test('MCP adapter exposes canonical job tools and job-scoped runtime event resou
         gatewayId: 'gw-mcp-runtime'
     };
     const job = bundle.jobRuntimeService.createAcceptedJob({
-        operation: 'coding.recall',
+        operation: 'agents.render',
         authContext,
         target: {
             type: 'tool',
-            id: 'gateway_recall_for_coding'
+            id: 'gateway_agent_bootstrap'
         },
         metadata: {
             phase: 'queued'
@@ -1228,11 +1088,11 @@ test('MCP job runtime preserves machine-readable failure identity and visibility
         gatewayId: 'gw-owner'
     };
     const completedJob = bundle.jobRuntimeService.createAcceptedJob({
-        operation: 'coding.memory_writeback',
+        operation: 'memory.write',
         authContext: ownerAuthContext,
         target: {
             type: 'tool',
-            id: 'gateway_memory_commit_for_coding'
+            id: 'gateway_memory_write'
         }
     });
     bundle.jobRuntimeService.completeJob(completedJob.jobId, {
@@ -1313,11 +1173,11 @@ test('MCP job runtime accepts canonical visibility identity from auth context wi
         gatewayId: 'gw-auth-only'
     };
     const job = bundle.jobRuntimeService.createAcceptedJob({
-        operation: 'coding.recall',
+        operation: 'agents.render',
         authContext,
         target: {
             type: 'tool',
-            id: 'gateway_recall_for_coding'
+            id: 'gateway_agent_bootstrap'
         }
     });
 
@@ -1605,7 +1465,8 @@ test('MCP discovery tolerates agent-less list requests from standard MCP clients
         assert.equal(toolsResponse.jsonrpc, '2.0');
         assert.equal(toolsResponse.result.meta.agentId, 'Ariadne');
         assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'SciCalculator'), true);
-        assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_render'), true);
+        assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_render'), false);
+        assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_bootstrap'), true);
         assert.equal(resourcesResponse.jsonrpc, '2.0');
         assert.equal(resourcesResponse.result.meta.agentId, 'Ariadne');
         assert.equal(resourcesResponse.result.resources.some((resource) => resource.uri === 'vcp://agent-gateway/agents/Ariadne/profile'), true);
@@ -1635,13 +1496,14 @@ test('MCP discovery falls back to global gateway-managed tools when no default a
 
     assert.equal(toolsResponse.jsonrpc, '2.0');
     assert.equal(toolsResponse.result.meta.agentId, undefined);
-    assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_render'), true);
+    assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_render'), false);
+    assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'gateway_agent_bootstrap'), true);
     assert.equal(toolsResponse.result.tools.some((tool) => tool.name === 'SciCalculator'), false);
     assert.deepEqual(resourcesResponse.result.resources, []);
     assert.equal(resourcesResponse.result.meta.agentId, undefined);
 });
 
-test('Gateway-managed MCP tools reuse one deferred runtime envelope for render, recall, and coding writeback', async () => {
+test('Gateway-managed MCP tools reuse one deferred runtime envelope for render and bootstrap', async () => {
     const pluginManager = createPluginManager();
     const baseBundle = getGatewayServiceBundle(pluginManager);
     const deferredBundle = {
@@ -1669,40 +1531,6 @@ test('Gateway-managed MCP tools reuse one deferred runtime envelope for render, 
                     }
                 });
             }
-        },
-        codingRecallService: {
-            ...baseBundle.codingRecallService,
-            async recallForCoding({ body }) {
-                return createDeferredGatewayResult(baseBundle.jobRuntimeService, {
-                    status: 'waiting_approval',
-                    operation: 'coding.recall',
-                    authContext: body.authContext,
-                    target: {
-                        type: 'tool',
-                        id: 'gateway_recall_for_coding'
-                    },
-                    metadata: {
-                        task: body.task?.description || ''
-                    }
-                });
-            }
-        },
-        codingMemoryWritebackService: {
-            ...baseBundle.codingMemoryWritebackService,
-            async commitForCoding({ body }) {
-                return createDeferredGatewayResult(baseBundle.jobRuntimeService, {
-                    status: 'accepted',
-                    operation: 'coding.memory_writeback',
-                    authContext: body.authContext,
-                    target: {
-                        type: 'tool',
-                        id: 'gateway_memory_commit_for_coding'
-                    },
-                    metadata: {
-                        diary: body.diary || body.target?.diary || ''
-                    }
-                });
-            }
         }
     };
     const adapter = createMcpAdapter(pluginManager, {
@@ -1718,33 +1546,15 @@ test('Gateway-managed MCP tools reuse one deferred runtime envelope for render, 
             requestId: 'req-mcp-deferred-render'
         }
     });
-    const recall = await adapter.callTool({
-        name: 'gateway_recall_for_coding',
+    const bootstrap = await adapter.callTool({
+        name: 'gateway_agent_bootstrap',
         arguments: {
-            task: {
-                description: '继续实现 deferred recall'
-            },
-            files: ['modules/agentGateway/adapters/mcpAdapter.js']
+            agentId: 'Ariadne'
         },
         agentId: 'Ariadne',
-        sessionId: 'sess-mcp-deferred-recall',
+        sessionId: 'sess-mcp-deferred-bootstrap',
         requestContext: {
-            requestId: 'req-mcp-deferred-recall'
-        }
-    });
-    const writeback = await adapter.callTool({
-        name: 'gateway_memory_commit_for_coding',
-        arguments: {
-            task: {
-                description: '提交 deferred writeback'
-            },
-            summary: '等待后台写入完成',
-            diary: 'Nova'
-        },
-        agentId: 'Ariadne',
-        sessionId: 'sess-mcp-deferred-writeback',
-        requestContext: {
-            requestId: 'req-mcp-deferred-writeback'
+            requestId: 'req-mcp-deferred-bootstrap'
         }
     });
 
@@ -1754,17 +1564,11 @@ test('Gateway-managed MCP tools reuse one deferred runtime envelope for render, 
     assert.equal(render.structuredContent.runtime.eventResourceUri.includes('/events'), true);
     assert.equal(render.structuredContent.operability.operationName, 'agents.render');
 
-    assert.equal(recall.deferred, true);
-    assert.equal(recall.status, 'waiting_approval');
-    assert.equal(recall.structuredContent.job.status, 'waiting_approval');
-    assert.equal(recall.structuredContent.runtime.eventResourceUri.includes(encodeURIComponent(recall.structuredContent.job.jobId)), true);
-    assert.equal(recall.structuredContent.operability.operationName, 'coding.recall');
-
-    assert.equal(writeback.deferred, true);
-    assert.equal(writeback.status, 'accepted');
-    assert.equal(writeback.structuredContent.job.status, 'accepted');
-    assert.equal(writeback.structuredContent.runtime.eventResourceUri.includes(encodeURIComponent(writeback.structuredContent.job.jobId)), true);
-    assert.equal(writeback.structuredContent.operability.operationName, 'coding.memory_writeback');
+    assert.equal(bootstrap.deferred, true);
+    assert.equal(bootstrap.status, 'accepted');
+    assert.equal(bootstrap.structuredContent.job.status, 'accepted');
+    assert.equal(bootstrap.structuredContent.runtime.eventResourceUri.includes(encodeURIComponent(bootstrap.structuredContent.job.jobId)), true);
+    assert.equal(bootstrap.structuredContent.operability.operationName, 'agents.render');
 });
 
 test('MCP prompt publication and agent preview resources preserve machine-readable missing-agent failures', async () => {

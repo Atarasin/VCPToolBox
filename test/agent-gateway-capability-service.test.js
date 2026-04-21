@@ -4,6 +4,7 @@ const test = require('node:test');
 const { createCapabilityService } = require('../modules/agentGateway/services/capabilityService');
 const { createSchemaRegistry } = require('../modules/agentGateway/infra/schemaRegistry');
 const {
+    createKnowledgeBaseManager,
     createPluginManager
 } = require('./helpers/agent-gateway-test-helpers');
 
@@ -73,6 +74,31 @@ test('CapabilityService derives memory targets from maid aliases when explicit p
     });
 
     assert.deepEqual(targets.map((target) => target.id), ['Nova']);
+});
+
+test('CapabilityService exposes policy-allowed memory targets even before they exist on disk', async () => {
+    const pluginManager = createPluginManager({
+        vectorDBManager: createKnowledgeBaseManager({
+            diaries: []
+        })
+    });
+    const service = createCapabilityService({
+        pluginManager,
+        agentPolicyResolver: {
+            async resolvePolicy() {
+                return {
+                    allowedDiaryNames: ['Nexus', 'Nexus架构设计']
+                };
+            }
+        }
+    });
+
+    const targets = await service.getMemoryTargets({
+        agentId: 'Nexus'
+    });
+
+    assert.deepEqual(targets.map((target) => target.id), ['Nexus', 'Nexus架构设计']);
+    assert.deepEqual(targets.map((target) => target.displayName), ['Nexus日记本', 'Nexus架构设计日记本']);
 });
 
 test('schemaRegistry supports derived oneOf schema and explicit overrides', () => {

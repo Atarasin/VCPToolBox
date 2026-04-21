@@ -6,6 +6,10 @@ const {
     OPENCLAW_ERROR_CODES
 } = require('../contracts/errorCodes');
 const {
+    normalizeDiaryCanonicalName,
+    resolveDiaryAliasesToAvailable
+} = require('../policy/mcpAgentMemoryPolicy');
+const {
     createAuditLogger
 } = require('../infra/auditLogger');
 
@@ -603,6 +607,7 @@ async function collectRagItems({
     pluginManager,
     query,
     requestedDiaries,
+    adapterAppliedDefaultDiaryPolicy = false,
     agentId,
     maid,
     authContext,
@@ -613,55 +618,79 @@ async function collectRagItems({
     const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
     const ragPlugin = getRagPlugin(pluginManager);
     const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
-    const allowedDiaries = agentPolicyResolver
-        ? (await agentPolicyResolver.resolvePolicy({
+    const resolvedPolicy = agentPolicyResolver
+        ? await agentPolicyResolver.resolvePolicy({
             authContext,
             availableDiaries
-        })).allowedDiaryNames
+        })
+        : null;
+    const allowedDiaries = resolvedPolicy
+        ? resolvedPolicy.allowedDiaryNames
         : resolveAllowedDiaries({
             agentId,
             maid,
             availableDiaries,
             ragConfig: getRagConfig(pluginManager)
         });
-
-    const missingDiaries = requestedDiaries.filter((requestedDiary) => !availableDiaries.includes(requestedDiary));
-    if (missingDiaries.length > 0) {
-        return {
-            success: false,
-            status: 404,
-            code: OPENCLAW_ERROR_CODES.RAG_TARGET_NOT_FOUND,
-            error: 'Requested diary target was not found',
-            details: {
-                diary: missingDiaries[0],
-                diaries: missingDiaries
-            }
-        };
-    }
-
+    const defaultDiaries = resolvedPolicy?.defaultDiaryNames?.length > 0
+        ? resolvedPolicy.defaultDiaryNames
+        : allowedDiaries;
+    // Diary selectors are access-control inputs, not existence checks. VCP can
+    // lazily materialize a diary later, so unresolved-but-allowed targets should
+    // continue as empty search/context results instead of failing with not-found.
+    requestedDiaries = resolveDiaryAliasesToAvailable(requestedDiaries, availableDiaries)
+        .map((requestedDiary) => normalizeDiaryCanonicalName(requestedDiary))
+        .filter(Boolean);
     const forbiddenDiaries = requestedDiaries.filter((requestedDiary) => !allowedDiaries.includes(requestedDiary));
     if (forbiddenDiaries.length > 0) {
-        return {
-            success: false,
-            status: 403,
-            code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
-            error: 'Requested diary target is not allowed for this agent',
-            details: {
-                diary: forbiddenDiaries[0],
-                diaries: forbiddenDiaries,
-                agentId
+        if (adapterAppliedDefaultDiaryPolicy) {
+            const filteredDefaultDiaries = requestedDiaries.filter((requestedDiary) => allowedDiaries.includes(requestedDiary));
+            if (filteredDefaultDiaries.length > 0) {
+                requestedDiaries = filteredDefaultDiaries;
+            } else {
+                return {
+                    success: false,
+                    status: 403,
+                    code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
+                    error: 'No default diary targets are configured for this agent',
+                    details: {
+                        agentId,
+                        allowedDiaries,
+                        defaultDiaries
+                    }
+                };
             }
-        };
+        } else {
+            return {
+                success: false,
+                status: 403,
+                code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
+                error: 'Requested diary target is not allowed for this agent',
+                details: {
+                    diary: forbiddenDiaries[0],
+                    diaries: forbiddenDiaries,
+                    agentId
+                }
+            };
+        }
     }
 
-    const targetDiaries = requestedDiaries.length > 0 ? requestedDiaries : allowedDiaries;
+    const targetDiaries = requestedDiaries.length > 0
+        ? requestedDiaries
+        : resolveDiaryAliasesToAvailable(defaultDiaries, availableDiaries)
+            .map((defaultDiary) => normalizeDiaryCanonicalName(defaultDiary))
+            .filter(Boolean);
     if (targetDiaries.length === 0) {
         return {
             success: false,
             status: 403,
             code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
-            error: 'No accessible diary targets are configured for this agent',
-            details: { agentId }
+            error: 'No default diary targets are configured for this agent',
+            details: {
+                agentId,
+                allowedDiaries,
+                defaultDiaries
+            }
         };
     }
 
@@ -882,6 +911,7 @@ function createContextRuntimeService(deps = {}) {
                     pluginManager,
                     query,
                     requestedDiaries,
+                    adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true,
                     agentId,
                     maid,
                     authContext,
@@ -1035,6 +1065,7 @@ function createContextRuntimeService(deps = {}) {
                     pluginManager,
                     query,
                     requestedDiaries,
+                    adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true,
                     agentId,
                     maid,
                     authContext,

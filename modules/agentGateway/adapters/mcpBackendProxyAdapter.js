@@ -14,6 +14,10 @@ const {
     parseResourceUri,
     createMemoryTargetsResource
 } = require('./mcpDescriptorRegistry');
+const {
+    areDiaryNamesEquivalent,
+    resolveConfiguredAgentMemoryPolicy
+} = require('../policy/mcpAgentMemoryPolicy');
 
 const MCP_ERROR_CODES = Object.freeze({
     INVALID_REQUEST: 'MCP_INVALID_REQUEST',
@@ -27,11 +31,10 @@ const MCP_ERROR_CODES = Object.freeze({
 
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
+    MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP,
     MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH,
     MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE,
     MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE,
-    MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING,
-    MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING,
     MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL
 ]);
 
@@ -230,11 +233,8 @@ function createGatewayManagedContent(name, data) {
     if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER && data && typeof data.renderedPrompt === 'string') {
         return createMcpTextContent(data.renderedPrompt);
     }
-    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING && data && typeof data.committedMemory === 'string') {
-        return createMcpTextContent(data.committedMemory);
-    }
-    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING && data && typeof data.codingContext === 'string') {
-        return createMcpTextContent(data.codingContext);
+    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP && data && typeof data.renderedPrompt === 'string') {
+        return createMcpTextContent(data.renderedPrompt);
     }
     return createMcpTextContent(data);
 }
@@ -308,7 +308,10 @@ function normalizeNativeResult(response, { fallbackStatus = 'completed' } = {}) 
 }
 
 function ensureAgentId(input, operation, fallback = '') {
-    const agentId = normalizeMcpString(input?.agentId || input?.requestContext?.agentId || fallback);
+    const args = input?.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
+        ? input.arguments
+        : {};
+    const agentId = normalizeMcpString(input?.agentId || args.agentId || input?.requestContext?.agentId || fallback);
     if (!agentId) {
         throw createMcpError(
             MCP_ERROR_CODES.INVALID_REQUEST,
@@ -364,6 +367,129 @@ function ensureJobIdentity(input, operation, fallbackAgentId = '', fallbackSessi
     );
 }
 
+function normalizeDiarySelectionArgs(args) {
+    const diary = normalizeMcpString(args?.diary, 256);
+    const diaries = Array.isArray(args?.diaries)
+        ? args.diaries.map((value) => normalizeMcpString(value, 256)).filter(Boolean)
+        : [];
+    return {
+        diary,
+        diaries: diary && !diaries.includes(diary) ? [diary, ...diaries] : diaries
+    };
+}
+
+function buildBootstrapSummary(renderResult, agentId) {
+    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || 'unknown-agent';
+    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
+    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
+    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId}`];
+
+    if (renderedPrompt) {
+        fragments.push(`length=${renderedPrompt.length}`);
+    }
+    if (renderResult?.truncated) {
+        fragments.push('truncated=true');
+    }
+    if (warnings.length > 0) {
+        fragments.push(`warnings=${warnings.length}`);
+    }
+
+    return fragments.join('; ');
+}
+
+function buildBootstrapResult(renderResult, agentId) {
+    return {
+        ...renderResult,
+        agentId: normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId,
+        summary: buildBootstrapSummary(renderResult, agentId)
+    };
+}
+
+function applyAgentDiaryPolicyToBody(name, body = {}) {
+    if (name !== MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH && name !== MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
+        return {
+            body,
+            rejection: null
+        };
+    }
+
+    const agentId = normalizeMcpString(body?.requestContext?.agentId || body?.agentId, 256);
+    const maid = normalizeMcpString(body?.maid || body?.requestContext?.maid || agentId, 256);
+    const policy = resolveConfiguredAgentMemoryPolicy({ agentId, maid });
+
+    if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
+        return {
+            body,
+            rejection: null
+        };
+    }
+
+    const { diary, diaries } = normalizeDiarySelectionArgs(body);
+    const requestedDiaries = diaries;
+    const allowedDiaries = policy.allowedDiaryNames;
+    const defaultDiaries = policy.defaultDiaryNames.length > 0
+        ? policy.defaultDiaryNames
+        : policy.allowedDiaryNames;
+
+    if (requestedDiaries.length > 0) {
+        const forbiddenDiaries = requestedDiaries.filter(
+            (requestedDiary) => !allowedDiaries.some((allowedDiary) => areDiaryNamesEquivalent(requestedDiary, allowedDiary))
+        );
+        if (forbiddenDiaries.length > 0) {
+            return {
+                body,
+                rejection: {
+                    success: false,
+                    requestId: normalizeMcpString(body?.requestContext?.requestId, 128),
+                    code: AGW_ERROR_CODES.FORBIDDEN,
+                    error: 'Requested diary target is not allowed for this agent',
+                    details: {
+                        diary: forbiddenDiaries[0],
+                        diaries: forbiddenDiaries,
+                        agentId,
+                        allowedDiaries
+                    }
+                }
+            };
+        }
+
+        return {
+            body: {
+                ...body,
+                diary: diary || requestedDiaries[0] || '',
+                diaries: requestedDiaries
+            },
+            rejection: null
+        };
+    }
+
+    if (defaultDiaries.length === 0) {
+        return {
+            body,
+            rejection: {
+                success: false,
+                requestId: normalizeMcpString(body?.requestContext?.requestId, 128),
+                code: AGW_ERROR_CODES.FORBIDDEN,
+                error: 'No default diary targets are configured for this agent',
+                details: {
+                    agentId,
+                    allowedDiaries,
+                    defaultDiaries
+                }
+            }
+        };
+    }
+
+    return {
+        body: {
+            ...body,
+            diary: defaultDiaries[0],
+            diaries: defaultDiaries
+        },
+        rejection: null
+    };
+}
+
 function buildBody(input, args, { requireSession = true, defaultAgentId = '', defaultSessionId = 'mcp-session' } = {}) {
     const inputWithArgs = {
         ...input,
@@ -415,9 +541,10 @@ function buildPromptMeta(result, agentId) {
         hostHints: {
             injectionMode: 'prompt_message_content',
             primarySurface: 'prompts/get',
-            fallbackToolSurfaceAvailable: false,
+            fallbackToolSurfaceAvailable: true,
             resolvedAgentId: agentId,
             promptName: MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER,
+            fallbackToolName: MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP,
             useMessageContentAsPromptBody: true
         },
         operability: buildOperabilityMetadata(result.meta)
@@ -545,15 +672,27 @@ function createBackendProxyMcpAdapter({
 
             let response;
             if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
-                response = await backendClient.searchMemory(buildBody(input, args, { defaultAgentId }));
+                const scopedBody = applyAgentDiaryPolicyToBody(name, buildBody(input, args, { defaultAgentId }));
+                if (scopedBody.rejection) {
+                    return createFailureResult(scopedBody.rejection);
+                }
+                response = await backendClient.searchMemory(scopedBody.body);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
-                response = await backendClient.assembleContext(buildBody(input, args, { defaultAgentId }));
+                const scopedBody = applyAgentDiaryPolicyToBody(name, buildBody(input, args, { defaultAgentId }));
+                if (scopedBody.rejection) {
+                    return createFailureResult(scopedBody.rejection);
+                }
+                response = await backendClient.assembleContext(scopedBody.body);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
                 response = await backendClient.writeMemory(buildBody(input, args, { defaultAgentId }));
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING) {
-                response = await backendClient.recallForCoding(buildBody(input, args, { defaultAgentId }));
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING) {
-                response = await backendClient.commitMemoryForCoding(buildBody(input, args, { defaultAgentId }));
+            } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
+                response = await backendClient.renderAgent(
+                    ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
+                    buildBody(input, args, {
+                        requireSession: false,
+                        defaultAgentId
+                    })
+                );
             } else if (name === MCP_GATEWAY_TOOL_NAMES.JOB_GET) {
                 ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
                 response = await backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId));
@@ -583,6 +722,9 @@ function createBackendProxyMcpAdapter({
             const result = normalizeNativeResult(response);
             if (!result.success) {
                 return createFailureResult(result);
+            }
+            if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
+                result.data = buildBootstrapResult(result.data || {}, result.data?.agentId || input.agentId || args.agentId || defaultAgentId);
             }
             if (
                 DEFERRED_RESULT_TOOL_NAMES.has(name) &&

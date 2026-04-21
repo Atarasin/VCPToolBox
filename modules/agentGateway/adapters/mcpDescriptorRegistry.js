@@ -8,13 +8,12 @@ const MCP_RESOURCE_KINDS = Object.freeze({
 
 const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
     AGENT_RENDER: 'gateway_agent_render',
+    AGENT_BOOTSTRAP: 'gateway_agent_bootstrap',
     JOB_GET: 'gateway_job_get',
     JOB_CANCEL: 'gateway_job_cancel',
     MEMORY_SEARCH: 'gateway_memory_search',
     CONTEXT_ASSEMBLE: 'gateway_context_assemble',
-    MEMORY_WRITE: 'gateway_memory_write',
-    MEMORY_COMMIT_FOR_CODING: 'gateway_memory_commit_for_coding',
-    RECALL_FOR_CODING: 'gateway_recall_for_coding'
+    MEMORY_WRITE: 'gateway_memory_write'
 });
 
 const MCP_GATEWAY_PROMPT_NAMES = Object.freeze({
@@ -174,6 +173,36 @@ function createGatewayManagedToolDescriptors({
 
     tools.push(
         createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP,
+            title: 'Gateway Agent Bootstrap',
+            description: 'Fetch the canonical rendered bootstrap prompt for tool-only hosts that cannot consume MCP prompt surfaces directly.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['agentId'],
+                properties: {
+                    agentId: { type: 'string' },
+                    variables: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    model: { type: 'string' },
+                    maxLength: { type: 'integer', minimum: 1 },
+                    context: {
+                        type: 'object',
+                        additionalProperties: true
+                    },
+                    messages: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            additionalProperties: true
+                        }
+                    }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
             name: MCP_GATEWAY_TOOL_NAMES.JOB_GET,
             title: 'Gateway Job Get',
             description: 'Read canonical Agent Gateway job status through the shared job runtime service.',
@@ -302,235 +331,6 @@ function createGatewayManagedToolDescriptors({
                     },
                     maid: { type: 'string' },
                     idempotencyKey: { type: 'string' },
-                    options: {
-                        type: 'object',
-                        additionalProperties: true
-                    }
-                }
-            }
-        }),
-        createGatewayToolDescriptor({
-            name: MCP_GATEWAY_TOOL_NAMES.MEMORY_COMMIT_FOR_CODING,
-            title: 'Gateway Memory Commit For Coding',
-            description: 'Commit coding-oriented durable memory through shared Gateway Core write behavior.',
-            inputSchema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['task'],
-                properties: {
-                    task: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    summary: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    implementation: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    outcome: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    result: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    notes: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    constraints: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'array',
-                                items: { type: 'string' }
-                            }
-                        ]
-                    },
-                    pitfalls: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'array',
-                                items: { type: 'string' }
-                            }
-                        ]
-                    },
-                    repository: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    workspaceRoot: { type: 'string' },
-                    target: {
-                        type: 'object',
-                        additionalProperties: true,
-                        required: ['diary'],
-                        properties: {
-                            diary: { type: 'string' },
-                            maid: { type: 'string' }
-                        }
-                    },
-                    diary: { type: 'string' },
-                    maid: { type: 'string' },
-                    files: {
-                        type: 'array',
-                        items: {
-                            oneOf: [
-                                { type: 'string' },
-                                {
-                                    type: 'object',
-                                    additionalProperties: true
-                                }
-                            ]
-                        }
-                    },
-                    symbols: {
-                        type: 'array',
-                        items: {
-                            oneOf: [
-                                { type: 'string' },
-                                {
-                                    type: 'object',
-                                    additionalProperties: true
-                                }
-                            ]
-                        }
-                    },
-                    recommendedTags: {
-                        type: 'array',
-                        items: { type: 'string' }
-                    },
-                    tags: {
-                        type: 'array',
-                        items: { type: 'string' }
-                    },
-                    metadata: {
-                        type: 'object',
-                        additionalProperties: true
-                    },
-                    idempotencyKey: { type: 'string' },
-                    timestamp: {
-                        oneOf: [
-                            { type: 'string' },
-                            { type: 'number' }
-                        ]
-                    },
-                    options: {
-                        type: 'object',
-                        additionalProperties: true
-                    }
-                }
-            }
-        }),
-        createGatewayToolDescriptor({
-            name: MCP_GATEWAY_TOOL_NAMES.RECALL_FOR_CODING,
-            title: 'Gateway Recall For Coding',
-            description: 'Build coding-oriented recall context through shared Gateway Core memory behavior.',
-            inputSchema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['task'],
-                properties: {
-                    task: {
-                        oneOf: [
-                            { type: 'string' },
-                            {
-                                type: 'object',
-                                additionalProperties: true
-                            }
-                        ]
-                    },
-                    repository: {
-                        type: 'object',
-                        additionalProperties: true
-                    },
-                    workspaceRoot: { type: 'string' },
-                    files: {
-                        type: 'array',
-                        items: {
-                            oneOf: [
-                                { type: 'string' },
-                                {
-                                    type: 'object',
-                                    additionalProperties: true
-                                }
-                            ]
-                        }
-                    },
-                    symbols: {
-                        type: 'array',
-                        items: {
-                            oneOf: [
-                                { type: 'string' },
-                                {
-                                    type: 'object',
-                                    additionalProperties: true
-                                }
-                            ]
-                        }
-                    },
-                    recentMessages: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            additionalProperties: true
-                        }
-                    },
-                    diary: { type: 'string' },
-                    diaries: {
-                        type: 'array',
-                        items: { type: 'string' }
-                    },
-                    maxBlocks: { type: 'integer', minimum: 1 },
-                    tokenBudget: { type: 'integer', minimum: 1 },
-                    minScore: { type: 'number' },
-                    mode: {
-                        type: 'string',
-                        enum: ['rag', 'hybrid', 'auto']
-                    },
-                    timeAware: { type: 'boolean' },
-                    groupAware: { type: 'boolean' },
-                    rerank: { type: 'boolean' },
-                    tagMemo: { type: 'boolean' },
                     options: {
                         type: 'object',
                         additionalProperties: true

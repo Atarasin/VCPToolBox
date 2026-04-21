@@ -24,10 +24,10 @@ async function writeAgentFile(baseDir, relativePath, content) {
     await fs.writeFile(absolutePath, content, 'utf8');
 }
 
-function createAgentManager(agentDir) {
-    const mapping = new Map([
-        ['Ariadne', 'Ariadne.md']
-    ]);
+function createAgentManager(agentDir, mappings = {
+    Ariadne: 'Ariadne.md'
+}) {
+    const mapping = new Map(Object.entries(mappings));
 
     return {
         agentDir,
@@ -48,11 +48,12 @@ function createAgentManager(agentDir) {
     };
 }
 
-function createTransportPluginManager(agentDir) {
+function createTransportPluginManager(agentDir, overrides = {}) {
     return createPluginManager({
-        agentManager: createAgentManager(agentDir),
+        agentManager: createAgentManager(agentDir, overrides.agentMappings),
         agentRegistryRenderPrompt: async ({ rawPrompt, renderVariables }) =>
-            rawPrompt.replaceAll('{{VarUserName}}', renderVariables.VarUserName || '')
+            rawPrompt.replaceAll('{{VarUserName}}', renderVariables.VarUserName || ''),
+        ...overrides
     });
 }
 
@@ -261,12 +262,12 @@ test('stdio MCP transport serves capability discovery and representative tool ca
             id: 7,
             method: 'tools/call',
             params: {
-                name: 'gateway_recall_for_coding',
+                name: 'gateway_agent_bootstrap',
                 arguments: {
-                    task: {
-                        description: '继续做 backend-only diary RAG loop'
-                    },
-                    files: ['modules/agentGateway/mcpStdioServer.js']
+                    agentId: 'Ariadne',
+                    variables: {
+                        VarUserName: 'Nova'
+                    }
                 },
                 agentId: 'Ariadne',
                 sessionId: 'sess-stdio-tool-call',
@@ -291,7 +292,8 @@ test('stdio MCP transport serves capability discovery and representative tool ca
         assert.equal(tools.result.meta.agentId, 'Ariadne');
         assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_agent_render'), false);
         assert.equal(tools.result.tools.some((tool) => tool.name === 'SciCalculator'), false);
-        assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_recall_for_coding'), true);
+        assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_recall_for_coding'), false);
+        assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_agent_bootstrap'), true);
         assert.equal(resources.result.meta.agentId, 'Ariadne');
         assert.deepEqual(
             resources.result.resources.map((resource) => resource.uri),
@@ -301,16 +303,76 @@ test('stdio MCP transport serves capability discovery and representative tool ca
         assert.equal(promptGet.result.messages[0].content[0].text.includes('Hello Nova'), true);
         assert.equal(promptGet.result.meta.agentId, 'Ariadne');
         assert.equal(promptGet.result.meta.hostHints.primarySurface, 'prompts/get');
-        assert.equal(promptGet.result.meta.hostHints.fallbackToolSurfaceAvailable, false);
+        assert.equal(promptGet.result.meta.hostHints.fallbackToolSurfaceAvailable, true);
         assert.equal(toolCall.result.isError, false);
-        assert.equal(toolCall.result.structuredContent.toolName, 'gateway_recall_for_coding');
-        assert.equal(toolCall.result.structuredContent.result.recallBlocks.length > 0, true);
+        assert.equal(toolCall.result.structuredContent.toolName, 'gateway_agent_bootstrap');
+        assert.equal(toolCall.result.structuredContent.result.renderedPrompt.includes('Hello Nova'), true);
+        assert.equal(toolCall.result.structuredContent.result.summary.includes('Bootstrap prompt ready for Ariadne'), true);
         assert.deepEqual(stdout.invalidLines, []);
         assert.equal(stderr.value.includes('[MCPTransport]'), false);
     } finally {
         await stopChild(child);
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('stdio MCP transport preserves explicit bootstrap agentId over default agent', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    await writeAgentFile(agentDir, 'Nexus.md', 'You are Nexus. Hello {{VarUserName}}.');
+
+    const pluginManager = createTransportPluginManager(agentDir, {
+        agentMappings: {
+            Ariadne: 'Ariadne.md',
+            Nexus: 'Nexus.md'
+        }
+    });
+    const server = await createNativeServer(pluginManager);
+    const { child, stdout, stderr } = spawnFixtureServer({
+        VCP_MCP_BACKEND_URL: server.baseUrl,
+        VCP_MCP_DEFAULT_AGENT_ID: 'Nexus'
+    });
+
+    try {
+        sendMessage(child, {
+            jsonrpc: '2.0',
+            id: 11,
+            method: 'initialize',
+            params: {
+                protocolVersion: '2025-06-18',
+                capabilities: {},
+                clientInfo: {
+                    name: 'trae',
+                    version: '1.0.0'
+                }
+            }
+        });
+        await stdout.waitFor((message) => message.id === 11);
+
+        sendMessage(child, {
+            jsonrpc: '2.0',
+            id: 12,
+            method: 'tools/call',
+            params: {
+                name: 'gateway_agent_bootstrap',
+                arguments: {
+                    agentId: 'Ariadne',
+                    variables: {
+                        VarUserName: 'Trae'
+                    }
+                }
+            }
+        });
+
+        const bootstrap = await stdout.waitFor((message) => message.id === 12);
+        assert.equal(bootstrap.result.structuredContent.result.agentId, 'Ariadne');
+        assert.match(bootstrap.result.content[0].text, /You are Ariadne/);
+        assert.doesNotMatch(bootstrap.result.content[0].text, /You are Nexus/);
+        assert.equal(stderr.value, '');
+    } finally {
+        await stopChild(child);
+        await server.close();
     }
 });
 
@@ -386,21 +448,10 @@ test('stdio MCP transport returns parse errors and keeps boot logs off stdout', 
     }
 });
 
-test('stdio MCP transport maps backend failures without polluting stdout', async () => {
+test('stdio MCP transport maps removed coding tools to not-found failures without polluting stdout', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
     const pluginManager = createTransportPluginManager(agentDir);
-    const bundle = getGatewayServiceBundle(pluginManager);
-    bundle.codingMemoryWritebackService.commitForCoding = async ({ body }) => ({
-        success: false,
-        requestId: body.requestContext.requestId,
-        status: 403,
-        code: 'AGW_FORBIDDEN',
-        error: 'Diary access denied by policy',
-        details: {
-            diary: body.diary || body.target?.diary || ''
-        }
-    });
     const server = await createNativeServer(pluginManager);
     const { child, stdout, stderr } = spawnFixtureServer({
         VCP_MCP_BACKEND_URL: server.baseUrl,
@@ -417,9 +468,7 @@ test('stdio MCP transport maps backend failures without polluting stdout', async
                 arguments: {
                     task: {
                         description: '提交 writeback'
-                    },
-                    summary: '这次应该被拒绝',
-                    diary: 'ProjectAlpha'
+                    }
                 },
                 agentId: 'Ariadne',
                 sessionId: 'sess-stdio-writeback-forbidden',
@@ -430,9 +479,8 @@ test('stdio MCP transport maps backend failures without polluting stdout', async
         });
 
         const failure = await stdout.waitFor((message) => message.id === 9);
-        assert.equal(failure.result.isError, true);
-        assert.equal(failure.result.error.code, 'MCP_FORBIDDEN');
-        assert.equal(failure.result.error.details.canonicalCode, 'AGW_FORBIDDEN');
+        assert.equal(failure.error.code, -32000);
+        assert.equal(failure.error.data.code, 'MCP_NOT_FOUND');
         assert.deepEqual(stdout.invalidLines, []);
         assert.equal(stderr.value.includes('[MCPTransport]'), false);
     } finally {
@@ -442,14 +490,14 @@ test('stdio MCP transport maps backend failures without polluting stdout', async
     }
 });
 
-test('stdio MCP transport preserves deferred job continuation and job-event resource shaping', async () => {
+test('stdio MCP transport preserves deferred bootstrap continuation and job-event resource shaping', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
     const pluginManager = createTransportPluginManager(agentDir);
     const bundle = getGatewayServiceBundle(pluginManager);
-    bundle.codingRecallService.recallForCoding = async ({ body }) => ({
+    bundle.agentRegistryService.renderAgent = async (agentId, options = {}) => ({
         success: true,
-        requestId: body.requestContext.requestId,
+        requestId: options?.context?.requestId || 'req-stdio-deferred-bootstrap',
         status: 'waiting_approval',
         data: {
             runtime: {
@@ -457,21 +505,21 @@ test('stdio MCP transport preserves deferred job continuation and job-event reso
                 status: 'waiting_approval'
             },
             job: bundle.jobRuntimeService.createWaitingApprovalJob({
-                operation: 'coding.recall',
+                operation: 'agents.render',
                 authContext: {
-                    requestId: body.requestContext.requestId,
-                    agentId: body.requestContext.agentId,
-                    sessionId: body.requestContext.sessionId,
+                    requestId: 'req-stdio-deferred-bootstrap',
+                    agentId,
+                    sessionId: 'sess-stdio-deferred-bootstrap',
                     runtime: 'native',
-                    source: 'agent-gateway-coding-recall',
+                    source: 'agent-gateway-bootstrap',
                     gatewayId: 'gw-transport-test'
                 },
                 target: {
                     type: 'tool',
-                    id: 'gateway_recall_for_coding'
+                    id: 'gateway_agent_bootstrap'
                 },
                 metadata: {
-                    task: body.task?.description || ''
+                    agentId
                 }
             })
         }
@@ -489,17 +537,14 @@ test('stdio MCP transport preserves deferred job continuation and job-event reso
             id: 1,
             method: 'tools/call',
             params: {
-                name: 'gateway_recall_for_coding',
+                name: 'gateway_agent_bootstrap',
                 arguments: {
-                    task: {
-                        description: '等待审批'
-                    },
-                    files: ['modules/agentGateway/mcpStdioServer.js']
+                    agentId: 'Ariadne'
                 },
                 agentId: 'Ariadne',
-                sessionId: 'sess-stdio-deferred-recall',
+                sessionId: 'sess-stdio-deferred-bootstrap',
                 requestContext: {
-                    requestId: 'req-stdio-deferred-recall'
+                    requestId: 'req-stdio-deferred-bootstrap'
                 }
             }
         });
@@ -518,7 +563,7 @@ test('stdio MCP transport preserves deferred job continuation and job-event reso
                     jobId
                 },
                 agentId: 'Ariadne',
-                sessionId: 'sess-stdio-deferred-recall',
+                sessionId: 'sess-stdio-deferred-bootstrap',
                 requestContext: {
                     requestId: 'req-stdio-job-get'
                 }
@@ -531,7 +576,7 @@ test('stdio MCP transport preserves deferred job continuation and job-event reso
             params: {
                 uri: eventUri,
                 agentId: 'Ariadne',
-                sessionId: 'sess-stdio-deferred-recall',
+                    sessionId: 'sess-stdio-deferred-bootstrap',
                 requestContext: {
                     requestId: 'req-stdio-job-events'
                 }

@@ -159,3 +159,185 @@ test('ContextRuntimeService rejects forbidden diary access and invalid query', a
     assert.equal(invalidResult.status, 400);
     assert.equal(invalidResult.code, 'OCW_RAG_INVALID_QUERY');
 });
+
+test('ContextRuntimeService normalizes default diary aliases from policy to canonical targets', async () => {
+    const pluginManager = createPluginManager({
+        vectorDBManager: createKnowledgeBaseManager({
+            diaries: ['Nexus', 'Nexus架构设计'],
+            searchResults: {
+                'Nexus架构设计': [
+                    {
+                        text: '沉淀了一条可复用的架构设计经验。',
+                        score: 0.94,
+                        sourceFile: '2026-03-21.md',
+                        fullPath: 'Nexus架构设计/2026-03-21.md'
+                    }
+                ]
+            },
+            metadataByPath: {
+                'Nexus架构设计/2026-03-21.md': {
+                    sourceDiary: 'Nexus架构设计',
+                    sourcePath: 'Nexus架构设计/2026-03-21.md',
+                    updatedAt: Date.parse('2026-03-21T09:00:00.000Z'),
+                    tags: ['架构', '经验']
+                }
+            }
+        }),
+        ragPlugin: createRagPlugin({
+            parseTime() {
+                return [];
+            }
+        })
+    });
+    const service = createContextRuntimeService({
+        pluginManager,
+        agentPolicyResolver: {
+            async resolvePolicy() {
+                return {
+                    allowedDiaryNames: ['Nexus', 'Nexus架构设计'],
+                    defaultDiaryNames: ['Nexus架构设计日记本']
+                };
+            }
+        }
+    });
+
+    const result = await service.search({
+        body: {
+            query: '总结最近的架构设计经验',
+            requestContext: {
+                source: 'mcp',
+                agentId: 'Nexus',
+                sessionId: 'sess-context-alias-default',
+                requestId: 'req-context-alias-default'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'mcp'
+    });
+
+    assert.equal(result.success, true);
+    assert.deepEqual(result.data.diagnostics.targetDiaries, ['Nexus架构设计']);
+    assert.equal(result.data.items[0].sourceDiary, 'Nexus架构设计');
+});
+
+test('ContextRuntimeService accepts explicit diary aliases that map to allowed canonical targets', async () => {
+    const pluginManager = createPluginManager({
+        vectorDBManager: createKnowledgeBaseManager({
+            diaries: ['Nexus', 'Nexus架构设计'],
+            searchResults: {
+                'Nexus架构设计': [
+                    {
+                        text: '显式 diary alias 请求命中了正确的架构设计日记。',
+                        score: 0.91,
+                        sourceFile: '2026-03-22.md',
+                        fullPath: 'Nexus架构设计/2026-03-22.md'
+                    }
+                ]
+            },
+            metadataByPath: {
+                'Nexus架构设计/2026-03-22.md': {
+                    sourceDiary: 'Nexus架构设计',
+                    sourcePath: 'Nexus架构设计/2026-03-22.md',
+                    updatedAt: Date.parse('2026-03-22T09:00:00.000Z'),
+                    tags: ['架构', '别名']
+                }
+            }
+        }),
+        ragPlugin: createRagPlugin({
+            parseTime() {
+                return [];
+            }
+        })
+    });
+    const service = createContextRuntimeService({
+        pluginManager,
+        agentPolicyResolver: {
+            async resolvePolicy() {
+                return {
+                    allowedDiaryNames: ['Nexus', 'Nexus架构设计'],
+                    defaultDiaryNames: ['Nexus']
+                };
+            }
+        }
+    });
+
+    const result = await service.search({
+        body: {
+            query: '查询架构设计经验',
+            diary: 'Nexus架构设计日记本',
+            requestContext: {
+                source: 'mcp',
+                agentId: 'Nexus',
+                sessionId: 'sess-context-alias-explicit',
+                requestId: 'req-context-alias-explicit'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'mcp'
+    });
+
+    assert.equal(result.success, true);
+    assert.deepEqual(result.data.diagnostics.targetDiaries, ['Nexus架构设计']);
+    assert.equal(result.data.items[0].sourceDiary, 'Nexus架构设计');
+});
+
+test('ContextRuntimeService treats allowed but unmaterialized diary searches as empty results', async () => {
+    const pluginManager = createPluginManager({
+        vectorDBManager: createKnowledgeBaseManager({
+            diaries: []
+        }),
+        ragPlugin: createRagPlugin({
+            parseTime() {
+                return [];
+            }
+        })
+    });
+    const service = createContextRuntimeService({
+        pluginManager,
+        agentPolicyResolver: {
+            async resolvePolicy() {
+                return {
+                    allowedDiaryNames: ['Nexus', 'Nexus架构设计'],
+                    defaultDiaryNames: ['Nexus架构设计']
+                };
+            }
+        }
+    });
+
+    const searchResult = await service.search({
+        body: {
+            query: '总结最近的架构设计经验',
+            diary: 'Nexus架构设计日记本',
+            requestContext: {
+                source: 'mcp',
+                agentId: 'Nexus',
+                sessionId: 'sess-context-empty-search',
+                requestId: 'req-context-empty-search'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'mcp'
+    });
+    const contextResult = await service.buildRecallContext({
+        body: {
+            query: '总结最近的架构设计经验',
+            requestContext: {
+                source: 'mcp',
+                agentId: 'Nexus',
+                sessionId: 'sess-context-empty-context',
+                requestId: 'req-context-empty-context'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'mcp'
+    });
+
+    assert.equal(searchResult.success, true);
+    assert.deepEqual(searchResult.data.diagnostics.targetDiaries, ['Nexus架构设计']);
+    assert.deepEqual(searchResult.data.items, []);
+
+    assert.equal(contextResult.success, true);
+    assert.deepEqual(contextResult.data.appliedPolicy.targetDiaries, ['Nexus架构设计']);
+    assert.deepEqual(contextResult.data.recallBlocks, []);
+    assert.equal(contextResult.data.estimatedTokens, 0);
+});

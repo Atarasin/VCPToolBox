@@ -129,14 +129,6 @@ class AgentGatewayClient {
         return this.requestJson('POST', '/agent_gateway/context/assemble', { body });
     }
 
-    recallForCoding(body) {
-        return this.requestJson('POST', '/agent_gateway/coding/recall', { body });
-    }
-
-    commitMemoryForCoding(body) {
-        return this.requestJson('POST', '/agent_gateway/coding/memory-writeback', { body });
-    }
-
     invokeTool(toolName, body) {
         return this.requestJson('POST', `/agent_gateway/tools/${encodeURIComponent(toolName)}/invoke`, {
             body

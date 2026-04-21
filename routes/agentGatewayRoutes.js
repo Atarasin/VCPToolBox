@@ -357,8 +357,6 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         jobRuntimeService,
         memoryRuntimeService,
         contextRuntimeService,
-        codingRecallService,
-        codingMemoryWritebackService,
         toolRuntimeService,
         operabilityService
     } = getGatewayServiceBundle(pluginManager, {
@@ -690,6 +688,24 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 context: req.body?.context,
                 messages: req.body?.messages
             });
+            if (
+                rendered &&
+                typeof rendered === 'object' &&
+                rendered.success === true &&
+                (
+                    rendered.status === 'completed' ||
+                    rendered.status === 'accepted' ||
+                    rendered.status === 'waiting_approval'
+                )
+            ) {
+                return sendNativeServiceResult(res, {
+                    result: rendered,
+                    startedAt,
+                    authContext,
+                    operationControl
+                });
+            }
+
             return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
@@ -957,121 +973,6 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                     },
                     startedAt,
                     defaultSource: 'agent-gateway-context'
-                });
-
-                return sendNativeServiceResult(res, {
-                    result,
-                    startedAt,
-                    authContext,
-                    operationControl
-                });
-            }
-        });
-    });
-
-    router.post('/coding/recall', async (req, res) => {
-        const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-coding-recall');
-        const authContext = buildNativeAuthContext({
-            authContextResolver,
-            requestContext,
-            providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
-            maid: req.body?.maid,
-        });
-        const operationControl = beginNativeOperation(operabilityService, {
-            operationName: 'coding.recall',
-            requestContext,
-            authContext,
-            payload: req.body
-        });
-
-        if (operationControl && !operationControl.allowed) {
-            return sendNativeOperationRejection(res, {
-                startedAt,
-                requestContext,
-                authContext,
-                operationControl
-            });
-        }
-
-        return executeNativeOperationSafely({
-            res,
-            startedAt,
-            requestContext,
-            authContext,
-            operationControl,
-            errorMessage: 'Failed to execute coding recall',
-            handler: async () => {
-                const result = await codingRecallService.recallForCoding({
-                    body: {
-                        ...req.body,
-                        authContext,
-                        requestContext
-                    },
-                    startedAt,
-                    defaultSource: 'agent-gateway-coding-recall'
-                });
-
-                return sendNativeServiceResult(res, {
-                    result,
-                    startedAt,
-                    authContext,
-                    operationControl
-                });
-            }
-        });
-    });
-
-    router.post('/coding/memory-writeback', async (req, res) => {
-        const startedAt = Date.now();
-        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-coding-memory-writeback');
-        const governedBody = createGovernedRequestBody(req, pluginManager, requestContext);
-        const authContext = buildNativeAuthContext({
-            authContextResolver,
-            requestContext,
-            providedAuthContext: governedBody.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
-            maid: governedBody.maid || governedBody.target?.maid
-        });
-        const operationControl = beginNativeOperation(operabilityService, {
-            operationName: 'coding.memory_writeback',
-            requestContext,
-            authContext,
-            payload: req.body
-        });
-
-        if (operationControl && !operationControl.allowed) {
-            return sendNativeOperationRejection(res, {
-                startedAt,
-                requestContext,
-                authContext,
-                operationControl
-            });
-        }
-
-        return executeNativeOperationSafely({
-            res,
-            startedAt,
-            requestContext,
-            authContext,
-            operationControl,
-            errorMessage: 'Failed to execute coding memory writeback',
-            handler: async () => {
-                const clientIp = req.ip && req.ip.startsWith('::ffff:') ? req.ip.slice(7) : req.ip;
-                const result = await codingMemoryWritebackService.commitForCoding({
-                    body: {
-                        ...governedBody,
-                        authContext,
-                        requestContext,
-                        options: {
-                            ...(governedBody.options || {}),
-                            idempotencyKey: governedBody.options?.idempotencyKey || governedBody.idempotencyKey
-                        }
-                    },
-                    startedAt,
-                    clientIp,
-                    defaultSource: 'agent-gateway-coding-memory-writeback'
                 });
 
                 return sendNativeServiceResult(res, {

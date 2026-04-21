@@ -107,9 +107,8 @@ node scripts/start-agent-gateway-mcp-server.js
 - tools:
   - `gateway_memory_search`
   - `gateway_context_assemble`
-  - `gateway_recall_for_coding`
+  - `gateway_agent_bootstrap`
   - `gateway_memory_write`
-  - `gateway_memory_commit_for_coding`
   - `gateway_job_get`
   - `gateway_job_cancel`
 - resources:
@@ -119,8 +118,7 @@ node scripts/start-agent-gateway-mcp-server.js
 这些 MCP 能力会分别代理到 backend native route，例如：
 
 - `prompts/get(name = gateway_agent_render)` -> `POST /agent_gateway/agents/:agentId/render`
-- `gateway_recall_for_coding` -> `POST /agent_gateway/coding/recall`
-- `gateway_memory_commit_for_coding` -> `POST /agent_gateway/coding/memory-writeback`
+- `gateway_agent_bootstrap` -> `POST /agent_gateway/agents/:agentId/render`
 - `gateway_memory_search` -> `POST /agent_gateway/memory/search`
 - `gateway_context_assemble` -> `POST /agent_gateway/context/assemble`
 - `gateway_memory_write` -> `POST /agent_gateway/memory/write`
@@ -135,9 +133,9 @@ Trae 注入 VCP agent 时，应直接消费：
 
 - 这段 message content 就是 inject-ready prompt body
 - `meta.hostHints.primarySurface = prompts/get` 表示该 prompt 是主注入路径
-- `meta.hostHints.fallbackToolSurfaceAvailable = false` 表示不应再通过 `tools/call(name = gateway_agent_render)` 获取注入 prompt
+- `meta.hostHints.fallbackToolSurfaceAvailable = true` 表示宿主若无法消费 prompt surface，可降级使用 `tools/call(name = gateway_agent_bootstrap)`
 
-也就是说，Trae 不应把 `gateway_agent_render` 当作一个 tool 去调用，而应把它当作一个 prompt 去获取。
+也就是说，Trae 应优先把 `gateway_agent_render` 当作 prompt 去获取；只有在宿主无法消费 MCP prompts 时，才降级调用 `gateway_agent_bootstrap`。
 
 ## 诊断说明
 
@@ -148,10 +146,11 @@ Trae 注入 VCP agent 时，应直接消费：
 
 ## 验证建议
 
-完成配置后，建议至少在 Trae 中验证以下 3 件事：
+完成配置后，建议至少在 Trae 中验证以下 5 件事：
 
 1. 能看到 `gateway_agent_render` prompt，且 `tools/list` 中不再把它作为 tool 暴露。
 2. 能成功执行一次 `prompts/get(name = gateway_agent_render)`，并确认返回的 message content 可直接作为 Trae 注入 prompt 使用。
-3. 能成功执行一次 `gateway_recall_for_coding`，确认请求走通 `Trae -> MCP -> backend -> diary RAG`。
-4. 能成功执行一次 `gateway_memory_commit_for_coding` 或 `gateway_memory_write`，确认 writeback 也走 backend canonical route。
-5. 出现启动错误时，Trae 不会收到被日志污染的协议输出。
+3. 若宿主不支持 prompts，可成功执行一次 `gateway_agent_bootstrap`，并确认返回的 `renderedPrompt` 与 prompt 路径语义一致。
+4. 能成功执行一次 `gateway_memory_search` 或 `gateway_context_assemble`，确认请求走通 `Trae -> MCP -> backend -> diary RAG`。
+5. 能成功执行一次 `gateway_memory_write`，确认 writeback 仍走 backend canonical route。
+6. 出现启动错误时，Trae 不会收到被日志污染的协议输出。

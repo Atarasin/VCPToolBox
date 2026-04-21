@@ -191,18 +191,6 @@ class GatewayBackendClient {
         });
     }
 
-    recallForCoding(body) {
-        return this.requestJson('POST', '/agent_gateway/coding/recall', {
-            body
-        });
-    }
-
-    commitMemoryForCoding(body) {
-        return this.requestJson('POST', '/agent_gateway/coding/memory-writeback', {
-            body
-        });
-    }
-
     getJob(jobId, query) {
         return this.requestJson('GET', `/agent_gateway/jobs/${encodeURIComponent(jobId)}`, {
             query

@@ -112,7 +112,7 @@ test('AgentGatewayClient can prepare an SSE request for the published event stre
     assert.equal(eventStreamRequest.headers['x-agent-gateway-id'], 'gw-prod');
 });
 
-test('AgentGatewayClient exposes canonical coding recall and writeback routes', async () => {
+test('AgentGatewayClient exposes canonical render and memory routes', async () => {
     const requests = [];
     const client = new AgentGatewayClient({
         baseUrl: 'http://localhost:3000',
@@ -137,20 +137,18 @@ test('AgentGatewayClient exposes canonical coding recall and writeback routes', 
         }
     });
 
-    await client.recallForCoding({
-        task: {
-            description: 'continue coding recall'
+    await client.renderAgent('Ariadne', {
+        requestContext: {
+            requestId: 'req-render-001'
         }
     });
-    await client.commitMemoryForCoding({
-        task: {
-            description: 'commit coding writeback'
-        },
-        summary: 'backend-only proxy'
+    await client.writeMemory({
+        diary: 'Nova',
+        text: 'backend canonical memory write'
     });
 
-    assert.equal(requests[0].url, 'http://localhost:3000/agent_gateway/coding/recall');
+    assert.equal(requests[0].url, 'http://localhost:3000/agent_gateway/agents/Ariadne/render');
     assert.equal(requests[0].options.method, 'POST');
-    assert.equal(requests[1].url, 'http://localhost:3000/agent_gateway/coding/memory-writeback');
+    assert.equal(requests[1].url, 'http://localhost:3000/agent_gateway/memory/write');
     assert.equal(requests[1].options.method, 'POST');
 });

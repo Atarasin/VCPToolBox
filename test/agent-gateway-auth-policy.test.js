@@ -1,4 +1,7 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -123,4 +126,113 @@ test('agentPolicyResolver returns shared tool and diary scopes with guards', asy
         () => ensureDiaryAllowed({ policy, diaryName: 'ProjectAlpha', authContext }),
         (error) => error && error.code === 'AGW_FORBIDDEN'
     );
+});
+
+test('agentPolicyResolver normalizes display-style MCP diary policy names to canonical targets', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agw-policy-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+    const previousPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+
+    await fs.writeFile(policyPath, JSON.stringify({
+        agents: {
+            Nexus: {
+                allowedDiaries: [
+                    'Nexus日记本',
+                    'Nexus架构设计日记本'
+                ],
+                defaultDiaries: [
+                    'Nexus架构设计日记本'
+                ]
+            }
+        }
+    }, null, 2), 'utf8');
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+
+    try {
+        const pluginManager = createPluginManager();
+        const resolver = createAgentPolicyResolver({ pluginManager });
+        const authContext = resolveAuthContext({
+            requestContext: {
+                requestId: 'req-auth-003',
+                sessionId: 'sess-auth-003',
+                agentId: 'Nexus',
+                source: 'mcp',
+                runtime: 'mcp'
+            }
+        });
+
+        const policy = await resolver.resolvePolicy({
+            authContext,
+            availableDiaries: ['Nexus', 'Nexus架构设计', 'SharedMemory']
+        });
+
+        assert.deepEqual(policy.allowedDiaryNames, ['Nexus', 'Nexus架构设计']);
+        assert.deepEqual(policy.defaultDiaryNames, ['Nexus架构设计']);
+        assert.equal(policy.policySource, 'mcp_agent_memory_policy');
+        assert.equal(ensureDiaryAllowed({
+            policy,
+            diaryName: 'Nexus架构设计日记本',
+            authContext
+        }), true);
+    } finally {
+        if (previousPolicyPath === undefined) {
+            delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        } else {
+            process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPolicyPath;
+        }
+    }
+});
+
+test('agentPolicyResolver keeps allowed canonical diary scopes even before diaries are materialized', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agw-policy-empty-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+    const previousPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+
+    await fs.writeFile(policyPath, JSON.stringify({
+        agents: {
+            Ariadne: {
+                allowedDiaries: [
+                    '阿里阿德涅日记本',
+                    '阿里阿德涅的知识日记本'
+                ],
+                defaultDiaries: [
+                    '阿里阿德涅的知识日记本'
+                ]
+            }
+        }
+    }, null, 2), 'utf8');
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+
+    try {
+        const pluginManager = createPluginManager();
+        const resolver = createAgentPolicyResolver({ pluginManager });
+        const authContext = resolveAuthContext({
+            requestContext: {
+                requestId: 'req-auth-004',
+                sessionId: 'sess-auth-004',
+                agentId: 'Ariadne',
+                source: 'mcp',
+                runtime: 'mcp'
+            }
+        });
+
+        const policy = await resolver.resolvePolicy({
+            authContext,
+            availableDiaries: []
+        });
+
+        assert.deepEqual(policy.allowedDiaryNames, ['阿里阿德涅', '阿里阿德涅的知识']);
+        assert.deepEqual(policy.defaultDiaryNames, ['阿里阿德涅的知识']);
+        assert.equal(ensureDiaryAllowed({
+            policy,
+            diaryName: '阿里阿德涅的知识日记本',
+            authContext
+        }), true);
+    } finally {
+        if (previousPolicyPath === undefined) {
+            delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        } else {
+            process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPolicyPath;
+        }
+    }
 });

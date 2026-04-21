@@ -1,6 +1,11 @@
 const {
     buildAgentAliases
 } = require('./authContextResolver');
+const {
+    normalizeDiaryCanonicalName,
+    resolveConfiguredAgentMemoryPolicy,
+    resolveDiaryAliasesToAvailable
+} = require('./mcpAgentMemoryPolicy');
 
 function normalizePolicyString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -117,39 +122,94 @@ function collectConfiguredDiaries(agentAliases, ragConfig) {
     return Array.from(configuredDiaries);
 }
 
+function filterAvailableDiaries(availableDiaries, allowedDiaryNames) {
+    const normalizedAvailableDiaries = normalizePolicyStringArray(availableDiaries);
+    if (allowedDiaryNames.length === 0) {
+        return normalizedAvailableDiaries;
+    }
+
+    // Diary policy defines what an agent may access, even before a diary has
+    // been materialized on disk. Prefer the backend-exposed canonical target
+    // when available, otherwise fall back to the canonical storage name.
+    const resolvedDiaries = resolveDiaryAliasesToAvailable(allowedDiaryNames, normalizedAvailableDiaries);
+    return resolvedDiaries
+        .map((diaryName) => normalizeDiaryCanonicalName(diaryName))
+        .filter(Boolean)
+        .filter((diaryName, index, array) => array.indexOf(diaryName) === index);
+}
+
 function resolveDiaryScopes({ authContext, availableDiaries, pluginManager }) {
     const ragConfig = getRagConfig(pluginManager);
     const policyConfig = getPolicyConfig(pluginManager);
     const agentAliases = buildAgentAliases(authContext.agentId, authContext.maid);
+    const configuredMemoryPolicy = resolveConfiguredAgentMemoryPolicy({
+        agentId: authContext.agentId,
+        maid: authContext.maid
+    });
     const explicitDiaryScopes = normalizePolicyStringArray(
         resolveAliasValue(policyConfig.agentPolicyMap, agentAliases, 'diaryScopes') ||
         resolveAliasValue(policyConfig.agentPolicyMap, agentAliases, 'memoryTargets')
     );
-    const normalizedAvailableDiaries = normalizePolicyStringArray(availableDiaries);
+
+    if (configuredMemoryPolicy.allowedDiaryNames.length > 0) {
+        const defaultDiaryNames = configuredMemoryPolicy.defaultDiaryNames.length > 0
+            ? configuredMemoryPolicy.defaultDiaryNames
+            : configuredMemoryPolicy.allowedDiaryNames;
+        return {
+            allowedDiaryNames: filterAvailableDiaries(availableDiaries, configuredMemoryPolicy.allowedDiaryNames),
+            defaultDiaryNames: filterAvailableDiaries(availableDiaries, defaultDiaryNames),
+            policySource: 'mcp_agent_memory_policy'
+        };
+    }
 
     if (explicitDiaryScopes.length > 0) {
-        return normalizedAvailableDiaries.length > 0
-            ? normalizedAvailableDiaries.filter((diaryName) => explicitDiaryScopes.includes(diaryName))
-            : explicitDiaryScopes;
+        const filtered = filterAvailableDiaries(availableDiaries, explicitDiaryScopes);
+        return {
+            allowedDiaryNames: filtered,
+            defaultDiaryNames: filtered,
+            policySource: 'agent_policy_map'
+        };
     }
     if (ragConfig.allowCrossRoleAccess) {
-        return normalizedAvailableDiaries;
+        const unrestricted = normalizePolicyStringArray(availableDiaries);
+        return {
+            allowedDiaryNames: unrestricted,
+            defaultDiaryNames: unrestricted,
+            policySource: 'rag_allow_cross_role'
+        };
     }
 
     const configuredDiaries = collectConfiguredDiaries(agentAliases, ragConfig);
     if (configuredDiaries.length > 0) {
-        return normalizedAvailableDiaries.length > 0
-            ? normalizedAvailableDiaries.filter((diaryName) => configuredDiaries.includes(diaryName))
-            : configuredDiaries;
+        const filtered = filterAvailableDiaries(availableDiaries, configuredDiaries);
+        return {
+            allowedDiaryNames: filtered,
+            defaultDiaryNames: filtered,
+            policySource: 'rag_config'
+        };
     }
 
+    const normalizedAvailableDiaries = normalizePolicyStringArray(availableDiaries);
     if (normalizedAvailableDiaries.length === 0) {
-        return [];
+        return {
+            allowedDiaryNames: [],
+            defaultDiaryNames: [],
+            policySource: 'none'
+        };
     }
     if (ragConfig.hasExplicitPolicy) {
-        return normalizedAvailableDiaries.filter((diaryName) => agentAliases.includes(diaryName));
+        const filtered = normalizedAvailableDiaries.filter((diaryName) => agentAliases.includes(diaryName));
+        return {
+            allowedDiaryNames: filtered,
+            defaultDiaryNames: filtered,
+            policySource: 'rag_alias_fallback'
+        };
     }
-    return normalizedAvailableDiaries;
+    return {
+        allowedDiaryNames: normalizedAvailableDiaries,
+        defaultDiaryNames: normalizedAvailableDiaries,
+        policySource: 'unrestricted'
+    };
 }
 
 function resolveToolScopes({ authContext, pluginManager }) {
@@ -191,7 +251,7 @@ function createAgentPolicyResolver(deps = {}) {
     return {
         async resolvePolicy({ authContext, availableDiaries }) {
             const resolvedAuthContext = authContext || {};
-            const allowedDiaryNames = resolveDiaryScopes({
+            const diaryScopeResult = resolveDiaryScopes({
                 authContext: resolvedAuthContext,
                 availableDiaries,
                 pluginManager
@@ -203,11 +263,14 @@ function createAgentPolicyResolver(deps = {}) {
 
             return {
                 authContext: resolvedAuthContext,
-                allowedDiaryNames,
+                allowedDiaryNames: diaryScopeResult.allowedDiaryNames,
+                defaultDiaryNames: diaryScopeResult.defaultDiaryNames,
                 allowedToolNames: toolScopeResult.allowedToolNames,
                 toolScopes: toolScopeResult.allowedToolNames,
                 allowAllTools: toolScopeResult.allowAllTools,
-                diaryScopes: allowedDiaryNames,
+                diaryScopes: diaryScopeResult.allowedDiaryNames,
+                diaryDefaultScopes: diaryScopeResult.defaultDiaryNames,
+                policySource: diaryScopeResult.policySource,
                 resolvedAt: new Date().toISOString()
             };
         }

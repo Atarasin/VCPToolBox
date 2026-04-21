@@ -7,9 +7,6 @@ const express = require('express');
 
 const createOpenClawBridgeRoutes = require('../routes/openclawBridgeRoutes');
 const createAgentGatewayRoutes = require('../routes/agentGatewayRoutes');
-const {
-    getGatewayServiceBundle
-} = require('../modules/agentGateway/createGatewayServiceBundle');
 
 function cosineSimilarity(vectorA, vectorB) {
     if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length) {
@@ -498,7 +495,7 @@ test('Native memory and context routes reuse shared runtime services', async () 
     }
 });
 
-test('Native coding routes publish canonical recall and coding memory writeback behavior', async () => {
+test('Removed native coding routes return 404 after MCP coding capability retirement', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
 
@@ -528,8 +525,6 @@ test('Native coding routes publish canonical recall and coding memory writeback 
                 }
             })
         });
-        const recallPayload = await recallResponse.json();
-
         const writebackResponse = await fetch(`${server.baseUrl}/agent_gateway/coding/memory-writeback`, {
             method: 'POST',
             headers: {
@@ -555,118 +550,9 @@ test('Native coding routes publish canonical recall and coding memory writeback 
                 }
             })
         });
-        const writebackPayload = await writebackResponse.json();
 
-        assert.equal(recallResponse.status, 200);
-        assert.equal(recallPayload.success, true);
-        assert.equal(recallPayload.meta.operationName, 'coding.recall');
-        assert.match(recallPayload.meta.traceId, /^agwop_/);
-        assert.equal(recallPayload.data.scope.applied, true);
-        assert.equal(recallPayload.data.recallBlocks.length > 0, true);
-
-        assert.equal(writebackResponse.status, 200);
-        assert.equal(writebackPayload.success, true);
-        assert.equal(writebackPayload.meta.operationName, 'coding.memory_writeback');
-        assert.match(writebackPayload.meta.traceId, /^agwop_/);
-        assert.equal(writebackPayload.data.writeStatus, 'created');
-        assert.equal(writebackPayload.data.target.diary, 'Nova');
-    } finally {
-        await server.close();
-        await fs.rm(agentDir, { recursive: true, force: true });
-    }
-});
-
-test('Native coding routes preserve deferred and validation machine-readable metadata', async () => {
-    const agentDir = await createTempAgentDir();
-    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
-
-    const pluginManager = createPluginManager({
-        agentManager: createAgentManager(agentDir, {
-            Ariadne: 'Ariadne.md'
-        })
-    });
-    const bundle = getGatewayServiceBundle(pluginManager);
-    bundle.codingRecallService.recallForCoding = async ({ body }) => ({
-        success: true,
-        requestId: body.requestContext.requestId,
-        status: 'waiting_approval',
-        data: {
-            runtime: {
-                deferred: true,
-                status: 'waiting_approval'
-            },
-            job: {
-                jobId: 'job-native-coding-recall-deferred',
-                status: 'waiting_approval'
-            }
-        }
-    });
-    bundle.codingMemoryWritebackService.commitForCoding = async ({ body }) => ({
-        success: false,
-        requestId: body.requestContext.requestId,
-        status: 400,
-        code: 'AGW_VALIDATION_ERROR',
-        error: 'coding memory writeback requires task plus additional signals',
-        details: {
-            field: 'task+(summary|implementation|outcome|result|notes|constraints|pitfalls|files|symbols)'
-        }
-    });
-
-    const server = await createServer(pluginManager);
-
-    try {
-        const deferredResponse = await fetch(`${server.baseUrl}/agent_gateway/coding/recall`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json'
-            },
-            body: JSON.stringify({
-                task: {
-                    description: '等待审批后继续 recall'
-                },
-                files: ['modules/agentGateway/adapters/mcpBackendProxyAdapter.js'],
-                requestContext: {
-                    requestId: 'req-native-coding-recall-deferred',
-                    agentId: 'Ariadne',
-                    sessionId: 'sess-native-coding-recall-deferred'
-                }
-            })
-        });
-        const deferredPayload = await deferredResponse.json();
-
-        const invalidWritebackResponse = await fetch(`${server.baseUrl}/agent_gateway/coding/memory-writeback`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json'
-            },
-            body: JSON.stringify({
-                task: {
-                    description: '只有 task，没有其它信号'
-                },
-                diary: 'Nova',
-                requestContext: {
-                    requestId: 'req-native-coding-writeback-invalid',
-                    agentId: 'Ariadne',
-                    sessionId: 'sess-native-coding-writeback-invalid'
-                }
-            })
-        });
-        const invalidWritebackPayload = await invalidWritebackResponse.json();
-
-        assert.equal(deferredResponse.status, 202);
-        assert.equal(deferredPayload.success, true);
-        assert.equal(deferredPayload.meta.operationName, 'coding.recall');
-        assert.equal(deferredPayload.meta.operationStatus, 'waiting_approval');
-        assert.equal(deferredPayload.data.job.jobId, 'job-native-coding-recall-deferred');
-
-        assert.equal(invalidWritebackResponse.status, 400);
-        assert.equal(invalidWritebackPayload.success, false);
-        assert.equal(invalidWritebackPayload.code, 'AGW_VALIDATION_ERROR');
-        assert.equal(
-            invalidWritebackPayload.details.field,
-            'task+(summary|implementation|outcome|result|notes|constraints|pitfalls|files|symbols)'
-        );
-        assert.equal(invalidWritebackPayload.meta.operationName, 'coding.memory_writeback');
+        assert.equal(recallResponse.status, 404);
+        assert.equal(writebackResponse.status, 404);
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });

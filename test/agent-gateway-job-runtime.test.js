@@ -139,10 +139,10 @@ test('JobRuntimeService filters runtime events by ownership and rejects terminal
         gatewayId: 'gw-owner'
     };
     const job = service.createAcceptedJob({
-        operation: 'coding.recall',
+        operation: 'agents.render',
         authContext: ownerAuthContext,
         metadata: {
-            toolName: 'gateway_recall_for_coding'
+            toolName: 'gateway_agent_bootstrap'
         }
     });
 

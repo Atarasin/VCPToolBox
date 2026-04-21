@@ -1,6 +1,9 @@
 const {
     createForbiddenError
 } = require('./toolScopeGuard');
+const {
+    areDiaryNamesEquivalent
+} = require('./mcpAgentMemoryPolicy');
 
 function isDiaryAllowed(policy, diaryName) {
     const normalizedDiaryName = typeof diaryName === 'string' ? diaryName.trim() : '';
@@ -10,7 +13,7 @@ function isDiaryAllowed(policy, diaryName) {
     const allowedDiaryNames = Array.isArray(policy?.allowedDiaryNames)
         ? policy.allowedDiaryNames
         : [];
-    return allowedDiaryNames.includes(normalizedDiaryName);
+    return allowedDiaryNames.some((allowedDiaryName) => areDiaryNamesEquivalent(allowedDiaryName, normalizedDiaryName));
 }
 
 function ensureDiaryAllowed({ policy, diaryName, authContext }) {
