@@ -3,10 +3,10 @@ const test = require('node:test');
 
 const {
     createOperabilityService
-} = require('../modules/agentGateway/services/operabilityService');
+} = require('../../../modules/agentGateway/services/operabilityService');
 const {
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 test('OperabilityService rejects excess rate and records a metrics snapshot', () => {
     let currentTime = Date.parse('2026-04-20T10:00:00.000Z');

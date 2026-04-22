@@ -1,5 +1,7 @@
 # OpenClaw Bridge API 接口文档
 
+> 已退役：`/admin_api/openclaw/*` 已不再作为当前受支持接口。本文件仅保留为历史 API 参考，现行契约请使用 `/agent_gateway/*`。
+
 > 基于 `routes/openclawBridgeRoutes.js` 当前实现自动生成  
 > 桥接版本：`v1`
 

@@ -1,5 +1,7 @@
 # oh-my-openagent × VCPToolBox 联合方案
 
+> 说明：文中涉及的 `/admin_api/openclaw/*` 示例接口属于历史探索语境，不代表当前受支持 contract。当前正式外部接口以 `/agent_gateway/*` 为准。
+
 > **你当前真正需要的不是“先桥接工具”，而是“先桥接 Agent 定义本身”。**
 >  
 > 目标是：**在 VCP 侧维护 Agent 提示词与注册表，oh-my-openagent 只负责读取这些已注册 Agent 并参与编排。**

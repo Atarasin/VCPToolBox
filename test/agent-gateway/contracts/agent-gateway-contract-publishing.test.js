@@ -7,7 +7,7 @@ const yaml = require('js-yaml');
 const {
     createPublishedOpenApiDocument,
     PUBLISHED_NATIVE_GATEWAY_PATHS
-} = require('../modules/agentGateway/contracts/publishedOpenApiDocument');
+} = require('../../../modules/agentGateway/contracts/publishedOpenApiDocument');
 
 function readJson(filePath) {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -33,7 +33,7 @@ function extractNativeRoutePaths(routeFilePath) {
 }
 
 test('published Agent Gateway OpenAPI YAML and JSON stay equivalent to the canonical document source', () => {
-    const rootDir = path.resolve(__dirname, '..');
+    const rootDir = path.resolve(__dirname, '..', '..', '..');
     const yamlPath = path.join(rootDir, 'mydoc', 'export', 'agent-gateway.openapi.yaml');
     const jsonPath = path.join(rootDir, 'mydoc', 'export', 'agent-gateway.openapi.json');
     const yamlDocument = readYaml(yamlPath);
@@ -45,7 +45,7 @@ test('published Agent Gateway OpenAPI YAML and JSON stay equivalent to the canon
 });
 
 test('published Agent Gateway OpenAPI covers the full native route surface', () => {
-    const rootDir = path.resolve(__dirname, '..');
+    const rootDir = path.resolve(__dirname, '..', '..', '..');
     const yamlPath = path.join(rootDir, 'mydoc', 'export', 'agent-gateway.openapi.yaml');
     const routeFilePath = path.join(rootDir, 'routes', 'agentGatewayRoutes.js');
     const yamlDocument = readYaml(yamlPath);
@@ -59,7 +59,7 @@ test('published Agent Gateway OpenAPI covers the full native route surface', () 
 });
 
 test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas machine-readable', () => {
-    const rootDir = path.resolve(__dirname, '..');
+    const rootDir = path.resolve(__dirname, '..', '..', '..');
     const jsonPath = path.join(rootDir, 'mydoc', 'export', 'agent-gateway.openapi.json');
     const document = readJson(jsonPath);
 

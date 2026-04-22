@@ -1,5 +1,7 @@
 # OpenClaw 通过标准接口统一接入 VCP 的设计方案
 
+> 历史设计记录：`/admin_api/openclaw/*` 已在后续 change 中退役。当前受支持接入面以 `/agent_gateway/*` 为准，本文件仅用于追溯迁移设计背景。
+
 ## 1. 背景与结论
 
 当前 `modules/agentGateway` 已经形成了比较清晰的三层结构：

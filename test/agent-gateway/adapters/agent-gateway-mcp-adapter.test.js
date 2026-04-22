@@ -5,17 +5,17 @@ const os = require('node:os');
 const path = require('node:path');
 const express = require('express');
 
-const createAgentGatewayRoutes = require('../routes/agentGatewayRoutes');
+const createAgentGatewayRoutes = require('../../../routes/agentGatewayRoutes');
 const {
     getGatewayServiceBundle
-} = require('../modules/agentGateway/createGatewayServiceBundle');
+} = require('../../../modules/agentGateway/createGatewayServiceBundle');
 const {
     createMcpAdapter,
     createMcpServerHarness
-} = require('../modules/agentGateway/adapters/mcpAdapter');
+} = require('../../../modules/agentGateway/adapters/mcpAdapter');
 const {
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 let previousMemoryPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
 

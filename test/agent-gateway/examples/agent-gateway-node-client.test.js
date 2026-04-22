@@ -4,7 +4,7 @@ const test = require('node:test');
 const {
     AgentGatewayClient,
     AgentGatewayClientError
-} = require('../examples/agent-gateway-node-client');
+} = require('../../../examples/agent-gateway-node-client');
 
 test('AgentGatewayClient sends governed auth headers and parses success envelopes', async () => {
     const requests = [];

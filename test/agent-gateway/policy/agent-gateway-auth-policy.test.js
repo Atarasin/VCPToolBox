@@ -6,19 +6,19 @@ const test = require('node:test');
 
 const {
     resolveAuthContext
-} = require('../modules/agentGateway/policy/authContextResolver');
+} = require('../../../modules/agentGateway/policy/authContextResolver');
 const {
     createAgentPolicyResolver
-} = require('../modules/agentGateway/policy/agentPolicyResolver');
+} = require('../../../modules/agentGateway/policy/agentPolicyResolver');
 const {
     ensureToolAllowed
-} = require('../modules/agentGateway/policy/toolScopeGuard');
+} = require('../../../modules/agentGateway/policy/toolScopeGuard');
 const {
     ensureDiaryAllowed
-} = require('../modules/agentGateway/policy/diaryScopeGuard');
+} = require('../../../modules/agentGateway/policy/diaryScopeGuard');
 const {
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 test('authContextResolver builds canonical transitional auth context', () => {
     const authContext = resolveAuthContext({

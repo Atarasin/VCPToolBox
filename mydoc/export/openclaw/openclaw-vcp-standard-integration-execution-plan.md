@@ -1,5 +1,7 @@
 # OpenClaw 标准接口迁移执行计划
 
+> 历史执行计划：本文记录的是迁移阶段计划。`/admin_api/openclaw/*` 已在后续 change 中退役，当前受支持接口以 `/agent_gateway/*` 为准。
+
 > 文档目标：基于 `openclaw-vcp-standard-integration-design.md`，给出一份可直接执行、可排期、可验收的迁移计划，使 `openclaw-vcp-plugin` 统一通过 canonical `/agent_gateway/*` 使用 VCP 能力。
 
 ---
@@ -208,7 +210,7 @@ Phase 4
 
 1. `routes/agentGatewayRoutes.js`
 2. `modules/agentGateway/contracts/publishedOpenApiDocument.js`
-3. `test/agent-gateway-routes.test.js`
+3. `test/agent-gateway/routes/agent-gateway-routes.test.js`
 4. 必要时：
    - `mydoc/export/agent-gateway.openapi.json`
 

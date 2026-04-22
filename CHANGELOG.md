@@ -1,5 +1,13 @@
 # VCPToolBox 版本变更日志
 
+## Unreleased
+
+### BREAKING: Retire Legacy OpenClaw Bridge Surface
+- 移除服务端对 `/admin_api/openclaw/*` 的活跃公开挂载，正式退役旧 OpenClaw bridge 接口。
+- 删除 `routes/openclawBridgeRoutes.js`、`modules/agentGatewayCore.js` 与 `test/openclaw-bridge-routes.test.js`，不再继续维护 legacy route 行为。
+- 从主 `openapi.yaml` 移除 `/admin_api/openclaw/*` 条目，当前正式对外 HTTP contract 收敛为 `/agent_gateway/*`。
+- 保留既往设计与 archive 材料用于历史追溯，但它们不再构成当前受支持接口说明。
+
 ## 7.1.2 - 2026-03-29
 
 ### OpenClaw Bridge Phase 4

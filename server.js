@@ -1142,7 +1142,6 @@ const adminPanelRoutes = require('./routes/adminPanelRoutes')(
         });
     }
 );
-const openclawBridgeRoutes = require('./routes/openclawBridgeRoutes')(pluginManager);
 const agentGatewayRoutes = require('./routes/agentGatewayRoutes')(pluginManager);
 
 // 新增：引入 VCP 论坛 API 路由
@@ -1229,11 +1228,10 @@ async function initialize() {
     await pluginManager.initializeServices(app, adminPanelRoutes, __dirname);
     // 在所有服务插件都注册完路由后，再将 adminApiRouter 挂载到主 app 上
     app.use('/admin_api', adminPanelRoutes);
-    app.use('/admin_api', openclawBridgeRoutes);
     app.use('/agent_gateway', agentGatewayRoutes);
     // 挂载 VCP 论坛 API 路由
     app.use('/admin_api/forum', forumApiRoutes);
-    console.log('服务类插件初始化完成，管理面板 API、OpenClaw Bridge、Native Agent Gateway 路由和 VCP 论坛 API 路由已挂载。');
+    console.log('服务类插件初始化完成，管理面板 API、Native Agent Gateway 路由和 VCP 论坛 API 路由已挂载。');
 
     // --- 新增：通用依赖注入 ---
     // 在所有服务都初始化完毕后，再执行依赖注入，确保 VCPLog 等服务已准备就绪。

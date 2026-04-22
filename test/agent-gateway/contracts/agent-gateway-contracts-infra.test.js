@@ -4,17 +4,17 @@ const test = require('node:test');
 const {
     normalizeRequestContext,
     createRequestId
-} = require('../modules/agentGateway/contracts/requestContext');
+} = require('../../../modules/agentGateway/contracts/requestContext');
 const {
     createResponseMeta,
     sendSuccessResponse,
     sendErrorResponse
-} = require('../modules/agentGateway/contracts/responseEnvelope');
+} = require('../../../modules/agentGateway/contracts/responseEnvelope');
 const {
     AGW_ERROR_CODES,
     OPENCLAW_ERROR_CODES,
     OPENCLAW_TO_AGENT_GATEWAY_CODE
-} = require('../modules/agentGateway/contracts/errorCodes');
+} = require('../../../modules/agentGateway/contracts/errorCodes');
 const {
     AGENT_GATEWAY_AUTH_MODES,
     AGENT_GATEWAY_HEADERS,
@@ -22,19 +22,19 @@ const {
     resolveDedicatedGatewayAuth,
     resolveGovernedIdempotencyKey,
     resolveNativeRequestContext
-} = require('../modules/agentGateway/contracts/protocolGovernance');
+} = require('../../../modules/agentGateway/contracts/protocolGovernance');
 const {
     reuseRequestId,
     getDurationMs
-} = require('../modules/agentGateway/infra/trace');
+} = require('../../../modules/agentGateway/infra/trace');
 const {
     createAuditLogger
-} = require('../modules/agentGateway/infra/auditLogger');
+} = require('../../../modules/agentGateway/infra/auditLogger');
 const {
     mapErrorByCategory,
     mapOpenClawMemoryWriteError,
     mapOpenClawToolExecutionError
-} = require('../modules/agentGateway/infra/errorMapper');
+} = require('../../../modules/agentGateway/infra/errorMapper');
 
 function createMockResponse() {
     return {

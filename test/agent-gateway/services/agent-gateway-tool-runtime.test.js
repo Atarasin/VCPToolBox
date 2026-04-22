@@ -1,15 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createSchemaRegistry } = require('../modules/agentGateway/infra/schemaRegistry');
-const { createToolRuntimeService } = require('../modules/agentGateway/services/toolRuntimeService');
-const { createJobRuntimeService } = require('../modules/agentGateway/services/jobRuntimeService');
-const { createAgentPolicyResolver } = require('../modules/agentGateway/policy/agentPolicyResolver');
-const { resolveAuthContext } = require('../modules/agentGateway/policy/authContextResolver');
-const { ensureToolAllowed } = require('../modules/agentGateway/policy/toolScopeGuard');
+const { createSchemaRegistry } = require('../../../modules/agentGateway/infra/schemaRegistry');
+const { createToolRuntimeService } = require('../../../modules/agentGateway/services/toolRuntimeService');
+const { createJobRuntimeService } = require('../../../modules/agentGateway/services/jobRuntimeService');
+const { createAgentPolicyResolver } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+const { resolveAuthContext } = require('../../../modules/agentGateway/policy/authContextResolver');
+const { ensureToolAllowed } = require('../../../modules/agentGateway/policy/toolScopeGuard');
 const {
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 function createAuditLoggerRecorder() {
     const entries = [];

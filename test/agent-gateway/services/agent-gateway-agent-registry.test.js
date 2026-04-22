@@ -6,7 +6,7 @@ const test = require('node:test');
 
 const {
     createAgentRegistryService
-} = require('../modules/agentGateway/services/agentRegistryService');
+} = require('../../../modules/agentGateway/services/agentRegistryService');
 
 async function createTempAgentDir() {
     return fs.mkdtemp(path.join(os.tmpdir(), 'agw-agent-registry-'));

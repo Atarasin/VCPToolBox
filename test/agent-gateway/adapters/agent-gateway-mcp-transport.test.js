@@ -6,13 +6,13 @@ const os = require('node:os');
 const test = require('node:test');
 const express = require('express');
 
-const createAgentGatewayRoutes = require('../routes/agentGatewayRoutes');
+const createAgentGatewayRoutes = require('../../../routes/agentGatewayRoutes');
 const {
     getGatewayServiceBundle
-} = require('../modules/agentGateway/createGatewayServiceBundle');
+} = require('../../../modules/agentGateway/createGatewayServiceBundle');
 const {
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 async function createTempAgentDir() {
     return fs.mkdtemp(path.join(os.tmpdir(), 'agw-mcp-transport-'));
@@ -57,7 +57,7 @@ function createTransportPluginManager(agentDir, overrides = {}) {
     });
 }
 
-const REPO_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const START_SCRIPT = path.join(REPO_ROOT, 'scripts', 'start-agent-gateway-mcp-server.js');
 
 async function createNativeServer(pluginManager) {

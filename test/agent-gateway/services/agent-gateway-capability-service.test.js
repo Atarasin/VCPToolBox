@@ -1,12 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createCapabilityService } = require('../modules/agentGateway/services/capabilityService');
-const { createSchemaRegistry } = require('../modules/agentGateway/infra/schemaRegistry');
+const { createCapabilityService } = require('../../../modules/agentGateway/services/capabilityService');
+const { createSchemaRegistry } = require('../../../modules/agentGateway/infra/schemaRegistry');
 const {
     createKnowledgeBaseManager,
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 test('CapabilityService builds compatible capabilities and scope-filtered targets', async () => {
     const pluginManager = createPluginManager({
@@ -140,7 +140,7 @@ test('CapabilityService filters tools with shared agent policy when configured',
             }
         }
     });
-    const bundle = require('../modules/agentGateway/createGatewayServiceBundle').getGatewayServiceBundle(pluginManager);
+    const bundle = require('../../../modules/agentGateway/createGatewayServiceBundle').getGatewayServiceBundle(pluginManager);
 
     const capabilities = await bundle.capabilityService.getCapabilities({
         agentId: 'agent.nova',

@@ -4,7 +4,7 @@ const test = require('node:test');
 const {
     JOB_STATUS,
     createJobRuntimeService
-} = require('../modules/agentGateway/services/jobRuntimeService');
+} = require('../../../modules/agentGateway/services/jobRuntimeService');
 
 test('JobRuntimeService creates canonical deferred jobs with stable states', () => {
     const service = createJobRuntimeService();

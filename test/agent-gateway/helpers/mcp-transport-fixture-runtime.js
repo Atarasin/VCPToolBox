@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const {
     createMcpServerHarness
-} = require('../../modules/agentGateway/adapters/mcpAdapter');
+} = require('../../../modules/agentGateway/adapters/mcpAdapter');
 const {
     createPluginManager
 } = require('./agent-gateway-test-helpers');

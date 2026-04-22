@@ -38,8 +38,8 @@
 - 共享 service bundle 装配：
   - `modules/agentGateway/createGatewayServiceBundle.js`
 - 当前聚焦测试：
-  - `test/agent-gateway-mcp-adapter.test.js`
-  - `test/agent-gateway-mcp-transport.test.js`
+  - `test/agent-gateway/adapters/agent-gateway-mcp-adapter.test.js`
+  - `test/agent-gateway/adapters/agent-gateway-mcp-transport.test.js`
 
 ---
 

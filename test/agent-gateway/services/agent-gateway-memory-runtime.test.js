@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createMemoryRuntimeService } = require('../modules/agentGateway/services/memoryRuntimeService');
+const { createMemoryRuntimeService } = require('../../../modules/agentGateway/services/memoryRuntimeService');
 const {
     createPluginManager
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 function createDailyNotePlugin() {
     return {

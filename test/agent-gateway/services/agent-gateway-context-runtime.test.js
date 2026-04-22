@@ -1,12 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createContextRuntimeService } = require('../modules/agentGateway/services/contextRuntimeService');
+const { createContextRuntimeService } = require('../../../modules/agentGateway/services/contextRuntimeService');
 const {
     createKnowledgeBaseManager,
     createPluginManager,
     createRagPlugin
-} = require('./helpers/agent-gateway-test-helpers');
+} = require('../helpers/agent-gateway-test-helpers');
 
 test('ContextRuntimeService search returns normalized items and diagnostics', async () => {
     const pluginManager = createPluginManager({
