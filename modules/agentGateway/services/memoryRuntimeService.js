@@ -660,7 +660,7 @@ function createMemoryRuntimeService(deps = {}) {
                     }
                 };
             } catch (error) {
-                console.error('[OpenClawBridgeRoutes] Error writing OpenClaw memory:', error);
+                console.error('[AgentGatewayMemoryRuntime] Error writing gateway memory:', error);
                 const mappedError = mapWriteError(error);
                 auditLogger.logMemory('write.failed', {
                     requestId,

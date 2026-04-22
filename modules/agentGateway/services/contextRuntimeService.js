@@ -962,7 +962,7 @@ function createContextRuntimeService(deps = {}) {
                     }
                 };
             } catch (error) {
-                console.error('[OpenClawBridgeRoutes] Error searching OpenClaw RAG:', error);
+                console.error('[AgentGatewayContextRuntime] Error searching gateway RAG:', error);
                 auditLogger.logSearch('failed', {
                     requestId,
                     source,
@@ -1162,7 +1162,7 @@ function createContextRuntimeService(deps = {}) {
                     }
                 };
             } catch (error) {
-                console.error('[OpenClawBridgeRoutes] Error building OpenClaw recall context:', error);
+                console.error('[AgentGatewayContextRuntime] Error building gateway recall context:', error);
                 auditLogger.logContext('failed', {
                     requestId,
                     source,
