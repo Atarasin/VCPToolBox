@@ -7,6 +7,7 @@ const NATIVE_GATEWAY_VERSION = 'v1';
 const NATIVE_GATEWAY_VERSION_KEY = 'gatewayVersion';
 const NATIVE_GATEWAY_RELEASE_STAGE = 'ga';
 const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
+    '/agent_gateway/health',
     '/agent_gateway/capabilities',
     '/agent_gateway/agents',
     '/agent_gateway/agents/{agentId}',

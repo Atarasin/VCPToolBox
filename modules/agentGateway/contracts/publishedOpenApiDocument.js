@@ -278,7 +278,7 @@ function createDocumentInfo() {
             '',
             '说明：',
             `- 当前对外协议版本为 \`${NATIVE_GATEWAY_VERSION}\`，发布阶段为 \`${NATIVE_GATEWAY_RELEASE_STAGE}\`。`,
-            '- 该文档覆盖当前正式开放的 `capabilities / agents / metrics / memory / context / tools / jobs / events` 资源。',
+            '- 该文档覆盖当前正式开放的 `health / capabilities / agents / metrics / memory / context / tools / jobs / events` 资源。',
             '- 推荐优先使用独立 Gateway 凭证接入；Basic Auth 与 `admin_auth` Cookie 仅作为过渡兼容链路记录。',
             '- 该契约与 `routes/agentGatewayRoutes.js`、M7-M11 主 specs 以及 contract validation 保持对齐。'
         ].join('\n'),
@@ -316,6 +316,24 @@ function createPublishedOpenApiDocument() {
             { adminAuthCookie: [] }
         ],
         paths: {
+            '/agent_gateway/health': {
+                get: {
+                    tags: ['Operations'],
+                    summary: '读取当前 gateway 实例的健康探测快照',
+                    operationId: 'getAgentGatewayHealth',
+                    parameters: [
+                        { $ref: '#/components/parameters/RequestIdQuery' },
+                        { $ref: '#/components/parameters/SourceQuery' },
+                        { $ref: '#/components/parameters/RuntimeQuery' }
+                    ],
+                    responses: {
+                        200: { $ref: '#/components/responses/HealthSuccess' },
+                        401: { $ref: '#/components/responses/Unauthorized' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
+                        500: { $ref: '#/components/responses/InternalError' }
+                    }
+                }
+            },
             '/agent_gateway/capabilities': {
                 get: {
                     tags: ['Capabilities'],
@@ -806,6 +824,19 @@ function createPublishedOpenApiDocument() {
                     content: {
                         'application/json': {
                             schema: { $ref: '#/components/schemas/MetricsEnvelope' }
+                        }
+                    }
+                },
+                HealthSuccess: {
+                    description: '成功',
+                    headers: {
+                        'x-request-id': { $ref: '#/components/headers/XRequestId' },
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
+                    },
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/HealthEnvelope' }
                         }
                     }
                 },
@@ -1350,6 +1381,33 @@ function createPublishedOpenApiDocument() {
                 },
                 MetricsEnvelope: createSuccessEnvelopeSchema({
                     $ref: '#/components/schemas/MetricsData'
+                }),
+                HealthData: {
+                    type: 'object',
+                    required: ['status', 'serverTime', 'pluginManagerReady', 'knowledgeBaseReady', 'gatewayVersion'],
+                    properties: {
+                        status: {
+                            type: 'string',
+                            enum: ['ok', 'degraded']
+                        },
+                        serverTime: {
+                            type: 'string',
+                            format: 'date-time'
+                        },
+                        pluginManagerReady: {
+                            type: 'boolean'
+                        },
+                        knowledgeBaseReady: {
+                            type: 'boolean'
+                        },
+                        gatewayVersion: {
+                            type: 'string',
+                            example: NATIVE_GATEWAY_VERSION
+                        }
+                    }
+                },
+                HealthEnvelope: createSuccessEnvelopeSchema({
+                    $ref: '#/components/schemas/HealthData'
                 }),
                 MemorySearchRequest: {
                     type: 'object',

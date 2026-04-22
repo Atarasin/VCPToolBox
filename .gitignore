@@ -237,3 +237,4 @@ Plugin/RAGDiaryPlugin/folding_store.db
 Plugin/VCPTavern/access_logs.json
 Plugin/AgentAssistant/agent_scores.json
 image/urlfetch/f24103af-23bb-486c-85ec-a272ca0aaacd.png
+.gstack/

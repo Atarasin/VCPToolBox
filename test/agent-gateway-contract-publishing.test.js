@@ -64,11 +64,18 @@ test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas 
     const document = readJson(jsonPath);
 
     assert.ok(document.components.schemas.GatewayMeta);
+    assert.ok(document.components.schemas.HealthData);
+    assert.ok(document.components.schemas.HealthEnvelope);
     assert.ok(document.components.schemas.JobObject);
     assert.ok(document.components.schemas.RuntimeEvent);
     assert.ok(document.components.schemas.AgentRenderMeta);
+    assert.ok(document.paths['/agent_gateway/health']);
     assert.ok(document.paths['/agent_gateway/jobs/{jobId}']);
     assert.ok(document.paths['/agent_gateway/events/stream']);
+    assert.equal(
+        document.paths['/agent_gateway/health'].get.responses['200'].$ref,
+        '#/components/responses/HealthSuccess'
+    );
     assert.ok(document.paths['/agent_gateway/tools/{toolName}/invoke'].post.responses['202']);
     assert.equal(
         document.components.responses.AgentRenderSuccess.content['application/json'].examples.renderedPrompt.value

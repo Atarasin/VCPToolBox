@@ -340,6 +340,27 @@ function writeNativeSseEvent(res, eventName, payload) {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function buildNativeHealthSnapshot(pluginManager) {
+    const pluginManagerReady = Boolean(
+        pluginManager &&
+        pluginManager.plugins &&
+        typeof pluginManager.getPlugin === 'function'
+    );
+    const knowledgeBaseReady = Boolean(
+        pluginManager &&
+        pluginManager.vectorDBManager &&
+        typeof pluginManager.vectorDBManager.listDiaryNames === 'function'
+    );
+
+    return {
+        status: pluginManagerReady && knowledgeBaseReady ? 'ok' : 'degraded',
+        serverTime: new Date().toISOString(),
+        pluginManagerReady,
+        knowledgeBaseReady,
+        gatewayVersion: NATIVE_GATEWAY_VERSION
+    };
+}
+
 /**
  * Native Agent Gateway beta adapter。
  * 路由层只负责协议适配，所有核心能力都委托给共享 Gateway Core services。
@@ -392,6 +413,56 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         }
 
         return next();
+    });
+
+    router.get('/health', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = createNativeRequestContext(req, {
+            requestId: req.query.requestId,
+            source: req.query.source,
+            runtime: req.query.runtime
+        }, 'agent-gateway-health');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth
+        });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'health.read',
+            requestContext,
+            authContext,
+            payload: req.query
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
+
+        try {
+            return sendNativeSuccessWithOperation(res, {
+                requestId: requestContext.requestId,
+                startedAt,
+                data: buildNativeHealthSnapshot(pluginManager),
+                authContext,
+                operationControl
+            });
+        } catch (error) {
+            return sendNativeErrorWithOperation(res, {
+                status: 500,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: AGW_ERROR_CODES.INTERNAL_ERROR,
+                error: 'Failed to load gateway health snapshot',
+                details: { message: error.message },
+                authContext,
+                operationControl
+            });
+        }
     });
 
     router.get('/capabilities', async (req, res) => {

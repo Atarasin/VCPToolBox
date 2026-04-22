@@ -368,6 +368,37 @@ test('GET /agent_gateway/capabilities returns native envelope and shared capabil
     }
 });
 
+test('GET /agent_gateway/health returns native readiness snapshot', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/health?requestId=req-native-health-001`);
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.data.status, 'ok');
+        assert.equal(payload.data.pluginManagerReady, true);
+        assert.equal(payload.data.knowledgeBaseReady, true);
+        assert.equal(payload.data.gatewayVersion, 'v1');
+        assert.equal(payload.meta.requestId, 'req-native-health-001');
+        assert.equal(payload.meta.operationName, 'health.read');
+        assert.match(payload.meta.traceId, /^agwop_/);
+        assert.ok(Date.parse(payload.data.serverTime));
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
 test('GET /agent_gateway/agents and related detail/render routes expose registry output', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(agentDir, 'Ariadne.md', 'Hello {{VarUserName}} from Ariadne\n[[阿里阿德涅日记本::Time::TagMemo]]');
@@ -739,6 +770,15 @@ test('Native gateway accepts dedicated gateway auth and rejects invalid credenti
     const server = await createServer(pluginManager);
 
     try {
+        const unauthorizedHealthResponse = await fetch(`${server.baseUrl}/agent_gateway/health`, {
+            headers: {
+                'x-agent-gateway-key': 'wrong-secret'
+            }
+        });
+        const unauthorizedHealthPayload = await unauthorizedHealthResponse.json();
+        assert.equal(unauthorizedHealthResponse.status, 401);
+        assert.equal(unauthorizedHealthPayload.code, 'AGW_UNAUTHORIZED');
+
         const unauthorizedResponse = await fetch(`${server.baseUrl}/agent_gateway/capabilities?agentId=Ariadne`, {
             headers: {
                 'x-agent-gateway-key': 'wrong-secret'
@@ -760,6 +800,18 @@ test('Native gateway accepts dedicated gateway auth and rejects invalid credenti
         assert.equal(authorizedPayload.meta.authMode, 'gateway_key');
         assert.equal(authorizedPayload.meta.gatewayId, 'gw-ariadne');
         assert.equal(authorizedPayload.data.auth.authMode, 'gateway_key');
+
+        const authorizedHealthResponse = await fetch(`${server.baseUrl}/agent_gateway/health`, {
+            headers: {
+                'x-agent-gateway-key': 'gw-secret',
+                'x-agent-gateway-id': 'gw-ariadne'
+            }
+        });
+        const authorizedHealthPayload = await authorizedHealthResponse.json();
+        assert.equal(authorizedHealthResponse.status, 200);
+        assert.equal(authorizedHealthPayload.success, true);
+        assert.equal(authorizedHealthPayload.meta.authMode, 'gateway_key');
+        assert.equal(authorizedHealthPayload.meta.gatewayId, 'gw-ariadne');
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
