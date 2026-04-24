@@ -60,26 +60,26 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TRANS-01 | TBD | — |
-| TRANS-02 | TBD | — |
-| TRANS-03 | TBD | — |
-| TRANS-04 | TBD | — |
-| TRANS-05 | TBD | — |
-| TRANS-06 | TBD | — |
-| TRANS-07 | TBD | — |
-| TRANS-08 | TBD | — |
-| TRANS-09 | TBD | — |
-| TRANS-10 | TBD | — |
-| CAP-01 | TBD | — |
-| CAP-02 | TBD | — |
-| CAP-03 | TBD | — |
-| CAP-04 | TBD | — |
-| CAP-05 | TBD | — |
-| OP-01 | TBD | — |
-| OP-02 | TBD | — |
-| OP-03 | TBD | — |
-| OP-04 | TBD | — |
-| OP-05 | TBD | — |
-| OP-06 | TBD | — |
+| TRANS-01 | Phase 2 | Pending |
+| TRANS-02 | Phase 2 | Pending |
+| TRANS-03 | Phase 2 | Pending |
+| TRANS-04 | Phase 3 | Pending |
+| TRANS-05 | Phase 3 | Pending |
+| TRANS-06 | Phase 3 | Pending |
+| TRANS-07 | Phase 3 | Pending |
+| TRANS-08 | Phase 3 | Pending |
+| TRANS-09 | Phase 2 | Pending |
+| TRANS-10 | Phase 2 | Pending |
+| CAP-01 | Phase 4 | Pending |
+| CAP-02 | Phase 4 | Pending |
+| CAP-03 | Phase 4 | Pending |
+| CAP-04 | Phase 4 | Pending |
+| CAP-05 | Phase 4 | Pending |
+| OP-01 | Phase 5 | Pending |
+| OP-02 | Phase 2 | Pending |
+| OP-03 | Phase 1 | Pending |
+| OP-04 | Phase 5 | Pending |
+| OP-05 | Phase 5 | Pending |
+| OP-06 | Phase 2 | Pending |
 
 *Traceability filled by roadmap.*
