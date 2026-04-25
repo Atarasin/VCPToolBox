@@ -26,7 +26,7 @@ External MCP clients can securely read from and write to VCP's knowledge base ov
 - [ ] Connection is authenticated using VCP's existing user/auth system
 - [ ] Remote clients can invoke RAG/memory MCP tools (query, add, update) that already work locally
 - [ ] Multiple concurrent remote connections are supported safely
-- [ ] Local stdio MCP service continues to work unchanged
+- [x] Local stdio MCP service continues to work unchanged — validated in Phase 01
 
 ### Out of Scope
 
@@ -74,4 +74,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-24 after initialization*
+*Last updated: 2026-04-25 after Phase 01 completion*
