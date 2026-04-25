@@ -1,4 +1,4 @@
-const readline = require('node:readline');
+const { StdioTransport } = require('./transport');
 
 const {
     createBackendProxyMcpServerHarness
@@ -21,10 +21,6 @@ function writeStderr(stderr, message) {
         return;
     }
     stderr.write(`${message}\n`);
-}
-
-function writeJsonMessage(stdout, payload) {
-    stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
 function createJsonRpcErrorResponse(id, code, message, data) {
@@ -94,9 +90,8 @@ async function shutdownBackendProxyMcpRuntime() {
     runtimeState.initializePromise = null;
 }
 
-async function startStdioMcpServer(options = {}) {
-    const stdin = options.stdin || process.stdin;
-    const stdout = options.stdout || process.stdout;
+async function createStdioMcpServer(options = {}) {
+    const transport = options.transport || new StdioTransport(options);
     const stderr = options.stderr || process.stderr;
     const initializeRuntime = options.initializeRuntime || initializeBackendProxyMcpRuntime;
     const shutdownRuntime = options.shutdownRuntime || shutdownBackendProxyMcpRuntime;
@@ -107,21 +102,11 @@ async function startStdioMcpServer(options = {}) {
         throw new Error('MCP stdio transport requires a harness with handleRequest(request).');
     }
 
-    if (typeof stdin.setEncoding === 'function') {
-        stdin.setEncoding('utf8');
-    }
-
-    const input = readline.createInterface({
-        input: stdin,
-        crlfDelay: Infinity,
-        terminal: false
-    });
-
     let queue = Promise.resolve();
     let closed = false;
 
     const finished = new Promise((resolve) => {
-        input.once('close', async () => {
+        transport.finished.then(async () => {
             closed = true;
             await queue;
             if (options.shutdownOnClose !== false) {
@@ -145,16 +130,16 @@ async function startStdioMcpServer(options = {}) {
         try {
             request = JSON.parse(normalizedLine);
         } catch (error) {
-            writeJsonMessage(stdout, createJsonRpcErrorResponse(null, -32700, 'Parse error', {
+            transport.send(JSON.stringify(createJsonRpcErrorResponse(null, -32700, 'Parse error', {
                 details: error.message
-            }));
+            })));
             return;
         }
 
         if (Array.isArray(request)) {
-            writeJsonMessage(stdout, createJsonRpcErrorResponse(null, -32600, 'Batch requests are not supported', {
+            transport.send(JSON.stringify(createJsonRpcErrorResponse(null, -32600, 'Batch requests are not supported', {
                 field: 'request'
-            }));
+            })));
             return;
         }
 
@@ -163,20 +148,20 @@ async function startStdioMcpServer(options = {}) {
         try {
             const response = await harness.handleRequest(request);
             if (expectsResponse && response) {
-                writeJsonMessage(stdout, response);
+                transport.send(JSON.stringify(response));
             }
         } catch (error) {
             if (!expectsResponse) {
                 writeStderr(stderr, `[MCPTransport] Notification handling failed: ${error.message}`);
                 return;
             }
-            writeJsonMessage(stdout, createJsonRpcErrorResponse(request.id, -32603, 'Internal error', {
+            transport.send(JSON.stringify(createJsonRpcErrorResponse(request.id, -32603, 'Internal error', {
                 details: error.message
-            }));
+            })));
         }
     }
 
-    input.on('line', (line) => {
+    transport.setMessageHandler((line) => {
         queue = queue
             .then(() => handleLine(line))
             .catch((error) => {
@@ -189,16 +174,21 @@ async function startStdioMcpServer(options = {}) {
             if (closed) {
                 return;
             }
-            input.close();
+            await transport.close();
             await finished;
         },
         finished
     };
 }
 
+async function startStdioMcpServer(options = {}) {
+    return createStdioMcpServer(options);
+}
+
 module.exports = {
     createJsonRpcErrorResponse,
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime,
-    startStdioMcpServer
+    startStdioMcpServer,
+    createStdioMcpServer
 };
