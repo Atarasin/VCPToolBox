@@ -6,7 +6,7 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
 
 ## Phases
 
-- [ ] **Phase 1: Transport Abstraction & Stdio Preservation** - Refactor existing stdio MCP to use a transport interface with zero behavioral changes
+- [x] **Phase 1: Transport Abstraction & Stdio Preservation** - Refactor existing stdio MCP to use a transport interface with zero behavioral changes
 - [ ] **Phase 2: WebSocket Endpoint & Session Management** - Expose `/mcp` WebSocket endpoint with upgrade-time auth, session isolation, and keepalive
 - [ ] **Phase 3: MCP Protocol Compliance** - Implement JSON-RPC framing, batch support, initialize handshake, and lifecycle methods
 - [ ] **Phase 4: Capability Exposure** - Wire RAG/memory tools and prompts over WebSocket with standard MCP error codes
@@ -26,7 +26,7 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
 **Plans**: 1 plan
 
 Plans:
-- [ ] `01-01-PLAN.md` — Create McpTransport interface, extract StdioTransport, refactor mcpStdioServer.js with factory + backwards-compatible wrapper, add transport unit tests
+- [x] `01-01-PLAN.md` — Create McpTransport interface, extract StdioTransport, refactor mcpStdioServer.js with factory + backwards-compatible wrapper, add transport unit tests
 
 ### Phase 2: WebSocket Endpoint & Session Management
 **Goal**: External MCP clients can establish authenticated WebSocket connections to VCP with proper session isolation and keepalive.
@@ -83,7 +83,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Transport Abstraction & Stdio Preservation | 0/1 | Not started | - |
+| 1. Transport Abstraction & Stdio Preservation | 1/1 | Complete | 2026-04-25 |
 | 2. WebSocket Endpoint & Session Management | 0/TBD | Not started | - |
 | 3. MCP Protocol Compliance | 0/TBD | Not started | - |
 | 4. Capability Exposure | 0/TBD | Not started | - |
