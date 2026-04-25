@@ -23,7 +23,10 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
   2. A new `McpTransport` interface abstracts message sending, receiving, and connection lifecycle
   3. The stdio transport implements `McpTransport` with identical behavior to the pre-refactor implementation
   4. All existing stdio MCP integration tests pass without modification
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] `01-01-PLAN.md` — Create McpTransport interface, extract StdioTransport, refactor mcpStdioServer.js with factory + backwards-compatible wrapper, add transport unit tests
 
 ### Phase 2: WebSocket Endpoint & Session Management
 **Goal**: External MCP clients can establish authenticated WebSocket connections to VCP with proper session isolation and keepalive.
@@ -80,7 +83,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Transport Abstraction & Stdio Preservation | 0/TBD | Not started | - |
+| 1. Transport Abstraction & Stdio Preservation | 0/1 | Not started | - |
 | 2. WebSocket Endpoint & Session Management | 0/TBD | Not started | - |
 | 3. MCP Protocol Compliance | 0/TBD | Not started | - |
 | 4. Capability Exposure | 0/TBD | Not started | - |
