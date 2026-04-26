@@ -365,6 +365,25 @@ async function createBackendProxyClient(t, options = {}) {
     };
 }
 
+async function createRealHarnessFixture(t, options = {}) {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', options.agentPrompt || 'You are Ariadne. Hello {{VarUserName}}.');
+    t.after(async () => {
+        await fs.rm(agentDir, { recursive: true, force: true });
+    });
+
+    const pluginManager = createRenderPluginManager(agentDir, options.pluginManagerOverrides);
+    const { client } = await createBackendProxyClient(t, {
+        backendPluginManager: pluginManager,
+        defaultAgentId: options.defaultAgentId || 'Ariadne'
+    });
+
+    return {
+        client,
+        agentDir
+    };
+}
+
 test('accepts a gateway key websocket upgrade and returns a JSON-RPC response', async (t) => {
     const fixture = await createFixture();
     t.after(async () => fixture.close());
@@ -1143,6 +1162,274 @@ test('preserves canonical request metadata on a follow-up real-harness websocket
     assert.equal(tools.id, 'real-tools-list');
     assert.equal(tools.result.meta.requestId, 'req-real-tools-list');
     assert.equal(tools.result.meta.agentId, 'Ariadne');
+});
+
+test('real harness: websocket capability discovery exposes prompt-only and tool-only gateway surfaces', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    const { client } = await createRealHarnessFixture(t);
+
+    client.send(JSON.stringify([
+        {
+            jsonrpc: '2.0',
+            id: 'cap-tools-list',
+            method: 'tools/list',
+            params: {
+                requestContext: {
+                    requestId: 'req-cap-tools-list'
+                }
+            }
+        },
+        {
+            jsonrpc: '2.0',
+            id: 'cap-prompts-list',
+            method: 'prompts/list',
+            params: {
+                requestContext: {
+                    requestId: 'req-cap-prompts-list'
+                }
+            }
+        }
+    ]));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(Array.isArray(response), true);
+
+    const tools = response.find((entry) => entry.id === 'cap-tools-list');
+    const prompts = response.find((entry) => entry.id === 'cap-prompts-list');
+
+    assert.equal(Array.isArray(tools.result.tools), true);
+    assert.equal(tools.result.meta.requestId, 'req-cap-tools-list');
+    assert.equal(tools.result.meta.agentId, 'Ariadne');
+    assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_memory_search'), true);
+    assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_context_assemble'), true);
+    assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_memory_write'), true);
+    assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_agent_render'), false);
+
+    assert.deepEqual(prompts.result.prompts.map((prompt) => prompt.name), ['gateway_agent_render']);
+    assert.equal(prompts.result.meta.requestId, 'req-cap-prompts-list');
+    assert.equal(prompts.result.meta.agentId, 'Ariadne');
+});
+
+test('real harness: websocket prompts/get returns rendered prompt content with host hints', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    const { client } = await createRealHarnessFixture(t);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'cap-prompt-get',
+        method: 'prompts/get',
+        params: {
+            name: 'gateway_agent_render',
+            arguments: {
+                agentId: 'Ariadne',
+                variables: {
+                    VarUserName: 'Nova'
+                }
+            },
+            requestContext: {
+                requestId: 'req-cap-prompt-get'
+            }
+        }
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.id, 'cap-prompt-get');
+    assert.equal(response.result.name, 'gateway_agent_render');
+    assert.equal(response.result.messages[0].role, 'system');
+    assert.equal(response.result.messages[0].content[0].text.includes('Hello Nova'), true);
+    assert.equal(response.result.meta.requestId, 'req-cap-prompt-get');
+    assert.equal(response.result.meta.agentId, 'Ariadne');
+    assert.equal(response.result.meta.hostHints.primarySurface, 'prompts/get');
+    assert.equal(response.result.meta.hostHints.resolvedAgentId, 'Ariadne');
+});
+
+test('real harness: websocket representative gateway-managed search and context calls keep MCP result shaping', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    const { client } = await createRealHarnessFixture(t);
+
+    client.send(JSON.stringify([
+        {
+            jsonrpc: '2.0',
+            id: 'cap-memory-search',
+            method: 'tools/call',
+            params: {
+                name: 'gateway_memory_search',
+                arguments: {
+                    query: 'Nova',
+                    diary: 'Nova'
+                },
+                agentId: 'Ariadne',
+                sessionId: 'sess-cap-memory-search',
+                requestContext: {
+                    requestId: 'req-cap-memory-search'
+                }
+            }
+        },
+        {
+            jsonrpc: '2.0',
+            id: 'cap-context-assemble',
+            method: 'tools/call',
+            params: {
+                name: 'gateway_context_assemble',
+                arguments: {
+                    query: 'Ariadne gateway'
+                },
+                agentId: 'Ariadne',
+                sessionId: 'sess-cap-context-assemble',
+                requestContext: {
+                    requestId: 'req-cap-context-assemble'
+                }
+            }
+        }
+    ]));
+
+    const response = await waitForJsonMessage(client, 2000);
+    assert.equal(Array.isArray(response), true);
+
+    const memorySearch = response.find((entry) => entry.id === 'cap-memory-search');
+    const contextAssemble = response.find((entry) => entry.id === 'cap-context-assemble');
+
+    assert.equal(memorySearch.result.isError, false);
+    assert.equal(Array.isArray(memorySearch.result.content), true);
+    assert.equal(typeof memorySearch.result.structuredContent, 'object');
+
+    assert.equal(contextAssemble.result.isError, false);
+    assert.equal(Array.isArray(contextAssemble.result.content), true);
+    assert.equal(typeof contextAssemble.result.structuredContent, 'object');
+});
+
+test('mock harness: websocket memory write preserves MCP tool-result success shaping', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    const fixture = await createFixture({
+        useStubHarness: false,
+        initializeRuntime: async () => ({
+            harness: {
+                async handleRequest(request) {
+                    if (request.method !== 'tools/call') {
+                        return {
+                            jsonrpc: '2.0',
+                            id: request.id ?? null,
+                            error: {
+                                code: -32601,
+                                message: 'Method not found'
+                            }
+                        };
+                    }
+
+                    return {
+                        jsonrpc: '2.0',
+                        id: request.id ?? null,
+                        result: {
+                            content: [{
+                                type: 'text',
+                                text: 'Memory write created'
+                            }],
+                            isError: false,
+                            structuredContent: {
+                                result: {
+                                    writeStatus: 'created',
+                                    diary: 'Nova'
+                                },
+                                operability: {
+                                    operationName: 'memory.write'
+                                }
+                            }
+                        }
+                    };
+                }
+            }
+        }),
+        shutdownRuntime: async () => {}
+    });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => client.terminate());
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'cap-memory-write',
+        method: 'tools/call',
+        params: {
+            name: 'gateway_memory_write',
+            arguments: {
+                target: {
+                    diary: 'Nova'
+                },
+                memory: {
+                    text: 'Phase 4 websocket capability exposure verification note',
+                    tags: ['phase4', 'websocket']
+                }
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-cap-memory-write',
+            requestContext: {
+                requestId: 'req-cap-memory-write'
+            }
+        }
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.id, 'cap-memory-write');
+    assert.equal(response.result.isError, false);
+    assert.equal(Array.isArray(response.result.content), true);
+    assert.equal(response.result.structuredContent.result.writeStatus, 'created');
+    assert.equal(response.result.structuredContent.operability.operationName, 'memory.write');
+});
+
+test('real harness: websocket batch capability discovery preserves per-entry prompt and tool semantics', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    const { client } = await createRealHarnessFixture(t);
+
+    client.send(JSON.stringify([
+        {
+            jsonrpc: '2.0',
+            id: 'cap-batch-tools-list',
+            method: 'tools/list',
+            params: {
+                requestContext: {
+                    requestId: 'req-cap-batch-tools-list'
+                }
+            }
+        },
+        {
+            jsonrpc: '2.0',
+            id: 'cap-batch-prompts-list',
+            method: 'prompts/list',
+            params: {
+                requestContext: {
+                    requestId: 'req-cap-batch-prompts-list'
+                }
+            }
+        },
+        {
+            jsonrpc: '2.0',
+            id: 'cap-batch-prompt-get',
+            method: 'prompts/get',
+            params: {
+                name: 'gateway_agent_render',
+                arguments: {
+                    agentId: 'Ariadne',
+                    variables: {
+                        VarUserName: 'Trae'
+                    }
+                },
+                requestContext: {
+                    requestId: 'req-cap-batch-prompt-get'
+                }
+            }
+        }
+    ]));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(Array.isArray(response), true);
+
+    const tools = response.find((entry) => entry.id === 'cap-batch-tools-list');
+    const prompts = response.find((entry) => entry.id === 'cap-batch-prompts-list');
+    const promptGet = response.find((entry) => entry.id === 'cap-batch-prompt-get');
+
+    assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_memory_search'), true);
+    assert.deepEqual(prompts.result.prompts.map((prompt) => prompt.name), ['gateway_agent_render']);
+    assert.equal(promptGet.result.name, 'gateway_agent_render');
+    assert.equal(promptGet.result.messages[0].content[0].text.includes('Hello Trae'), true);
+    assert.equal(promptGet.result.meta.hostHints.primarySurface, 'prompts/get');
 });
 
 test('serves /mcp even when the legacy websocket server is attached to the same HTTP server', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {

@@ -9,7 +9,7 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
 - [x] **Phase 1: Transport Abstraction & Stdio Preservation** - Refactor existing stdio MCP to use a transport interface with zero behavioral changes
 - [x] **Phase 2: WebSocket Endpoint & Session Management** - Expose `/mcp` WebSocket endpoint with upgrade-time auth, session isolation, and keepalive
 - [x] **Phase 3: MCP Protocol Compliance** - Implement JSON-RPC framing, batch support, initialize handshake, and lifecycle methods
-- [ ] **Phase 4: Capability Exposure** - Wire RAG/memory tools and prompts over WebSocket with standard MCP error codes
+- [x] **Phase 4: Capability Exposure** - Wire RAG/memory tools and prompts over WebSocket with standard MCP error codes
 - [ ] **Phase 5: Production Hardening** - Add connection limits, rate limiting, payload limits, and overload protection
 
 ## Phase Details
@@ -74,8 +74,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] `04-01-PLAN.md` — Verify real `/mcp` capability discovery plus representative remote prompt and gateway-managed memory invocation over the backend-proxy websocket harness
-- [ ] `04-02-PLAN.md` — Harden and verify MCP-standard error mapping for remote prompt, tool, and resource failures over WebSocket
+- [x] `04-01-PLAN.md` — Verify real `/mcp` capability discovery plus representative remote prompt and gateway-managed memory invocation over the backend-proxy websocket harness
+- [x] `04-02-PLAN.md` — Harden and verify MCP-standard error mapping for remote prompt, tool, and resource failures over WebSocket
 
 ### Phase 5: Production Hardening
 **Goal**: The WebSocket MCP endpoint is safe to run in production with resource limits and overload protection.
@@ -102,5 +102,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Transport Abstraction & Stdio Preservation | 1/1 | Complete | 2026-04-25 |
 | 2. WebSocket Endpoint & Session Management | 2/2 | Complete | 2026-04-26 |
 | 3. MCP Protocol Compliance | 2/2 | Complete | 2026-04-26 |
-| 4. Capability Exposure | 0/2 | Planned | - |
+| 4. Capability Exposure | 2/2 | Complete | 2026-04-26 |
 | 5. Production Hardening | 0/1+ | Not started | - |
