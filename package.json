@@ -9,6 +9,7 @@
     "test:rag-params": "node --test test/rag-params/*.test.js",
     "test:agent-gateway-contracts": "node --test test/agent-gateway/contracts/agent-gateway-contract-publishing.test.js test/agent-gateway/examples/agent-gateway-node-client.test.js",
     "test:agent-gateway-mcp-transport": "node --test test/agent-gateway/adapters/agent-gateway-mcp-transport.test.js",
+    "test:agent-gateway-mcp-websocket": "node --test test/agent-gateway/transport/websocket-transport.test.js test/agent-gateway/adapters/agent-gateway-mcp-websocket.test.js",
     "eval:mock:baseline": "node eval/mock-run-eval.js baseline",
     "eval:mock:candidate": "node eval/mock-run-eval.js candidate",
     "eval:real:baseline": "node eval/real-run-eval.js baseline",

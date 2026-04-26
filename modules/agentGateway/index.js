@@ -6,6 +6,7 @@ module.exports = {
     adapters: require('./adapters'),
     contracts: require('./contracts'),
     infra: require('./infra'),
+    mcpWebSocketServer: require('./mcpWebSocketServer'),
     policy: require('./policy'),
     services: require('./services')
 };

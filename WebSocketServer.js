@@ -92,8 +92,8 @@ function initialize(httpServer, config) {
             connectionKey = adminPanelMatch[1];
             writeLog(`Admin Panel client attempting to connect.`);
         } else {
-            writeLog(`WebSocket upgrade request for unhandled path: ${pathname}. Ignoring.`);
-            socket.destroy();
+            // 让不属于旧 mesh 的升级请求继续交给其他 upgrade 监听器处理。
+            writeLog(`WebSocket upgrade request for unhandled path: ${pathname}. Ignoring and delegating.`);
             return;
         }
 

@@ -113,6 +113,7 @@ const pluginManager = require('./Plugin.js');
 const taskScheduler = require('./routes/taskScheduler.js');
 const webSocketServer = require('./WebSocketServer.js'); // 新增 WebSocketServer 引入
 const FileFetcherServer = require('./FileFetcherServer.js'); // 引入新的 FileFetcherServer 模块
+const { createMcpWebSocketServer } = require('./modules/agentGateway/mcpWebSocketServer');
 const vcpInfoHandler = require('./vcpInfoHandler.js'); // 引入新的 VCP 信息处理器
 const basicAuth = require('basic-auth');
 const cors = require('cors'); // 引入 cors 模块
@@ -1309,6 +1310,7 @@ async function initialize() {
 
 // Store the server instance globally so it can be accessed by gracefulShutdown
 let server;
+let mcpWebSocketServer;
 
 async function startServer() {
     await loadBlacklist(); // 新增：在服务器启动时加载IP黑名单
@@ -1363,6 +1365,13 @@ async function startServer() {
         // 初始化 FileFetcherServer
         FileFetcherServer.initialize(webSocketServer);
 
+        // `/mcp` 使用独立的 Agent Gateway WebSocket 栈，不与旧 mesh 连接复用。
+        mcpWebSocketServer = createMcpWebSocketServer({
+            pluginManager,
+            stderr: process.stderr
+        });
+        mcpWebSocketServer.attach(server);
+
         if (DEBUG_MODE) console.log('[Server] WebSocketServer, PluginManager, and FileFetcherServer have been interconnected.');
     });
 }
@@ -1383,6 +1392,11 @@ async function gracefulShutdown(exitCode = 0) {
     if (webSocketServer) {
         console.log('[Server] Shutting down WebSocketServer...');
         webSocketServer.shutdown();
+    }
+    if (mcpWebSocketServer) {
+        console.log('[Server] Shutting down MCP WebSocketServer...');
+        await mcpWebSocketServer.close();
+        mcpWebSocketServer = null;
     }
     if (pluginManager) {
         await pluginManager.shutdownAllPlugins();

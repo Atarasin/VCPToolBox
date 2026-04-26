@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Phase 01 complete
-last_updated: "2026-04-25T15:53:00.000Z"
-last_activity: 2026-04-25 -- Phase 01 complete
+status: execution_ready
+stopped_at: Phase 04 plans created; next step is executing 04-01 remote capability discovery and invocation
+last_updated: "2026-04-26T00:00:00.000Z"
+last_activity: 2026-04-26 -- Phase 04 plans created for remote capability exposure and MCP error-contract verification
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 20
+  completed_phases: 3
+  total_plans: 7
+  completed_plans: 5
+  percent: 71
 ---
 
 # Project State
@@ -21,30 +21,33 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-24)
 
 **Core value:** External MCP clients can securely read from and write to VCP's knowledge base over a stable WebSocket connection without requiring local process access.
-**Current focus:** Phase 01 — transport-abstraction-stdio-preservation
+**Current focus:** Phase 04 — capability-exposure
 
 ## Current Position
 
-Phase: 01 (transport-abstraction-stdio-preservation) — COMPLETE
-Plan: 1 of 1
-Status: Complete — Phase 01 execution finished; ready for Phase 2
-Last activity: 2026-04-25 -- Phase 01 complete
+Phase: 04 (capability-exposure) — PLANNED
+Plan: 04-01 next
+Status: Ready to execute — Phase 04 plans are written; deferred hardening item remains in Phase 5
+Last activity: 2026-04-26 -- Phase 04 plans created for remote capability exposure and MCP error-contract verification
 
-Progress: [██░░░░░░░░] 20%
+Progress: [███████░░░] 71%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 1
-- Average duration: ~6 min
-- Total execution time: ~6 min
+- Total plans completed: 5
+- Average duration: not recalculated
+- Total execution time: not recalculated
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 1 | 1 | ~6 min |
+| 02 | 2 | 2 | not recalculated |
+| 03 | 2 | 2 | not recalculated |
+| 04 | 0 | 2 | not started |
 
 **Recent Trend:**
 
@@ -64,14 +67,19 @@ Recent decisions affecting current work:
 - No MCP SDK dependency — custom transport adapter (from research)
 - Reuse existing runtime — zero new dependencies (from research)
 - Auth at upgrade time using `resolveDedicatedGatewayAuth` (from research)
+- WebSocket `/mcp` auth context is canonical server-owned metadata, not client-mergeable
+- Phase 02 accepted `WR-02` as a deferred production-hardening item for Phase 5
 
 ### Pending Todos
 
-None yet.
+- Execute `04-01-PLAN.md` for remote capability discovery and representative invocation over `/mcp`
+- Execute `04-02-PLAN.md` for remote MCP error-contract verification
+- Carry `WR-02` into Phase 5 hardening execution when production safeguards are scheduled
 
 ### Blockers/Concerns
 
-None yet.
+- No blocker for Phase 04 execution start
+- Remaining known risk: `/mcp` upgrade auth timeout guard is not implemented yet and is intentionally deferred to Phase 5
 
 ## Deferred Items
 
@@ -79,10 +87,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| *(none)* | | | |
+| Hardening | Add timeout guard for `/mcp` upgrade authentication stalls (`WR-02`) | Deferred to Phase 5 | 2026-04-26 |
 
 ## Session Continuity
 
-Last session: 2026-04-24
-Stopped at: Roadmap created; ready to plan Phase 1
-Resume file: None
+Last session: 2026-04-26
+Stopped at: Phase 04 plans created; next step is executing `04-01-PLAN.md`
+Resume file: .planning/ROADMAP.md

@@ -118,7 +118,7 @@ function buildMcpInitializeResult(params = {}) {
             name: 'vcp-agent-gateway',
             version: packageMetadata.version
         },
-        instructions: 'Use the published Agent Gateway diary RAG prompts, tools, and resources over MCP stdio.'
+        instructions: 'Use the published Agent Gateway diary RAG prompts, tools, and resources through this MCP server.'
     };
 }
 

@@ -16,6 +16,9 @@
  *   Register a callback invoked when the transport surfaces an error (typically
  *   thrown by the message handler). Setting a handler replaces any previously
  *   registered handler.
+ * @property {Promise<void>|{then: Function}} finished
+ *   Promise-like value that resolves when the underlying transport has fully
+ *   closed and no further inbound messages will arrive.
  */
 
 /**
@@ -27,7 +30,8 @@ const McpTransport = Object.freeze({
     send: 'function',
     close: 'function',
     setMessageHandler: 'function',
-    setErrorHandler: 'function'
+    setErrorHandler: 'function',
+    finished: 'promise'
 });
 
 const REQUIRED_METHODS = Object.keys(McpTransport);
@@ -45,9 +49,18 @@ function validateMcpTransport(transport) {
     }
 
     for (const methodName of REQUIRED_METHODS) {
+        if (methodName === 'finished') {
+            continue;
+        }
         if (typeof transport[methodName] !== 'function') {
             throw new TypeError(`McpTransport missing required method: ${methodName}`);
         }
+    }
+
+    const finished = transport.finished;
+    const isPromiseLike = Boolean(finished) && typeof finished.then === 'function';
+    if (!isPromiseLike) {
+        throw new TypeError('McpTransport missing required method: finished');
     }
 
     return transport;

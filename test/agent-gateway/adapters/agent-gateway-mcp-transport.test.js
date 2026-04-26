@@ -287,6 +287,7 @@ test('stdio MCP transport serves capability discovery and representative tool ca
 
         assert.equal(initialize.result.protocolVersion, '2025-06-18');
         assert.equal(initialize.result.serverInfo.name, 'vcp-agent-gateway');
+        assert.doesNotMatch(initialize.result.instructions, /stdio/i);
         assert.deepEqual(ping.result, {});
         assert.deepEqual(prompts.result.prompts.map((prompt) => prompt.name), ['gateway_agent_render']);
         assert.equal(tools.result.meta.agentId, 'Ariadne');

@@ -7,8 +7,8 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
 ## Phases
 
 - [x] **Phase 1: Transport Abstraction & Stdio Preservation** - Refactor existing stdio MCP to use a transport interface with zero behavioral changes
-- [ ] **Phase 2: WebSocket Endpoint & Session Management** - Expose `/mcp` WebSocket endpoint with upgrade-time auth, session isolation, and keepalive
-- [ ] **Phase 3: MCP Protocol Compliance** - Implement JSON-RPC framing, batch support, initialize handshake, and lifecycle methods
+- [x] **Phase 2: WebSocket Endpoint & Session Management** - Expose `/mcp` WebSocket endpoint with upgrade-time auth, session isolation, and keepalive
+- [x] **Phase 3: MCP Protocol Compliance** - Implement JSON-RPC framing, batch support, initialize handshake, and lifecycle methods
 - [ ] **Phase 4: Capability Exposure** - Wire RAG/memory tools and prompts over WebSocket with standard MCP error codes
 - [ ] **Phase 5: Production Hardening** - Add connection limits, rate limiting, payload limits, and overload protection
 
@@ -39,7 +39,11 @@ Plans:
   4. Native WebSocket ping/pong frames keep connections alive without colliding with existing VCP heartbeat protocols
   5. The `/mcp` endpoint uses a dedicated client Map and is strictly separated from the existing node-to-node WebSocket mesh
   6. Connection cleanup runs on `ws.close` and `ws.error` (removes from tracking Map, clears timers)
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [x] `02-01-PLAN.md` — Build callback-based `WebSocketTransport`, dedicated `/mcp` upgrade manager, per-connection session injection, keepalive lifecycle, and focused unit coverage
+- [x] `02-02-PLAN.md` — Wire the dedicated MCP WebSocket manager into `server.js`, add endpoint integration tests, and expose a repeatable websocket transport test command
 
 ### Phase 3: MCP Protocol Compliance
 **Goal**: Remote clients can complete the MCP initialization handshake and exchange JSON-RPC messages correctly over WebSocket.
@@ -51,7 +55,11 @@ Plans:
   3. The MCP `initialize` handshake returns correct protocol version, capabilities, and server info
   4. `notifications/initialized` is handled idempotently (no response sent for notifications)
   5. The `ping` method returns a healthy response
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [x] `03-01-PLAN.md` — Upgrade the dedicated `/mcp` websocket manager to support bounded JSON-RPC batch arrays and verify WebSocket frame/batch semantics with endpoint tests
+- [x] `03-02-PLAN.md` — Verify the real MCP lifecycle (`initialize`, `notifications/initialized`, `ping`) over WebSocket and make initialize metadata transport-correct
 
 ### Phase 4: Capability Exposure
 **Goal**: Remote clients can discover and invoke VCP's RAG/memory tools and prompts over the WebSocket transport.
@@ -63,7 +71,11 @@ Plans:
   3. Remote clients can call `prompts/list` and discover available prompts
   4. Remote clients can fetch prompt content via `prompts/get`
   5. Tool, prompt, and resource errors are mapped to standard MCP error codes (not raw stack traces)
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] `04-01-PLAN.md` — Verify real `/mcp` capability discovery plus representative remote prompt and gateway-managed memory invocation over the backend-proxy websocket harness
+- [ ] `04-02-PLAN.md` — Harden and verify MCP-standard error mapping for remote prompt, tool, and resource failures over WebSocket
 
 ### Phase 5: Production Hardening
 **Goal**: The WebSocket MCP endpoint is safe to run in production with resource limits and overload protection.
@@ -74,7 +86,11 @@ Plans:
   2. Per-connection message rate limiting prevents backend overload
   3. Maximum JSON-RPC payload size is enforced; oversized messages are rejected cleanly
   4. Connection cleanup on disconnect prevents memory leaks and connection counter drift
-**Plans**: TBD
+  5. Upgrade authentication cannot hang indefinitely; timeout protection aborts stalled `/mcp` handshakes cleanly
+**Plans**: 1 deferred follow-up
+
+Plans:
+- [ ] `05-XX-HARDENING.md` — Add upgrade auth timeout guard for `/mcp` handshake stalls (deferred from Phase 2 WR-02)
 
 ## Progress
 
@@ -84,7 +100,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Transport Abstraction & Stdio Preservation | 1/1 | Complete | 2026-04-25 |
-| 2. WebSocket Endpoint & Session Management | 0/TBD | Not started | - |
-| 3. MCP Protocol Compliance | 0/TBD | Not started | - |
-| 4. Capability Exposure | 0/TBD | Not started | - |
-| 5. Production Hardening | 0/TBD | Not started | - |
+| 2. WebSocket Endpoint & Session Management | 2/2 | Complete | 2026-04-26 |
+| 3. MCP Protocol Compliance | 2/2 | Complete | 2026-04-26 |
+| 4. Capability Exposure | 0/2 | Planned | - |
+| 5. Production Hardening | 0/1+ | Not started | - |
