@@ -151,8 +151,14 @@ async function createFixture(options = {}) {
         ...(options.backendUrl ? { backendUrl: options.backendUrl } : {}),
         ...(options.defaultAgentId ? { defaultAgentId: options.defaultAgentId } : {}),
         ...(options.maxBatchSize ? { maxBatchSize: options.maxBatchSize } : {}),
+        ...(options.maxConnections ? { maxConnections: options.maxConnections } : {}),
+        ...(options.maxPayloadBytes ? { maxPayloadBytes: options.maxPayloadBytes } : {}),
+        ...(options.upgradeAuthTimeoutMs ? { upgradeAuthTimeoutMs: options.upgradeAuthTimeoutMs } : {}),
+        ...(options.rateLimitMessages ? { rateLimitMessages: options.rateLimitMessages } : {}),
+        ...(options.rateLimitWindowMs ? { rateLimitWindowMs: options.rateLimitWindowMs } : {}),
         ...(options.initializeRuntime ? { initializeRuntime: options.initializeRuntime } : {}),
         ...(options.shutdownRuntime ? { shutdownRuntime: options.shutdownRuntime } : {}),
+        ...(options.resolveAuth ? { resolveAuth: options.resolveAuth } : {}),
         pingIntervalMs: options.pingIntervalMs || 40,
         stderr: options.stderr || null
     });
@@ -277,6 +283,31 @@ async function waitForJsonMessage(client, timeoutMs = 1000) {
     ]);
 }
 
+async function waitForJsonMessages(client, expectedCount, timeoutMs = 1000) {
+    return new Promise((resolve, reject) => {
+        const messages = [];
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error('Timed out waiting for websocket message'));
+        }, timeoutMs);
+
+        const cleanup = () => {
+            clearTimeout(timeout);
+            client.off('message', handleMessage);
+        };
+
+        const handleMessage = (message) => {
+            messages.push(JSON.parse(message.toString()));
+            if (messages.length >= expectedCount) {
+                cleanup();
+                resolve(messages);
+            }
+        };
+
+        client.on('message', handleMessage);
+    });
+}
+
 async function waitForNoMessage(client, timeoutMs = 150) {
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -296,6 +327,17 @@ async function waitForNoMessage(client, timeoutMs = 150) {
 
         client.on('message', handleMessage);
     });
+}
+
+async function waitForSocketClose(client, timeoutMs = 1000) {
+    return Promise.race([
+        once(client, 'close'),
+        new Promise((_resolve, reject) => setTimeout(() => reject(new Error('Timed out waiting for websocket close')), timeoutMs))
+    ]);
+}
+
+async function delay(timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, timeoutMs));
 }
 
 async function createNativeServer(pluginManager) {
@@ -969,6 +1011,248 @@ test('cleans up connection state after the client closes the websocket', async (
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     assert.equal(fixture.manager.getConnectionCount(), 0);
+});
+
+test('enforces the configured websocket connection limit at upgrade time', async (t) => {
+    const fixture = await createFixture({ maxConnections: 1 });
+    t.after(async () => fixture.close());
+
+    const firstClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => firstClient.terminate());
+
+    const secondFailure = await expectConnectFailure(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+
+    assert.match(secondFailure, /unexpected-response|error:/);
+    assert.equal(fixture.manager.getConnectionCount(), 1);
+
+    firstClient.close();
+    await waitForSocketClose(firstClient, 1000);
+    await delay(50);
+
+    assert.equal(fixture.manager.getConnectionCount(), 0);
+});
+
+test('prevents websocket connection-count drift across overlapping client teardown', async (t) => {
+    const fixture = await createFixture();
+    t.after(async () => fixture.close());
+
+    const firstClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    const secondClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => firstClient.terminate());
+    t.after(() => secondClient.terminate());
+
+    assert.equal(fixture.manager.getConnectionCount(), 2);
+
+    firstClient.close();
+    secondClient.close();
+    await Promise.all([
+        waitForSocketClose(firstClient, 1000),
+        waitForSocketClose(secondClient, 1000)
+    ]);
+    await delay(50);
+    assert.equal(fixture.manager.getConnectionCount(), 0);
+
+    const thirdClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => thirdClient.terminate());
+
+    assert.equal(fixture.manager.getConnectionCount(), 1);
+    thirdClient.close();
+    await waitForSocketClose(thirdClient, 1000);
+    await delay(50);
+    assert.equal(fixture.manager.getConnectionCount(), 0);
+});
+
+test('rejects oversized websocket payloads promptly without hanging fixture shutdown', async (t) => {
+    const fixture = await createFixture({ maxPayloadBytes: 128 });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => client.terminate());
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'oversized-frame',
+        method: 'ping',
+        params: {
+            blob: 'x'.repeat(2048)
+        }
+    }));
+
+    await waitForSocketClose(client, 1000);
+    await delay(50);
+
+    assert.equal(fixture.manager.getConnectionCount(), 0);
+});
+
+test('keeps the websocket server healthy after rejecting an oversized payload', async (t) => {
+    const fixture = await createFixture({ maxPayloadBytes: 128 });
+    t.after(async () => fixture.close());
+
+    const oversizedClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => oversizedClient.terminate());
+
+    oversizedClient.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'oversized-first',
+        method: 'ping',
+        params: {
+            blob: 'x'.repeat(2048)
+        }
+    }));
+    await waitForSocketClose(oversizedClient, 1000);
+    await delay(50);
+
+    const healthyClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => healthyClient.terminate());
+
+    healthyClient.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'healthy-after-oversized',
+        method: 'ping'
+    }));
+
+    const response = await waitForJsonMessage(healthyClient);
+    assert.equal(response.id, 'healthy-after-oversized');
+    assert.equal(response.result.method, 'ping');
+});
+
+test('aborts stalled websocket upgrade authentication with the configured timeout', async (t) => {
+    const fixture = await createFixture({
+        upgradeAuthTimeoutMs: 50,
+        resolveAuth: async () => new Promise(() => {})
+    });
+    t.after(async () => fixture.close());
+
+    const startedAt = Date.now();
+    const failure = await expectConnectFailure(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.match(failure, /unexpected-response|error:/);
+    assert.equal(elapsedMs < 500, true);
+    assert.equal(fixture.manager.getConnectionCount(), 0);
+});
+
+test('rate limits burst traffic per websocket connection and returns retry metadata', async (t) => {
+    const fixture = await createFixture({
+        rateLimitMessages: 2,
+        rateLimitWindowMs: 80
+    });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => client.terminate());
+
+    client.send(JSON.stringify({ jsonrpc: '2.0', id: 'burst-1', method: 'ping' }));
+    client.send(JSON.stringify({ jsonrpc: '2.0', id: 'burst-2', method: 'ping' }));
+    client.send(JSON.stringify({ jsonrpc: '2.0', id: 'burst-3', method: 'ping' }));
+
+    const responses = await waitForJsonMessages(client, 3);
+    const responseById = new Map(responses.map((response) => [response.id, response]));
+
+    assert.equal(responseById.get('burst-1').result.method, 'ping');
+    assert.equal(responseById.get('burst-2').result.method, 'ping');
+    assert.equal(responseById.get('burst-3').error.data.canonicalCode, 'AGW_RATE_LIMITED');
+    assert.equal(responseById.get('burst-3').error.data.retryAfterMs > 0, true);
+    assert.equal(responseById.get('burst-3').error.data.limit, 2);
+    assert.equal(responseById.get('burst-3').error.data.windowMs, 80);
+    assert.equal(fixture.requests.length, 2);
+});
+
+test('recovers the same websocket connection after the rate-limit window resets', async (t) => {
+    const fixture = await createFixture({
+        rateLimitMessages: 1,
+        rateLimitWindowMs: 80
+    });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => client.terminate());
+
+    client.send(JSON.stringify({ jsonrpc: '2.0', id: 'window-ok', method: 'ping' }));
+    const allowed = await waitForJsonMessage(client);
+    assert.equal(allowed.id, 'window-ok');
+
+    client.send(JSON.stringify({ jsonrpc: '2.0', id: 'window-rate-limited', method: 'ping' }));
+    const rejected = await waitForJsonMessage(client);
+    assert.equal(rejected.error.data.canonicalCode, 'AGW_RATE_LIMITED');
+
+    await delay(100);
+
+    client.send(JSON.stringify({ jsonrpc: '2.0', id: 'window-recovered', method: 'ping' }));
+    const recovered = await waitForJsonMessage(client);
+    assert.equal(recovered.id, 'window-recovered');
+    assert.equal(recovered.result.method, 'ping');
+});
+
+test('keeps healthy websocket peers isolated from another connection being rate limited', async (t) => {
+    const fixture = await createFixture({
+        rateLimitMessages: 1,
+        rateLimitWindowMs: 80
+    });
+    t.after(async () => fixture.close());
+
+    const noisyClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    const healthyClient = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => noisyClient.terminate());
+    t.after(() => healthyClient.terminate());
+
+    noisyClient.send(JSON.stringify({ jsonrpc: '2.0', id: 'noisy-ok', method: 'ping' }));
+    noisyClient.send(JSON.stringify({ jsonrpc: '2.0', id: 'noisy-rate-limited', method: 'ping' }));
+    healthyClient.send(JSON.stringify({ jsonrpc: '2.0', id: 'healthy-ok', method: 'ping' }));
+
+    const noisyResponses = await waitForJsonMessages(noisyClient, 2);
+    const noisyById = new Map(noisyResponses.map((response) => [response.id, response]));
+    const healthyResponse = await waitForJsonMessage(healthyClient);
+
+    assert.equal(noisyById.get('noisy-ok').result.method, 'ping');
+    assert.equal(noisyById.get('noisy-rate-limited').error.data.canonicalCode, 'AGW_RATE_LIMITED');
+    assert.equal(healthyResponse.id, 'healthy-ok');
+    assert.equal(healthyResponse.result.method, 'ping');
+});
+
+test('drops rate-limited notifications without dispatching backend work', async (t) => {
+    const fixture = await createFixture({
+        rateLimitMessages: 1,
+        rateLimitWindowMs: 80
+    });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => client.terminate());
+
+    client.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+    client.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+    await waitForNoMessage(client, 120);
+
+    assert.equal(fixture.requests.length, 1);
 });
 
 test('serves /mcp independently without requiring the legacy websocket mesh', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {

@@ -10,7 +10,7 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
 - [x] **Phase 2: WebSocket Endpoint & Session Management** - Expose `/mcp` WebSocket endpoint with upgrade-time auth, session isolation, and keepalive
 - [x] **Phase 3: MCP Protocol Compliance** - Implement JSON-RPC framing, batch support, initialize handshake, and lifecycle methods
 - [x] **Phase 4: Capability Exposure** - Wire RAG/memory tools and prompts over WebSocket with standard MCP error codes
-- [ ] **Phase 5: Production Hardening** - Add connection limits, rate limiting, payload limits, and overload protection
+- [x] **Phase 5: Production Hardening** - Add connection limits, rate limiting, payload limits, and overload protection
 
 ## Phase Details
 
@@ -87,10 +87,11 @@ Plans:
   3. Maximum JSON-RPC payload size is enforced; oversized messages are rejected cleanly
   4. Connection cleanup on disconnect prevents memory leaks and connection counter drift
   5. Upgrade authentication cannot hang indefinitely; timeout protection aborts stalled `/mcp` handshakes cleanly
-**Plans**: 1 deferred follow-up
+**Plans**: 2 plans
 
 Plans:
-- [ ] `05-XX-HARDENING.md` — Add upgrade auth timeout guard for `/mcp` handshake stalls (deferred from Phase 2 WR-02)
+- [x] `05-01-PLAN.md` — Wire production `/mcp` transport guardrails: max connections, payload ceilings, cleanup drift coverage, and upgrade-auth timeout protection
+- [x] `05-02-PLAN.md` — Add per-connection websocket message rate limiting with retry-aware overload protection and peer-isolation tests
 
 ## Progress
 
@@ -103,4 +104,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. WebSocket Endpoint & Session Management | 2/2 | Complete | 2026-04-26 |
 | 3. MCP Protocol Compliance | 2/2 | Complete | 2026-04-26 |
 | 4. Capability Exposure | 2/2 | Complete | 2026-04-26 |
-| 5. Production Hardening | 0/1+ | Not started | - |
+| 5. Production Hardening | 2/2 | Complete | 2026-04-26 |

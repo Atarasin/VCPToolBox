@@ -4,6 +4,9 @@ const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const WebSocket = require('ws');
 
+const {
+    AGW_ERROR_CODES
+} = require('./contracts/errorCodes');
 const { normalizeRequestContext, sanitizeRequestContextValue } = require('./contracts/requestContext');
 const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance');
 const { WebSocketTransport, validateMcpTransport } = require('./transport');
@@ -16,9 +19,20 @@ const {
 const DEFAULT_ENDPOINT_PATH = '/mcp';
 const DEFAULT_PING_INTERVAL_MS = 30000;
 const DEFAULT_MAX_BATCH_SIZE = 20;
+const DEFAULT_MAX_CONNECTIONS = 100;
+const DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+const DEFAULT_UPGRADE_AUTH_TIMEOUT_MS = 5000;
+const DEFAULT_RATE_LIMIT_MESSAGES = 60;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;
 const MAX_BATCH_SIZE_ENV = 'VCP_MCP_WS_MAX_BATCH_SIZE';
+const MAX_CONNECTIONS_ENV = 'VCP_MCP_WS_MAX_CONNECTIONS';
+const MAX_PAYLOAD_BYTES_ENV = 'VCP_MCP_WS_MAX_PAYLOAD_BYTES';
+const UPGRADE_AUTH_TIMEOUT_MS_ENV = 'VCP_MCP_WS_UPGRADE_AUTH_TIMEOUT_MS';
+const RATE_LIMIT_MESSAGES_ENV = 'VCP_MCP_WS_RATE_LIMIT_MESSAGES';
+const RATE_LIMIT_WINDOW_MS_ENV = 'VCP_MCP_WS_RATE_LIMIT_WINDOW_MS';
 const DEFAULT_SOURCE = 'agent-gateway-mcp-ws';
 const DEFAULT_RUNTIME = 'mcp-websocket';
+const JSON_RPC_SERVER_ERROR_CODE = -32000;
 
 function hasOwn(object, key) {
     return Object.prototype.hasOwnProperty.call(object, key);
@@ -90,6 +104,87 @@ function resolveMaxBatchSize(options = {}) {
         || DEFAULT_MAX_BATCH_SIZE;
 }
 
+function resolveConfiguredPositiveInteger(optionValue, envName, fallbackValue) {
+    return resolvePositiveInteger(optionValue)
+        || resolvePositiveInteger(process.env[envName])
+        || fallbackValue;
+}
+
+function destroySocket(socket) {
+    if (!socket || socket.destroyed) {
+        return;
+    }
+
+    try {
+        socket.destroy();
+    } catch (_error) {
+        // Ignore destroy races during upgrade rejection paths.
+    }
+}
+
+function createRateLimitErrorResponse(id, rateLimit) {
+    return createJsonRpcErrorResponse(
+        id,
+        JSON_RPC_SERVER_ERROR_CODE,
+        'Request rate limit exceeded for this websocket connection',
+        {
+            canonicalCode: AGW_ERROR_CODES.RATE_LIMITED,
+            gatewayCode: AGW_ERROR_CODES.RATE_LIMITED,
+            reason: 'rate_limited',
+            retryAfterMs: rateLimit.retryAfterMs,
+            limit: rateLimit.limit,
+            windowMs: rateLimit.windowMs,
+            rejectionCategory: 'rate_limit',
+            retryable: true
+        }
+    );
+}
+
+function buildRateLimitRejectionPayload(rawMessage, rateLimit) {
+    let request;
+    try {
+        request = JSON.parse(rawMessage);
+    } catch (_error) {
+        return null;
+    }
+
+    if (Array.isArray(request)) {
+        const responses = request
+            .filter((entry) => isPlainObject(entry) && hasOwn(entry, 'id'))
+            .map((entry) => createRateLimitErrorResponse(entry.id, rateLimit));
+
+        return responses.length > 0 ? JSON.stringify(responses) : null;
+    }
+
+    if (!isPlainObject(request) || !hasOwn(request, 'id')) {
+        return null;
+    }
+
+    return JSON.stringify(createRateLimitErrorResponse(request.id, rateLimit));
+}
+
+function checkRateLimit(connection, timestamp = Date.now()) {
+    const rateLimit = connection.rateLimit;
+    if (!rateLimit || rateLimit.limit <= 0 || rateLimit.windowMs <= 0) {
+        return { allowed: true };
+    }
+
+    const cutoff = timestamp - rateLimit.windowMs;
+    connection.rateLimit.timestamps = connection.rateLimit.timestamps.filter((entry) => entry > cutoff);
+
+    if (connection.rateLimit.timestamps.length >= rateLimit.limit) {
+        return {
+            allowed: false,
+            retryAfterMs: Math.max(0, connection.rateLimit.timestamps[0] + rateLimit.windowMs - timestamp),
+            limit: rateLimit.limit,
+            windowMs: rateLimit.windowMs
+        };
+    }
+
+    connection.rateLimit.timestamps.push(timestamp);
+    return { allowed: true };
+}
+
 function injectConnectionContext(request, connectionContext, options = {}) {
     const requestObject = isPlainObject(request) ? request : {};
     const params = isPlainObject(requestObject.params) ? { ...requestObject.params } : {};
@@ -140,10 +235,34 @@ function createMcpWebSocketServer(options = {}) {
         ? options.pingIntervalMs
         : DEFAULT_PING_INTERVAL_MS;
     const maxBatchSize = resolveMaxBatchSize(options);
-    const maxConnections = resolvePositiveInteger(options.maxConnections) || 100;
-    const maxPayloadBytes = resolvePositiveInteger(options.maxPayloadBytes) || 4 * 1024 * 1024;
+    const maxConnections = resolveConfiguredPositiveInteger(
+        options.maxConnections,
+        MAX_CONNECTIONS_ENV,
+        DEFAULT_MAX_CONNECTIONS
+    );
+    const maxPayloadBytes = resolveConfiguredPositiveInteger(
+        options.maxPayloadBytes,
+        MAX_PAYLOAD_BYTES_ENV,
+        DEFAULT_MAX_PAYLOAD_BYTES
+    );
+    const upgradeAuthTimeoutMs = resolveConfiguredPositiveInteger(
+        options.upgradeAuthTimeoutMs,
+        UPGRADE_AUTH_TIMEOUT_MS_ENV,
+        DEFAULT_UPGRADE_AUTH_TIMEOUT_MS
+    );
+    const rateLimitMessages = resolveConfiguredPositiveInteger(
+        options.rateLimitMessages,
+        RATE_LIMIT_MESSAGES_ENV,
+        DEFAULT_RATE_LIMIT_MESSAGES
+    );
+    const rateLimitWindowMs = resolveConfiguredPositiveInteger(
+        options.rateLimitWindowMs,
+        RATE_LIMIT_WINDOW_MS_ENV,
+        DEFAULT_RATE_LIMIT_WINDOW_MS
+    );
     const initializeRuntime = options.initializeRuntime || initializeBackendProxyMcpRuntime;
     const shutdownRuntime = options.shutdownRuntime || shutdownBackendProxyMcpRuntime;
+    const resolveAuth = options.resolveAuth || resolveDedicatedGatewayAuth;
     const wss = new WebSocket.Server({
         noServer: true,
         clientTracking: false,
@@ -371,7 +490,7 @@ function createMcpWebSocketServer(options = {}) {
         }
     }
 
-    function registerConnection(ws, request, auth) {
+    function registerConnection(ws, auth) {
         const context = createConnectionContext(auth, options);
         const transport = validateMcpTransport(new WebSocketTransport(ws, options.transportOptions));
         const connection = {
@@ -384,7 +503,12 @@ function createMcpWebSocketServer(options = {}) {
             cleanupPromise: null,
             heartbeatTimer: null,
             queue: Promise.resolve(),
-            harnessPromise: null
+            harnessPromise: null,
+            rateLimit: {
+                limit: rateLimitMessages,
+                windowMs: rateLimitWindowMs,
+                timestamps: []
+            }
         };
 
         connections.set(connection.connectionId, connection);
@@ -396,6 +520,15 @@ function createMcpWebSocketServer(options = {}) {
         });
 
         transport.setMessageHandler((message) => {
+            const rateLimitResult = checkRateLimit(connection);
+            if (!rateLimitResult.allowed) {
+                const payload = buildRateLimitRejectionPayload(message, rateLimitResult);
+                if (payload) {
+                    connection.transport.send(payload);
+                }
+                return;
+            }
+
             connection.queue = connection.queue
                 .then(() => handleClientMessage(connection, message))
                 .catch((error) => {
@@ -427,24 +560,83 @@ function createMcpWebSocketServer(options = {}) {
         }
 
         if (connections.size >= maxConnections) {
-            socket.destroy();
+            destroySocket(socket);
             writeStderr(stderr, `[MCPTransport] Connection rejected: maxConnections (${maxConnections}) reached.`);
             return;
         }
 
-        const auth = resolveDedicatedGatewayAuth({
-            headers: request.headers,
-            pluginManager: options.pluginManager
+        let auth;
+        let upgradeTimeout = null;
+        let cleanupSocketAbortListeners = null;
+        const socketAbortPromise = new Promise((_, reject) => {
+            const rejectOnAbort = () => {
+                const error = new Error('Socket closed before websocket upgrade authentication completed');
+                error.code = 'MCP_WS_UPGRADE_SOCKET_ABORTED';
+                reject(error);
+            };
+
+            socket.once('close', rejectOnAbort);
+            socket.once('error', rejectOnAbort);
+            cleanupSocketAbortListeners = () => {
+                socket.off('close', rejectOnAbort);
+                socket.off('error', rejectOnAbort);
+            };
         });
 
+        try {
+            auth = await Promise.race([
+                Promise.resolve().then(() => resolveAuth({
+                    headers: request.headers,
+                    pluginManager: options.pluginManager
+                })),
+                socketAbortPromise,
+                new Promise((_, reject) => {
+                    // Bound the full auth resolution path so a stalled upgrade cannot pin a socket forever.
+                    upgradeTimeout = setTimeout(() => {
+                        const error = new Error(`WebSocket upgrade authentication timed out after ${upgradeAuthTimeoutMs}ms`);
+                        error.code = 'MCP_WS_UPGRADE_TIMEOUT';
+                        reject(error);
+                    }, upgradeAuthTimeoutMs);
+
+                    if (typeof upgradeTimeout.unref === 'function') {
+                        upgradeTimeout.unref();
+                    }
+                })
+            ]);
+        } catch (error) {
+            if (error?.code === 'MCP_WS_UPGRADE_SOCKET_ABORTED') {
+                return;
+            }
+
+            if (error?.code === 'MCP_WS_UPGRADE_TIMEOUT') {
+                writeStderr(stderr, `[MCPTransport] ${error.message}`);
+            } else {
+                logTransportError(stderr, '[MCPTransport] Upgrade authentication failed', error);
+            }
+            destroySocket(socket);
+            return;
+        } finally {
+            if (upgradeTimeout) {
+                clearTimeout(upgradeTimeout);
+            }
+            if (typeof cleanupSocketAbortListeners === 'function') {
+                cleanupSocketAbortListeners();
+            }
+        }
+
         if (!auth.provided || !auth.authenticated) {
-            socket.destroy();
+            destroySocket(socket);
             return;
         }
 
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            registerConnection(ws, request, auth);
-        });
+        try {
+            wss.handleUpgrade(request, socket, head, (ws) => {
+                registerConnection(ws, auth);
+            });
+        } catch (error) {
+            logTransportError(stderr, '[MCPTransport] WebSocket upgrade failed', error);
+            destroySocket(socket);
+        }
     }
 
     function attach(httpServer) {

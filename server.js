@@ -384,6 +384,12 @@ const serverKey = process.env.Key;
 
 const cachedEmojiLists = new Map();
 
+function resolvePositiveIntegerEnvValue(name, fallbackValue) {
+    const rawValue = typeof process.env[name] === 'string' ? process.env[name].trim() : '';
+    const parsedValue = Number.parseInt(rawValue, 10);
+    return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : fallbackValue;
+}
+
 // Authentication middleware for Admin Panel and Admin API
 const adminAuth = (req, res, next) => {
     // This middleware protects both the Admin Panel static files and its API endpoints.
@@ -1366,9 +1372,15 @@ async function startServer() {
         FileFetcherServer.initialize(webSocketServer);
 
         // `/mcp` 使用独立的 Agent Gateway WebSocket 栈，不与旧 mesh 连接复用。
+        // 这些环境变量保持生产资源保护显式可调，避免只依赖测试构造参数。
         mcpWebSocketServer = createMcpWebSocketServer({
             pluginManager,
-            stderr: process.stderr
+            stderr: process.stderr,
+            maxConnections: resolvePositiveIntegerEnvValue('VCP_MCP_WS_MAX_CONNECTIONS', 100),
+            maxPayloadBytes: resolvePositiveIntegerEnvValue('VCP_MCP_WS_MAX_PAYLOAD_BYTES', 4 * 1024 * 1024),
+            upgradeAuthTimeoutMs: resolvePositiveIntegerEnvValue('VCP_MCP_WS_UPGRADE_AUTH_TIMEOUT_MS', 5000),
+            rateLimitMessages: resolvePositiveIntegerEnvValue('VCP_MCP_WS_RATE_LIMIT_MESSAGES', 60),
+            rateLimitWindowMs: resolvePositiveIntegerEnvValue('VCP_MCP_WS_RATE_LIMIT_WINDOW_MS', 1000)
         });
         mcpWebSocketServer.attach(server);
 

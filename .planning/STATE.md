@@ -2,41 +2,41 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: execution_ready
-stopped_at: Phase 04 completed; next step is Phase 05 production hardening when deferred safeguards are scheduled
-last_updated: "2026-04-26T00:00:00.000Z"
-last_activity: 2026-04-26 -- Phase 04 completed with websocket capability exposure coverage and MCP error-contract hardening
+status: execution_complete
+stopped_at: Phase 05 completed and archived
+last_updated: "2026-04-26T23:59:00.000Z"
+last_activity: 2026-04-26 -- Phase 05 websocket endpoint archived with live remote verification and Trae compatibility note
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 7
-  completed_plans: 7
-  percent: 86
+  completed_phases: 5
+  total_plans: 9
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-24)
+See: .planning/PROJECT.md (updated 2026-04-26)
 
-**Core value:** External MCP clients can securely read from and write to VCP's knowledge base over a stable WebSocket connection without requiring local process access.
-**Current focus:** Phase 05 — production-hardening
+**Core value:** WebSocket-capable external MCP clients can securely read from and write to VCP's knowledge base over a stable WebSocket connection without requiring local process access.
+**Current focus:** Milestone wrap-up after Phase 05 completion
 
 ## Current Position
 
-Phase: 05 (production-hardening) — NEXT
-Plan: 05-XX next
-Status: Ready to execute — Phase 04 is complete; deferred hardening item remains queued in Phase 5
-Last activity: 2026-04-26 -- Phase 04 completed with websocket capability exposure coverage and MCP error-contract hardening
+Phase: 05 (production-hardening) — COMPLETE
+Plan: 05-01 and 05-02 complete
+Status: Complete — production hardening is implemented, validated, and archived
+Last activity: 2026-04-26 -- Phase 05 websocket endpoint archived with live remote verification and Trae compatibility note
 
-Progress: [████████░░] 86%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 7
+- Total plans completed: 9
 - Average duration: not recalculated
 - Total execution time: not recalculated
 
@@ -48,11 +48,12 @@ Progress: [████████░░] 86%
 | 02 | 2 | 2 | not recalculated |
 | 03 | 2 | 2 | not recalculated |
 | 04 | 2 | 2 | not recalculated |
+| 05 | 2 | 2 | not recalculated |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-02, 03-01, 03-02, 04-01, 04-02
-- Trend: phase execution complete through capability exposure
+- Last 5 plans: 03-02, 04-01, 04-02, 05-01, 05-02
+- Trend: milestone execution complete through production hardening
 
 *Updated after each plan completion*
 
@@ -68,27 +69,28 @@ Recent decisions affecting current work:
 - Reuse existing runtime — zero new dependencies (from research)
 - Auth at upgrade time using `resolveDedicatedGatewayAuth` (from research)
 - WebSocket `/mcp` auth context is canonical server-owned metadata, not client-mergeable
-- Phase 02 accepted `WR-02` as a deferred production-hardening item for Phase 5
+- Phase 02 deferred `WR-02` to Phase 5 and Phase 05 closed it with bounded upgrade-auth timeout protection
 
 ### Pending Todos
 
-- Carry `WR-02` into Phase 5 hardening execution when production safeguards are scheduled
+- None for Phase 05 archive; next step is optional milestone closure/cleanup
 
 ### Blockers/Concerns
 
-- No blocker for Phase 05 execution start
-- Remaining known risk: `/mcp` upgrade auth timeout guard is not implemented yet and is intentionally deferred to Phase 5
+- No active blocker for the completed Phase 05 scope
+- Remaining known risk: production hardening is intentionally instance-local; cross-process quotas and broader observability remain out of scope
+- Compatibility boundary: Trae currently cannot consume the archived websocket endpoint via its native MCP client and must use stdio until an HTTP MCP transport exists
 
 ## Deferred Items
 
-Items acknowledged and carried forward from previous milestone close:
+Items acknowledged earlier and resolved or still deferred:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Hardening | Add timeout guard for `/mcp` upgrade authentication stalls (`WR-02`) | Deferred to Phase 5 | 2026-04-26 |
+| Hardening | Add timeout guard for `/mcp` upgrade authentication stalls (`WR-02`) | Completed in Phase 5 | 2026-04-26 |
 
 ## Session Continuity
 
 Last session: 2026-04-26
-Stopped at: Phase 04 completed; next step is scheduling Phase 05 hardening work
-Resume file: .planning/ROADMAP.md
+Stopped at: Phase 05 completed and archived
+Resume file: .planning/phases/05-production-hardening/05-UAT.md
