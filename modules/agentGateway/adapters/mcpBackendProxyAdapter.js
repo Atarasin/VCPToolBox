@@ -29,6 +29,8 @@ const MCP_ERROR_CODES = Object.freeze({
     RESOURCE_UNSUPPORTED: 'MCP_RESOURCE_UNSUPPORTED'
 });
 
+const MCP_ERROR_CODE_SET = new Set(Object.values(MCP_ERROR_CODES));
+
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
     MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP,
@@ -49,11 +51,86 @@ function normalizeMcpString(value, maxLength = 128) {
     return normalized.slice(0, maxLength);
 }
 
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function createMcpError(code, message, details = {}) {
     const error = new Error(message);
     error.code = code;
     error.details = details;
     return error;
+}
+
+const MAX_SANITIZATION_DEPTH = 8;
+
+function sanitizeMcpErrorDetails(value, depth = 0, seen = new WeakSet()) {
+    if (depth > MAX_SANITIZATION_DEPTH) {
+        return undefined;
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .map((entry) => sanitizeMcpErrorDetails(entry, depth + 1, seen))
+            .filter((entry) => typeof entry !== 'undefined');
+    }
+
+    if (!isPlainObject(value)) {
+        return value;
+    }
+
+    if (seen.has(value)) {
+        return undefined;
+    }
+    seen.add(value);
+
+    const sanitized = {};
+    Object.entries(value).forEach(([key, entry]) => {
+        if (key.toLowerCase() === 'stack') {
+            return;
+        }
+
+        const sanitizedEntry = sanitizeMcpErrorDetails(entry, depth + 1, seen);
+        if (typeof sanitizedEntry !== 'undefined') {
+            sanitized[key] = sanitizedEntry;
+        }
+    });
+
+    return sanitized;
+}
+
+function buildGatewayFailureDetails(result) {
+    return sanitizeMcpErrorDetails({
+        canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
+        gatewayCode: result.code || '',
+        requestId: result.requestId || '',
+        gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
+        ...buildOperabilityMetadata(result.meta),
+        ...(result.details && typeof result.details === 'object' ? result.details : {})
+    }) || {};
+}
+
+function shapeHarnessFailure(error) {
+    const rawCode = normalizeMcpString(error?.code, 64);
+
+    if (!MCP_ERROR_CODE_SET.has(rawCode)) {
+        return {
+            message: 'Gateway backend request failed',
+            data: {
+                code: MCP_ERROR_CODES.RUNTIME_ERROR,
+                ...(rawCode ? { sourceErrorCode: rawCode } : {})
+            }
+        };
+    }
+
+    const details = sanitizeMcpErrorDetails(error?.details);
+    return {
+        message: normalizeMcpString(error?.message || 'MCP adapter request failed', 256) || 'MCP adapter request failed',
+        data: {
+            code: rawCode,
+            ...(isPlainObject(details) ? details : {})
+        }
+    };
 }
 
 function serializeMcpValue(value) {
@@ -150,30 +227,33 @@ function buildOperabilityMetadata(meta = {}) {
 
 function createFailureResult(result) {
     const operability = buildOperabilityMetadata(result.meta);
+    const errorDetails = sanitizeMcpErrorDetails({
+        canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
+        gatewayCode: result.code || '',
+        requestId: result.requestId || '',
+        gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
+        ...operability,
+        ...(result.details && typeof result.details === 'object' ? result.details : {})
+    }) || {};
+    const contentDetails = sanitizeMcpErrorDetails({
+        gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
+        ...operability,
+        ...(result.details && typeof result.details === 'object' ? result.details : {})
+    }) || {};
+
     return {
         isError: true,
         status: 'failed',
         error: {
             code: mapGatewayFailureToMcpErrorCode(result.code),
             message: result.error || 'MCP tool call failed',
-            details: {
-                canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
-                gatewayCode: result.code || '',
-                requestId: result.requestId || '',
-                gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
-                ...operability,
-                ...(result.details && typeof result.details === 'object' ? result.details : {})
-            }
+            details: errorDetails
         },
         content: createMcpTextContent({
             error: result.error || 'MCP tool call failed',
             code: mapGatewayFailureToMcpErrorCode(result.code),
             requestId: result.requestId || '',
-            details: {
-                gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
-                ...operability,
-                ...(result.details && typeof result.details === 'object' ? result.details : {})
-            }
+            details: contentDetails
         })
     };
 }
@@ -632,14 +712,7 @@ function createBackendProxyMcpAdapter({
                 throw createMcpError(
                     mapGatewayFailureToMcpErrorCode(result.code),
                     result.error || 'MCP prompt request failed',
-                    {
-                        canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
-                        gatewayCode: result.code || '',
-                        requestId: result.requestId || '',
-                        gatewayStatus: result.httpStatus,
-                        ...buildOperabilityMetadata(result.meta),
-                        ...(result.details && typeof result.details === 'object' ? result.details : {})
-                    }
+                    buildGatewayFailureDetails(result)
                 );
             }
 
@@ -786,14 +859,7 @@ function createBackendProxyMcpAdapter({
                     throw createMcpError(
                         mapGatewayFailureToMcpErrorCode(result.code),
                         result.error || 'Failed to read memory targets resource',
-                        {
-                            canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
-                            gatewayCode: result.code || '',
-                            requestId: result.requestId || '',
-                            gatewayStatus: result.httpStatus,
-                            ...buildOperabilityMetadata(result.meta),
-                            ...(result.details && typeof result.details === 'object' ? result.details : {})
-                        }
+                        buildGatewayFailureDetails(result)
                     );
                 }
 
@@ -825,14 +891,7 @@ function createBackendProxyMcpAdapter({
                     throw createMcpError(
                         mapGatewayFailureToMcpErrorCode(jobResult.code),
                         jobResult.error || 'Failed to read Gateway job runtime events',
-                        {
-                            canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[jobResult.code] || jobResult.code || '',
-                            gatewayCode: jobResult.code || '',
-                            requestId: jobResult.requestId || '',
-                            gatewayStatus: jobResult.httpStatus,
-                            ...buildOperabilityMetadata(jobResult.meta),
-                            ...(jobResult.details && typeof jobResult.details === 'object' ? jobResult.details : {})
-                        }
+                        buildGatewayFailureDetails(jobResult)
                     );
                 }
 
@@ -883,6 +942,8 @@ function createBackendProxyMcpServerHarness(options = {}) {
 
     return {
         adapter,
+        // This harness is cached as a singleton across stdio and websocket transports.
+        // Keep per-connection mutable state in transport-injected requestContext/sessionId, not on the harness object.
         async handleRequest(message = {}) {
             const request = message && typeof message === 'object' ? message : {};
             const params = request.params && typeof request.params === 'object' ? request.params : {};
@@ -929,14 +990,12 @@ function createBackendProxyMcpServerHarness(options = {}) {
                     result
                 };
             } catch (error) {
+                const shapedError = shapeHarnessFailure(error);
                 return buildJsonRpcError(
                     request.id,
                     -32000,
-                    error.message || 'MCP adapter request failed',
-                    {
-                        code: error.code || MCP_ERROR_CODES.RUNTIME_ERROR,
-                        ...(error.details && typeof error.details === 'object' ? error.details : {})
-                    }
+                    shapedError.message,
+                    shapedError.data
                 );
             }
         }

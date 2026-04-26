@@ -91,8 +91,11 @@ function initialize(httpServer, config) {
             clientType = 'AdminPanel';
             connectionKey = adminPanelMatch[1];
             writeLog(`Admin Panel client attempting to connect.`);
+        } else if (pathname === '/mcp') {
+            // 将 /mcp 委托给独立的 Agent Gateway MCP WebSocket 栈处理。
+            return;
         } else {
-            // 让不属于旧 mesh 的升级请求继续交给其他 upgrade 监听器处理。
+            // Keep unknown upgrade paths delegable so other websocket stacks can coexist.
             writeLog(`WebSocket upgrade request for unhandled path: ${pathname}. Ignoring and delegating.`);
             return;
         }

@@ -411,6 +411,39 @@ test('stdio MCP transport rejects gateway_agent_render as a tool and points clie
     }
 });
 
+test('stdio MCP transport sanitizes representative backend runtime failures with stable MCP metadata', async () => {
+    const { child, stdout } = spawnFixtureServer({
+        VCP_MCP_BACKEND_URL: 'http://127.0.0.1:9',
+        VCP_MCP_DEFAULT_AGENT_ID: 'Ariadne'
+    });
+
+    try {
+        sendMessage(child, {
+            jsonrpc: '2.0',
+            id: 12,
+            method: 'prompts/get',
+            params: {
+                name: 'gateway_agent_render',
+                arguments: {
+                    agentId: 'Ariadne'
+                }
+            }
+        });
+
+        const failure = await stdout.waitFor((message) => message.id === 12);
+        const payload = JSON.stringify(failure);
+
+        assert.equal(failure.error.code, -32000);
+        assert.equal(failure.error.message, 'Gateway backend request failed');
+        assert.equal(failure.error.data.code, 'MCP_RUNTIME_ERROR');
+        assert.equal(failure.error.data.stack, undefined);
+        assert.equal(failure.error.data.details, undefined);
+        assert.doesNotMatch(payload, /127\.0\.0\.1:9|localhost:9|ECONNREFUSED|https?:\/\/127\.0\.0\.1:9/i);
+    } finally {
+        await stopChild(child);
+    }
+});
+
 test('stdio MCP transport returns parse errors and keeps boot logs off stdout', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');

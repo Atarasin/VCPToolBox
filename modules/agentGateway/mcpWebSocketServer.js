@@ -140,11 +140,18 @@ function createMcpWebSocketServer(options = {}) {
         ? options.pingIntervalMs
         : DEFAULT_PING_INTERVAL_MS;
     const maxBatchSize = resolveMaxBatchSize(options);
+    const maxConnections = resolvePositiveInteger(options.maxConnections) || 100;
+    const maxPayloadBytes = resolvePositiveInteger(options.maxPayloadBytes) || 4 * 1024 * 1024;
     const initializeRuntime = options.initializeRuntime || initializeBackendProxyMcpRuntime;
     const shutdownRuntime = options.shutdownRuntime || shutdownBackendProxyMcpRuntime;
     const wss = new WebSocket.Server({
         noServer: true,
-        clientTracking: false
+        clientTracking: false,
+        maxPayload: maxPayloadBytes
+    });
+
+    wss.on('error', (error) => {
+        logTransportError(stderr, '[MCPTransport] WebSocket server error', error);
     });
 
     const connections = new Map();
@@ -168,12 +175,12 @@ function createMcpWebSocketServer(options = {}) {
             runtimePromise = Promise.resolve(initializeRuntime(options))
                 .then((context) => {
                     runtimeContext = context || null;
-                    ownsRuntime = true;
 
                     if (!runtimeContext?.harness || typeof runtimeContext.harness.handleRequest !== 'function') {
                         throw new Error('MCP websocket transport requires a harness with handleRequest(request).');
                     }
 
+                    ownsRuntime = true;
                     return runtimeContext;
                 })
                 .catch((error) => {
@@ -274,12 +281,16 @@ function createMcpWebSocketServer(options = {}) {
             return;
         }
 
-        let harnessPromise = null;
         const getHarness = async () => {
-            if (!harnessPromise) {
-                harnessPromise = resolveHarness();
+            if (!connection.harnessPromise) {
+                // Reset the per-connection cache after transient init failures so later
+                // requests on the same websocket can retry runtime bootstrap.
+                connection.harnessPromise = resolveHarness().catch((error) => {
+                    connection.harnessPromise = null;
+                    throw error;
+                });
             }
-            return harnessPromise;
+            return connection.harnessPromise;
         };
         const dispatchRequest = async (requestItem, errorData) => {
             if (!isPlainObject(requestItem)) {
@@ -372,7 +383,8 @@ function createMcpWebSocketServer(options = {}) {
             cleanedUp: false,
             cleanupPromise: null,
             heartbeatTimer: null,
-            queue: Promise.resolve()
+            queue: Promise.resolve(),
+            harnessPromise: null
         };
 
         connections.set(connection.connectionId, connection);
@@ -387,7 +399,11 @@ function createMcpWebSocketServer(options = {}) {
             connection.queue = connection.queue
                 .then(() => handleClientMessage(connection, message))
                 .catch((error) => {
-                    logTransportError(stderr, '[MCPTransport] Request handling failed', error);
+                    try {
+                        logTransportError(stderr, '[MCPTransport] Request handling failed', error);
+                    } catch (_logError) {
+                        // Logging itself failed — swallow to avoid killing the queue.
+                    }
                 });
         });
 
@@ -403,12 +419,16 @@ function createMcpWebSocketServer(options = {}) {
             logTransportError(stderr, '[MCPTransport] WebSocket connection error', error);
             void cleanupConnection(connection, 'error');
         });
-
-        wss.emit('connection', ws, request);
     }
 
     async function handleUpgrade(request, socket, head) {
         if (buildPathname(request.url) !== endpointPath) {
+            return;
+        }
+
+        if (connections.size >= maxConnections) {
+            socket.destroy();
+            writeStderr(stderr, `[MCPTransport] Connection rejected: maxConnections (${maxConnections}) reached.`);
             return;
         }
 

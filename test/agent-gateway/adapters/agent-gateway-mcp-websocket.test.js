@@ -1,8 +1,11 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
 const http = require('node:http');
 const { once } = require('node:events');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const express = require('express');
@@ -18,8 +21,78 @@ const {
     createPluginManager
 } = require('../helpers/agent-gateway-test-helpers');
 
+let previousMemoryPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+const INTEGRATION_TEST_TIMEOUT_MS = 10000;
+
 function cloneJson(value) {
     return JSON.parse(JSON.stringify(value));
+}
+
+test.before(async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agw-mcp-ws-policy-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+
+    await fs.writeFile(policyPath, JSON.stringify({
+        agents: {
+            Ariadne: {
+                allowedDiaries: ['Nova', 'SharedMemory'],
+                defaultDiaries: ['Nova']
+            }
+        }
+    }, null, 2), 'utf8');
+
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+});
+
+test.after(() => {
+    if (previousMemoryPolicyPath === undefined) {
+        delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        return;
+    }
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousMemoryPolicyPath;
+});
+
+async function createTempAgentDir() {
+    return fs.mkdtemp(path.join(os.tmpdir(), 'agw-mcp-ws-'));
+}
+
+async function writeAgentFile(baseDir, relativePath, content) {
+    const absolutePath = path.join(baseDir, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, content, 'utf8');
+}
+
+function createAgentManager(agentDir, mappings = {
+    Ariadne: 'Ariadne.md'
+}) {
+    const agentMap = new Map(Object.entries(mappings));
+
+    return {
+        agentDir,
+        agentMap,
+        isAgent(alias) {
+            return agentMap.has(alias);
+        },
+        async getAgentPrompt(alias) {
+            const sourceFile = agentMap.get(alias);
+            return fs.readFile(path.join(agentDir, sourceFile), 'utf8');
+        },
+        async getAllAgentFiles() {
+            return {
+                files: Array.from(agentMap.values()),
+                folderStructure: {}
+            };
+        }
+    };
+}
+
+function createRenderPluginManager(agentDir, overrides = {}) {
+    return createPluginManager({
+        agentManager: createAgentManager(agentDir, overrides.agentMappings),
+        agentRegistryRenderPrompt: async ({ rawPrompt, renderVariables }) =>
+            rawPrompt.replaceAll('{{VarUserName}}', renderVariables.VarUserName || ''),
+        ...overrides
+    });
 }
 
 function createHarness() {
@@ -65,12 +138,21 @@ async function createFixture(options = {}) {
         res.writeHead(404);
         res.end('not found');
     });
+    const sockets = new Set();
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => {
+            sockets.delete(socket);
+        });
+    });
     const manager = createMcpWebSocketServer({
         pluginManager,
         ...(harnessState ? { harness: harnessState.harness } : {}),
         ...(options.backendUrl ? { backendUrl: options.backendUrl } : {}),
         ...(options.defaultAgentId ? { defaultAgentId: options.defaultAgentId } : {}),
         ...(options.maxBatchSize ? { maxBatchSize: options.maxBatchSize } : {}),
+        ...(options.initializeRuntime ? { initializeRuntime: options.initializeRuntime } : {}),
+        ...(options.shutdownRuntime ? { shutdownRuntime: options.shutdownRuntime } : {}),
         pingIntervalMs: options.pingIntervalMs || 40,
         stderr: options.stderr || null
     });
@@ -92,6 +174,8 @@ async function createFixture(options = {}) {
 
     return {
         manager,
+        server,
+        port,
         requests: harnessState ? harnessState.requests : [],
         wsUrl: `ws://127.0.0.1:${port}/mcp`,
         async close() {
@@ -100,13 +184,20 @@ async function createFixture(options = {}) {
                 legacyWebSocketServer.shutdown();
             }
             await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Timed out closing websocket test fixture server'));
+                }, 1000);
                 server.close((error) => {
+                    clearTimeout(timeout);
                     if (error) {
                         reject(error);
                         return;
                     }
                     resolve();
                 });
+                for (const socket of sockets) {
+                    socket.destroy();
+                }
             });
         }
     };
@@ -229,6 +320,48 @@ async function createNativeServer(pluginManager) {
                 });
             });
         }
+    };
+}
+
+function createGatewayHeaders() {
+    return {
+        [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: 'gw-secret'
+    };
+}
+
+function assertNoStackLeak(response) {
+    assert.equal(response.error?.data?.stack, undefined);
+    assert.equal(response.error?.data?.details?.stack, undefined);
+}
+
+function assertNoTopologyLeak(response) {
+    const payload = JSON.stringify(response);
+    assert.doesNotMatch(payload, /127\.0\.0\.1:9|localhost:9|ECONNREFUSED|https?:\/\/127\.0\.0\.1:9/i);
+}
+
+async function createBackendProxyClient(t, options = {}) {
+    let backendServer = null;
+    if (!options.backendUrl) {
+        backendServer = await createNativeServer(options.backendPluginManager || createPluginManager());
+        t.after(async () => backendServer.close());
+    }
+
+    const fixture = await createFixture({
+        useStubHarness: false,
+        backendUrl: options.backendUrl || backendServer.baseUrl,
+        defaultAgentId: options.defaultAgentId || 'Ariadne'
+    });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: createGatewayHeaders()
+    });
+    t.after(() => client.terminate());
+
+    return {
+        client,
+        fixture,
+        backendServer
     };
 }
 
@@ -571,6 +704,200 @@ test('surfaces harness failures as JSON-RPC internal errors', async (t) => {
     assert.match(response.error.data.details, /boom/);
 });
 
+test('websocket backend proxy maps prompt misuse to stable MCP JSON-RPC errors', async (t) => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne. Hello {{VarUserName}}.');
+    t.after(async () => fs.rm(agentDir, { recursive: true, force: true }));
+
+    const { client } = await createBackendProxyClient(t, {
+        backendPluginManager: createRenderPluginManager(agentDir)
+    });
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'prompt-unsupported',
+        method: 'prompts/get',
+        params: {
+            name: 'missing_prompt',
+            arguments: {
+                agentId: 'Ariadne'
+            }
+        }
+    }));
+
+    const unsupported = await waitForJsonMessage(client);
+    assert.equal(unsupported.error.code, -32000);
+    assert.equal(unsupported.error.data.code, 'MCP_NOT_FOUND');
+    assert.equal(unsupported.error.data.name, 'missing_prompt');
+    assertNoStackLeak(unsupported);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'prompt-invalid-args',
+        method: 'prompts/get',
+        params: {
+            name: 'gateway_agent_render'
+        }
+    }));
+
+    const invalidArguments = await waitForJsonMessage(client);
+    assert.equal(invalidArguments.error.code, -32000);
+    assert.equal(invalidArguments.error.data.code, 'MCP_INVALID_ARGUMENTS');
+    assert.equal(invalidArguments.error.data.field, 'arguments');
+    assertNoStackLeak(invalidArguments);
+});
+
+test('websocket backend proxy points gateway_agent_render tool misuse to prompts/get', async (t) => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne.');
+    t.after(async () => fs.rm(agentDir, { recursive: true, force: true }));
+
+    const { client } = await createBackendProxyClient(t, {
+        backendPluginManager: createRenderPluginManager(agentDir)
+    });
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'tool-render-misuse',
+        method: 'tools/call',
+        params: {
+            name: 'gateway_agent_render',
+            arguments: {
+                agentId: 'Ariadne'
+            }
+        }
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.error.code, -32000);
+    assert.equal(response.error.data.code, 'MCP_NOT_FOUND');
+    assert.equal(response.error.data.primarySurface, 'prompts/get');
+    assertNoStackLeak(response);
+});
+
+test('websocket backend proxy preserves result-level MCP tool failures for diary policy rejections', async (t) => {
+    const { client } = await createBackendProxyClient(t);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'tool-policy-rejection',
+        method: 'tools/call',
+        params: {
+            name: 'gateway_memory_search',
+            arguments: {
+                query: '查询不允许的 diary',
+                diary: 'ProjectAlpha'
+            },
+            agentId: 'Ariadne'
+        }
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.error, undefined);
+    assert.equal(response.result.isError, true);
+    assert.equal(response.result.error.code, 'MCP_FORBIDDEN');
+    assert.equal(response.result.error.details.diary, 'ProjectAlpha');
+});
+
+test('websocket backend proxy maps unsupported tool and resource requests to MCP-standard JSON-RPC errors', async (t) => {
+    const { client } = await createBackendProxyClient(t);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'tool-unsupported',
+        method: 'tools/call',
+        params: {
+            name: 'gateway_unknown_tool',
+            arguments: {}
+        }
+    }));
+
+    const toolFailure = await waitForJsonMessage(client);
+    assert.equal(toolFailure.error.code, -32000);
+    assert.equal(toolFailure.error.data.code, 'MCP_NOT_FOUND');
+    assert.equal(toolFailure.error.data.name, 'gateway_unknown_tool');
+    assertNoStackLeak(toolFailure);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'resource-unsupported',
+        method: 'resources/read',
+        params: {
+            uri: 'vcp://agent-gateway/agents/Ariadne/profile'
+        }
+    }));
+
+    const resourceFailure = await waitForJsonMessage(client);
+    assert.equal(resourceFailure.error.code, -32000);
+    assert.equal(resourceFailure.error.data.code, 'MCP_RESOURCE_UNSUPPORTED');
+    assert.equal(resourceFailure.error.data.uri, 'vcp://agent-gateway/agents/Ariadne/profile');
+    assertNoStackLeak(resourceFailure);
+});
+
+test('websocket backend proxy sanitizes representative backend runtime failures', async (t) => {
+    const { client } = await createBackendProxyClient(t, {
+        backendUrl: 'http://127.0.0.1:9',
+        defaultAgentId: 'Ariadne'
+    });
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'prompt-backend-runtime',
+        method: 'prompts/get',
+        params: {
+            name: 'gateway_agent_render',
+            arguments: {
+                agentId: 'Ariadne'
+            }
+        }
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.error.code, -32000);
+    assert.equal(response.error.message, 'Gateway backend request failed');
+    assert.equal(response.error.data.code, 'MCP_RUNTIME_ERROR');
+    assertNoStackLeak(response);
+    assertNoTopologyLeak(response);
+});
+
+test('websocket backend proxy preserves per-entry semantics for mixed success and failure batches', async (t) => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'You are Ariadne.');
+    t.after(async () => fs.rm(agentDir, { recursive: true, force: true }));
+
+    const { client } = await createBackendProxyClient(t, {
+        backendPluginManager: createRenderPluginManager(agentDir)
+    });
+
+    client.send(JSON.stringify([
+        {
+            jsonrpc: '2.0',
+            id: 'batch-tools-list',
+            method: 'tools/list',
+            params: {
+                agentId: 'Ariadne'
+            }
+        },
+        {
+            jsonrpc: '2.0',
+            id: 'batch-invalid-prompt',
+            method: 'prompts/get',
+            params: {
+                name: 'missing_prompt',
+                arguments: {
+                    agentId: 'Ariadne'
+                }
+            }
+        }
+    ]));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(Array.isArray(response), true);
+    assert.deepEqual(response.map((entry) => entry.id), ['batch-tools-list', 'batch-invalid-prompt']);
+    assert.equal(Array.isArray(response[0].result.tools), true);
+    assert.equal(response[1].error.data.code, 'MCP_NOT_FOUND');
+});
+
 test('keeps healthy websocket clients connected across native ping/pong heartbeats', async (t) => {
     const fixture = await createFixture({ pingIntervalMs: 25 });
     t.after(async () => fixture.close());
@@ -625,7 +952,7 @@ test('cleans up connection state after the client closes the websocket', async (
     assert.equal(fixture.manager.getConnectionCount(), 0);
 });
 
-test('serves /mcp independently without requiring the legacy websocket mesh', async (t) => {
+test('serves /mcp independently without requiring the legacy websocket mesh', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
     const fixture = await createFixture();
     t.after(async () => fixture.close());
 
@@ -650,7 +977,7 @@ test('serves /mcp independently without requiring the legacy websocket mesh', as
     assert.equal(fixture.requests.length, 1);
 });
 
-test('completes the real MCP initialize handshake over websocket with transport-correct metadata', async (t) => {
+test('completes the real MCP initialize handshake over websocket with transport-correct metadata', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
     const pluginManager = createPluginManager({
         agentGatewayProtocolConfig: {
             gatewayKey: 'gw-secret',
@@ -698,7 +1025,7 @@ test('completes the real MCP initialize handshake over websocket with transport-
     assert.doesNotMatch(response.result.instructions, /stdio/i);
 });
 
-test('keeps repeated initialized notifications silent and still answers ping on the real harness', async (t) => {
+test('keeps repeated initialized notifications silent and still answers ping on the real harness', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
     const pluginManager = createPluginManager({
         agentGatewayProtocolConfig: {
             gatewayKey: 'gw-secret',
@@ -761,7 +1088,7 @@ test('keeps repeated initialized notifications silent and still answers ping on 
     assert.deepEqual(ping.result, {});
 });
 
-test('preserves canonical request metadata on a follow-up real-harness websocket call', async (t) => {
+test('preserves canonical request metadata on a follow-up real-harness websocket call', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
     const pluginManager = createPluginManager({
         agentGatewayProtocolConfig: {
             gatewayKey: 'gw-secret',
@@ -818,7 +1145,7 @@ test('preserves canonical request metadata on a follow-up real-harness websocket
     assert.equal(tools.result.meta.agentId, 'Ariadne');
 });
 
-test('serves /mcp even when the legacy websocket server is attached to the same HTTP server', async (t) => {
+test('serves /mcp even when the legacy websocket server is attached to the same HTTP server', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
     const fixture = await createFixture({
         enableLegacyWebSocketServer: true
     });
@@ -842,4 +1169,109 @@ test('serves /mcp even when the legacy websocket server is attached to the same 
 
     assert.equal(response.id, 'req-coexist');
     assert.equal(response.result.method, 'ping');
+});
+
+test('legacy websocket server leaves unknown upgrade paths available for sibling websocket stacks', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    const fixture = await createFixture({
+        enableLegacyWebSocketServer: true
+    });
+    t.after(async () => fixture.close());
+
+    const customWss = new WebSocket.Server({
+        noServer: true,
+        clientTracking: false
+    });
+    const handleUpgrade = (request, socket, head) => {
+        if (new URL(request.url, 'http://127.0.0.1').pathname !== '/custom') {
+            return;
+        }
+
+        customWss.handleUpgrade(request, socket, head, (ws) => {
+            // Defer the first frame so the client-side message waiter is attached.
+            setTimeout(() => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+                ws.send(JSON.stringify({
+                    ok: true,
+                    path: 'custom'
+                }));
+            }, 10);
+        });
+    };
+
+    fixture.server.on('upgrade', handleUpgrade);
+    t.after(async () => {
+        fixture.server.off('upgrade', handleUpgrade);
+        await new Promise((resolve) => customWss.close(() => resolve()));
+    });
+
+    const client = await connectClient(`ws://127.0.0.1:${fixture.port}/custom`);
+
+    const payload = await waitForJsonMessage(client);
+    assert.deepEqual(payload, {
+        ok: true,
+        path: 'custom'
+    });
+
+    const closePromise = once(client, 'close');
+    client.close();
+    await closePromise;
+});
+
+test('retries harness initialization on the same websocket after a transient bootstrap failure', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
+    let initializeAttempts = 0;
+    const fixture = await createFixture({
+        useStubHarness: false,
+        initializeRuntime: async () => {
+            initializeAttempts += 1;
+            if (initializeAttempts === 1) {
+                throw new Error('transient bootstrap failure');
+            }
+
+            return {
+                harness: {
+                    async handleRequest(request) {
+                        return {
+                            jsonrpc: '2.0',
+                            id: request.id ?? null,
+                            result: {
+                                method: request.method
+                            }
+                        };
+                    }
+                }
+            };
+        },
+        shutdownRuntime: async () => {}
+    });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: {
+            [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: 'gw-secret'
+        }
+    });
+    t.after(() => client.terminate());
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'first-bootstrap-attempt',
+        method: 'ping',
+        params: {}
+    }));
+
+    await waitForNoMessage(client, 120);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'second-bootstrap-attempt',
+        method: 'ping',
+        params: {}
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.id, 'second-bootstrap-attempt');
+    assert.equal(response.result.method, 'ping');
+    assert.equal(initializeAttempts, 2);
 });
