@@ -699,13 +699,14 @@ function createBackendProxyMcpAdapter({
                 ...input,
                 agentId: args.agentId || input.agentId
             }, `prompts/get:${name}`, defaultAgentId);
+            const requestOptions = input.signal ? { signal: input.signal } : undefined;
             const response = await backendClient.renderAgent(agentId, buildBody({
                 ...input,
                 agentId
             }, args, {
                 requireSession: false,
                 defaultAgentId
-            }));
+            }), requestOptions);
             const result = normalizeNativeResult(response);
 
             if (!result.success) {
@@ -744,37 +745,39 @@ function createBackendProxyMcpAdapter({
             }
 
             let response;
+            const requestOptions = input.signal ? { signal: input.signal } : undefined;
             if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
                 const scopedBody = applyAgentDiaryPolicyToBody(name, buildBody(input, args, { defaultAgentId }));
                 if (scopedBody.rejection) {
                     return createFailureResult(scopedBody.rejection);
                 }
-                response = await backendClient.searchMemory(scopedBody.body);
+                response = await backendClient.searchMemory(scopedBody.body, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
                 const scopedBody = applyAgentDiaryPolicyToBody(name, buildBody(input, args, { defaultAgentId }));
                 if (scopedBody.rejection) {
                     return createFailureResult(scopedBody.rejection);
                 }
-                response = await backendClient.assembleContext(scopedBody.body);
+                response = await backendClient.assembleContext(scopedBody.body, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
-                response = await backendClient.writeMemory(buildBody(input, args, { defaultAgentId }));
+                response = await backendClient.writeMemory(buildBody(input, args, { defaultAgentId }), requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
                 response = await backendClient.renderAgent(
                     ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
                     buildBody(input, args, {
                         requireSession: false,
                         defaultAgentId
-                    })
+                    }),
+                    requestOptions
                 );
             } else if (name === MCP_GATEWAY_TOOL_NAMES.JOB_GET) {
                 ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
-                response = await backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId));
+                response = await backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId), requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL) {
                 ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
                 response = await backendClient.cancelJob(args.jobId, buildBody(input, args, {
                     requireSession: false,
                     defaultAgentId
-                }));
+                }), requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
                 throw createMcpError(
                     MCP_ERROR_CODES.NOT_FOUND,
@@ -853,7 +856,7 @@ function createBackendProxyMcpAdapter({
                     agentId,
                     requestId: normalizeMcpString(input.requestContext?.requestId, 128),
                     maid: normalizeMcpString(input.maid || input.requestContext?.maid, 256)
-                });
+                }, input.signal ? { signal: input.signal } : undefined);
                 const result = normalizeNativeResult(response);
                 if (!result.success) {
                     throw createMcpError(
@@ -882,8 +885,8 @@ function createBackendProxyMcpAdapter({
                     jobId: parsed.jobId
                 }, defaultAgentId);
                 const [jobResponse, eventsResponse] = await Promise.all([
-                    backendClient.getJob(parsed.jobId, jobQuery),
-                    backendClient.listJobEvents(parsed.jobId, jobQuery)
+                    backendClient.getJob(parsed.jobId, jobQuery, input.signal ? { signal: input.signal } : undefined),
+                    backendClient.listJobEvents(parsed.jobId, jobQuery, input.signal ? { signal: input.signal } : undefined)
                 ]);
                 const jobResult = normalizeNativeResult(jobResponse);
 

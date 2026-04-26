@@ -1,8 +1,8 @@
-# Roadmap: VCP Remote MCP WebSocket Bridge
+# Roadmap: VCP Remote MCP Transport Bridge
 
 ## Overview
 
-This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js platform so external MCP clients (Claude Desktop, Cursor, etc.) can connect over the network, authenticate via VCP's existing user system, and use the RAG/memory tools already exposed locally over stdio. The existing stdio transport is preserved exactly through a new `McpTransport` abstraction.
+This milestone first added a remote WebSocket MCP transport to the existing VCP Node.js platform so external MCP clients can connect over the network, authenticate via VCP's existing user system, and use the RAG/memory tools already exposed locally over stdio. The next increment extends that work with Trae-compatible HTTP transports (`Streamable HTTP` plus deprecated `SSE` compatibility) while preserving the existing stdio and WebSocket surfaces.
 
 ## Phases
 
@@ -11,6 +11,7 @@ This milestone adds a remote WebSocket MCP transport to the existing VCP Node.js
 - [x] **Phase 3: MCP Protocol Compliance** - Implement JSON-RPC framing, batch support, initialize handshake, and lifecycle methods
 - [x] **Phase 4: Capability Exposure** - Wire RAG/memory tools and prompts over WebSocket with standard MCP error codes
 - [x] **Phase 5: Production Hardening** - Add connection limits, rate limiting, payload limits, and overload protection
+- [ ] **Phase 6: HTTP Compatibility Layer** - Add Streamable HTTP and SSE-compatible MCP transports for Trae and other HTTP-first clients
 
 ## Phase Details
 
@@ -93,10 +94,31 @@ Plans:
 - [x] `05-01-PLAN.md` — Wire production `/mcp` transport guardrails: max connections, payload ceilings, cleanup drift coverage, and upgrade-auth timeout protection
 - [x] `05-02-PLAN.md` — Add per-connection websocket message rate limiting with retry-aware overload protection and peer-isolation tests
 
+### Phase 6: HTTP Compatibility Layer
+**Goal**: HTTP-capable MCP clients can consume the same Agent Gateway prompt and memory surface remotely through standards-aligned Streamable HTTP and backward-compatible SSE endpoints.
+**Depends on**: Phase 5
+**Requirements**: HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, HTTP-06, HTTP-07, HTTP-08, HTTP-09, HTTP-10, HTTP-11, HTTP-12, HTTP-13, HTTP-14
+**Success Criteria** (what must be TRUE):
+  1. Express serves a canonical Streamable HTTP MCP endpoint on `/mcp` for `POST`/`GET` without regressing the existing `/mcp` WebSocket upgrade path
+  2. HTTP `initialize` can create a server-owned MCP session and follow-up requests validate `MCP-Session-Id` instead of silently accepting anonymous cross-request state
+  3. Dedicated Agent Gateway auth is enforced for HTTP MCP requests using the same gateway-key / bearer-token rules as the WebSocket transport
+  4. Streamable HTTP requests reuse the existing backend-proxy MCP harness and preserve prompt/tool/result semantics already validated over stdio and WebSocket
+  5. A deprecated SSE compatibility surface exists at a separate URL and can complete the initialization flow expected by HTTP+SSE clients without duplicating Gateway Core business logic
+  6. Representative parity tests pass for `initialize`, `notifications/initialized`, `tools/list`, `prompts/get`, and a gateway-managed memory call over the new HTTP transports
+  7. Existing stdio and WebSocket MCP transports remain behaviorally unchanged
+  8. HTTP transport mirrors WebSocket hardening with explicit limits for active sessions, payload size, rate limiting, auth timeout, and idle-session expiry
+  9. Streamable HTTP supports required `GET /mcp`, `DELETE /mcp`, and route-local payload limits without inheriting the global 300 MB JSON body limit
+  10. WebSocket, Streamable HTTP, and SSE compatibility are proven to coexist on one live `http.Server`
+**Plans**: 2 plans
+
+Plans:
+- [ ] `06-01-PLAN.md` — Add the canonical Streamable HTTP `/mcp` transport with session management, GET/DELETE lifecycle, HTTP hardening parity, and transport-parity integration tests
+- [ ] `06-02-PLAN.md` — Add the deprecated SSE compatibility endpoint on fixed URLs plus coexistence tests and consumer-facing configuration/docs updates
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -105,3 +127,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. MCP Protocol Compliance | 2/2 | Complete | 2026-04-26 |
 | 4. Capability Exposure | 2/2 | Complete | 2026-04-26 |
 | 5. Production Hardening | 2/2 | Complete | 2026-04-26 |
+| 6. HTTP Compatibility Layer | 0/2 | Planned | |

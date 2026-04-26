@@ -113,6 +113,7 @@ const pluginManager = require('./Plugin.js');
 const taskScheduler = require('./routes/taskScheduler.js');
 const webSocketServer = require('./WebSocketServer.js'); // 新增 WebSocketServer 引入
 const FileFetcherServer = require('./FileFetcherServer.js'); // 引入新的 FileFetcherServer 模块
+const { createMcpHttpServer } = require('./modules/agentGateway/mcpHttpServer');
 const { createMcpWebSocketServer } = require('./modules/agentGateway/mcpWebSocketServer');
 const vcpInfoHandler = require('./vcpInfoHandler.js'); // 引入新的 VCP 信息处理器
 const basicAuth = require('basic-auth');
@@ -302,6 +303,19 @@ else console.log('未加载任何全局上下文转换规则。');
 const app = express();
 app.set('trust proxy', true); // 新增：信任代理，以便正确解析 X-Forwarded-For 头，解决本地IP识别为127.0.0.1的问题
 app.use(cors({ origin: '*' })); // 启用 CORS，允许所有来源的跨域请求，方便本地文件调试
+
+// `/mcp` 路由需要独立的 payload 限制与原始 JSON 解析，因此在全局 body parser 之前挂载。
+const mcpHttpServer = createMcpHttpServer({
+    pluginManager,
+    stderr: process.stderr,
+    maxSessions: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_MAX_SESSIONS', 100),
+    maxPayloadBytes: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_MAX_PAYLOAD_BYTES', 4 * 1024 * 1024),
+    authTimeoutMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_AUTH_TIMEOUT_MS', 5000),
+    rateLimitMessages: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_RATE_LIMIT_MESSAGES', 60),
+    rateLimitWindowMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_RATE_LIMIT_WINDOW_MS', 1000),
+    sessionIdleMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_SESSION_IDLE_MS', 10 * 60 * 1000)
+});
+mcpHttpServer.attach(app);
 
 // 在路由决策之前解析请求体，以便 req.body 可用
 app.use(express.json({ limit: '300mb' }));
@@ -1316,6 +1330,7 @@ async function initialize() {
 
 // Store the server instance globally so it can be accessed by gracefulShutdown
 let server;
+let mountedMcpHttpServer = mcpHttpServer;
 let mcpWebSocketServer;
 
 async function startServer() {
@@ -1409,6 +1424,11 @@ async function gracefulShutdown(exitCode = 0) {
         console.log('[Server] Shutting down MCP WebSocketServer...');
         await mcpWebSocketServer.close();
         mcpWebSocketServer = null;
+    }
+    if (mountedMcpHttpServer) {
+        console.log('[Server] Shutting down MCP HTTP Server...');
+        await mountedMcpHttpServer.close();
+        mountedMcpHttpServer = null;
     }
     if (pluginManager) {
         await pluginManager.shutdownAllPlugins();

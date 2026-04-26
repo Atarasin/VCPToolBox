@@ -108,7 +108,7 @@ class GatewayBackendClient {
         return headers;
     }
 
-    async requestJson(method, routePath, { query, body, headers } = {}) {
+    async requestJson(method, routePath, { query, body, headers, signal } = {}) {
         const response = await this.fetchImpl(
             `${this.baseUrl}${routePath}${buildQueryString(query)}`,
             {
@@ -117,7 +117,8 @@ class GatewayBackendClient {
                     ...(body ? { 'content-type': 'application/json' } : {}),
                     ...(headers || {})
                 }),
-                body: body ? JSON.stringify(body) : undefined
+                body: body ? JSON.stringify(body) : undefined,
+                signal
             }
         );
         const responseText = await response.text();
@@ -139,7 +140,7 @@ class GatewayBackendClient {
         };
     }
 
-    async requestEventStream(routePath, { query, headers } = {}) {
+    async requestEventStream(routePath, { query, headers, signal } = {}) {
         const response = await this.fetchImpl(
             `${this.baseUrl}${routePath}${buildQueryString(query)}`,
             {
@@ -147,7 +148,8 @@ class GatewayBackendClient {
                 headers: this.createHeaders({
                     accept: 'text/event-stream',
                     ...(headers || {})
-                })
+                }),
+                signal
             }
         );
 
@@ -161,54 +163,62 @@ class GatewayBackendClient {
         };
     }
 
-    renderAgent(agentId, body) {
+    renderAgent(agentId, body, requestOptions) {
         return this.requestJson('POST', `/agent_gateway/agents/${encodeURIComponent(agentId)}/render`, {
-            body
+            body,
+            ...(requestOptions || {})
         });
     }
 
-    getMemoryTargets(query) {
+    getMemoryTargets(query, requestOptions) {
         return this.requestJson('GET', '/agent_gateway/memory/targets', {
-            query
+            query,
+            ...(requestOptions || {})
         });
     }
 
-    searchMemory(body) {
+    searchMemory(body, requestOptions) {
         return this.requestJson('POST', '/agent_gateway/memory/search', {
-            body
+            body,
+            ...(requestOptions || {})
         });
     }
 
-    assembleContext(body) {
+    assembleContext(body, requestOptions) {
         return this.requestJson('POST', '/agent_gateway/context/assemble', {
-            body
+            body,
+            ...(requestOptions || {})
         });
     }
 
-    writeMemory(body) {
+    writeMemory(body, requestOptions) {
         return this.requestJson('POST', '/agent_gateway/memory/write', {
-            body
+            body,
+            ...(requestOptions || {})
         });
     }
 
-    getJob(jobId, query) {
+    getJob(jobId, query, requestOptions) {
         return this.requestJson('GET', `/agent_gateway/jobs/${encodeURIComponent(jobId)}`, {
-            query
+            query,
+            ...(requestOptions || {})
         });
     }
 
-    cancelJob(jobId, body) {
+    cancelJob(jobId, body, requestOptions) {
         return this.requestJson('POST', `/agent_gateway/jobs/${encodeURIComponent(jobId)}/cancel`, {
-            body
+            body,
+            ...(requestOptions || {})
         });
     }
 
-    listJobEvents(jobId, query) {
+    listJobEvents(jobId, query, requestOptions) {
         return this.requestEventStream('/agent_gateway/events/stream', {
             query: {
                 ...(query || {}),
                 jobId
-            }
+            },
+            ...(requestOptions || {})
         });
     }
 }
