@@ -1,0 +1,4 @@
+{"id":"9c8e0253-a713-4111-af41-41707d545cdf","ts":"2026-04-29T13:57:23.705Z","severity":"info","message":"Writing .gsd directory…","source":"notify","read":false}
+{"id":"f84da1f7-c58b-458e-b85f-e8b7aa573e70","ts":"2026-04-29T13:57:23.715Z","severity":"info","message":"✓ Migration complete — 46 file(s) written to .gsd/","source":"notify","read":false}
+{"id":"ffcacc7b-c050-4fa1-9853-a8e9902f2a9c","ts":"2026-04-29T14:08:28.079Z","severity":"info","message":"Writing .gsd directory…","source":"notify","read":false}
+{"id":"14ca8c54-3a52-40fb-89e0-eb53f4ef8dcf","ts":"2026-04-29T14:08:28.102Z","severity":"info","message":"✓ Migration complete — 46 file(s) written to .gsd/","source":"notify","read":false}
