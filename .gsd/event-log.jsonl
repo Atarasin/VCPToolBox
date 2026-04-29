@@ -1,0 +1,2 @@
+{"v":2,"cmd":"complete-slice","params":{"milestoneId":"M001","sliceId":"S06"},"ts":"2026-04-29T14:15:54.992Z","actor":"agent","hash":"fedfb0239925e215","session_id":"4f32a906-ace2-4c3d-95d0-78c381cc3ba3"}
+{"v":2,"cmd":"complete-milestone","params":{"milestoneId":"M001"},"ts":"2026-04-29T14:18:37.149Z","actor":"agent","hash":"c877176040436ab9","session_id":"4f32a906-ace2-4c3d-95d0-78c381cc3ba3"}

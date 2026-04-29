@@ -2,39 +2,42 @@
 id: T02
 parent: S03
 milestone: M001
-provides: []
-requires: []
-affects: []
-key_files: []
-key_decisions: []
-patterns_established: []
-observability_surfaces: []
-drill_down_paths: []
+key_files:
+  - (none)
+key_decisions:
+  - (none)
 duration: 
-verification_result: passed
-completed_at: 
+verification_result: untested
+completed_at: 2026-04-29T14:14:58.927Z
 blocker_discovered: false
 ---
+
 # T02: 03-mcp-protocol-compliance 02
 
-**# 03-02 Summary**
+****
 
 ## What Happened
 
-# 03-02 Summary
-
-## Completed
-
-- Updated `modules/agentGateway/adapters/mcpBackendProxyAdapter.js` so the MCP `initialize` payload uses transport-neutral instructions instead of stdio-only wording.
-- Extended `test/agent-gateway/adapters/agent-gateway-mcp-websocket.test.js` to exercise the real backend-proxy harness over `/mcp`, covering `initialize`, repeated `notifications/initialized`, `ping`, and a follow-up `tools/list` request with preserved request metadata.
-- Updated `test/agent-gateway/adapters/agent-gateway-mcp-transport.test.js` to keep stdio expectations aligned with the transport-correct initialize response.
+No summary recorded.
 
 ## Verification
 
-- `node --test test/agent-gateway/adapters/agent-gateway-mcp-adapter.test.js test/agent-gateway/adapters/agent-gateway-mcp-transport.test.js test/agent-gateway/adapters/agent-gateway-mcp-websocket.test.js`
+No verification recorded.
 
-## Coverage Highlights
+## Verification Evidence
 
-- Real websocket clients can complete `initialize -> notifications/initialized -> ping` against the canonical backend-proxy harness.
-- Repeated `notifications/initialized` calls remain silent and idempotent.
-- Follow-up websocket calls still preserve canonical request metadata such as `requestContext.requestId`.
+| # | Command | Exit Code | Verdict | Duration |
+|---|---------|-----------|---------|----------|
+| — | No verification commands discovered | — | — | — |
+
+## Deviations
+
+None.
+
+## Known Issues
+
+None.
+
+## Files Created/Modified
+
+None.

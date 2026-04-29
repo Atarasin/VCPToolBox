@@ -1,0 +1,232 @@
+{
+  "nodes": [
+    {
+      "id": "milestone:M001",
+      "label": "M001: Migration",
+      "type": "milestone",
+      "description": "Active milestone: M001",
+      "confidence": "EXTRACTED",
+      "sourceFile": "STATE.md"
+    },
+    {
+      "id": "concept:phase:validating-milestone",
+      "label": "Phase: validating-milestone",
+      "type": "concept",
+      "confidence": "EXTRACTED",
+      "sourceFile": "STATE.md"
+    },
+    {
+      "id": "slice:M001:S01",
+      "label": "S01: Transport Abstraction Stdio Preservation",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S01/S01-PLAN.md"
+    },
+    {
+      "id": "task:M001:S01:T01",
+      "label": "T01: 01-transport-abstraction-stdio-preservation 01",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S02",
+      "label": "S02: Websocket Endpoint Session Management",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S02/S02-PLAN.md"
+    },
+    {
+      "id": "task:M001:S02:T01",
+      "label": "T01: 02-websocket-endpoint-session-management 01",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S02:T02",
+      "label": "T02: 02-websocket-endpoint-session-management 02",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S03",
+      "label": "S03: Mcp Protocol Compliance",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S03/S03-PLAN.md"
+    },
+    {
+      "id": "task:M001:S03:T01",
+      "label": "T01: 03-mcp-protocol-compliance 01",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S03:T02",
+      "label": "T02: 03-mcp-protocol-compliance 02",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S04",
+      "label": "S04: Capability Exposure",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S04/S04-PLAN.md"
+    },
+    {
+      "id": "task:M001:S04:T01",
+      "label": "T01: 04-capability-exposure 01",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S04:T02",
+      "label": "T02: 04-capability-exposure 02",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S05",
+      "label": "S05: Production Hardening",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S05/S05-PLAN.md"
+    },
+    {
+      "id": "task:M001:S05:T01",
+      "label": "T01: 05-production-hardening 01",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S05:T02",
+      "label": "T02: 05-production-hardening 02",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S06",
+      "label": "S06: Http Compatibility Layer",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S06/S06-PLAN.md"
+    },
+    {
+      "id": "task:M001:S06:T01",
+      "label": "T01: 06-http-compatibility-layer 01",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S06:T02",
+      "label": "T02: 06-http-compatibility-layer 02",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    }
+  ],
+  "edges": [
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S01",
+      "to": "task:M001:S01:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S02",
+      "to": "task:M001:S02:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S02",
+      "to": "task:M001:S02:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S03",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S03",
+      "to": "task:M001:S03:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S03",
+      "to": "task:M001:S03:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S04",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S04",
+      "to": "task:M001:S04:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S04",
+      "to": "task:M001:S04:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S05",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S05",
+      "to": "task:M001:S05:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S05",
+      "to": "task:M001:S05:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S06",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S06",
+      "to": "task:M001:S06:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S06",
+      "to": "task:M001:S06:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    }
+  ],
+  "builtAt": "2026-04-29T14:15:55.027Z"
+}
