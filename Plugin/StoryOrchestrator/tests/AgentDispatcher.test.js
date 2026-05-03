@@ -208,7 +208,7 @@ describe('AgentDispatcher', () => {
       requestMock.mock.restore();
 
       assert.strictEqual(payload.model, 'model-world');
-      assert.strictEqual(payload.messages[0].content, '你是世界观设定Agent。');
+      assert.strictEqual(payload.messages[0].content, 'You are the worldBuilder agent.');
       assert.strictEqual(payload.max_tokens, 4000);
       assert.strictEqual(payload.temperature, 0.7);
     });

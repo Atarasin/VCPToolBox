@@ -35,8 +35,23 @@ function createStory(overrides = {}) {
 
 function createDeps(story = createStory()) {
   const state = { current: story };
+  let phaseAttemptId = 0;
+
+  const repository = {
+    createPhaseAttempt: mock.fn(() => `attempt-${++phaseAttemptId}`),
+    updatePhaseAttempt: mock.fn(() => {}),
+    getStory: mock.fn(() => ({ current_phase2_snapshot_id: 'snapshot-phase2' }))
+  };
+
+  const artifactManager = {
+    saveArtifact: mock.fn(async (_storyId, artifactType) => ({
+      filePath: `/tmp/${artifactType}.json`
+    }))
+  };
 
   const stateManager = {
+    repository,
+    artifactManager,
     getStory: mock.fn(async () => state.current),
     updateStory: mock.fn(async (_storyId, updates) => {
       state.current = { ...state.current, ...updates };

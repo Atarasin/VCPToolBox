@@ -3,13 +3,15 @@
   "version": "7.1.2",
   "main": "Server.js",
   "scripts": {
-    "test": "node --test test/rag-params/*.test.js",
+    "test": "node --test tests/rag-params/*.test.js",
     "export:agent-gateway-openapi": "node scripts/exportAgentGatewayOpenApi.js",
     "start:mcp-agent-gateway": "node scripts/start-agent-gateway-mcp-server.js",
-    "test:rag-params": "node --test test/rag-params/*.test.js",
-    "test:agent-gateway-contracts": "node --test test/agent-gateway/contracts/agent-gateway-contract-publishing.test.js test/agent-gateway/examples/agent-gateway-node-client.test.js",
-    "test:agent-gateway-mcp-transport": "node --test test/agent-gateway/adapters/agent-gateway-mcp-transport.test.js",
-    "test:agent-gateway-mcp-websocket": "node --test test/agent-gateway/transport/websocket-transport.test.js test/agent-gateway/adapters/agent-gateway-mcp-websocket.test.js",
+    "test:rag-params": "node --test tests/rag-params/*.test.js",
+    "test:agent-gateway-contracts": "node --test tests/agent-gateway/contracts/agent-gateway-contract-publishing.test.js tests/agent-gateway/examples/agent-gateway-node-client.test.js",
+    "test:agent-gateway-mcp-transport": "node --test tests/agent-gateway/adapters/agent-gateway-mcp-transport.test.js",
+    "test:agent-gateway-mcp-websocket": "node --test tests/agent-gateway/transport/websocket-transport.test.js tests/agent-gateway/adapters/agent-gateway-mcp-websocket.test.js",
+    "test:workflow-kernel": "node --test tests/workflowKernel/**/*.test.js",
+    "test:workflow-kernel:coverage": "c8 --reporter=text --reporter=html node --test tests/workflowKernel/**/*.test.js",
     "eval:mock:baseline": "node eval/mock-run-eval.js baseline",
     "eval:mock:candidate": "node eval/mock-run-eval.js candidate",
     "eval:real:baseline": "node eval/real-run-eval.js baseline",
@@ -24,7 +26,9 @@
     "eval:all:real:variant": "npm run eval:real:baseline:variant && npm run eval:real:candidate:variant && npm run eval:rag-params && npm run eval:compare && npm run eval:gate",
     "start": "node server.js",
     "start:admin": "node adminServer.js",
-    "start:all": "node server.js & node adminServer.js"
+    "start:all": "node server.js & node adminServer.js",
+    "e2e": "RUN_E2E_TESTS=1 node --test Plugin/StoryOrchestrator/tests/e2e-real.test.js",
+    "e2e:short": "RUN_E2E_TESTS=1 E2E_TARGET_WORD_COUNT=300 E2E_MAX_WAIT_MS=300000 node --test Plugin/StoryOrchestrator/tests/e2e-real.test.js"
   },
   "keywords": [],
   "author": "",
@@ -83,5 +87,11 @@
   },
   "overrides": {
     "pdfjs-dist": "2.16.105"
+  },
+  "devDependencies": {
+    "c8": "^11.0.0"
+  },
+  "bin": {
+    "e2e": "./scripts/e2e.js"
   }
 }

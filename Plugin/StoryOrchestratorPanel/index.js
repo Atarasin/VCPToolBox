@@ -127,6 +127,73 @@ function repairTruncatedJson(input) {
   return result.replace(/,\s*([}\]])/g, '$1');
 }
 
+function unwrapDataEnvelope(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  if (value.data && typeof value.data === 'object') {
+    return value.data;
+  }
+
+  return value;
+}
+
+function deriveActiveCheckpoint(story) {
+  const explicit = story?.workflow?.activeCheckpoint;
+  if (explicit?.id || explicit?.checkpointId) {
+    return {
+      id: explicit.id || explicit.checkpointId,
+      phase: explicit.phase || story?.workflow?.currentPhase || null,
+      type: explicit.type || explicit.checkpointType || null,
+      status: explicit.status || 'pending',
+      createdAt: explicit.createdAt || explicit.at || null
+    };
+  }
+
+  const isWaitingCheckpoint = story?.status === 'waiting_checkpoint' || story?.workflow?.state === 'waiting_checkpoint';
+  if (!isWaitingCheckpoint) {
+    return null;
+  }
+
+  const history = Array.isArray(story?.workflow?.history) ? story.workflow.history : [];
+  const pendingEntry = [...history].reverse().find((entry) => {
+    return entry?.type === 'checkpoint_pending' || entry?.type === 'checkpoint_created';
+  });
+
+  if (!pendingEntry?.detail?.checkpointId) {
+    return null;
+  }
+
+  return {
+    id: pendingEntry.detail.checkpointId,
+    phase: pendingEntry.phase && pendingEntry.phase !== 'unknown'
+      ? pendingEntry.phase
+      : (story?.workflow?.currentPhase || null),
+    type: pendingEntry.detail.checkpointType || null,
+    status: 'pending',
+    createdAt: pendingEntry.at || null
+  };
+}
+
+function derivePhaseStatus(story, phaseName) {
+  const phaseStatus = story?.[phaseName]?.status || 'pending';
+  const checkpoint = deriveActiveCheckpoint(story);
+  if (checkpoint && checkpoint.phase === phaseName) {
+    return 'pending_confirmation';
+  }
+
+  if (
+    story?.status === 'waiting_checkpoint' &&
+    story?.workflow?.currentPhase === phaseName &&
+    (phaseStatus === 'running' || phaseStatus === 'pending')
+  ) {
+    return 'pending_confirmation';
+  }
+
+  return phaseStatus;
+}
+
 /**
  * Normalize worldview data from various formats into a consistent structure.
  * 
@@ -154,6 +221,7 @@ function normalizeWorldview(worldview) {
     return empty;
   }
 
+  worldview = unwrapDataEnvelope(worldview);
   let result = { ...empty };
 
   // Handle raw JSON string input
@@ -205,9 +273,9 @@ function normalizeWorldview(worldview) {
   } else {
     // No raw string, use direct fields
     result.setting = worldview.setting || '';
-    result.rules = normalizeArray(worldview.rules);
+    result.rules = worldview.rules || [];
     result.factions = normalizeArray(worldview.factions);
-    result.history = normalizeArray(worldview.history);
+    result.history = worldview.history || [];
     result.secrets = normalizeArray(worldview.secrets);
   }
 
@@ -271,6 +339,7 @@ function normalizeCharacters(charData) {
     return empty;
   }
 
+  charData = unwrapDataEnvelope(charData);
   let characters = [];
   let categories = { protagonists: 0, supporting: 0, antagonists: 0 };
 
@@ -361,6 +430,7 @@ function extractCharactersStructure(charData) {
     return empty;
   }
 
+  charData = unwrapDataEnvelope(charData);
   if (Array.isArray(charData)) {
     return {
       ...empty,
@@ -1327,6 +1397,7 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
       }
 
       const phase1 = data.phase1 || {};
+      const activeCheckpoint = deriveActiveCheckpoint(data);
       const worldview = normalizeWorldview(phase1.worldview);
       const characters = extractCharactersStructure(phase1.characters);
       const normalizedCharacters = normalizeCharacters(phase1.characters);
@@ -1340,8 +1411,8 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
           allCharacters: normalizedCharacters.characters,
           validation: phase1.validation || null,
           userConfirmed: phase1.userConfirmed || false,
-          checkpointId: phase1.checkpointId || null,
-          status: phase1.status || 'pending'
+          checkpointId: phase1.checkpointId || activeCheckpoint?.id || null,
+          status: derivePhaseStatus(data, 'phase1')
         }
       });
     } catch (error) {
@@ -1433,7 +1504,7 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
       }
 
       let characters = [];
-      const charData = data.phase1?.characters;
+      const charData = unwrapDataEnvelope(data.phase1?.characters);
 
       if (charData) {
         if (Array.isArray(charData)) {
@@ -1518,34 +1589,12 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
 
-      let worldview = data.phase1?.worldview || null;
-
-      // Parse the raw JSON string which contains the full worldview structure
-      if (worldview && worldview.raw && typeof worldview.raw === 'string') {
-        try {
-          const parsedRaw = JSON.parse(worldview.raw);
-          worldview = {
-            ...worldview,
-            ...parsedRaw,
-            setting: parsedRaw.setting || worldview.setting || '',
-            rules: parsedRaw.rules || null,
-            factions: parsedRaw.factions || [],
-            history: parsedRaw.history || []
-          };
-          console.log('[StoryOrchestratorPanel] Parsed worldview from raw:', {
-            hasSetting: !!parsedRaw.setting,
-            factionsCount: parsedRaw.factions?.length || 0,
-            hasRules: !!parsedRaw.rules
-          });
-        } catch (e) {
-          console.error('[StoryOrchestratorPanel] Failed to parse worldview raw:', e.message);
-        }
-      }
+      const worldview = normalizeWorldview(data.phase1?.worldview);
 
       res.json({
         success: true,
         worldview: worldview,
-        phase1Status: data.phase1?.status || 'pending',
+        phase1Status: derivePhaseStatus(data, 'phase1'),
         userConfirmed: data.phase1?.userConfirmed || false
       });
     } catch (error) {
@@ -1590,12 +1639,13 @@ function registerRoutes(app, adminApiRouter, pluginConfig, projectBasePath) {
         return res.status(404).json({ success: false, error: 'Story not found' });
       }
 
+      const activeCheckpoint = deriveActiveCheckpoint(data);
       res.json({
         success: true,
         history: data.workflow?.history || [],
         currentState: data.workflow?.state || 'idle',
         currentPhase: data.workflow?.currentPhase || null,
-        activeCheckpoint: data.workflow?.activeCheckpoint || null
+        activeCheckpoint: activeCheckpoint || null
       });
     } catch (error) {
       console.error('[StoryOrchestratorPanel] Error getting history:', error);
@@ -1894,8 +1944,8 @@ function formatStoryListItem(data) {
   }
 
   // 获取检查点信息
-  const hasCheckpoint = !!data.workflow?.activeCheckpoint;
-  const checkpointPending = hasCheckpoint && data.workflow.activeCheckpoint.status === 'pending';
+  const activeCheckpoint = deriveActiveCheckpoint(data);
+  const checkpointPending = !!activeCheckpoint;
 
   return {
     id: data.id,
@@ -1912,7 +1962,7 @@ function formatStoryListItem(data) {
     retryingPhase,
     progress,
     checkpointPending,
-    checkpointType: data.workflow?.activeCheckpoint?.type || null,
+    checkpointType: activeCheckpoint?.type || null,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt
   };
@@ -1925,6 +1975,7 @@ function formatStoryDetail(data) {
   const base = formatStoryListItem(data);
   const phase2 = formatPhase2Detail(data.phase2);
   const phase3 = formatPhase3Detail(data.phase3);
+  const activeCheckpoint = deriveActiveCheckpoint(data);
 
   const isCompleted = (status) => status && (status === 'completed' || status.startsWith('completed'));
   const chapterStats = {
@@ -1936,7 +1987,7 @@ function formatStoryDetail(data) {
 
   // 角色统计（适配新格式）
   let characterCount = 0;
-  const charData = data.phase1?.characters;
+  const charData = unwrapDataEnvelope(data.phase1?.characters);
   if (charData) {
     if (Array.isArray(charData)) {
       characterCount = charData.length;
@@ -1975,7 +2026,7 @@ function formatStoryDetail(data) {
       state: data.workflow?.state || 'idle',
       currentPhase: data.workflow?.currentPhase || null,
       currentStep: data.workflow?.currentStep || null,
-      activeCheckpoint: data.workflow?.activeCheckpoint || null,
+      activeCheckpoint: activeCheckpoint || null,
       retryCount: data.workflow?.retryContext?.attempt || 0
     }
   };
@@ -2031,6 +2082,8 @@ module.exports = {
   registerRoutes,
   normalizeWorldview,
   normalizeCharacters,
+  deriveActiveCheckpoint,
+  derivePhaseStatus,
   normalizeOutline,
   normalizeChapter,
   normalizeWorkflowHistory,
@@ -2038,5 +2091,6 @@ module.exports = {
   extractArtifactSummary,
   normalizeTargetWordCount,
   formatTargetWordCountLabel,
-  extractStoryShortId
+  extractStoryShortId,
+  formatStoryListItem
 };

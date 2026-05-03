@@ -289,34 +289,59 @@ ${chapterContent}`;
    * @returns {string}
    */
   static buildWorldviewValidationPrompt(params) {
-    const { content, worldview } = params;
+    const { content, worldview, characters } = params;
 
-    return `【世界观一致性验证】
+    return `【世界观与人物设定一致性验证】
 
-请验证以下内容是否符合已确立的世界观设定。
+请验证以下世界观和人物设定是否完整、一致且符合故事需求。
 
-=== 已确立的世界观 ===
+=== 世界观设定 ===
 ${JSON.stringify(worldview, null, 2)}
 
-=== 待验证内容 ===
-${content}
+=== 人物设定 ===
+${JSON.stringify(characters || {}, null, 2)}
+
+=== 故事需求 ===
+${content || ''}
 
 === 验证维度 ===
-1. 物理规则是否一致
-2. 势力体系是否符合设定
-3. 历史背景是否有冲突
-4. 场景规范是否被遵守
-5. 特殊设定是否被正确运用
+1. 世界观是否完整（时代背景、地理环境、规则体系、势力结构）
+2. 人物是否立体（性格、动机、成长弧线、OOC防护）
+3. 人物与世界观是否适配
+4. 设定内部是否自洽无矛盾
+5. 是否满足故事需求
 
-=== 输出格式 ===
-【验证结果】
-通过 / 有条件通过 / 不通过
+【重要】本验证面向500-3000字的短篇小说创作。以下情况**不**应判定为阻塞问题：
+- 世界观细节未完全展开（短篇无需详尽设定）
+- 人物数量较少或关系简单（短篇聚焦核心角色）
+- 历史背景简略（短篇不需要完整编年史）
+- 势力结构单一（短篇聚焦主线冲突）
+- 存在创意留白或开放式设定
 
-【发现的冲突】（如有）
-- 冲突1：...
+只有以下情况才应判定为 FAIL：
+- 世界观与人物设定存在直接逻辑矛盾（如重力规则前后不一致）
+- 核心人物缺乏基本动机或目标
+- 故事需求与世界观完全不符
 
-【修正建议】（如有）
-- 建议1：...`;
+=== 输出格式（YOU MUST use EXACT format below）===
+
+<<<VALIDATION_RESULT开始>>>
+{
+  "verdict": "PASS | PASS_WITH_WARNINGS | FAIL",
+  "confidence": 0-10,
+  "blocking_issues": ["问题1", "问题2"],
+  "non_blocking_issues": ["建议1", "建议2"],
+  "revision_priorities": ["优先级1", "优先级2"]
+}
+<<<VALIDATION_RESULT结束>>>
+
+【格式说明】：
+- verdict 可选值：PASS（完全通过）、PASS_WITH_WARNINGS（有非阻塞警告）、FAIL（存在阻塞问题）
+- blocking_issues：必须修复的关键问题，如无则填[]
+- non_blocking_issues：建议性改进，如无则填[]
+- revision_priorities：按优先级排序的修订建议，如无需修订则填[]
+- confidence：对验证结论的信心分数（0-10）
+- 短篇小说创作中，优先给 PASS 或 PASS_WITH_WARNINGS，仅在存在严重逻辑矛盾时才给 FAIL`;
   }
 
   /**
@@ -779,12 +804,13 @@ ${validationFeedback}
    * @returns {string}
    */
   static buildOutlineValidationPrompt(outline, storyBible) {
+    const outlineText = typeof outline === 'string' ? outline : JSON.stringify(outline, null, 2);
     return `【大纲验证任务 - 严格模式】
 
 请对分章大纲进行严格的一致性和可行性验证。
 
 === 待验证大纲 ===
-${outline}
+${outlineText}
 
 === 故事圣经 ===
 

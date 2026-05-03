@@ -1,6 +1,14 @@
 const { TextMetrics } = require('../utils/TextMetrics');
 const { PromptBuilder } = require('../utils/PromptBuilder');
 
+/**
+ * ChapterOperations keeps chapter-generation domain behavior inside
+ * StoryOrchestrator while making the reusable orchestration skeleton explicit.
+ *
+ * The prompts, thresholds, and rewrite policies here are story-specific. The
+ * delegate -> check length -> retry / expand pattern is the part that may
+ * continue to inform future SDK extraction work.
+ */
 class ChapterOperations {
   constructor(agentDispatcher, stateManager) {
     this.agentDispatcher = agentDispatcher;
@@ -57,9 +65,7 @@ class ChapterOperations {
 
     const previousEnding = options.previousEnding || this._getPreviousChapterEnding(storyState, chapterNum);
 
-    const targetWordCount = typeof options.targetWordCount === 'number'
-      ? { min: Math.floor(options.targetWordCount * 0.8), max: options.targetWordCount }
-      : (options.targetWordCount || { min: 2500, max: 3500 });
+    const targetWordCount = this._normalizeTargetWordCountRange(options.targetWordCount);
 
     const prompt = PromptBuilder.buildChapterWriterPrompt({
       storyBible,
@@ -71,18 +77,16 @@ class ChapterOperations {
       stylePreference: config.stylePreference
     });
 
-    let result = await this.agentDispatcher.delegate('chapterWriter', prompt, {
-      timeoutMs: options.timeoutMs || 300000,
-      temporaryContact: true
-    });
-
-    if (!result.content || result.content.trim().length < 1000) {
-      console.warn(`[ChapterOperations] Chapter ${chapterNum} draft too short (${result.content?.length || 0} chars), retrying once`);
-      result = await this.agentDispatcher.delegate('chapterWriter', prompt + '\n\n注意：上一版输出为空或过短，请务必输出完整的章节正文，字数必须达标。', {
+    const result = await this._delegateWithSingleRetry(
+      'chapterWriter',
+      prompt,
+      {
         timeoutMs: options.timeoutMs || 300000,
-        temporaryContact: true
-      });
-    }
+        minimumLength: 1000,
+        retryInstruction: '注意：上一版输出为空或过短，请务必输出完整的章节正文，字数必须达标。'
+      },
+      `[ChapterOperations] Chapter ${chapterNum} draft`
+    );
 
     const wordCountCheck = this.countChapterLength(
       result.content,
@@ -314,18 +318,16 @@ ${JSON.stringify(outline, null, 2)}
 请输出扩充后的完整章节。
 `;
 
-    let result = await this.agentDispatcher.delegate('detailFiller', expansionPrompt, {
-      timeoutMs: 300000,
-      temporaryContact: true
-    });
-
-    if (!result.content || result.content.trim().length < currentContent.length + 500) {
-      console.warn(`[ChapterOperations] Expand result too short (${result.content?.length || 0} chars), retrying once`);
-      result = await this.agentDispatcher.delegate('detailFiller', expansionPrompt + '\n\n注意：上一版扩充不足，请大幅增加细节描写、对话和心理活动，确保字数达标。', {
+    const result = await this._delegateWithSingleRetry(
+      'detailFiller',
+      expansionPrompt,
+      {
         timeoutMs: 300000,
-        temporaryContact: true
-      });
-    }
+        minimumLength: currentContent.length + 500,
+        retryInstruction: '注意：上一版扩充不足，请大幅增加细节描写、对话和心理活动，确保字数达标。'
+      },
+      '[ChapterOperations] Expand result'
+    );
 
     return {
       content: result.content,
@@ -392,6 +394,34 @@ ${JSON.stringify(outline, null, 2)}
     }
     
     return improvements.length > 0 ? improvements : ['文笔整体优化'];
+  }
+
+  _normalizeTargetWordCountRange(targetWordCount) {
+    if (typeof targetWordCount === 'number') {
+      return { min: Math.floor(targetWordCount * 0.8), max: targetWordCount };
+    }
+
+    return targetWordCount || { min: 2500, max: 3500 };
+  }
+
+  async _delegateWithSingleRetry(agentType, prompt, options, logLabel) {
+    const requestOptions = {
+      timeoutMs: options.timeoutMs || 300000,
+      temporaryContact: true
+    };
+
+    let result = await this.agentDispatcher.delegate(agentType, prompt, requestOptions);
+
+    if (!result.content || result.content.trim().length < options.minimumLength) {
+      console.warn(`${logLabel} too short (${result.content?.length || 0} chars), retrying once`);
+      result = await this.agentDispatcher.delegate(
+        agentType,
+        `${prompt}\n\n${options.retryInstruction}`,
+        requestOptions
+      );
+    }
+
+    return result;
   }
 }
 

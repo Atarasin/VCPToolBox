@@ -1,12 +1,14 @@
 const { StateManager } = require('./StateManager');
 const { ChapterOperations } = require('./ChapterOperations');
 const { ContentValidator } = require('./ContentValidator');
-const { AgentDispatcher } = require('../agents/AgentDispatcher');
+const { AgentDispatcher } = require('../../../modules/agentDispatcher');
 const { WorkflowEngine } = require('./WorkflowEngine');
+const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
 const { validateInput } = require('../utils/ValidationSchemas');
 const { TextMetrics } = require('../utils/TextMetrics');
 const path = require('path');
 const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
 
 class StoryOrchestrator {
   constructor() {
@@ -15,8 +17,11 @@ class StoryOrchestrator {
     this.chapterOperations = null;
     this.contentValidator = null;
     this.workflowEngine = null;
+    this.kernelAdapter = null;
+    this.useKernel = false;
     this.textMetrics = new TextMetrics();
     this.globalConfig = {};
+    this.metrics = this._createMetrics();
   }
 
   async initialize(config, dependencies) {
@@ -48,8 +53,29 @@ class StoryOrchestrator {
       config: this.globalConfig
     });
     await this.workflowEngine.initialize();
-    
-    console.log('[StoryOrchestrator] Initialized successfully');
+
+    // Initialize WorkflowKernel adapter if feature flag enabled
+    this.useKernel = this.globalConfig.USE_WORKFLOW_KERNEL === 'true' || this.globalConfig.USE_WORKFLOW_KERNEL === true;
+    if (this.useKernel) {
+      try {
+        this.kernelAdapter = new StoryOrchestratorKernelAdapter({
+          stateManager: this.stateManager,
+          agentDispatcher: this.agentDispatcher,
+          chapterOperations: this.chapterOperations,
+          contentValidator: this.contentValidator,
+          config: this.globalConfig
+        });
+        await this.kernelAdapter.initialize();
+        console.log('[StoryOrchestrator] WorkflowKernel adapter initialized');
+      } catch (err) {
+        console.error('[StoryOrchestrator] Failed to initialize WorkflowKernel adapter:', err.message);
+        console.log('[StoryOrchestrator] Falling back to legacy WorkflowEngine');
+        this.useKernel = false;
+        this.kernelAdapter = null;
+      }
+    }
+
+    console.log('[StoryOrchestrator] Initialized successfully (kernel:', this.useKernel, ')');
   }
 
   async shutdown() {
@@ -120,16 +146,63 @@ class StoryOrchestrator {
       style_preference: args.style_preference
     });
 
-    this.workflowEngine.start(story.id).catch(err => {
-      console.error('[StoryOrchestrator] Workflow start error:', err);
-    });
+    if (this.useKernel && this.kernelAdapter) {
+      this._logRoutingDecision('StartStoryProject', story.id, 'kernel');
+
+      // Set up initial workflow state for kernel path
+      const runToken = uuidv4();
+      await this.stateManager.updateWorkflow(story.id, {
+        state: 'running',
+        currentPhase: 'phase1',
+        currentStep: 'initial',
+        retryContext: {
+          phase: 'phase1',
+          step: 'initial',
+          attempt: 0,
+          maxAttempts: this.globalConfig.MAX_PHASE_RETRY_ATTEMPTS || 3,
+          lastError: null
+        },
+        runToken
+      });
+      await this.stateManager.updateStory(story.id, {
+        status: 'phase1_running'
+      });
+
+      // Run via kernel adapter (fire-and-forget background execution)
+      this.kernelAdapter.executeWorkflow(story.id, {
+        storyPrompt: args.story_prompt,
+        targetWordCount: {
+          min: args.target_word_count || 2500,
+          max: (args.target_word_count || 2500) + 1000
+        },
+        genre: args.genre,
+        stylePreference: args.style_preference
+      }).then(result => {
+        const outcome = result.status === 'completed' ? 'success' : 'failure';
+        this._recordOutcome('kernel', outcome, { storyId: story.id, command: 'StartStoryProject' });
+      }).catch(err => {
+        console.error('[StoryOrchestrator] Kernel workflow start error:', err);
+        this._recordOutcome('kernel', 'error', { storyId: story.id, command: 'StartStoryProject', error: err.message });
+      });
+    } else {
+      this._logRoutingDecision('StartStoryProject', story.id, 'legacy');
+
+      this.workflowEngine.start(story.id).then(result => {
+        const outcome = result?.status === 'error' ? 'failure' : 'success';
+        this._recordOutcome('legacy', outcome, { storyId: story.id, command: 'StartStoryProject' });
+      }).catch(err => {
+        console.error('[StoryOrchestrator] Workflow start error:', err);
+        this._recordOutcome('legacy', 'error', { storyId: story.id, command: 'StartStoryProject', error: err.message });
+      });
+    }
 
     return {
       status: 'success',
       result: {
         story_id: story.id,
         status: story.status,
-        message: '故事项目已启动，正在执行第一阶段：世界观与人设搭建'
+        message: '故事项目已启动，正在执行第一阶段：世界观与人设搭建',
+        routing_path: this.useKernel && this.kernelAdapter ? 'kernel' : 'legacy'
       }
     };
   }
@@ -148,6 +221,23 @@ class StoryOrchestrator {
     const progress = this._calculateProgress(story);
     const workflowStatus = await this.workflowEngine.getWorkflowStatus(args.story_id);
 
+    let kernelStatus = null;
+    if (this.useKernel && this.kernelAdapter) {
+      try {
+        kernelStatus = await this.kernelAdapter.getStatus(args.story_id);
+      } catch (err) {
+        console.warn('[StoryOrchestrator] Failed to get kernel status:', err.message);
+      }
+    }
+
+    // Kernel path: prefer kernelStatus for checkpoint info (handles optimistic-lock sync failures)
+    const checkpointPending = kernelStatus?.activeCheckpoint
+      ? true
+      : this._isCheckpointPending(story);
+    const checkpointId = kernelStatus?.activeCheckpoint
+      ? kernelStatus.activeCheckpoint
+      : this._getCurrentCheckpointId(story);
+
     return {
       status: 'success',
       result: {
@@ -156,8 +246,8 @@ class StoryOrchestrator {
         phase_name: this._getPhaseName(story),
         status: story.status,
         progress_percent: progress,
-        checkpoint_pending: this._isCheckpointPending(story),
-        checkpoint_id: this._getCurrentCheckpointId(story),
+        checkpoint_pending: checkpointPending,
+        checkpoint_id: checkpointId,
         chapters_completed: story.phase2?.chapters?.length || 0,
         total_word_count: this._calculateTotalWordCount(story),
         updated_at: story.updatedAt,
@@ -165,7 +255,10 @@ class StoryOrchestrator {
         current_step: workflowStatus?.currentStep || null,
         active_checkpoint: workflowStatus?.activeCheckpoint || null,
         retry_attempt: workflowStatus?.retryContext?.attempt || 0,
-        last_error: workflowStatus?.retryContext?.lastError || null
+        last_error: workflowStatus?.retryContext?.lastError || null,
+        kernel_state: kernelStatus?.state || null,
+        kernel_current_step: kernelStatus?.currentStep || null,
+        routing_path: this.useKernel && this.kernelAdapter ? 'kernel' : 'legacy'
       }
     };
   }
@@ -186,12 +279,45 @@ class StoryOrchestrator {
       return { status: 'error', error: 'Story not found' };
     }
 
-    const result = await this.workflowEngine.resume(story_id, {
+    const normalizedCheckpointDecision = {
       checkpointId: checkpoint_id,
       approval,
+      action: approval ? 'approve' : 'reject',
       feedback,
       chapter_number: chapter_number || null
-    });
+    };
+
+    let result;
+    if (this.useKernel && this.kernelAdapter) {
+      this._logRoutingDecision('UserConfirmCheckpoint', story_id, 'kernel');
+      try {
+        result = await this.kernelAdapter.resume(story_id, normalizedCheckpointDecision);
+        const outcome = result.status === 'error' ? 'failure' : 'success';
+        this._recordOutcome('kernel', outcome, { storyId: story_id, command: 'UserConfirmCheckpoint', checkpointId: checkpoint_id });
+      } catch (error) {
+        const kernelInactive = /is not active/i.test(error.message || '');
+        if (!kernelInactive) {
+          throw error;
+        }
+
+        // Recovery and panel review can expose a persisted checkpoint without an in-memory
+        // kernel workflow. Fall back to the state-driven engine so approval still works.
+        this._logRoutingDecision('UserConfirmCheckpoint', story_id, 'legacy-fallback');
+        result = await this.workflowEngine.resume(story_id, normalizedCheckpointDecision);
+        const outcome = result.status === 'error' ? 'failure' : 'success';
+        this._recordOutcome('legacy', outcome, {
+          storyId: story_id,
+          command: 'UserConfirmCheckpoint',
+          checkpointId: checkpoint_id,
+          fallbackReason: error.message
+        });
+      }
+    } else {
+      this._logRoutingDecision('UserConfirmCheckpoint', story_id, 'legacy');
+      result = await this.workflowEngine.resume(story_id, normalizedCheckpointDecision);
+      const outcome = result.status === 'error' ? 'failure' : 'success';
+      this._recordOutcome('legacy', outcome, { storyId: story_id, command: 'UserConfirmCheckpoint', checkpointId: checkpoint_id });
+    }
 
     return {
       status: result.status === 'error' ? 'error' : 'success',
@@ -477,6 +603,53 @@ class StoryOrchestrator {
     };
   }
 
+  // ==================== Feature Switch Metrics & Observability ====================
+
+  _createMetrics() {
+    return {
+      kernel: { success: 0, failure: 0, error: 0, total: 0 },
+      legacy: { success: 0, failure: 0, error: 0, total: 0 },
+      routingDecisions: [],
+      startedAt: new Date().toISOString()
+    };
+  }
+
+  _logRoutingDecision(command, storyId, path) {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      command,
+      storyId,
+      path,
+      useKernel: this.useKernel,
+      kernelAdapterReady: !!this.kernelAdapter
+    };
+    this.metrics.routingDecisions.push(entry);
+    // Keep last 100 decisions
+    if (this.metrics.routingDecisions.length > 100) {
+      this.metrics.routingDecisions = this.metrics.routingDecisions.slice(-100);
+    }
+    console.log(`[StoryOrchestrator] Routing decision: command=${command} story=${storyId} path=${path}`);
+  }
+
+  _recordOutcome(path, outcome, details = {}) {
+    if (!this.metrics[path]) return;
+    this.metrics[path][outcome] = (this.metrics[path][outcome] || 0) + 1;
+    this.metrics[path].total += 1;
+    console.log(`[StoryOrchestrator] Outcome recorded: path=${path} outcome=${outcome}`, details);
+  }
+
+  getMetrics() {
+    const now = new Date().toISOString();
+    return {
+      ...this.metrics,
+      currentConfig: {
+        USE_WORKFLOW_KERNEL: this.useKernel,
+        kernelAdapterInitialized: !!this.kernelAdapter
+      },
+      queriedAt: now
+    };
+  }
+
   async getPlaceholderValue(placeholder) {
     if (placeholder === 'StoryOrchestratorStatus') {
       const stories = await this.stateManager.listStories();
@@ -632,4 +805,6 @@ class StoryOrchestrator {
   }
 }
 
-module.exports = new StoryOrchestrator();
+const singleton = new StoryOrchestrator();
+singleton.StoryOrchestrator = StoryOrchestrator;
+module.exports = singleton;

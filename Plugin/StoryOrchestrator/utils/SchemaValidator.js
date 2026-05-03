@@ -1,3 +1,11 @@
+/**
+ * SchemaValidator currently validates StoryOrchestrator domain artifacts while
+ * also acting as a candidate source of reusable validation skeletons.
+ *
+ * Structural convergence keeps the domain field rules here explicit so future
+ * SDK extraction can separate generic validation flow from story-specific
+ * schema requirements.
+ */
 class SchemaValidator {
   static validateWorldview(worldview) {
     const result = {

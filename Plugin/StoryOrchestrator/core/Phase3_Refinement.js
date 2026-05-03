@@ -1,15 +1,11 @@
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');
 
 /**
- * Phase3_Refinement - 润色校验迭代与终校定稿
- * 
- * 职责：
- * 1. 逐章润色
- * 2. 整体校验
- * 3. 润色-校验循环 (最多 MAX_PHASE_ITERATIONS 次)
- * 4. 质量评分
- * 5. 终校定稿
- * 6. 创建 checkpoint 3 (终稿验收)
+ * Phase3_Refinement - retained legacy phase implementation.
+ *
+ * It remains available for compatibility-driven entrypoints, but the canonical
+ * workflow control path is now expected to flow through WorkflowKernel and the
+ * shared workflow definition.
  */
 class Phase3_Refinement {
   constructor({ stateManager, agentDispatcher, chapterOperations, contentValidator, promptBuilder, config }) {

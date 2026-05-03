@@ -1,6 +1,15 @@
 const { PromptBuilder } = require('../utils/PromptBuilder');
 const { SchemaValidator } = require('../utils/SchemaValidator');
 
+/**
+ * ContentValidator keeps story-domain validation prompts in the plugin while
+ * making the validation orchestration skeleton explicit.
+ *
+ * The prompt construction and verdict interpretation below are story-specific.
+ * The delegate -> parse -> aggregate pattern is the reusable part that future
+ * SDK extraction work may continue to lift out.
+ */
+
 class ContentValidator {
   constructor(agentDispatcher) {
     this.agentDispatcher = agentDispatcher;
@@ -12,37 +21,18 @@ class ContentValidator {
       worldview: storyBible.worldview
     });
 
-    const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 300000,
-      temporaryContact: true
-    });
-
-    return this._parseStructuredValidationResult(result.content);
+    return this._runStructuredValidation(prompt);
   }
 
   async validateCharacters(storyId, content, storyBible) {
-    let characters = storyBible.characters || [];
-    if (characters && typeof characters === 'object' && !Array.isArray(characters)) {
-      if (characters.characters && Array.isArray(characters.characters)) {
-        characters = characters.characters;
-      } else if (characters.protagonists && Array.isArray(characters.protagonists)) {
-        characters = characters.protagonists;
-      } else {
-        characters = [];
-      }
-    }
+    const characters = this._normalizeCharacterCollection(storyBible.characters);
 
     const prompt = PromptBuilder.buildCharacterValidationPrompt({
       content,
-      characters: characters
+      characters
     });
 
-    const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 300000,
-      temporaryContact: true
-    });
-
-    return this._parseStructuredValidationResult(result.content);
+    return this._runStructuredValidation(prompt);
   }
 
   async validatePlot(storyId, content, storyBible, previousChapters = []) {
@@ -80,12 +70,7 @@ ${content}
   "suggestions": []
 }`;
 
-    const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
-      timeoutMs: 300000,
-      temporaryContact: true
-    });
-
-    return this._parseStructuredValidationResult(result.content);
+    return this._runStructuredValidation(prompt);
   }
 
   async comprehensiveValidation(storyId, chapterNum, content, storyBible, previousChapters = []) {
@@ -95,54 +80,38 @@ ${content}
       this.validatePlot(storyId, content, storyBible, previousChapters)
     ]);
 
-    const allBlocking = [
-      ...worldviewCheck.blockingIssues,
-      ...characterCheck.blockingIssues,
-      ...plotCheck.blockingIssues
-    ];
-
-    const allPassed = worldviewCheck.verdict !== 'FAIL' &&
-                      characterCheck.verdict !== 'FAIL' &&
-                      plotCheck.verdict !== 'FAIL';
-
-    const hasWarnings = worldviewCheck.verdict === 'PASS_WITH_WARNINGS' ||
-                        characterCheck.verdict === 'PASS_WITH_WARNINGS' ||
-                        plotCheck.verdict === 'PASS_WITH_WARNINGS';
-
-    const aggregatedVerdict = !allPassed ? 'FAIL' : (hasWarnings ? 'PASS_WITH_WARNINGS' : 'PASS');
+    // Keep the reusable aggregation skeleton explicit while leaving each
+    // individual check's prompt/rule set story-domain specific.
+    const aggregate = this._aggregateValidationChecks([
+      worldviewCheck,
+      characterCheck,
+      plotCheck
+    ]);
 
     const canPromote = SchemaValidator.canPromoteToValidated(
-      { valid: allPassed && allBlocking.length === 0 },
+      { valid: aggregate.allPassed && aggregate.allBlocking.length === 0 },
       {
-        verdict: aggregatedVerdict,
-        schemaRisk: worldviewCheck.schemaRisk || characterCheck.schemaRisk || plotCheck.schemaRisk,
-        completenessRisk: worldviewCheck.completenessRisk || characterCheck.completenessRisk || plotCheck.completenessRisk,
-        blockingIssues: allBlocking
+        verdict: aggregate.verdict,
+        schemaRisk: aggregate.schemaRisk,
+        completenessRisk: aggregate.completenessRisk,
+        blockingIssues: aggregate.allBlocking
       }
     );
 
     return {
       overall: {
-        passed: allPassed && allBlocking.length === 0,
+        passed: aggregate.allPassed && aggregate.allBlocking.length === 0,
         canPromoteToValidated: canPromote,
-        hasCriticalIssues: allBlocking.length > 0,
-        criticalCount: allBlocking.length
+        hasCriticalIssues: aggregate.allBlocking.length > 0,
+        criticalCount: aggregate.allBlocking.length
       },
       checks: {
         worldview: worldviewCheck,
         characters: characterCheck,
         plot: plotCheck
       },
-      allIssues: [
-        ...worldviewCheck.issues,
-        ...characterCheck.issues,
-        ...plotCheck.issues
-      ],
-      allSuggestions: [
-        ...worldviewCheck.suggestions,
-        ...characterCheck.suggestions,
-        ...plotCheck.suggestions
-      ]
+      allIssues: aggregate.allIssues,
+      allSuggestions: aggregate.allSuggestions
     };
   }
 
@@ -170,6 +139,55 @@ ${content.substring(0, 3000)}...
     });
 
     return this._parseQualityScore(result.content);
+  }
+
+  async _runStructuredValidation(prompt) {
+    const result = await this.agentDispatcher.delegate('logicValidator', prompt, {
+      timeoutMs: 300000,
+      temporaryContact: true
+    });
+
+    return this._parseStructuredValidationResult(result.content);
+  }
+
+  _normalizeCharacterCollection(characters) {
+    if (!characters) {
+      return [];
+    }
+
+    if (Array.isArray(characters)) {
+      return characters;
+    }
+
+    if (typeof characters === 'object') {
+      if (Array.isArray(characters.characters)) {
+        return characters.characters;
+      }
+
+      if (Array.isArray(characters.protagonists)) {
+        return characters.protagonists;
+      }
+    }
+
+    return [];
+  }
+
+  _aggregateValidationChecks(checks) {
+    const allBlocking = checks.flatMap((check) => check.blockingIssues || []);
+    const allIssues = checks.flatMap((check) => check.issues || []);
+    const allSuggestions = checks.flatMap((check) => check.suggestions || []);
+    const allPassed = checks.every((check) => check.verdict !== 'FAIL');
+    const hasWarnings = checks.some((check) => check.verdict === 'PASS_WITH_WARNINGS');
+
+    return {
+      allBlocking,
+      allIssues,
+      allSuggestions,
+      allPassed,
+      verdict: !allPassed ? 'FAIL' : (hasWarnings ? 'PASS_WITH_WARNINGS' : 'PASS'),
+      schemaRisk: checks.some((check) => check.schemaRisk),
+      completenessRisk: checks.some((check) => check.completenessRisk)
+    };
   }
 
   _parseStructuredValidationResult(content) {
@@ -212,17 +230,19 @@ ${content.substring(0, 3000)}...
       const validVerdicts = ['PASS', 'PASS_WITH_WARNINGS', 'FAIL'];
       const normalizedVerdict = validVerdicts.includes(verdict) ? verdict : this._parseTextValidationResult(content).verdict;
 
+      const blockingIssues = Array.isArray(parsed.blocking_issues) ? parsed.blocking_issues :
+        Array.isArray(parsed.blockingIssues) ? parsed.blockingIssues : [];
+      const nonBlockingIssues = Array.isArray(parsed.non_blocking_issues) ? parsed.non_blocking_issues :
+        Array.isArray(parsed.nonBlockingIssues) ? parsed.nonBlockingIssues : [];
+
       return {
         verdict: normalizedVerdict,
         passed: normalizedVerdict !== 'FAIL',
         schemaRisk: parsed.schema_risk === true || parsed.schemaRisk === true,
         completenessRisk: parsed.completeness_risk === true || parsed.completenessRisk === true,
-        blockingIssues: Array.isArray(parsed.blocking_issues) ? parsed.blocking_issues :
-                        Array.isArray(parsed.blockingIssues) ? parsed.blockingIssues : [],
-        nonBlockingIssues: Array.isArray(parsed.non_blocking_issues) ? parsed.non_blocking_issues :
-                           Array.isArray(parsed.nonBlockingIssues) ? parsed.nonBlockingIssues : [],
-        issues: Array.isArray(parsed.blocking_issues) ? parsed.blocking_issues :
-                Array.isArray(parsed.blockingIssues) ? parsed.blockingIssues : [],
+        blockingIssues,
+        nonBlockingIssues,
+        issues: this._buildIssueObjects(blockingIssues, nonBlockingIssues),
         suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
         rawReport: content
       };
@@ -302,7 +322,7 @@ ${content.substring(0, 3000)}...
       }
     }
 
-    result.issues = result.blockingIssues;
+    result.issues = this._buildIssueObjects(result.blockingIssues, result.nonBlockingIssues);
     return result;
   }
 
@@ -333,6 +353,13 @@ ${content.substring(0, 3000)}...
     if (!content) return '';
     const text = typeof content === 'string' ? content : content.content || '';
     return text.substring(0, 200).replace(/\n/g, ' ') + '...';
+  }
+
+  _buildIssueObjects(blockingIssues = [], nonBlockingIssues = []) {
+    return [
+      ...blockingIssues.map((issue) => ({ description: issue, severity: 'major' })),
+      ...nonBlockingIssues.map((issue) => ({ description: issue, severity: 'minor' }))
+    ];
   }
 }
 

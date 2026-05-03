@@ -35,11 +35,69 @@ class StateManager {
     return path.join(STATE_DIR, `${storyId}.json`);
   }
 
-  async createStory(storyPrompt, config = {}) {
-    const storyId = this.generateStoryId();
-    const now = new Date().toISOString();
+  _createDefaultRetryContext() {
+    return {
+      phase: null,
+      step: null,
+      attempt: 0,
+      maxAttempts: 3,
+      lastError: null
+    };
+  }
 
-    const story = {
+  /**
+   * StoryOrchestrator persists a compatibility-oriented workflow view alongside
+   * business phase projections. This helper keeps that shape explicit so later
+   * convergence work can tighten the boundary without chasing repeated literals.
+   */
+  _createWorkflowCompatibilityState(overrides = {}) {
+    return {
+      state: 'idle',
+      currentPhase: 'phase1',
+      currentStep: null,
+      activeCheckpoint: null,
+      retryContext: {
+        ...this._createDefaultRetryContext(),
+        ...(overrides.retryContext || {})
+      },
+      history: [],
+      runToken: overrides.runToken || uuidv4(),
+      ...overrides
+    };
+  }
+
+  _ensureWorkflowCompatibilityState(story) {
+    if (!story.workflow) {
+      story.workflow = this._createWorkflowCompatibilityState();
+      return story.workflow;
+    }
+
+    story.workflow = this._createWorkflowCompatibilityState({
+      ...story.workflow,
+      retryContext: {
+        ...this._createDefaultRetryContext(),
+        ...(story.workflow.retryContext || {})
+      },
+      history: Array.isArray(story.workflow.history) ? story.workflow.history : []
+    });
+
+    return story.workflow;
+  }
+
+  _createDefaultPhaseProjection(phaseName) {
+    const phaseDefaults = {
+      phase1: { worldview: null, characters: [], validation: null, userConfirmed: false, checkpointId: null, status: 'pending' },
+      phase2: { outline: null, chapters: [], currentChapter: 0, userConfirmed: false, checkpointId: null, status: 'pending' },
+      phase3: { polishedChapters: [], finalValidation: null, iterationCount: 0, userConfirmed: false, checkpointId: null, status: 'pending' }
+    };
+
+    return {
+      ...(phaseDefaults[phaseName] || {})
+    };
+  }
+
+  _buildInitialStoryProjection(storyId, storyPrompt, config, now) {
+    return {
       id: storyId,
       status: 'phase1_running',
       createdAt: now,
@@ -50,49 +108,139 @@ class StateManager {
           : (config.target_word_count || { min: 2500, max: 3500 }),
         genre: config.genre || 'general',
         stylePreference: config.style_preference || '',
-        storyPrompt: storyPrompt
+        storyPrompt
       },
       phase1: {
-        worldview: null,
-        characters: [],
-        validation: null,
-        userConfirmed: false,
-        checkpointId: null,
+        ...this._createDefaultPhaseProjection('phase1'),
         status: 'running'
       },
-      phase2: {
-        outline: null,
-        chapters: [],
-        currentChapter: 0,
-        userConfirmed: false,
-        checkpointId: null,
-        status: 'pending'
-      },
-      phase3: {
-        polishedChapters: [],
-        finalValidation: null,
-        iterationCount: 0,
-        userConfirmed: false,
-        checkpointId: null,
-        status: 'pending'
-      },
+      phase2: this._createDefaultPhaseProjection('phase2'),
+      phase3: this._createDefaultPhaseProjection('phase3'),
       finalOutput: null,
-      workflow: {
-        state: 'idle',
-        currentPhase: 'phase1',
-        currentStep: null,
+      workflow: this._createWorkflowCompatibilityState()
+    };
+  }
+
+  _parseProjectionJson(payload, fallback) {
+    if (!payload) {
+      return fallback;
+    }
+
+    try {
+      return JSON.parse(payload);
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  _loadPhaseProjection(snapshotId, phaseName) {
+    if (!snapshotId) {
+      return this._createDefaultPhaseProjection(phaseName);
+    }
+
+    const snapshot = this.repository.getSnapshot(snapshotId);
+    if (!snapshot) {
+      return this._createDefaultPhaseProjection(phaseName);
+    }
+
+    const parsedPayload = this._parseProjectionJson(snapshot.payload_json, null);
+    if (!parsedPayload || typeof parsedPayload !== 'object') {
+      return this._createDefaultPhaseProjection(phaseName);
+    }
+
+    return {
+      ...this._createDefaultPhaseProjection(phaseName),
+      ...parsedPayload
+    };
+  }
+
+  _buildActiveCheckpointCompatibilityView(checkpointRecord) {
+    if (!checkpointRecord) {
+      return null;
+    }
+
+    return {
+      id: checkpointRecord.checkpoint_id,
+      phase: checkpointRecord.phase_name,
+      type: checkpointRecord.checkpoint_type,
+      status: checkpointRecord.status,
+      createdAt: checkpointRecord.created_at,
+      expiresAt: checkpointRecord.expires_at,
+      autoContinueOnTimeout: true,
+      feedback: checkpointRecord.feedback || ''
+    };
+  }
+
+  /**
+   * Assemble the plugin-facing story projection from repository fields. The
+   * resulting object intentionally combines business phase projections with a
+   * compatibility-only workflow view, rather than claiming to re-create kernel
+   * runtime truth from plugin storage alone.
+   */
+  _assembleStoryProjectionFromRow(row) {
+    const finalOutput = this._parseProjectionJson(row.final_output_json, null);
+    const retryContext = this._parseProjectionJson(row.retry_context_json, this._createDefaultRetryContext());
+    const story = {
+      id: row.story_id,
+      status: row.status,
+      version: row.version,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      config: this._parseProjectionJson(row.config_json, {}),
+      phase1: this._loadPhaseProjection(row.current_phase1_snapshot_id, 'phase1'),
+      phase2: this._loadPhaseProjection(row.current_phase2_snapshot_id, 'phase2'),
+      phase3: this._loadPhaseProjection(row.current_phase3_snapshot_id, 'phase3'),
+      finalOutput,
+      workflow: this._createWorkflowCompatibilityState({
+        state: row.workflow_state || (row.status === 'completed' ? 'completed' : 'idle'),
+        currentPhase: row.current_phase,
+        currentStep: row.current_step,
         activeCheckpoint: null,
-        retryContext: {
-          phase: null,
-          step: null,
-          attempt: 0,
-          maxAttempts: 3,
-          lastError: null
-        },
+        retryContext,
         history: [],
         runToken: uuidv4()
-      }
+      })
     };
+
+    if (row.active_checkpoint_id) {
+      story.workflow.activeCheckpoint = this._buildActiveCheckpointCompatibilityView(
+        this.repository.getCheckpoint(row.active_checkpoint_id)
+      );
+    }
+
+    const events = this.repository.getEvents(row.story_id, { limit: 1000 });
+    story.workflow.history = events.reverse().map((evt) => {
+      const detail = this._parseProjectionJson(evt.event_detail_json, {});
+      return {
+        at: evt.created_at,
+        type: evt.event_type,
+        phase: evt.phase_name,
+        step: detail.step || null,
+        detail
+      };
+    });
+
+    return story;
+  }
+
+  _applyWorkflowCompatibilityPatch(workflow, updates) {
+    const nextWorkflow = this._createWorkflowCompatibilityState({
+      ...workflow,
+      ...updates,
+      retryContext: {
+        ...workflow.retryContext,
+        ...(updates.retryContext || {})
+      }
+    });
+
+    return nextWorkflow;
+  }
+
+  async createStory(storyPrompt, config = {}) {
+    const storyId = this.generateStoryId();
+    const now = new Date().toISOString();
+
+    const story = this._buildInitialStoryProjection(storyId, storyPrompt, config, now);
 
     this.repository.createStory(storyId, story.config, now);
 
@@ -145,119 +293,7 @@ class StateManager {
     const row = this.repository.getStoryWithFields(storyId);
     if (!row) return null;
 
-    let finalOutput = null;
-    try {
-      finalOutput = row.final_output_json ? JSON.parse(row.final_output_json) : null;
-    } catch (e) {}
-
-    let retryContext = {
-      phase: null,
-      step: null,
-      attempt: 0,
-      maxAttempts: 3,
-      lastError: null
-    };
-    try {
-      if (row.retry_context_json) {
-        retryContext = JSON.parse(row.retry_context_json);
-      }
-    } catch (e) {}
-
-    const story = {
-      id: row.story_id,
-      status: row.status,
-      version: row.version,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      config: JSON.parse(row.config_json || '{}'),
-      phase1: null,
-      phase2: null,
-      phase3: null,
-      finalOutput,
-      workflow: {
-        state: row.workflow_state || (row.status === 'completed' ? 'completed' : 'idle'),
-        currentPhase: row.current_phase,
-        currentStep: row.current_step,
-        activeCheckpoint: null,
-        retryContext,
-        history: [],
-        runToken: uuidv4()
-      }
-    };
-
-    if (row.current_phase1_snapshot_id) {
-      const snap = this.repository.getSnapshot(row.current_phase1_snapshot_id);
-      if (snap) {
-        try {
-          story.phase1 = JSON.parse(snap.payload_json);
-        } catch (e) {
-          story.phase1 = null;
-        }
-      }
-    }
-    if (row.current_phase2_snapshot_id) {
-      const snap = this.repository.getSnapshot(row.current_phase2_snapshot_id);
-      if (snap) {
-        try {
-          story.phase2 = JSON.parse(snap.payload_json);
-        } catch (e) {
-          story.phase2 = null;
-        }
-      }
-    }
-    if (row.current_phase3_snapshot_id) {
-      const snap = this.repository.getSnapshot(row.current_phase3_snapshot_id);
-      if (snap) {
-        try {
-          story.phase3 = JSON.parse(snap.payload_json);
-        } catch (e) {
-          story.phase3 = null;
-        }
-      }
-    }
-
-    if (!story.phase1) {
-      story.phase1 = { worldview: null, characters: [], validation: null, userConfirmed: false, checkpointId: null, status: 'pending' };
-    }
-    if (!story.phase2) {
-      story.phase2 = { outline: null, chapters: [], currentChapter: 0, userConfirmed: false, checkpointId: null, status: 'pending' };
-    }
-    if (!story.phase3) {
-      story.phase3 = { polishedChapters: [], finalValidation: null, iterationCount: 0, userConfirmed: false, checkpointId: null, status: 'pending' };
-    }
-
-    if (row.active_checkpoint_id) {
-      const cp = this.repository.getCheckpoint(row.active_checkpoint_id);
-      if (cp) {
-        story.workflow.activeCheckpoint = {
-          id: cp.checkpoint_id,
-          phase: cp.phase_name,
-          type: cp.checkpoint_type,
-          status: cp.status,
-          createdAt: cp.created_at,
-          expiresAt: cp.expires_at,
-          autoContinueOnTimeout: true,
-          feedback: cp.feedback || ''
-        };
-      }
-    }
-
-    const events = this.repository.getEvents(storyId, { limit: 1000 });
-    story.workflow.history = events.reverse().map(evt => {
-      let detail = {};
-      try {
-        detail = JSON.parse(evt.event_detail_json || '{}');
-      } catch (e) {}
-      return {
-        at: evt.created_at,
-        type: evt.event_type,
-        phase: evt.phase_name,
-        step: detail.step || null,
-        detail
-      };
-    });
-
-    return story;
+    return this._assembleStoryProjectionFromRow(row);
   }
 
   async updateStory(storyId, updates, repoExtraUpdates = {}) {
@@ -388,36 +424,8 @@ class StateManager {
       throw new Error(`Story not found: ${storyId}`);
     }
 
-    if (!story.workflow) {
-      story.workflow = {
-        state: 'idle',
-        currentPhase: null,
-        currentStep: null,
-        activeCheckpoint: null,
-        retryContext: {
-          phase: null,
-          step: null,
-          attempt: 0,
-          maxAttempts: 3,
-          lastError: null
-        },
-        history: [],
-        runToken: uuidv4()
-      };
-    }
-
-    if (updates.retryContext !== undefined) {
-      story.workflow.retryContext = {
-        ...story.workflow.retryContext,
-        ...updates.retryContext
-      };
-    }
-
-    story.workflow = {
-      ...story.workflow,
-      ...updates,
-      retryContext: story.workflow.retryContext
-    };
+    this._ensureWorkflowCompatibilityState(story);
+    story.workflow = this._applyWorkflowCompatibilityPatch(story.workflow, updates);
 
     const repoUpdates = {
       status: story.status,
@@ -435,23 +443,7 @@ class StateManager {
       throw new Error(`Story not found: ${storyId}`);
     }
 
-    if (!story.workflow) {
-      story.workflow = {
-        state: 'idle',
-        currentPhase: null,
-        currentStep: null,
-        activeCheckpoint: null,
-        retryContext: {
-          phase: null,
-          step: null,
-          attempt: 0,
-          maxAttempts: 3,
-          lastError: null
-        },
-        history: [],
-        runToken: uuidv4()
-      };
-    }
+    this._ensureWorkflowCompatibilityState(story);
 
     const historyEntry = {
       at: entry.at || new Date().toISOString(),
@@ -479,29 +471,14 @@ class StateManager {
       throw new Error(`Story not found: ${storyId}`);
     }
 
-    if (!story.workflow) {
-      story.workflow = {
-        state: 'idle',
-        currentPhase: null,
-        currentStep: null,
-        activeCheckpoint: null,
-        retryContext: {
-          phase: null,
-          step: null,
-          attempt: 0,
-          maxAttempts: 3,
-          lastError: null
-        },
-        history: [],
-        runToken: uuidv4()
-      };
-    }
+    this._ensureWorkflowCompatibilityState(story);
 
     const checkpointId = checkpoint.id || checkpoint.checkpointId || `cp-${uuidv4().replace(/-/g, '').substring(0, 8)}`;
+    const effectivePhase = checkpoint.phase || story.workflow.currentPhase || 'phase1';
 
     story.workflow.activeCheckpoint = {
       id: checkpointId,
-      phase: checkpoint.phase || story.workflow.currentPhase,
+      phase: effectivePhase,
       type: checkpoint.type || 'outline_confirmation',
       status: checkpoint.status || 'pending',
       createdAt: checkpoint.createdAt || new Date().toISOString(),
@@ -511,8 +488,8 @@ class StateManager {
     };
 
     let snapshotId = checkpoint.snapshot_id || null;
-    if (!snapshotId && checkpoint.phase) {
-      const phase = checkpoint.phase;
+    if (!snapshotId && effectivePhase) {
+      const phase = effectivePhase;
       if (phase === 'phase1' && story.phase1) {
         snapshotId = this.repository.createSnapshot({
           story_id: storyId,
@@ -582,7 +559,7 @@ class StateManager {
     return story;
   }
 
-  async recordPhaseFeedback(storyId, phaseName, feedback, resolutionStatus = null) {
+  async recordPhaseFeedback(storyId, phaseName, feedback, resolutionStatus = 'approved') {
     const story = await this.getStory(storyId);
     if (!story) {
       throw new Error(`Story not found: ${storyId}`);

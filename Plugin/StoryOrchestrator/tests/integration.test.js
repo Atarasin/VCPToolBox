@@ -21,7 +21,7 @@ function createMockAgentDispatcher() {
       const responses = {
         worldBuilder: { content: JSON.stringify({ setting: '未来地球公元2150年', rules: { physical: '星际旅行' }, factions: [{ name: '地球联邦' }], history: { keyEvents: ['火星独立战争'] }, sceneNorms: ['高科技感'], secrets: ['AI正在觉醒'] }) },
         characterDesigner: { content: JSON.stringify({ protagonists: [{ name: '林博士', identity: 'AI研究员', personality: ['理性'], background: '火星出生', motivation: '解开AI意识之谜', innerConflict: '人类与AI的界限', growthArc: '从学者到守护者' }], supportingCharacters: [{ name: '小柒', identity: '家用机器人' }], relationshipNetwork: { direct: [], hidden: [] }, oocRules: {} }) },
-        plotArchitect: { content: '第1章：火星黎明\n核心事件：林博士发现AI异常' },
+        plotArchitect: { content: '【Chapter 1】\n标题：火星黎明\n核心事件：林博士发现AI异常\n场景：\n1. 火星研究所\n出场人物：\n林博士\n故事功能：setup' },
         logicValidator: { content: '【验证结论】\n通过\n\n【问题清单】\n无' },
         chapterWriter: { content: '这是第一章的详细内容。林博士站在火星研究所的观景窗前...' },
         detailFiller: { content: '【细节填充完成】\n\n场景描写已增强...' },
@@ -66,10 +66,84 @@ function createMockAgentDispatcher() {
 
 function createMockStateManager() {
   const cache = new Map();
+  let phaseAttemptCounter = 0;
+  let snapshotCounter = 0;
+  const repositoryStories = new Map();
+  const checkpoints = new Map();
+  const snapshots = new Map();
+  const phaseAttempts = new Map();
+  const artifactManager = {
+    async saveArtifact(storyId, artifactType, _content, extension = 'txt') {
+      return {
+        filePath: path.join(TEST_STATE_DIR, `${storyId}-${artifactType}-${Date.now()}.${extension}`)
+      };
+    }
+  };
+  const repository = {
+    createPhaseAttempt(payload) {
+      const id = `attempt-${++phaseAttemptCounter}`;
+      phaseAttempts.set(id, { id, ...payload });
+      return id;
+    },
+    updatePhaseAttempt(id, updates) {
+      phaseAttempts.set(id, { ...(phaseAttempts.get(id) || { id }), ...updates });
+    },
+    getStory(storyId) {
+      return repositoryStories.get(storyId) || null;
+    },
+    getStoryWithFields(storyId) {
+      return repositoryStories.get(storyId) || null;
+    },
+    createStory(storyId, config) {
+      repositoryStories.set(storyId, {
+        story_id: storyId,
+        current_phase2_snapshot_id: `phase2-snapshot-${storyId}`,
+        current_phase3_snapshot_id: `phase3-snapshot-${storyId}`,
+        ...config
+      });
+      return storyId;
+    },
+    createSnapshot(payload) {
+      const id = `snapshot-${++snapshotCounter}`;
+      snapshots.set(id, { snapshot_id: id, ...payload });
+      return id;
+    },
+    getSnapshot(snapshotId) {
+      return snapshots.get(snapshotId) || null;
+    },
+    createCheckpoint(payload) {
+      checkpoints.set(payload.checkpoint_id, payload);
+    },
+    updateCheckpoint(checkpointId, updates) {
+      checkpoints.set(checkpointId, { ...(checkpoints.get(checkpointId) || {}), ...updates });
+    },
+    getCheckpoint(checkpointId) {
+      return checkpoints.get(checkpointId) || null;
+    },
+    updateStory(storyId, updates, _version) {
+      const existing = repositoryStories.get(storyId) || { story_id: storyId, version: 1 };
+      repositoryStories.set(storyId, { ...existing, ...updates, version: (existing.version || 1) + 1 });
+      return repositoryStories.get(storyId);
+    },
+    getLatestApprovedSnapshot(storyId, phaseName) {
+      const story = repositoryStories.get(storyId);
+      if (!story) return null;
+      const field = `current_${phaseName}_snapshot_id`;
+      const snapshotId = story[field];
+      if (!snapshotId) return null;
+      return snapshots.get(snapshotId) || null;
+    },
+    listStories() {
+      return Array.from(repositoryStories.values());
+    },
+    appendEvent() {}
+  };
   
   return {
     initialized: false,
     cache,
+    artifactManager,
+    repository,
     stateDir: TEST_STATE_DIR,
     
     async initialize() { this.initialized = true; return Promise.resolve(); },
@@ -111,6 +185,11 @@ function createMockStateManager() {
       
       cache.set(storyId, story);
       testStories.set(storyId, story);
+      repositoryStories.set(storyId, {
+        story_id: storyId,
+        current_phase2_snapshot_id: `phase2-snapshot-${storyId}`,
+        current_phase3_snapshot_id: `phase3-snapshot-${storyId}`
+      });
       return story;
     },
 
@@ -196,6 +275,14 @@ function createMockStateManager() {
         autoContinueOnTimeout: checkpoint.autoContinueOnTimeout !== undefined ? checkpoint.autoContinueOnTimeout : true,
         feedback: checkpoint.feedback || ''
       };
+      checkpoints.set(story.workflow.activeCheckpoint.id, {
+        checkpoint_id: story.workflow.activeCheckpoint.id,
+        phase_name: story.workflow.activeCheckpoint.phase,
+        checkpoint_type: story.workflow.activeCheckpoint.type,
+        status: story.workflow.activeCheckpoint.status,
+        expires_at: story.workflow.activeCheckpoint.expiresAt,
+        feedback: story.workflow.activeCheckpoint.feedback || ''
+      });
       return this.updateStory(storyId, story);
     },
 
@@ -277,6 +364,22 @@ function createTestableStoryOrchestrator() {
   orchestrator.contentValidator = createMockContentValidator();
   orchestrator.globalConfig = { MAX_PHASE_RETRY_ATTEMPTS: 3, USER_CHECKPOINT_TIMEOUT_MS: 86400000 };
   
+  // Optionally initialize kernel adapter for kernel-path testing
+  const useKernel = process.env.TEST_USE_WORKFLOW_KERNEL === 'true';
+  orchestrator.useKernel = useKernel;
+  if (useKernel) {
+    const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
+    orchestrator.kernelAdapter = new StoryOrchestratorKernelAdapter({
+      stateManager: orchestrator.stateManager,
+      agentDispatcher: orchestrator.agentDispatcher,
+      chapterOperations: orchestrator.chapterOperations,
+      contentValidator: orchestrator.contentValidator,
+      config: { ...orchestrator.globalConfig, USE_WORKFLOW_KERNEL: 'true' }
+    });
+    // initialize() is async but contains no await, so it runs synchronously
+    orchestrator.kernelAdapter.initialize();
+  }
+  
   return orchestrator;
 }
 
@@ -286,6 +389,7 @@ function createMockChapterOperations() {
       return { content: `第${chapterNumber}章内容。这是一个测试章节的详细内容，包含足够多的文字来模拟真实的写作过程。`.repeat(20), metrics: { counts: { actualCount: 2800, chineseChars: 2800 } }, wasExpanded: false };
     },
     async fillDetails(storyId, chapterNum, content, options = {}) { return { detailedContent: content + '\n\n【细节填充】...', improvements: ['场景更生动'] }; },
+    async _expandChapter(storyId, content, deficit, chapterOutline) { return { content: content + '\n\n【自动扩写】补足目标字数。'.repeat(20) }; },
     async reviewChapter(storyId, chapterNum, content, options = {}) { return { verdict: 'passed', severity: 'minor', issues: [], suggestions: [] }; },
     async reviseChapter(storyId, chapterNum, content, options = {}) { return { revisedContent: content + '\n\n【修订】...', revisionCount: 1 }; },
     async polishChapter(storyId, chapterNum, content, options = {}) { return { polishedContent: content + '\n\n【润色】...', improvements: ['语言更精炼'], metrics: { counts: { actualCount: 2850, chineseChars: 2850 } } }; },
@@ -310,6 +414,7 @@ function createMockContentValidator() {
 }
 
 let WorkflowEngine;
+const activeWorkflowEngines = new Set();
 
 describe('StoryOrchestrator Plugin Integration Tests', () => {
   
@@ -321,10 +426,21 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   });
 
   after(async () => {
+    for (const workflowEngine of activeWorkflowEngines) {
+      await workflowEngine.shutdown?.();
+    }
+    activeWorkflowEngines.clear();
     try { await fs.promises.rm(TEST_STATE_DIR, { recursive: true, force: true }); } catch (e) { console.log('Cleanup warning:', e.message); }
   });
 
   beforeEach(() => { testStories.clear(); agentCallLog.length = 0; notifications.length = 0; });
+
+  afterEach(async () => {
+    for (const workflowEngine of activeWorkflowEngines) {
+      await workflowEngine.shutdown?.();
+    }
+    activeWorkflowEngines.clear();
+  });
 
   describe('1. Command Interface Tests (processToolCall)', () => {
     
@@ -340,7 +456,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const result = await orchestrator.processToolCall({
           command: 'StartStoryProject',
@@ -370,7 +488,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const result = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '太短' });
         
@@ -391,7 +511,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const createResult = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '测试故事状态查询功能的项目足够长' });
         
@@ -415,7 +537,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const result = await orchestrator.processToolCall({ command: 'QueryStoryStatus', story_id: 'non-existent-story' });
         
@@ -428,6 +552,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       
       it('should handle approval through processToolCall', async () => {
         const orchestrator = createTestableStoryOrchestrator();
+        // Force legacy path for this test (it mocks workflowEngine phases directly)
+        orchestrator.useKernel = false;
+        orchestrator.kernelAdapter = null;
         const mockStateManager = orchestrator.stateManager;
         
         orchestrator.workflowEngine = new WorkflowEngine({
@@ -437,7 +564,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
@@ -462,6 +591,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
 
       it('should reject mismatched checkpoint_id', async () => {
         const orchestrator = createTestableStoryOrchestrator();
+        // Force legacy path for this test (it mocks workflowEngine phases directly)
+        orchestrator.useKernel = false;
+        orchestrator.kernelAdapter = null;
         const mockStateManager = orchestrator.stateManager;
         
         orchestrator.workflowEngine = new WorkflowEngine({
@@ -471,7 +603,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
@@ -486,6 +620,48 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         
         assert.strictEqual(result.status, 'error');
         assert.ok(result.result?.error && result.result.error.includes('mismatch'));
+      });
+
+      it('falls back to workflowEngine when kernel checkpoint resume is not active', async () => {
+        const orchestrator = createTestableStoryOrchestrator();
+        const mockStateManager = orchestrator.stateManager;
+
+        orchestrator.useKernel = true;
+        orchestrator.kernelAdapter = {
+          async resume() {
+            throw new Error('Workflow story-test is not active');
+          }
+        };
+
+        orchestrator.workflowEngine = new WorkflowEngine({
+          stateManager: mockStateManager,
+          agentDispatcher: orchestrator.agentDispatcher,
+          chapterOperations: createMockChapterOperations(),
+          contentValidator: createMockContentValidator(),
+          config: orchestrator.globalConfig
+        });
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        await orchestrator.workflowEngine.initialize();
+
+        const story = await mockStateManager.createStory('测试故事');
+        await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
+        await mockStateManager.setActiveCheckpoint(story.id, { id: 'cp-1-worldview', phase: 'phase1', status: 'pending' });
+
+        orchestrator.workflowEngine.phases = {
+          phase1: { async run() { return { status: 'completed', phase: 'phase1' }; } },
+          phase2: { async run() { return { status: 'completed', phase: 'phase2' }; } },
+          phase3: { async run() { return { status: 'completed', phase: 'phase3' }; } }
+        };
+
+        const result = await orchestrator.processToolCall({
+          command: 'UserConfirmCheckpoint',
+          story_id: story.id,
+          checkpoint_id: 'cp-1-worldview',
+          approval: true,
+          feedback: 'Looks great!'
+        });
+
+        assert.strictEqual(result.status, 'success');
       });
     });
 
@@ -502,7 +678,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'running', currentPhase: 'phase2' });
@@ -529,7 +707,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'completed' });
@@ -554,7 +734,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'failed', retryContext: { phase: 'phase1', attempt: 1, maxAttempts: 3, lastError: 'Previous failure' } });
@@ -564,6 +746,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           phase2: { async run() { return { status: 'completed', phase: 'phase2' }; } },
           phase3: { async run() { return { status: 'completed', phase: 'phase3' }; } }
         };
+        orchestrator.workflowEngine._runPhase1 = async () => ({ status: 'running', phase: 'phase1' });
         
         const result = await orchestrator.processToolCall({ command: 'RetryPhase', story_id: story.id, phase_name: 'phase1', reason: 'Manual retry' });
         
@@ -580,7 +763,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const result = await orchestrator.processToolCall({ command: 'RetryPhase', story_id: 'story-123456789012', phase_name: 'invalid_phase' });
         
@@ -599,7 +784,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: { MAX_PHASE_RETRY_ATTEMPTS: 3 }
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'failed', retryContext: { phase: 'phase1', attempt: 3, maxAttempts: 3, lastError: 'Max retries exceeded' } });
@@ -624,7 +811,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateStory(story.id, { status: 'completed', finalOutput: { metadata: { title: 'Test Story' }, chapters: [{ number: 1, content: 'Test content' }] } });
@@ -646,7 +835,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const testContent = '这是测试内容。这是一个测试内容。'.repeat(100);
         
@@ -789,7 +980,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           contentValidator: createMockContentValidator(),
           config: orchestrator.globalConfig
         });
-        await orchestrator.workflowEngine.initialize();
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+        activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
         
         const result = await orchestrator.processToolCall({ command: 'UnknownCommand' });
         
@@ -803,6 +996,9 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     
     it('should execute full 3-phase workflow through processToolCall', async () => {
       const orchestrator = createTestableStoryOrchestrator();
+      // Force legacy path for this test (it mocks workflowEngine phases directly)
+      orchestrator.useKernel = false;
+      orchestrator.kernelAdapter = null;
       const mockStateManager = orchestrator.stateManager;
       
       orchestrator.workflowEngine = new WorkflowEngine({
@@ -812,6 +1008,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       orchestrator.workflowEngine.phases = {
@@ -825,33 +1022,63 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         phase2: {
           async run() {
             const story = await mockStateManager.getStory(mockStateManager._lastStoryId);
-            await mockStateManager.updatePhase2(story.id, { outline: { chapters: [{ number: 1, title: '第一章' }] }, status: 'pending_confirmation' });
-            return { status: 'waiting_checkpoint', checkpointId: 'cp-2-outline', phase: 'phase2', data: {} };
+            if (story.phase2?.userConfirmed) {
+              await mockStateManager.updatePhase2(story.id, {
+                chapters: [{ number: 1, title: '第一章', content: '章节正文', metrics: { counts: { chineseChars: 2800 } } }],
+                checkpointId: 'cp-2-content',
+                status: 'content_pending_confirmation'
+              });
+              return { status: 'waiting_checkpoint', checkpointId: 'cp-2-content', checkpointType: 'phase2_content_confirmation', phase: 'phase2', data: {} };
+            }
+            await mockStateManager.updatePhase2(story.id, {
+              outline: { chapters: [{ number: 1, title: '第一章' }] },
+              checkpointId: 'cp-2-outline',
+              status: 'pending_confirmation'
+            });
+            return { status: 'waiting_checkpoint', checkpointId: 'cp-2-outline', checkpointType: 'phase2_outline_confirmation', phase: 'phase2', data: {} };
           },
           async continueFromCheckpoint() { return { status: 'completed', phase: 'phase2' }; }
         },
         phase3: {
           async run() {
             const story = await mockStateManager.getStory(mockStateManager._lastStoryId);
-            await mockStateManager.updatePhase3(story.id, { status: 'pending_confirmation' });
+            await mockStateManager.updatePhase3(story.id, { checkpointId: 'cp-3-final', status: 'pending_confirmation' });
             return { status: 'waiting_checkpoint', checkpointId: 'cp-3-final', phase: 'phase3', data: {} };
           },
           async continueFromCheckpoint() { return { status: 'completed', phase: 'phase3' }; }
         }
       };
+
+      async function waitForCheckpoint(checkpointId) {
+        for (let i = 0; i < 40; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          if (story.workflow?.activeCheckpoint?.id === checkpointId) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error(`Checkpoint ${checkpointId} was not created`);
+      }
       
       const startResult = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '一个完整的测试故事工作流程足够长以通过验证' });
       
       assert.strictEqual(startResult.status, 'success');
       const storyId = startResult.result.story_id;
       mockStateManager._lastStoryId = storyId;
-      
+
+      await waitForCheckpoint('cp-1-worldview');
       const approve1 = await orchestrator.processToolCall({ command: 'UserConfirmCheckpoint', story_id: storyId, checkpoint_id: 'cp-1-worldview', approval: true });
       assert.strictEqual(approve1.status, 'success');
-      
+
+      await waitForCheckpoint('cp-2-outline');
       const approve2 = await orchestrator.processToolCall({ command: 'UserConfirmCheckpoint', story_id: storyId, checkpoint_id: 'cp-2-outline', approval: true });
       assert.strictEqual(approve2.status, 'success');
-      
+
+      await waitForCheckpoint('cp-2-content');
+      const approveContent = await orchestrator.processToolCall({ command: 'UserConfirmCheckpoint', story_id: storyId, checkpoint_id: 'cp-2-content', approval: true });
+      assert.strictEqual(approveContent.status, 'success');
+
+      await waitForCheckpoint('cp-3-final');
       const approve3 = await orchestrator.processToolCall({ command: 'UserConfirmCheckpoint', story_id: storyId, checkpoint_id: 'cp-3-final', approval: true });
       assert.strictEqual(approve3.status, 'success');
       
@@ -870,6 +1097,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       // StartStoryProject runs workflow asynchronously, so we need to:
@@ -907,6 +1135,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const story1Result = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '第一个并发测试故事项目足够长' });
@@ -936,6 +1165,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const story1 = await mockStateManager.createStory('故事1');
@@ -1013,6 +1243,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const story = await mockStateManager.createStory('测试检查点');
@@ -1036,6 +1267,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const story = await mockStateManager.createStory('测试历史');
@@ -1062,6 +1294,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const result = await orchestrator.processToolCall({ command: 'StartStoryProject' });
@@ -1080,6 +1313,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: orchestrator.globalConfig
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const result = await orchestrator.processToolCall({ command: 'UserConfirmCheckpoint', story_id: 'some-story', checkpoint_id: 'some-cp', approval: 'not-a-boolean' });
@@ -1101,6 +1335,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 50 }
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const storyId = 'expired-checkpoint-story';
@@ -1140,6 +1375,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 5000 }
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const storyId = 'valid-checkpoint-story';
@@ -1178,6 +1414,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         contentValidator: createMockContentValidator(),
         config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 50 }
       });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
       await orchestrator.workflowEngine.initialize();
       
       const storyId = 'no-auto-story';
@@ -1210,29 +1447,61 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   describe('8. Phase2 Retry and Checkpoint Tests', () => {
     it('should retry outline validation up to 5 times', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
+      orchestrator.workflowEngine = new WorkflowEngine({
+        stateManager: orchestrator.stateManager,
+        agentDispatcher: orchestrator.agentDispatcher,
+        chapterOperations: orchestrator.chapterOperations,
+        contentValidator: orchestrator.contentValidator,
+        config: orchestrator.globalConfig
+      });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
+
+      const phase2 = orchestrator.workflowEngine.phases.phase2;
+      const outlineText = [
+        '第1章 失联前夜',
+        '核心事件：调查员收到第一条异常告警',
+        '场景：北区机房',
+        '人物：周岚, 值班 AI',
+        '字数分配：约2500字'
+      ].join('\n');
+
       let validationAttempts = 0;
-      const mockValidator = {
-        async validate() {
-          validationAttempts++;
-          return { passed: validationAttempts >= 5, issues: [], suggestions: [] };
+      phase2.agentDispatcher = {
+        async delegate(agentType) {
+          if (agentType === 'plotArchitect') {
+            return { content: outlineText, raw: {}, markers: {} };
+          }
+          return { content: 'unused', raw: {}, markers: {} };
         }
       };
-      
-      orchestrator.phases.phase2.contentValidator = mockValidator;
-      
-      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
-      await orchestrator.phases.phase2._runOutlineGeneration(storyId);
-      
-      assert.strictEqual(validationAttempts >= 1 && validationAttempts <= 5, true, 
-        `Expected 1-5 validation attempts, got ${validationAttempts}`);
+      phase2._validateOutline = async () => {
+        validationAttempts++;
+        return validationAttempts >= 5
+          ? { verdict: 'PASS', passed: true, issues: [], suggestions: [] }
+          : { verdict: 'FAIL', passed: false, issues: ['需要继续修订'], suggestions: ['重写大纲'] };
+      };
+
+      const story = await orchestrator.stateManager.createStory('测试故事需要走完大纲修订重试链路', { genre: '科幻' });
+      const result = await phase2._generateOutline(story.id);
+
+      assert.strictEqual(result.status, 'waiting_checkpoint');
+      assert.strictEqual(validationAttempts, 5);
     });
 
     it('should not hard-fail on outline warnings only', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
+      orchestrator.workflowEngine = new WorkflowEngine({
+        stateManager: orchestrator.stateManager,
+        agentDispatcher: orchestrator.agentDispatcher,
+        chapterOperations: orchestrator.chapterOperations,
+        contentValidator: orchestrator.contentValidator,
+        config: orchestrator.globalConfig
+      });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
+
+      const phase2 = orchestrator.workflowEngine.phases.phase2;
       const mockDispatcher = {
         async delegate(agentType, prompt) {
           if (agentType === 'logicValidator') {
@@ -1248,30 +1517,39 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           return { succeeded: [], failed: [] };
         }
       };
-      
-      orchestrator.phases.phase2.agentDispatcher = mockDispatcher;
-      
-      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
-      const result = await orchestrator.phases.phase2._validateOutline(storyId, { chapters: [] });
-      
+
+      phase2.agentDispatcher = mockDispatcher;
+
+      const story = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      const result = await phase2._validateOutline(story.id, { chapters: [] });
+
       assert.strictEqual(result.passed, true, 'Outline with only warnings should pass');
     });
 
     it('should create second checkpoint after content generation', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
-      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
-      await orchestrator.stateManager.updatePhase2(storyId, { 
+      orchestrator.workflowEngine = new WorkflowEngine({
+        stateManager: orchestrator.stateManager,
+        agentDispatcher: orchestrator.agentDispatcher,
+        chapterOperations: orchestrator.chapterOperations,
+        contentValidator: orchestrator.contentValidator,
+        config: orchestrator.globalConfig
+      });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
+
+      const phase2 = orchestrator.workflowEngine.phases.phase2;
+      const story = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.stateManager.updatePhase2(story.id, {
         outline: { chapters: [{ title: '第一章', scenes: [] }] },
         userConfirmed: true 
       });
-      
-      await orchestrator.phases.phase2._produceContent(storyId);
-      
-      const story = await orchestrator.stateManager.getStory(storyId);
-      assert.ok(story.phase2.checkpointId, 'Should have content checkpoint ID');
-      assert.strictEqual(story.phase2.status, 'content_pending_confirmation', 
+
+      await phase2._produceContent(story.id);
+
+      const updatedStory = await orchestrator.stateManager.getStory(story.id);
+      assert.ok(updatedStory.phase2.checkpointId, 'Should have content checkpoint ID');
+      assert.strictEqual(updatedStory.phase2.status, 'content_pending_confirmation',
         'Should be waiting for content confirmation');
     });
   });
@@ -1279,35 +1557,53 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   describe('9. Phase3 Guard Tests', () => {
     it('should not run Phase3 when Phase2 has no approved chapters', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
-      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
-      await orchestrator.stateManager.updateStory(storyId, {
+      orchestrator.workflowEngine = new WorkflowEngine({
+        stateManager: orchestrator.stateManager,
+        agentDispatcher: orchestrator.agentDispatcher,
+        chapterOperations: orchestrator.chapterOperations,
+        contentValidator: orchestrator.contentValidator,
+        config: orchestrator.globalConfig
+      });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
+
+      const phase3 = orchestrator.workflowEngine.phases.phase3;
+      const story = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.stateManager.updateStory(story.id, {
         status: 'phase2_completed',
         phase2: { chapters: [], userConfirmed: true }
       });
-      
-      const result = await orchestrator.phases.phase3.run(storyId);
-      
+
+      const result = await phase3.run(story.id);
+
       assert.strictEqual(result.status, 'failed');
       assert.ok(result.error.includes('No chapters') || result.error.includes('no approved chapters'));
     });
 
     it('should run Phase3 when Phase2 has approved chapters', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
-      const storyId = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
-      await orchestrator.stateManager.updateStory(storyId, {
+      orchestrator.workflowEngine = new WorkflowEngine({
+        stateManager: orchestrator.stateManager,
+        agentDispatcher: orchestrator.agentDispatcher,
+        chapterOperations: orchestrator.chapterOperations,
+        contentValidator: orchestrator.contentValidator,
+        config: orchestrator.globalConfig
+      });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
+
+      const phase3 = orchestrator.workflowEngine.phases.phase3;
+      const story = await orchestrator.stateManager.createStory('测试故事', { genre: '科幻' });
+      await orchestrator.stateManager.updateStory(story.id, {
         status: 'phase2_completed',
         phase2: { 
           chapters: [{ content: '第一章内容', status: 'completed' }], 
           userConfirmed: true 
         }
       });
-      
-      const result = await orchestrator.phases.phase3.run(storyId);
-      
+
+      const result = await phase3.run(story.id);
+
       assert.notStrictEqual(result.status, 'failed');
     });
   });
@@ -1315,78 +1611,169 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   describe('10. Complete Workflow Closure Tests', () => {
     it('should complete full 3-phase workflow with all checkpoints', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
-      const storyId = await orchestrator.processToolCall('StartStoryProject', {
-        story_prompt: 'AI觉醒的科幻故事',
+      // Force legacy path for this test (it mocks workflowEngine phases directly)
+      orchestrator.useKernel = false;
+      orchestrator.kernelAdapter = null;
+      const mockStateManager = orchestrator.stateManager;
+
+      orchestrator.workflowEngine = new WorkflowEngine({
+        stateManager: mockStateManager,
+        agentDispatcher: orchestrator.agentDispatcher,
+        chapterOperations: createMockChapterOperations(),
+        contentValidator: createMockContentValidator(),
+        config: orchestrator.globalConfig
+      });
+      activeWorkflowEngines.add(orchestrator.workflowEngine);
+      await orchestrator.workflowEngine.initialize();
+
+      orchestrator.workflowEngine.phases = {
+        phase1: {
+          async run(storyId) {
+            await mockStateManager.updatePhase1(storyId, {
+              worldview: { setting: '未来都市' },
+              characters: [{ name: '零号' }],
+              checkpointId: 'cp-1-worldview',
+              status: 'pending_confirmation'
+            });
+            return { status: 'waiting_checkpoint', checkpointId: 'cp-1-worldview', phase: 'phase1', data: {} };
+          }
+        },
+        phase2: {
+          async run(storyId) {
+            const story = await mockStateManager.getStory(storyId);
+            if (story.phase2?.userConfirmed) {
+              await mockStateManager.updatePhase2(storyId, {
+                chapters: [{ number: 1, title: '第一章', content: '正文内容', metrics: { counts: { chineseChars: 2800 } } }],
+                checkpointId: 'cp-2-content',
+                status: 'content_pending_confirmation'
+              });
+              return { status: 'waiting_checkpoint', checkpointId: 'cp-2-content', checkpointType: 'phase2_content_confirmation', phase: 'phase2', data: {} };
+            }
+
+            await mockStateManager.updatePhase2(storyId, {
+              outline: { chapters: [{ number: 1, title: '第一章' }] },
+              checkpointId: 'cp-2-outline',
+              status: 'pending_confirmation'
+            });
+            return { status: 'waiting_checkpoint', checkpointId: 'cp-2-outline', checkpointType: 'phase2_outline_confirmation', phase: 'phase2', data: {} };
+          }
+        },
+        phase3: {
+          async run(storyId) {
+            await mockStateManager.updatePhase3(storyId, {
+              checkpointId: 'cp-3-final',
+              status: 'pending_confirmation'
+            });
+            await mockStateManager.updateStory(storyId, {
+              finalOutput: {
+                metadata: { title: 'AI觉醒的科幻故事' },
+                chapters: [{ number: 1, title: '第一章', content: '终稿正文', wordCount: 2800 }],
+                totalWordCount: 2800
+              }
+            });
+            return { status: 'waiting_checkpoint', checkpointId: 'cp-3-final', phase: 'phase3', data: {} };
+          }
+        }
+      };
+
+      async function waitForState(predicate, message) {
+        for (let i = 0; i < 40; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          if (predicate(story)) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error(message);
+      }
+
+      const startResult = await orchestrator.processToolCall({
+        command: 'StartStoryProject',
+        story_prompt: 'AI觉醒的科幻故事，需要穿过三个阶段并完成所有检查点',
         genre: '科幻'
       });
-      
-      assert.ok(storyId);
-      
-      let story = await orchestrator.stateManager.getStory(storyId);
-      assert.ok(story.workflow.checkpointId, 'Phase1 should have checkpoint');
-      
-      await orchestrator.processToolCall('UserConfirmCheckpoint', {
+
+      assert.strictEqual(startResult.status, 'success');
+      const storyId = startResult.result.story_id;
+
+      let story = await waitForState(
+        (currentStory) => currentStory.workflow?.activeCheckpoint?.id === 'cp-1-worldview',
+        'Phase1 checkpoint was not created'
+      );
+      assert.strictEqual(story.workflow.activeCheckpoint.id, 'cp-1-worldview');
+
+      await orchestrator.processToolCall({
+        command: 'UserConfirmCheckpoint',
         story_id: storyId,
-        checkpoint_id: story.workflow.checkpointId,
+        checkpoint_id: 'cp-1-worldview',
         approval: true
       });
-      
-      story = await orchestrator.stateManager.getStory(storyId);
-      if (story.phase2.status === 'outline_pending_confirmation') {
-        assert.ok(story.phase2.checkpointId, 'Phase2 outline should have checkpoint');
-        
-        await orchestrator.processToolCall('UserConfirmCheckpoint', {
-          story_id: storyId,
-          checkpoint_id: story.phase2.checkpointId,
-          approval: true
-        });
-      }
-      
-      story = await orchestrator.stateManager.getStory(storyId);
-      if (story.phase2.status === 'content_pending_confirmation') {
-        assert.ok(story.phase2.checkpointId, 'Phase2 content should have checkpoint');
-        
-        await orchestrator.processToolCall('UserConfirmCheckpoint', {
-          story_id: storyId,
-          checkpoint_id: story.phase2.checkpointId,
-          approval: true
-        });
-      }
-      
-      story = await orchestrator.stateManager.getStory(storyId);
-      if (story.phase3.status === 'pending_confirmation') {
-        assert.ok(story.phase3.checkpointId, 'Phase3 should have checkpoint');
-        
-        await orchestrator.processToolCall('UserConfirmCheckpoint', {
-          story_id: storyId,
-          checkpoint_id: story.phase3.checkpointId,
-          approval: true
-        });
-      }
-      
-      story = await orchestrator.stateManager.getStory(storyId);
-      assert.strictEqual(story.status, 'completed', 'Story should be completed');
-      assert.ok(story.finalOutput, 'Should have final output');
+
+      story = await waitForState(
+        (currentStory) => currentStory.workflow?.activeCheckpoint?.id === 'cp-2-outline',
+        'Phase2 outline checkpoint was not created'
+      );
+      assert.strictEqual(story.phase2.checkpointId, 'cp-2-outline');
+
+      await orchestrator.processToolCall({
+        command: 'UserConfirmCheckpoint',
+        story_id: storyId,
+        checkpoint_id: 'cp-2-outline',
+        approval: true
+      });
+
+      story = await waitForState(
+        (currentStory) => currentStory.workflow?.activeCheckpoint?.id === 'cp-2-content',
+        'Phase2 content checkpoint was not created'
+      );
+      assert.strictEqual(story.phase2.checkpointId, 'cp-2-content');
+
+      await orchestrator.processToolCall({
+        command: 'UserConfirmCheckpoint',
+        story_id: storyId,
+        checkpoint_id: 'cp-2-content',
+        approval: true
+      });
+
+      story = await waitForState(
+        (currentStory) => currentStory.workflow?.activeCheckpoint?.id === 'cp-3-final',
+        'Phase3 final checkpoint was not created'
+      );
+      assert.strictEqual(story.phase3.checkpointId, 'cp-3-final');
+
+      await orchestrator.processToolCall({
+        command: 'UserConfirmCheckpoint',
+        story_id: storyId,
+        checkpoint_id: 'cp-3-final',
+        approval: true
+      });
+
+      story = await waitForState(
+        (currentStory) => currentStory.status === 'completed',
+        'Story did not reach completed state'
+      );
+      assert.strictEqual(story.status, 'completed');
+      assert.ok(story.finalOutput);
+      assert.strictEqual(story.finalOutput.totalWordCount, 2800);
     });
 
     it('should generate story within target word count range', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      await orchestrator.initialize();
-      
-      const storyId = await orchestrator.stateManager.createStory('测试故事', {
+      const story = await orchestrator.stateManager.createStory('测试故事', {
         target_word_count: { min: 2500, max: 3500 }
       });
-      
-      await orchestrator.stateManager.updateStory(storyId, {
+
+      await orchestrator.stateManager.updateStory(story.id, {
         status: 'completed',
-        finalOutput: 'A'.repeat(3000)
+        finalOutput: {
+          chapters: [{ number: 1, content: 'A'.repeat(3000), wordCount: 3000 }],
+          totalWordCount: 3000
+        }
       });
-      
-      const story = await orchestrator.stateManager.getStory(storyId);
-      const wordCount = story.finalOutput ? story.finalOutput.length : 0;
-      
+
+      const updatedStory = await orchestrator.stateManager.getStory(story.id);
+      const wordCount = updatedStory.finalOutput?.totalWordCount || 0;
+
       assert.ok(wordCount >= 2500 && wordCount <= 3500,
         `Story word count ${wordCount} should be within target range 2500-3500`);
     });

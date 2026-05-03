@@ -1,11 +1,10 @@
 /**
- * Phase1_WorldBuilding - 世界观与人设并行搭建
- * 
- * 职责:
- * 1. 并行运行 world-builder 和 character-designer agents
- * 2. 逻辑校验审查
- * 3. 校验失败时自动修订一次
- * 4. 创建 checkpoint 1
+ * Phase1_WorldBuilding - retained legacy phase implementation.
+ *
+ * WorkflowKernel + `workflow-definition` now own the primary phase-control path.
+ * This class remains to serve compatibility entrypoints while StoryOrchestrator
+ * continues structural convergence, and should not absorb new primary workflow
+ * control semantics.
  */
 
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');

@@ -1,16 +1,16 @@
+const fs = require('fs');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { Phase1_WorldBuilding } = require('./Phase1_WorldBuilding');
 const { Phase2_OutlineDrafting } = require('./Phase2_OutlineDrafting');
 const { Phase3_Refinement } = require('./Phase3_Refinement');
 
 /**
- * WorkflowEngine - 工作流编排引擎
- * 
- * 职责：
- * 1. 管理 Phase 到 Phase 的转换
- * 2. 管理检查点等待和恢复
- * 3. 集中重试处理
- * 4. 发送 WebSocket 通知
+ * WorkflowEngine - StoryOrchestrator 的兼容工作流外壳。
+ *
+ * 在 legacy 模式下，它仍执行手写 phase classes。
+ * 在 kernel 模式下，它的长期职责是保留兼容入口并把控制面委托给
+ * `StoryOrchestratorKernelAdapter`，而不是继续演化成第二个主执行引擎。
  */
 class WorkflowEngine {
   /**
@@ -27,6 +27,10 @@ class WorkflowEngine {
     this.chapterOperations = chapterOperations;
     this.contentValidator = contentValidator;
     this.config = config || {};
+
+    // WorkflowKernel adapter (feature flag controlled)
+    this.kernelAdapter = null;
+    this.useKernel = config.USE_WORKFLOW_KERNEL === 'true' || config.USE_WORKFLOW_KERNEL === true;
 
     // Phase 实例
     this.phases = {
@@ -51,6 +55,15 @@ class WorkflowEngine {
     // 定期检查定时器
     this._expiryCheckTimer = null;
     this._expiryCheckIntervalMs = this.config.CHECKPOINT_EXPIRY_CHECK_INTERVAL_MS || 60000; // 默认 60 秒
+  }
+
+  /**
+   * 当 kernel control plane 可用时，WorkflowEngine 只保留兼容壳职责。
+   * 所有主控制逻辑都应委托给 adapter，而不是继续扩展 legacy path。
+   * @private
+   */
+  _hasKernelControlPlane() {
+    return this.useKernel && Boolean(this.kernelAdapter);
   }
 
   /**
@@ -96,6 +109,28 @@ class WorkflowEngine {
       config: this.config
     });
 
+    // Initialize WorkflowKernel adapter if feature flag enabled
+    if (this.useKernel) {
+      try {
+        const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
+        this.kernelAdapter = new StoryOrchestratorKernelAdapter({
+          stateManager: this.stateManager,
+          agentDispatcher: this.agentDispatcher,
+          chapterOperations: this.chapterOperations,
+          contentValidator: this.contentValidator,
+          config: this.config,
+          legacyEventListener: async (workflowId, event) => {
+            await this._notify(workflowId, event.eventType, event.payload);
+          }
+        });
+        await this.kernelAdapter.initialize();
+      } catch (err) {
+        console.error('[WorkflowEngine] Failed to initialize WorkflowKernel adapter:', err.message);
+        console.log('[WorkflowEngine] Falling back to legacy engine');
+        this.useKernel = false;
+      }
+    }
+
     this.initialized = true;
     console.log('[WorkflowEngine] Initialized successfully');
 
@@ -122,6 +157,10 @@ class WorkflowEngine {
     this._expiryCheckTimer = setInterval(async () => {
       await this.checkExpiredCheckpoints();
     }, this._expiryCheckIntervalMs);
+    // Allow test runners and short-lived scripts to exit naturally.
+    if (typeof this._expiryCheckTimer.unref === 'function') {
+      this._expiryCheckTimer.unref();
+    }
     console.log(`[WorkflowEngine] Expiry check timer started (interval: ${this._expiryCheckIntervalMs}ms)`);
   }
 
@@ -138,6 +177,13 @@ class WorkflowEngine {
   }
 
   /**
+   * 释放引擎持有的后台资源，供测试和宿主显式清理。
+   */
+  async shutdown() {
+    this._stopExpiryCheckTimer();
+  }
+
+  /**
    * 检查并自动批准所有过期的检查点
    * @returns {Object} 检查结果
    */
@@ -145,6 +191,11 @@ class WorkflowEngine {
     console.log('[WorkflowEngine] Running scheduled checkpoint expiry check...');
 
     try {
+      if (this._hasKernelControlPlane()) {
+        console.log('[WorkflowEngine] Checkpoint timeout continuation is kernel-owned; skipping legacy expiry scan');
+        return { processed: 0, autoApproved: 0, mode: 'kernel' };
+      }
+
       const expiredCheckpoints = await this._findExpiredCheckpoints();
 
       if (expiredCheckpoints.length === 0) {
@@ -307,6 +358,13 @@ class WorkflowEngine {
       };
     }
 
+    if (this._hasKernelControlPlane()) {
+      console.log(`[WorkflowEngine] Delegating workflow start to WorkflowKernel control plane`);
+      return this._delegateControlPlaneAction(storyId, async () => {
+        return this.kernelAdapter.executeWorkflow(storyId, { storyId });
+      });
+    }
+
     // 3. 生成新的 runToken
     const runToken = uuidv4();
 
@@ -337,7 +395,7 @@ class WorkflowEngine {
       runToken
     });
 
-    // 7. 执行 Phase 1
+    // 7. Legacy-only path: kernel mode has already returned above.
     const phase1Result = await this.phases.phase1.run(storyId);
 
     // 8. 处理 Phase 1 返回结果
@@ -376,6 +434,18 @@ class WorkflowEngine {
         error: `Checkpoint mismatch. Expected: ${activeCheckpoint.id}, Got: ${checkpointId}`,
         activeCheckpointId: activeCheckpoint.id
       };
+    }
+
+    if (this._hasKernelControlPlane()) {
+      return this._delegateControlPlaneAction(storyId, async () => {
+        return this.kernelAdapter.resume(storyId, {
+          checkpointId,
+          approval,
+          feedback,
+          reason,
+          chapter_number
+        });
+      });
     }
 
     // 3. 检查检查点是否超时并自动批准
@@ -478,6 +548,14 @@ class WorkflowEngine {
         status: 'error',
         error: `Story not found: ${storyId}`
       };
+    }
+
+    if (this._hasKernelControlPlane()) {
+      return this._delegateControlPlaneAction(storyId, async () => {
+        return this.kernelAdapter.recover(storyId, options);
+      }, {
+        fallbackPhase: options.targetPhase || story.workflow?.currentPhase || null
+      });
     }
 
     const workflow = story.workflow || {};
@@ -914,6 +992,18 @@ class WorkflowEngine {
       };
     }
 
+    if (this._hasKernelControlPlane()) {
+      return this._delegateControlPlaneAction(storyId, async () => {
+        return this.kernelAdapter.recover(storyId, {
+          recoveryAction: 'restart_phase',
+          targetPhase: phaseName,
+          feedback: reason
+        });
+      }, {
+        fallbackPhase: phaseName
+      });
+    }
+
     const story = await this.stateManager.getStory(storyId);
     if (!story) {
       return {
@@ -1005,6 +1095,7 @@ class WorkflowEngine {
    * @private
    */
   async _runPhase1(storyId) {
+    // This helper only exists for the retained legacy shell path.
     console.log(`[WorkflowEngine] Running Phase 1 for story: ${storyId}`);
 
     // 更新 workflow 状态
@@ -1025,6 +1116,7 @@ class WorkflowEngine {
    * @private
    */
   async _runPhase2(storyId) {
+    // This helper remains dual-path temporarily while compatibility entrypoints exist.
     console.log(`[WorkflowEngine] Running Phase 2 for story: ${storyId}`);
 
     // 更新 workflow 状态
@@ -1038,7 +1130,10 @@ class WorkflowEngine {
     const phase2NeedsResume = story.phase2?.checkpointId && !story.phase2?.userConfirmed;
 
     let phase2Result;
-    if (phase2NeedsResume) {
+    if (this._hasKernelControlPlane() && !phase2NeedsResume) {
+      console.log(`[WorkflowEngine] Delegating Phase 2 to WorkflowKernel`);
+      phase2Result = await this._runPhaseWithKernel(storyId, 'phase2');
+    } else if (phase2NeedsResume) {
       // 需要从检查点继续
       phase2Result = await this.phases.phase2.continueFromCheckpoint(storyId, 'approve', null);
     } else {
@@ -1055,6 +1150,7 @@ class WorkflowEngine {
    * @private
    */
   async _runPhase3(storyId) {
+    // This helper remains dual-path temporarily while compatibility entrypoints exist.
     console.log(`[WorkflowEngine] Running Phase 3 for story: ${storyId}`);
 
     // 验证 Phase2 完成状态
@@ -1085,7 +1181,10 @@ class WorkflowEngine {
     const phase3NeedsResume = story.phase3?.checkpointId && !story.phase3?.userConfirmed;
 
     let phase3Result;
-    if (phase3NeedsResume) {
+    if (this._hasKernelControlPlane() && !phase3NeedsResume) {
+      console.log(`[WorkflowEngine] Delegating Phase 3 to WorkflowKernel`);
+      phase3Result = await this._runPhaseWithKernel(storyId, 'phase3');
+    } else if (phase3NeedsResume) {
       // 需要从检查点继续
       phase3Result = await this.phases.phase3.continueFromCheckpoint(storyId, 'approve', null);
     } else {
@@ -1095,6 +1194,203 @@ class WorkflowEngine {
 
     // 处理返回结果
     return await this._processPhaseResult(storyId, 'phase3', phase3Result);
+  }
+
+  /**
+   * Run a phase using WorkflowKernel adapter
+   * @private
+   */
+  async _runPhaseWithKernel(storyId, phaseName) {
+    if (!this.kernelAdapter) {
+      throw new Error('WorkflowKernel adapter not initialized');
+    }
+    try {
+      const resolution = this._loadPhaseDefinition(phaseName);
+      if (resolution.status !== 'success') {
+        const error = new Error(resolution.message);
+        error.code = resolution.code;
+        error.phaseDefinitionStatus = resolution.status;
+        throw error;
+      }
+
+      const result = await this.kernelAdapter.executePhase(storyId, phaseName, resolution.definition);
+      const runtimeView = this._createPhaseRuntimeView(result, resolution.definition, phaseName);
+      return {
+        ...result,
+        ...runtimeView,
+        status: result.status === 'completed' ? 'completed' : result.status,
+        phaseDefinitionSource: resolution.source,
+        phaseDefinitionStatus: resolution.status
+      };
+    } catch (error) {
+      console.error(`[WorkflowEngine] WorkflowKernel phase ${phaseName} failed:`, error.message);
+      return {
+        status: 'error',
+        state: 'error',
+        error: error.message,
+        phase: phaseName,
+        currentPhase: phaseName,
+        currentStep: null,
+        activeCheckpoint: null,
+        errorCode: error.code || 'phase_execution_failed',
+        phaseDefinitionStatus: error.phaseDefinitionStatus || 'invalid'
+      };
+    }
+  }
+
+  /**
+   * Load workflow definition for a phase
+   * @private
+   */
+  _loadPhaseDefinition(phaseName) {
+    if (!this._getSupportedKernelPhases().includes(phaseName)) {
+      return {
+        status: 'missing',
+        code: 'unsupported_phase',
+        phaseName,
+        source: null,
+        definition: null,
+        message: `Unsupported phase definition requested: ${phaseName}`
+      };
+    }
+
+    try {
+      // Legacy phase files may still exist for compatibility, but the canonical
+      // source of truth for kernel execution is the full workflow definition.
+      const legacyDefinition = this._loadLegacyPhaseDefinitionModule(phaseName);
+      if (legacyDefinition && legacyDefinition.deprecated === true) {
+        return {
+          status: 'deprecated',
+          code: 'deprecated_phase_definition',
+          phaseName,
+          source: 'legacy_phase_file',
+          definition: null,
+          message: `Legacy phase definition for ${phaseName} is deprecated; use the full workflow definition as source of truth`
+        };
+      }
+
+      const fullDefinition = this._loadFullWorkflowDefinitionModule();
+      if (!fullDefinition || !Array.isArray(fullDefinition.phases)) {
+        return {
+          status: 'invalid',
+          code: 'invalid_full_workflow_definition',
+          phaseName,
+          source: 'full_workflow_definition',
+          definition: null,
+          message: 'Full workflow definition is missing a valid phases array'
+        };
+      }
+
+      const derivedDefinition = this._derivePhaseDefinitionFromFullWorkflow(fullDefinition, phaseName);
+      if (!derivedDefinition) {
+        return {
+          status: 'missing',
+          code: 'phase_not_declared_in_full_definition',
+          phaseName,
+          source: 'full_workflow_definition',
+          definition: null,
+          message: `Phase ${phaseName} is not declared in workflow-definition.js`
+        };
+      }
+
+      return {
+        status: 'success',
+        code: 'phase_definition_loaded',
+        phaseName,
+        source: 'full_workflow_definition',
+        definition: derivedDefinition,
+        message: `Loaded phase definition for ${phaseName} from full workflow definition`
+      };
+    } catch (err) {
+      console.warn(`[WorkflowEngine] Could not load workflow definition for ${phaseName}:`, err.message);
+      return {
+        status: 'invalid',
+        code: 'invalid_phase_definition',
+        phaseName,
+        source: 'full_workflow_definition',
+        definition: null,
+        message: `Failed to load phase definition for ${phaseName}: ${err.message}`
+      };
+    }
+  }
+
+  _getSupportedKernelPhases() {
+    return ['phase1', 'phase2', 'phase3'];
+  }
+
+  _loadLegacyPhaseDefinitionModule(phaseName) {
+    const legacyPath = path.join(__dirname, '..', 'config', `workflow-${phaseName}.js`);
+    if (!fs.existsSync(legacyPath)) {
+      return null;
+    }
+    delete require.cache[require.resolve(legacyPath)];
+    return require(legacyPath);
+  }
+
+  _loadFullWorkflowDefinitionModule() {
+    const definitionPath = path.join(__dirname, '..', 'config', 'workflow-definition.js');
+    delete require.cache[require.resolve(definitionPath)];
+    return require(definitionPath);
+  }
+
+  _derivePhaseDefinitionFromFullWorkflow(fullDefinition, phaseName) {
+    const phase = fullDefinition.phases.find((item) => item.id === phaseName);
+    if (!phase) {
+      return null;
+    }
+
+    return {
+      id: `${fullDefinition.id}-${phaseName}`,
+      version: fullDefinition.version,
+      description: `Derived phase definition for ${phaseName} from ${fullDefinition.id}`,
+      globalRetryPolicy: fullDefinition.globalRetryPolicy,
+      onFailure: fullDefinition.onFailure,
+      metadata: {
+        sourceOfTruth: 'workflow-definition.js',
+        fullWorkflowId: fullDefinition.id,
+        phaseName
+      },
+      phases: [JSON.parse(JSON.stringify(phase))]
+    };
+  }
+
+  _createPhaseRuntimeView(result, definition, fallbackPhaseName) {
+    const phaseIndex = result?.executionCursor?.find((cursor) => cursor.phase !== undefined)?.phase;
+    const stepIndex = result?.executionCursor?.find((cursor) => cursor.step !== undefined)?.step;
+    const phase = Number.isInteger(phaseIndex) ? definition?.phases?.[phaseIndex] : definition?.phases?.[0];
+    const step = Number.isInteger(stepIndex) ? phase?.steps?.[stepIndex] : null;
+
+    return {
+      state: result?.status || 'idle',
+      currentPhase: phase?.id || fallbackPhaseName || null,
+      currentStep: step?.id || null,
+      activeCheckpoint: result?.checkpointState || null
+    };
+  }
+
+  async _delegateControlPlaneAction(storyId, action, options = {}) {
+    // The compatibility shell projects kernel status back into the legacy API
+    // surface without reclaiming control-plane ownership from WorkflowKernel.
+    const result = await action();
+    const status = this.kernelAdapter && typeof this.kernelAdapter.getStatus === 'function'
+      ? await this.kernelAdapter.getStatus(storyId)
+      : null;
+
+    if (!status) {
+      return result;
+    }
+
+    return {
+      ...result,
+      status: status.state,
+      state: status.state,
+      currentPhase: status.currentPhase || options.fallbackPhase || null,
+      currentStep: status.currentStep || null,
+      activeCheckpoint: status.activeCheckpoint
+        ? { checkpointId: status.activeCheckpoint }
+        : result?.checkpointState || null,
+      recoveryCursor: status.recoveryCursor || null
+    };
   }
 
   /**

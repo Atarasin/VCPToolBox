@@ -6,6 +6,13 @@ class StoryStateRepository {
     this.db = null;
   }
 
+  /**
+   * This repository persists both story-facing business projections and
+   * compatibility-oriented workflow bookkeeping. Structural convergence work
+   * should keep those roles explicit instead of treating this table set as the
+   * canonical kernel runtime source of truth.
+   */
+
   initialize() {
     const dbInstance = getDatabase();
     this.db = dbInstance.initialize();
@@ -30,6 +37,15 @@ class StoryStateRepository {
       FROM stories WHERE story_id = ?
     `);
     return stmt.get(storyId) || null;
+  }
+
+  /**
+   * Return the artifact index for plugin-facing lookup flows. This index helps
+   * StoryOrchestrator find persisted prompts/responses without implying that
+   * artifact rows are the workflow runtime source of truth.
+   */
+  getArtifactIndex(storyId, artifactType) {
+    return this.getArtifacts(storyId, artifactType);
   }
 
   getStory(storyId) {

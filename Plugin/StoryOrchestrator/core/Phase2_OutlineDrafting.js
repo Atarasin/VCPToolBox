@@ -1,3 +1,11 @@
+/**
+ * Phase2_OutlineDrafting - retained legacy phase implementation.
+ *
+ * This module still backs compatibility flows, but it is no longer the
+ * canonical source of StoryOrchestrator workflow control when kernel mode owns
+ * the control plane.
+ */
+
 const { PromptBuilder } = require('../utils/PromptBuilder');
 const { SchemaValidator } = require('../utils/SchemaValidator');
 const { v4: uuidv4 } = require('uuid');

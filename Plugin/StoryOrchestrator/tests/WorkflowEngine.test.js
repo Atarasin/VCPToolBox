@@ -55,8 +55,44 @@ function createStory(overrides = {}) {
 
 function createMockStateManager(initialStory) {
   let story = initialStory;
+  const checkpoints = new Map();
+  const snapshots = new Map([
+    ['snap-phase2', {
+      snapshot_id: 'snap-phase2',
+      payload_json: JSON.stringify(story?.phase2 || {}),
+      schema_version: '1',
+      schema_valid: 1,
+      created_from_attempt_id: null
+    }]
+  ]);
+
+  const repository = {
+    getCheckpoint: mock.fn((checkpointId) => {
+      if (checkpoints.has(checkpointId)) {
+        return checkpoints.get(checkpointId);
+      }
+      if (story?.workflow?.activeCheckpoint?.id === checkpointId) {
+        return {
+          checkpoint_id: checkpointId,
+          phase_name: story.workflow.activeCheckpoint.phase,
+          checkpoint_type: story.workflow.activeCheckpoint.type,
+          status: story.workflow.activeCheckpoint.status,
+          snapshot_id: 'snap-phase2'
+        };
+      }
+      return null;
+    }),
+    createSnapshot: mock.fn((payload) => {
+      const snapshotId = `snap-${snapshots.size + 1}`;
+      snapshots.set(snapshotId, { snapshot_id: snapshotId, ...payload });
+      return snapshotId;
+    }),
+    getSnapshot: mock.fn((snapshotId) => snapshots.get(snapshotId) || null),
+    getApprovedCheckpoints: mock.fn(() => [{ phase_name: 'phase2', checkpoint_id: 'cp-2-outline' }])
+  };
 
   const stateManager = {
+    repository,
     initialize: mock.fn(async () => {}),
     getStory: mock.fn(async (storyId) => (story && story.id === storyId ? story : null)),
     updateStory: mock.fn(async (_storyId, updates) => {
@@ -95,6 +131,13 @@ function createMockStateManager(initialStory) {
     }),
     setActiveCheckpoint: mock.fn(async (_storyId, checkpoint) => {
       story.workflow.activeCheckpoint = { ...checkpoint };
+      checkpoints.set(checkpoint.id, {
+        checkpoint_id: checkpoint.id,
+        phase_name: checkpoint.phase,
+        checkpoint_type: checkpoint.type,
+        status: checkpoint.status,
+        snapshot_id: checkpoint.snapshot_id || 'snap-phase2'
+      });
       return story;
     }),
     clearActiveCheckpoint: mock.fn(async () => {
@@ -227,6 +270,31 @@ describe('WorkflowEngine', () => {
       assert.strictEqual(updatedStory.workflow.state, 'failed');
       assert.strictEqual(updatedStory.status, 'phase1_failed');
     });
+
+    it('delegates start to the kernel control plane when kernel mode is enabled', async () => {
+      engine.useKernel = true;
+      engine.kernelAdapter = {
+        executeWorkflow: mock.fn(async () => ({
+          status: 'waiting_checkpoint',
+          checkpointState: { checkpointId: 'cp-kernel-start' }
+        })),
+        getStatus: mock.fn(async () => ({
+          state: 'waiting_checkpoint',
+          currentPhase: 'phase1',
+          currentStep: 'reviewWorld',
+          activeCheckpoint: 'cp-kernel-start',
+          recoveryCursor: null
+        }))
+      };
+
+      const result = await engine.start('story-123');
+
+      assert.strictEqual(engine.kernelAdapter.executeWorkflow.mock.calls.length, 1);
+      assert.strictEqual(engine.phases.phase1.run.mock.calls.length, 0);
+      assert.strictEqual(result.status, 'waiting_checkpoint');
+      assert.strictEqual(result.currentPhase, 'phase1');
+      assert.deepStrictEqual(result.activeCheckpoint, { checkpointId: 'cp-kernel-start' });
+    });
   });
 
   describe('resume(storyId, checkpointApproval)', () => {
@@ -241,6 +309,7 @@ describe('WorkflowEngine', () => {
       };
 
       engine._runPhase2 = mock.fn(async () => ({ status: 'running', phase: 'phase2' }));
+      engine._continueApprovedPhaseInBackground = mock.fn(async () => {});
 
       const result = await engine.resume('story-123', {
         checkpointId: 'cp-1',
@@ -249,9 +318,14 @@ describe('WorkflowEngine', () => {
       });
 
       assert.strictEqual(result.status, 'running');
-      assert.strictEqual(engine._runPhase2.mock.calls.length, 1);
+      assert.strictEqual(result.background, true);
+      assert.strictEqual(result.phase, 'phase2');
+      assert.strictEqual(engine._continueApprovedPhaseInBackground.mock.calls.length, 1);
+      assert.strictEqual(engine._continueApprovedPhaseInBackground.mock.calls[0].arguments[1], 'phase2');
       assert.strictEqual(stateManager.clearActiveCheckpoint.mock.calls.length, 1);
       assert.strictEqual(stateManager.recordPhaseFeedback.mock.calls.length, 1);
+      assert.strictEqual(stateManager.updatePhase1.mock.calls.at(-1).arguments[1].status, 'completed');
+      assert.strictEqual(stateManager.updateStory.mock.calls.at(-1).arguments[1].status, 'phase2_running');
     });
 
     it('rejects a checkpoint and reruns the current phase', async () => {
@@ -265,6 +339,7 @@ describe('WorkflowEngine', () => {
       };
 
       engine._runPhase2 = mock.fn(async () => ({ status: 'waiting_checkpoint', phase: 'phase2', checkpointId: 'cp-2b' }));
+      engine._rerunRejectedPhaseInBackground = mock.fn(async () => {});
 
       const result = await engine.resume('story-123', {
         checkpointId: 'cp-2',
@@ -273,10 +348,12 @@ describe('WorkflowEngine', () => {
         reason: 'outline too weak'
       });
 
-      assert.strictEqual(result.status, 'waiting_checkpoint');
-      assert.strictEqual(engine._runPhase2.mock.calls.length, 1);
+      assert.strictEqual(result.status, 'retrying');
+      assert.strictEqual(result.background, true);
+      assert.strictEqual(engine._rerunRejectedPhaseInBackground.mock.calls.length, 1);
       assert.strictEqual(stateManager.recordPhaseFeedback.mock.calls.length, 1);
       assert.strictEqual(stateManager.updateWorkflow.mock.calls.at(-1).arguments[1].state, 'running');
+      assert.strictEqual(stateManager.updateStory.mock.calls.at(-1).arguments[1].status, 'phase2_retrying');
     });
 
     it('rejects mismatched checkpoint ids', async () => {
@@ -318,6 +395,42 @@ describe('WorkflowEngine', () => {
       assert.strictEqual(result.status, 'completed');
       assert.strictEqual(updatedStory.workflow.state, 'completed');
       assert.strictEqual(updatedStory.status, 'completed');
+    });
+
+    it('delegates resume to the kernel control plane when kernel mode is enabled', async () => {
+      engine.useKernel = true;
+      story.workflow.state = 'waiting_checkpoint';
+      story.workflow.currentPhase = 'phase1';
+      story.workflow.activeCheckpoint = {
+        id: 'cp-kernel-resume',
+        phase: 'phase1',
+        type: 'phase1_checkpoint',
+        status: 'pending'
+      };
+      engine.kernelAdapter = {
+        resume: mock.fn(async () => ({
+          status: 'running'
+        })),
+        getStatus: mock.fn(async () => ({
+          state: 'running',
+          currentPhase: 'phase2',
+          currentStep: 'generateOutline',
+          activeCheckpoint: null,
+          recoveryCursor: null
+        }))
+      };
+
+      const result = await engine.resume('story-123', {
+        checkpointId: 'cp-kernel-resume',
+        approval: true,
+        feedback: 'approved'
+      });
+
+      assert.strictEqual(engine.kernelAdapter.resume.mock.calls.length, 1);
+      assert.strictEqual(stateManager.recordPhaseFeedback.mock.calls.length, 0);
+      assert.strictEqual(stateManager.clearActiveCheckpoint.mock.calls.length, 0);
+      assert.strictEqual(result.status, 'running');
+      assert.strictEqual(result.currentPhase, 'phase2');
     });
   });
 
@@ -417,6 +530,36 @@ describe('WorkflowEngine', () => {
       assert.strictEqual(stateManager.clearActiveCheckpoint.mock.calls.length, 1);
       assert.strictEqual(stateManager.updateWorkflow.mock.calls.at(-1).arguments[1].currentPhase, 'phase2');
     });
+
+    it('delegates recovery actions to the kernel control plane when kernel mode is enabled', async () => {
+      engine.useKernel = true;
+      story.workflow.state = 'failed';
+      story.workflow.currentPhase = 'phase3';
+      engine._handleRollback = mock.fn(async () => ({ status: 'legacy-rollback' }));
+      engine.kernelAdapter = {
+        recover: mock.fn(async () => ({
+          status: 'running',
+          recoveryCursor: { phaseId: 'phase2' }
+        })),
+        getStatus: mock.fn(async () => ({
+          state: 'running',
+          currentPhase: 'phase2',
+          currentStep: 'generateOutline',
+          activeCheckpoint: null,
+          recoveryCursor: { phaseId: 'phase2' }
+        }))
+      };
+
+      const result = await engine.recover('story-123', {
+        recoveryAction: 'rollback',
+        targetCheckpoint: 'cp-kernel-rollback'
+      });
+
+      assert.strictEqual(engine.kernelAdapter.recover.mock.calls.length, 1);
+      assert.strictEqual(engine._handleRollback.mock.calls.length, 0);
+      assert.strictEqual(result.currentPhase, 'phase2');
+      assert.deepStrictEqual(result.recoveryCursor, { phaseId: 'phase2' });
+    });
   });
 
   describe('notification flow', () => {
@@ -496,6 +639,30 @@ describe('WorkflowEngine', () => {
 
       assert.strictEqual(resumeResult.status, 'completed');
       assert.strictEqual(stateManager.__getStory().workflow.state, 'completed');
+    });
+  });
+
+  describe('kernel compatibility shell', () => {
+    it('retryPhase delegates restart_phase through kernel recovery when kernel mode is enabled', async () => {
+      engine.useKernel = true;
+      engine.kernelAdapter = {
+        recover: mock.fn(async () => ({ status: 'running' })),
+        getStatus: mock.fn(async () => ({
+          state: 'running',
+          currentPhase: 'phase2',
+          currentStep: 'generateOutline',
+          activeCheckpoint: null,
+          recoveryCursor: { phaseId: 'phase2' }
+        }))
+      };
+      engine._sleep = mock.fn(async () => {});
+
+      const result = await engine.retryPhase('story-123', 'phase2', 'temporary failure');
+
+      assert.strictEqual(engine.kernelAdapter.recover.mock.calls.length, 1);
+      assert.strictEqual(engine.kernelAdapter.recover.mock.calls[0].arguments[1].recoveryAction, 'restart_phase');
+      assert.strictEqual(engine._sleep.mock.calls.length, 0);
+      assert.strictEqual(result.currentPhase, 'phase2');
     });
   });
 });
