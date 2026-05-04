@@ -171,6 +171,61 @@ class StateManager {
     };
   }
 
+  _buildWorkflowCompatibilityViewFromRow(row) {
+    if (!row) {
+      return null;
+    }
+
+    const workflow = this._createWorkflowCompatibilityState({
+      state: row.workflow_state || (row.status === 'completed' ? 'completed' : 'idle'),
+      currentPhase: row.current_phase,
+      currentStep: row.current_step,
+      activeCheckpoint: null,
+      retryContext: this._parseProjectionJson(row.retry_context_json, this._createDefaultRetryContext()),
+      history: [],
+      runToken: uuidv4()
+    });
+
+    if (row.active_checkpoint_id) {
+      workflow.activeCheckpoint = this._buildActiveCheckpointCompatibilityView(
+        this.repository.getCheckpoint(row.active_checkpoint_id)
+      );
+    }
+
+    const events = this.repository.getEvents(row.story_id, { limit: 1000 });
+    workflow.history = events.reverse().map((evt) => {
+      const detail = this._parseProjectionJson(evt.event_detail_json, {});
+      return {
+        at: evt.created_at,
+        type: evt.event_type,
+        phase: evt.phase_name,
+        step: detail.step || null,
+        detail
+      };
+    });
+
+    return workflow;
+  }
+
+  _buildStoryBusinessProjection(story) {
+    if (!story) {
+      return null;
+    }
+
+    return {
+      id: story.id,
+      status: story.status,
+      version: story.version,
+      createdAt: story.createdAt,
+      updatedAt: story.updatedAt,
+      config: story.config,
+      phase1: story.phase1,
+      phase2: story.phase2,
+      phase3: story.phase3,
+      finalOutput: story.finalOutput
+    };
+  }
+
   /**
    * Assemble the plugin-facing story projection from repository fields. The
    * resulting object intentionally combines business phase projections with a
@@ -179,7 +234,6 @@ class StateManager {
    */
   _assembleStoryProjectionFromRow(row) {
     const finalOutput = this._parseProjectionJson(row.final_output_json, null);
-    const retryContext = this._parseProjectionJson(row.retry_context_json, this._createDefaultRetryContext());
     const story = {
       id: row.story_id,
       status: row.status,
@@ -191,34 +245,8 @@ class StateManager {
       phase2: this._loadPhaseProjection(row.current_phase2_snapshot_id, 'phase2'),
       phase3: this._loadPhaseProjection(row.current_phase3_snapshot_id, 'phase3'),
       finalOutput,
-      workflow: this._createWorkflowCompatibilityState({
-        state: row.workflow_state || (row.status === 'completed' ? 'completed' : 'idle'),
-        currentPhase: row.current_phase,
-        currentStep: row.current_step,
-        activeCheckpoint: null,
-        retryContext,
-        history: [],
-        runToken: uuidv4()
-      })
+      workflow: this._buildWorkflowCompatibilityViewFromRow(row)
     };
-
-    if (row.active_checkpoint_id) {
-      story.workflow.activeCheckpoint = this._buildActiveCheckpointCompatibilityView(
-        this.repository.getCheckpoint(row.active_checkpoint_id)
-      );
-    }
-
-    const events = this.repository.getEvents(row.story_id, { limit: 1000 });
-    story.workflow.history = events.reverse().map((evt) => {
-      const detail = this._parseProjectionJson(evt.event_detail_json, {});
-      return {
-        at: evt.created_at,
-        type: evt.event_type,
-        phase: evt.phase_name,
-        step: detail.step || null,
-        detail
-      };
-    });
 
     return story;
   }
@@ -287,6 +315,76 @@ class StateManager {
       }
       throw error;
     }
+  }
+
+  /**
+   * Return only the plugin-facing business projection. Callers that need legacy
+   * workflow compatibility bookkeeping must use `getWorkflowCompatibilityView()`
+   * explicitly instead of inferring runtime truth from the broader story object.
+   */
+  async getStoryBusinessProjection(storyId) {
+    const story = await this.getStory(storyId);
+    return this._buildStoryBusinessProjection(story);
+  }
+
+  /**
+   * Return the narrowed compatibility view retained for legacy workflow APIs.
+   * This remains a plugin-side projection and must not be treated as the
+   * canonical kernel execution record.
+   */
+  async getWorkflowCompatibilityView(storyId) {
+    if (typeof this.repository.getWorkflowCompatibilityRecord === 'function') {
+      const row = this.repository.getWorkflowCompatibilityRecord(storyId);
+      if (row) {
+        return this._buildWorkflowCompatibilityViewFromRow(row);
+      }
+    }
+
+    const story = await this.getStory(storyId);
+    if (!story) {
+      return null;
+    }
+
+    return this._createWorkflowCompatibilityState({
+      ...story.workflow,
+      retryContext: {
+        ...this._createDefaultRetryContext(),
+        ...(story.workflow?.retryContext || {})
+      },
+      history: Array.isArray(story.workflow?.history) ? story.workflow.history : []
+    });
+  }
+
+  async getStateBoundarySummary(storyId) {
+    const businessProjection = await this.getStoryBusinessProjection(storyId);
+    if (!businessProjection) {
+      return null;
+    }
+
+    const compatibilityView = await this.getWorkflowCompatibilityView(storyId);
+    return {
+      storyId,
+      businessProjection: {
+        fields: ['config', 'phase1', 'phase2', 'phase3', 'finalOutput', 'status'],
+        currentStatus: businessProjection.status,
+        hasFinalOutput: businessProjection.finalOutput !== null
+      },
+      compatibilityResidue: {
+        fields: ['workflow.state', 'workflow.currentPhase', 'workflow.currentStep', 'workflow.activeCheckpoint', 'workflow.retryContext', 'workflow.history', 'workflow.runToken'],
+        currentState: compatibilityView?.state || 'idle',
+        currentPhase: compatibilityView?.currentPhase || null,
+        activeCheckpointId: compatibilityView?.activeCheckpoint?.id || null,
+        historyLength: compatibilityView?.history?.length || 0
+      },
+      artifactProjection: {
+        lookupSurface: 'ArtifactManager.listArtifacts',
+        repositorySurface: 'StoryStateRepository.getArtifactIndex'
+      },
+      runtimeTruth: {
+        owner: 'WorkflowKernel',
+        pluginStateRole: 'projection-and-compatibility-only'
+      }
+    };
   }
 
   _assembleStoryFromSQLite(storyId) {

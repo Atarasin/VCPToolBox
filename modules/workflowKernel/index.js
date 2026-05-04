@@ -62,6 +62,8 @@ module.exports = {
   NoopTraceSink,
   FileTraceSink,
   pluginSdk,
+  listSharedHelperFamilies: pluginSdk.listSharedHelperFamilies,
+  getSharedHelperFamily: pluginSdk.getSharedHelperFamily,
   createLastErrorView,
   createRunStatusView,
   createStepTraceRecord,

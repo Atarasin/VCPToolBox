@@ -21,6 +21,64 @@ const {
 const { PromptBuilder } = require('../utils/PromptBuilder');
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');
 
+const STEP_HELPER_BOUNDARY_STATES = Object.freeze({
+  SHARED_SDK_CONSUMER: 'shared-sdk-consumer',
+  PLUGIN_LOCAL_DOMAIN: 'plugin-local-domain',
+  TRANSITION_GLUE: 'transition-glue'
+});
+
+const STEP_HELPER_BOUNDARIES = Object.freeze([
+  Object.freeze({
+    id: 'parse-agent-json-step',
+    state: STEP_HELPER_BOUNDARY_STATES.SHARED_SDK_CONSUMER,
+    usesSharedFamilies: ['structured-data-extraction'],
+    storyOwnedConcerns: ['raw payload field selection', 'fallback payload defaults'],
+    rationale: 'Consumes the shared parse/extract skeleton while leaving payload meaning in StoryOrchestrator.'
+  }),
+  Object.freeze({
+    id: 'story-validate-step',
+    state: STEP_HELPER_BOUNDARY_STATES.SHARED_SDK_CONSUMER,
+    usesSharedFamilies: ['structured-validation-orchestration'],
+    storyOwnedConcerns: ['validation prompts', 'story verdict semantics'],
+    rationale: 'Uses shared validation orchestration but keeps prompt construction and domain interpretation local.'
+  }),
+  Object.freeze({
+    id: 'parse-outline-step',
+    state: STEP_HELPER_BOUNDARY_STATES.TRANSITION_GLUE,
+    usesSharedFamilies: ['structured-data-extraction'],
+    storyOwnedConcerns: ['outline normalization', 'outline fallback parsing'],
+    rationale: 'Wraps shared extraction but still carries StoryOrchestrator-specific outline shaping logic.'
+  }),
+  Object.freeze({
+    id: 'generate-outline-step',
+    state: STEP_HELPER_BOUNDARY_STATES.PLUGIN_LOCAL_DOMAIN,
+    usesSharedFamilies: [],
+    storyOwnedConcerns: ['outline prompt semantics', 'story chapter estimation'],
+    rationale: 'Generates story-domain outline content and should remain plugin-local.'
+  }),
+  Object.freeze({
+    id: 'produce-chapters-step',
+    state: STEP_HELPER_BOUNDARY_STATES.PLUGIN_LOCAL_DOMAIN,
+    usesSharedFamilies: [],
+    storyOwnedConcerns: ['chapter production policy', 'quality thresholds', 'revision strategy'],
+    rationale: 'Encodes chapter-generation semantics rather than reusable workflow skeleton.'
+  }),
+  Object.freeze({
+    id: 'polish-chapters-step',
+    state: STEP_HELPER_BOUNDARY_STATES.PLUGIN_LOCAL_DOMAIN,
+    usesSharedFamilies: [],
+    storyOwnedConcerns: ['story style polishing', 'iteration policy', 'segmented polish rules'],
+    rationale: 'Contains story-domain polishing behavior that should stay outside shared SDK contracts.'
+  }),
+  Object.freeze({
+    id: 'final-edit-step',
+    state: STEP_HELPER_BOUNDARY_STATES.PLUGIN_LOCAL_DOMAIN,
+    usesSharedFamilies: [],
+    storyOwnedConcerns: ['final editor prompt semantics'],
+    rationale: 'Represents final manuscript editing semantics specific to StoryOrchestrator.'
+  })
+]);
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -159,6 +217,18 @@ function tryParseJsonOutline(content) {
   } catch (e) {
     return null;
   }
+}
+
+function listStepHelperBoundaries() {
+  return STEP_HELPER_BOUNDARIES.map((boundary) => ({
+    ...boundary,
+    usesSharedFamilies: [...boundary.usesSharedFamilies],
+    storyOwnedConcerns: [...boundary.storyOwnedConcerns]
+  }));
+}
+
+function getStepHelperBoundary(boundaryId) {
+  return listStepHelperBoundaries().find((boundary) => boundary.id === boundaryId) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +495,9 @@ function createFinalEditStep(adapter) {
 }
 
 module.exports = {
+  STEP_HELPER_BOUNDARY_STATES,
+  listStepHelperBoundaries,
+  getStepHelperBoundary,
   createParseAgentJsonStep,
   createStoryValidateStep,
   createGenerateOutlineStep,

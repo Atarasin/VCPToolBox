@@ -40,6 +40,21 @@ class StoryStateRepository {
   }
 
   /**
+   * Return only the compatibility bookkeeping fields that StoryOrchestrator
+   * still projects into legacy workflow APIs. This narrowed query makes it
+   * harder to mistake plugin state assembly for the canonical kernel runtime
+   * record.
+   */
+  getWorkflowCompatibilityRecord(storyId) {
+    const stmt = this.db.prepare(`
+      SELECT story_id, status, current_phase, current_step, active_checkpoint_id,
+             retry_context_json, workflow_state
+      FROM stories WHERE story_id = ?
+    `);
+    return stmt.get(storyId) || null;
+  }
+
+  /**
    * Return the artifact index for plugin-facing lookup flows. This index helps
    * StoryOrchestrator find persisted prompts/responses without implying that
    * artifact rows are the workflow runtime source of truth.

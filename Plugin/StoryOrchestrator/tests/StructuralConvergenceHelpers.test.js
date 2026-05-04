@@ -5,7 +5,12 @@ const assert = require('node:assert/strict');
 
 const { ContentValidator } = require('../core/ContentValidator');
 const { ChapterOperations } = require('../core/ChapterOperations');
-const { createStoryValidateStep } = require('../steps');
+const {
+  STEP_HELPER_BOUNDARY_STATES,
+  listStepHelperBoundaries,
+  getStepHelperBoundary,
+  createStoryValidateStep
+} = require('../steps');
 
 function createStoryState() {
   return {
@@ -180,5 +185,22 @@ describe('Structural convergence helper boundaries', () => {
         { description: '节奏偏慢', severity: 'minor' }
       ]
     );
+  });
+
+  test('StoryOrchestrator step helper inventory keeps shared skeleton usage separate from story-domain logic', () => {
+    const boundaries = listStepHelperBoundaries();
+    const validateStep = getStepHelperBoundary('story-validate-step');
+    const outlineParser = getStepHelperBoundary('parse-outline-step');
+    const chapterProducer = getStepHelperBoundary('produce-chapters-step');
+
+    assert.ok(Array.isArray(boundaries));
+    assert.ok(boundaries.length >= 6);
+    assert.equal(validateStep.state, STEP_HELPER_BOUNDARY_STATES.SHARED_SDK_CONSUMER);
+    assert.deepEqual(validateStep.usesSharedFamilies, ['structured-validation-orchestration']);
+    assert.deepEqual(validateStep.storyOwnedConcerns, ['validation prompts', 'story verdict semantics']);
+    assert.equal(outlineParser.state, STEP_HELPER_BOUNDARY_STATES.TRANSITION_GLUE);
+    assert.deepEqual(outlineParser.usesSharedFamilies, ['structured-data-extraction']);
+    assert.equal(chapterProducer.state, STEP_HELPER_BOUNDARY_STATES.PLUGIN_LOCAL_DOMAIN);
+    assert.deepEqual(chapterProducer.usesSharedFamilies, []);
   });
 });

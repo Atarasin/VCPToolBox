@@ -26,6 +26,11 @@ const {
   readContractValue,
   getPath
 } = require('./contracts');
+const {
+  HELPER_SURFACE_STATES,
+  listSharedHelperFamilies,
+  getSharedHelperFamily
+} = require('./helperSurface');
 
 module.exports = {
   PLUGIN_SDK_CONTRACT_VERSION,
@@ -49,5 +54,8 @@ module.exports = {
   createPromptRevisionMacro,
   projectContractFields,
   readContractValue,
-  getPath
+  getPath,
+  HELPER_SURFACE_STATES,
+  listSharedHelperFamilies,
+  getSharedHelperFamily
 };

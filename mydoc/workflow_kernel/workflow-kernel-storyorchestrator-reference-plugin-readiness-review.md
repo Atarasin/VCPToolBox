@@ -6,22 +6,21 @@
 
 它回答的不是“运行时替代是否成立”，而是更具体的问题：
 
-- `StoryOrchestrator` 是否已经达到薄型参考插件终态
-- 当前还剩哪些明确 blocker
-- 哪些问题已经从 blocker 降级为可接受 note
-- 如果现在仍未达标，下一批 follow-up 应继续收什么债
+- `StoryOrchestrator` 是否已经达到可作为薄型参考插件继续复用的状态
+- 当前剩余问题是否还是 blocker，还是已经下降为可接受 note
+- 未来维护者现在应把哪些结构边界视为长期约束，而不是继续开放问题
 
 ## 评审边界
 
 本评审遵循下面三条边界：
 
 1. **不重新打开 `workflow-kernel-replacement-certification`**
-   replacement certification 已经回答运行时替代是否成立；本评审只判断结构收敛是否足以宣称“薄型参考插件”。
+   replacement certification 已回答运行时替代是否成立；本评审只判断结构收敛是否已足以支持“薄型参考插件”口径。
 
-2. **不把 readiness review 变成新的结构重构**
-   本文只汇总证据、做判断、命名 blocker，不在这里顺手扩 scope 做新的平台设计。
+2. **不把最终评审变成新的结构重构**
+   本文只汇总证据、更新结论、标记 residual notes，不再在评审文档里发起新的大范围收敛工程。
 
-3. **只按四个既有维度出结论**
+3. **仍按四个既有维度出结论**
    - compatibility surface governance
    - adapter thinness
    - state projection boundaries
@@ -31,203 +30,163 @@
 
 ### Outcome
 
-**`not-ready`**
+**`ready-with-notes`**
 
 ### 一句话结论
 
-`StoryOrchestrator` 已经具备 reference plugin readiness review 所需的大部分前提条件，但截至当前实现批次，它仍未达到可以正式宣称为“薄型参考插件”的终态；阻塞点已经收缩为少量明确的 adapter、状态边界与 helper promotion 收口问题，而不再是 runtime correctness 问题。
+`StoryOrchestrator` 现在已经可以按“薄型参考插件”口径继续被引用和复用；之前阻塞 readiness 的 adapter、状态边界与 helper promotion 三类结构债，已经在本轮 follow-up 中收敛到足够窄、足够显式、且有测试保护的长期边界，但仓库里仍保留少量受控的 compatibility shell、transition glue 与 plugin-local domain semantics，应继续作为 note 管理，而不再作为 blocker 管理。
+
+### 结论更新说明
+
+这次结论相对上一版正式评审发生了一个关键变化：
+
+- 上一版 outcome 是 `not-ready`
+- 当前 outcome 更新为 `ready-with-notes`
+
+变化原因不是“运行时替代突然更强”，而是此前三类 blocker 已全部经过独立 change 的实现、验证、主 spec 同步与 archive：
+
+- `workflow-kernel-storyorchestrator-adapter-thinning-phase-2`
+- `workflow-kernel-storyorchestrator-state-projection-boundaries-phase-2`
+- `workflow-kernel-plugin-sdk-helper-promotion-stabilization`
 
 ## 证据矩阵
 
 | 维度 | 当前判断 | 分类 | 结论摘要 |
 |---|---|---|---|
-| compatibility surface governance | 已建立正式治理口径 | note | 兼容壳边界与 retain/degrade 规则已具备稳定文档和测试，不再是 readiness 的主 blocker |
-| adapter thinness | 仍未完全达标 | blocker | adapter 虽已切出职责，但仍未收缩到真正的 thin bridge 形态 |
-| state projection boundaries | 仍未完全达标 | blocker | business projection 与 compatibility residue 的边界已显式化，但仍在同一插件状态层并存 |
-| helper / SDK promotion maturity | 仍未完全达标 | blocker | shared helper 已开始承接通用骨架，但 StoryOrchestrator 仍保留较多候选 family 的混层实现 |
+| compatibility surface governance | 已稳定 | note | 兼容壳 retain / degrade 规则已正式化，且不再被当成 readiness blocker |
+| adapter thinness | 已收敛到可接受范围 | note | adapter 现已按 bridge seam inventory 和初始化计划表达，仍有少量 transitional seams，但已不再是厚协调中心 |
+| state projection boundaries | 已收敛到可接受范围 | note | business projection、compatibility view 与 boundary summary 已显式分离，查询口径更难再误读为 kernel truth |
+| helper / SDK promotion maturity | 已收敛到可接受范围 | note | shared helper surface 已有 inventory、boundary report 与聚焦 contract tests，StoryOrchestrator 私有层更多保留 story-domain semantics |
 
 ## 维度 1：Compatibility Surface Governance
 
-### 证据
-
-- `Plugin/StoryOrchestrator/docs/COMPATIBILITY_SURFACE_STATUS.md`
-- `Plugin/StoryOrchestrator/core/CompatibilitySurfaceRegistry.js`
-- `Plugin/StoryOrchestrator/core/WorkflowEngine.js`
-- `Plugin/StoryOrchestrator/tests/WorkflowEngine.test.js`
-- `Plugin/StoryOrchestrator/tests/KernelAdapterBackupRestore.test.js`
-
 ### 当前事实
 
-- `WorkflowEngine`、`Phase1_WorldBuilding`、`Phase2_OutlineDrafting`、`Phase3_Refinement` 已被显式分类为 `retain-as-shell`
-- `config/workflow-phase1.js` 已被显式分类为 `degrade-entry`
-- 旧 `story-orchestrator-phase1` recovery ref 已被降级归一到 canonical `workflow-definition.js`
-- 聚焦测试已经覆盖 compatibility surface report 与 degraded definition ref 的行为
+- compatibility shell 的 retain / degrade / eligible-for-retirement 治理口径已经正式化
+- `WorkflowEngine` 和保留 phase 模块的存在理由已经被清楚限定为 compatibility surface
+- compatibility retirement 现在回答的是“是否可以继续收窄”，而不是“是否还影响 readiness”
 
 ### 评审结论
 
-这一维度当前**不是 blocker**。
+这一维度继续维持 **non-blocking note**。
 
-原因不是“兼容壳已经全部删除”，而是：
+原因不是 compatibility shell 已经被彻底移除，而是：
 
-- 它们的存在理由已经被写实
-- 继续保留与继续收窄的规则已经正式化
-- 这些模块已不再被默认当成未来新增主控制逻辑的承接点
-
-因此，compatibility governance 当前更适合作为 **non-blocking note**：
-
-- 壳层仍存在
-- 但它们的治理方式已经从“历史遗留不确定项”变成“受控兼容面”
+- 它们的存在理由已被文档化
+- 它们的未来处理方式已被分类治理
+- 它们已经不再是默认承接新主控制语义的位置
 
 ## 维度 2：Adapter Thinness
 
-### 证据
-
-- `Plugin/StoryOrchestrator/adapters/StoryOrchestratorKernelAdapter.js`
-- `Plugin/StoryOrchestrator/docs/SDK_BOUNDARIES.md`
-- `mydoc/workflow_kernel/workflow-kernel-storyorchestrator-target-state.md`
-
 ### 当前事实
 
-`StoryOrchestratorKernelAdapter` 顶部职责说明仍明确列出四类职责：
-
-- kernel bridge and execution delegation
-- business snapshot / restore projection
-- legacy event compatibility
-- StoryOrchestrator-specific helper and extraction glue
-
-这说明 adapter 已经完成第一轮“可见职责切片”，但它还不是一个只做薄桥接的模块。尤其是：
-
-- snapshot 投影与恢复桥接仍在 adapter 内
-- legacy event compatibility 仍在 adapter 内
-- extraction/helper glue 仍在 adapter 内
+- `StoryOrchestratorKernelAdapter` 现已把 bridge seams 与 transitional residue 明确区分
+- adapter 初始化改为按 plan 安装 seam，而不是继续堆叠自由生长的 setup blob
+- seam inventory 与初始化顺序已有聚焦测试保护
+- adapter 仍保留少量 compatibility bridge 和 business projection bridge，但这些残留已经被显式归类为窄接缝，而不是混杂协调中心
 
 ### 评审结论
 
-这一维度当前是**明确 blocker**。
+这一维度现在从 blocker 降级为 **note**。
 
-阻塞理由不是“adapter 还很乱”，而是：
+原因不是 adapter 物理上已经只剩一个极小文件，而是：
 
-- 它虽然已经不再是完全黑箱
-- 但仍未收缩到只保留宿主接入边界、kernel lifecycle hookup 与少量合法业务投影的 thin adapter 形态
+- 它已经从“职责虽可见但仍混在一起”推进到“哪些是长期 bridge、哪些只是 transitional residue”都可直接读出
+- 新的平台语义不再自然追加回 adapter 中心层
+- 维护者现在看到的首先是 bridge seam，而不是一团混合协调流
 
-只要 adapter 还同时持有 bridge、projection、compatibility、helper glue 四类职责，`StoryOrchestrator` 就仍然更接近“收敛中的 reference consumer”，而不是已经闭合的薄型参考插件。
+当前 residual note 主要是：
+
+- compatibility event bridge 与 business projection bridge 仍在 adapter 周边保留
+- 这些接缝应继续保持窄化，不应再次成长为 general coordination layer
 
 ## 维度 3：State Projection Boundaries
 
-### 证据
-
-- `Plugin/StoryOrchestrator/core/StateManager.js`
-- `Plugin/StoryOrchestrator/core/StoryStateRepository.js`
-- `Plugin/StoryOrchestrator/core/ArtifactManager.js`
-- `Plugin/StoryOrchestrator/tests/StateProjectionBoundaries.test.js`
-- `mydoc/workflow_kernel/workflow-kernel-storyorchestrator-target-state.md`
-
 ### 当前事实
 
-- `StateManager` 已显式区分 phase projection 默认值、snapshot rehydrate、workflow compatibility patch
-- `StoryStateRepository` 已把 artifact rows 标注为 plugin-facing lookup，而不是 workflow runtime truth
-- `ArtifactManager` 已把 artifact indexing 标注为 plugin-facing projection record，而不是 runtime state persistence
-- `StateProjectionBoundaries.test.js` 已覆盖 malformed snapshot fallback、workflow compatibility patch、artifact index failure、artifact list lookup 等边界
-
-但当前仍有一个关键现实没有被完全消除：
-
-- 业务投影
-- compatibility-oriented workflow bookkeeping
-
-仍然在同一插件状态层中并存。
+- `StateManager` 现已显式暴露 business projection、workflow compatibility view 与 boundary summary 三种读取口径
+- `StoryStateRepository` 已提供更窄的 compatibility record 查询，而不是让调用方总是从宽表意对象反推状态语义
+- `WorkflowEngine` 已优先读取 narrowed compatibility view，而不是默认从混合 story object 上取 runtime-like 字段
+- 聚焦测试已覆盖 boundary summary、compatibility view 与 artifact lookup 仍然可用的路径
 
 ### 评审结论
 
-这一维度当前仍是**明确 blocker**。
+这一维度现在从 blocker 降级为 **note**。
 
-原因不是状态边界完全没做，而是：
+原因不是插件侧状态层被完全移除，而是：
 
-- 它已经从“口头区分”推进到“helper + 注释 + 测试的显式区分”
-- 但还没有达到“维护者几乎不会再把插件状态误读成 kernel runtime truth”的最终状态
+- 维护者现在更难把 plugin-facing projection 当成 kernel runtime truth
+- compatibility residue 的残留理由、读取入口和边界摘要都已显式化
+- artifact lookup 继续保留为 plugin-facing projection，而不是被伪装成 canonical runtime surface
 
-因此，当前状态层更适合被描述为：
+当前 residual note 主要是：
 
-- 已开始显式收口
-- 但尚未完全完成 reference-plugin readiness 所要求的长期边界闭合
+- business projection 与 compatibility residue 仍然共处在插件状态子系统中
+- 但这种共处已被边界 API 和测试约束为受控状态，而不再构成 readiness blocker
 
 ## 维度 4：Helper / SDK Promotion Maturity
 
-### 证据
-
-- `modules/workflowKernel/pluginSdk/extraction.js`
-- `modules/workflowKernel/pluginSdk/structuredValidation.js`
-- `tests/workflowKernel/pluginSdk/PluginSdk.test.js`
-- `Plugin/StoryOrchestrator/steps/index.js`
-- `Plugin/StoryOrchestrator/docs/SDK_BOUNDARIES.md`
-- `mydoc/workflow_kernel/workflow-kernel-storyorchestrator-target-state.md`
-
 ### 当前事实
 
-- `modules/workflowKernel/pluginSdk` 已正式承接 extraction helper 与 structured validation helper
-- `tests/workflowKernel/pluginSdk/PluginSdk.test.js` 已证明 shared helper、contract builder、macro builder 的最小通用性
-- `Plugin/StoryOrchestrator/steps/index.js` 已开始直接消费 shared plugin SDK surface
-
-但 `steps/index.js` 的文件头也明确承认当前仍处于“可复用骨架 + story-domain rules 共存”的阶段：
-
-- 一部分逻辑已是 shared orchestration skeleton
-- 另一部分仍然是故事领域规则，如 outline normalization、chapter production 等
+- `pluginSdk` 已不只是一些零散 helper export，而是已有 shared helper family inventory
+- shared surface 的稳定范围已经被结构化写实为 schema validation、structured extraction、structured validation orchestration 与 workflow contract builders
+- `StoryOrchestrator` steps 层已增加本地 helper boundary report，明确 shared SDK consumer、transition glue 与 plugin-local domain 的分界
+- 聚焦 contract tests 已证明 shared helper contract 不依赖 StoryOrchestrator 私有语义才能成立
 
 ### 评审结论
 
-这一维度当前仍是**明确 blocker**。
+这一维度现在从 blocker 降级为 **note**。
 
-阻塞理由不是 helper promotion 没有开始，而是：
+原因不是所有候选 helper 都已迁入 SDK，而是：
 
-- 当前只完成了第一批 family 的上收
-- StoryOrchestrator 仍保留较多“未来也可能被其他插件复用”的候选骨架
-- shared helper surface 已经可用，但尚未稳定到足以把 `StoryOrchestrator` 宣称为“参考插件终态样板”
+- 当前 shared surface 已达到“稳定、可解释、可测试”的门槛
+- StoryOrchestrator 私有层中保留的更多是 story-domain prompt、schema interpretation 与 chapter policy
+- 未来维护者现在可以更清楚地区分“哪些是可复用 skeleton”“哪些仍应插件私有”
 
-换句话说，当前更准确的判断是：
+当前 residual note 主要是：
 
-- helper promotion 已跨过“只会写文档不会落代码”的阶段
-- 但还没有跨过“多数可复用骨架都已沉淀为稳定 shared surface”的 readiness 门槛
+- 仍存在少量 transition glue，例如 outline normalization 一类 StoryOrchestrator 语义包裹层
+- 这些逻辑可以继续观察，但在当前证据下已不再阻塞 readiness
 
-## Blockers
+## 当前 Residual Notes
 
-当前最终阻塞项只剩三类：
+当前仍建议持续观察，但已不再构成 blocker 的事项有四类：
 
-1. **Adapter 仍未压薄到真正的 thin bridge**
-   `StoryOrchestratorKernelAdapter` 仍同时承担 bridge、projection、compatibility、helper glue 四类职责。
+1. **compatibility shell 仍然存在**
+   它们继续承担 retain-as-shell 或 degrade-entry 的兼容职责，但当前治理已足够正式。
 
-2. **插件状态层仍保留 business projection 与 compatibility residue 的同层并存**
-   边界已显式，但尚未完全达到长期不会被误解为 runtime truth 的状态。
+2. **adapter 仍有少量 transitional seams**
+   例如 compatibility bridge 与 projection bridge 仍保留在 adapter 周边，但这些 seam 已显式且受控。
 
-3. **Helper promotion 仍停留在第一批 family 收敛阶段**
-   shared helper 已成立，但 StoryOrchestrator 还没有收敛成“主要保留 definition、领域 step、业务投影和装配”的最终薄插件形态。
+3. **插件状态层仍保留 compatibility residue**
+   但 residue 已通过更窄 API、边界摘要与调用侧约束显式化。
 
-## Non-Blocking Notes
+4. **helper promotion 仍不是“所有 helper 全部上收”**
+   当前 shared surface 的目标是稳定，而不是无限扩大；保留 story-domain logic 在插件侧是设计要求，不是失败信号。
 
-下面这些事项已不再构成 readiness 的主 blocker：
+## 当前不再成立的 Blockers
 
-- `WorkflowKernel` 对手写工作流的 **replacement certification 已成立**
-- compatibility shell 的 retain/degrade 治理口径已经正式化
-- shared plugin SDK 已有最小第二 consumer / shared helper 证明，不再只是 StoryOrchestrator 私有抽象
+上一版 readiness review 中的三类 blocker 现在都可以关闭：
 
-这些 note 很重要，但它们回答的是“基础前提是否具备”，不是“终态是否已经闭合”。
+1. **adapter 仍偏厚**
+   已通过 seam inventory、initialization plan 与回归测试收敛到可接受边界。
 
-## 后续动作建议
+2. **状态边界尚未完全闭合**
+   已通过 narrowed compatibility query、boundary API 与调用侧调整降到可接受误读概率。
 
-由于当前 outcome 是 `not-ready`，最合理的下一批 follow-up 不应重新打开 replacement certification，而应继续围绕剩余三类结构债收口：
-
-### 方向 1：继续 adapter thinning
-
-建议沿既有 `workflow-kernel-storyorchestrator-adapter-thinning` 口径继续推进第二轮收口，目标从“职责可见”进一步推进到“职责真正收薄”。
-
-### 方向 2：继续 state projection boundary tightening
-
-建议沿既有 `workflow-kernel-storyorchestrator-state-projection-boundaries` 口径继续推进，把 plugin-facing projection 与 compatibility bookkeeping 再继续拆薄，减少对 kernel truth 的误读空间。
-
-### 方向 3：继续 helper promotion stabilization
-
-建议沿既有 `workflow-kernel-plugin-sdk-helper-promotion` 口径继续推进，把已识别的 shared skeleton 从“第一批 adoption”推进到“更稳定、更多 family 的长期 shared surface”。
+3. **helper promotion 尚未完成稳定化**
+   已通过 shared helper inventory、plugin-local boundary report 与 contract tests 进入长期可管理状态。
 
 ## 推荐统一表述
 
 如果未来维护者现在要一句话描述 `StoryOrchestrator` 的真实状态，建议使用下面这句：
 
-**`StoryOrchestrator` 已完成运行时替代认证，并且 compatibility surface 治理已经正式化；它当前已处于薄型参考插件候选态，但仍因 adapter 仍偏厚、状态边界尚未完全闭合、helper promotion 尚未完成稳定化而不宜宣称为最终完成的 thin reference plugin。**
+**`StoryOrchestrator` 已完成运行时替代认证，并且已达到可作为薄型参考插件继续复用的 `ready-with-notes` 状态；当前仍保留少量受控的 compatibility shell、transitional seam 和 story-domain local logic，但这些已属于长期边界管理问题，而不再构成 readiness blocker。**
+
+## 维护建议
+
+基于当前 outcome，后续更合适的动作不是再立刻新起一轮大而泛的结构收口 change，而是：
+
+- 按 note 管理 compatibility shell、adapter transitional seam 和 plugin-local glue
+- 当第二、第三个 workflow plugin 真实接入时，用它们验证当前 shared helper surface 是否还需要扩张
+- 只有在新的 consumer 证据表明某个边界再次失真时，才针对具体问题起小范围 follow-up change

@@ -6,6 +6,7 @@ const fs = require('fs');
 
 const { StateManager } = require('../core/StateManager');
 const { ArtifactManager } = require('../core/ArtifactManager');
+const { WorkflowEngine } = require('../core/WorkflowEngine');
 
 function createStateManagerWithRepository(repositoryOverrides = {}) {
   const manager = new StateManager();
@@ -156,6 +157,111 @@ test('StateManager.updateWorkflow patches compatibility view without rewriting b
     current_phase: 'phase2',
     current_step: 'generateOutline',
     workflow_state: 'running'
+  });
+});
+
+test('StateManager exposes explicit business projection, compatibility view and boundary summary APIs', async () => {
+  const workflowRow = {
+    story_id: 'story-projection-1',
+    status: 'phase2_running',
+    current_phase: 'phase2',
+    current_step: 'generateOutline',
+    workflow_state: 'running',
+    retry_context_json: JSON.stringify({ phase: 'phase2', step: 'generateOutline', attempt: 2 }),
+    active_checkpoint_id: 'cp-1'
+  };
+  const manager = createStateManagerWithRepository({
+    getWorkflowCompatibilityRecord: () => workflowRow,
+    getCheckpoint: () => ({
+      checkpoint_id: 'cp-1',
+      phase_name: 'phase2',
+      checkpoint_type: 'outline_confirmation',
+      status: 'pending',
+      created_at: '2026-05-04T00:09:00.000Z',
+      expires_at: null,
+      feedback: ''
+    }),
+    getEvents: () => ([
+      {
+        created_at: '2026-05-04T00:08:00.000Z',
+        event_type: 'workflow.step_completed',
+        phase_name: 'phase2',
+        event_detail_json: JSON.stringify({ step: 'validateOutline' })
+      }
+    ])
+  });
+  manager.getStory = async () => ({
+    id: 'story-projection-1',
+    status: 'phase2_running',
+    version: 7,
+    createdAt: '2026-05-04T00:00:00.000Z',
+    updatedAt: '2026-05-04T00:10:00.000Z',
+    config: { genre: 'sci-fi' },
+    phase1: { status: 'approved' },
+    phase2: { status: 'running', outline: { beats: 8 } },
+    phase3: { status: 'pending' },
+    finalOutput: null,
+    workflow: { state: 'running' }
+  });
+
+  const businessProjection = await manager.getStoryBusinessProjection('story-projection-1');
+  const compatibilityView = await manager.getWorkflowCompatibilityView('story-projection-1');
+  const boundarySummary = await manager.getStateBoundarySummary('story-projection-1');
+
+  assert.equal(businessProjection.workflow, undefined);
+  assert.equal(businessProjection.phase2.outline.beats, 8);
+  assert.equal(compatibilityView.currentStep, 'generateOutline');
+  assert.equal(compatibilityView.activeCheckpoint.id, 'cp-1');
+  assert.equal(compatibilityView.history.length, 1);
+  assert.deepEqual(boundarySummary.businessProjection.fields, [
+    'config',
+    'phase1',
+    'phase2',
+    'phase3',
+    'finalOutput',
+    'status'
+  ]);
+  assert.equal(boundarySummary.compatibilityResidue.activeCheckpointId, 'cp-1');
+  assert.equal(boundarySummary.artifactProjection.lookupSurface, 'ArtifactManager.listArtifacts');
+  assert.equal(boundarySummary.runtimeTruth.owner, 'WorkflowKernel');
+});
+
+test('WorkflowEngine.getWorkflowStatus reads the narrowed compatibility view when available', async () => {
+  const compatibilityView = {
+    state: 'running',
+    currentPhase: 'phase2',
+    currentStep: 'generateOutline',
+    activeCheckpoint: { id: 'cp-1' },
+    retryContext: { attempt: 2, lastError: null },
+    history: [{ type: 'workflow.started' }],
+    runToken: 'run-123'
+  };
+  const engine = new WorkflowEngine({
+    stateManager: {
+      getWorkflowCompatibilityView: async (storyId) => {
+        assert.equal(storyId, 'story-projection-1');
+        return compatibilityView;
+      },
+      getStory: async () => {
+        throw new Error('getStory fallback should not be used when a narrowed view exists');
+      }
+    },
+    agentDispatcher: {},
+    chapterOperations: {},
+    contentValidator: {},
+    config: {}
+  });
+
+  const status = await engine.getWorkflowStatus('story-projection-1');
+
+  assert.deepEqual(status, {
+    state: 'running',
+    currentPhase: 'phase2',
+    currentStep: 'generateOutline',
+    activeCheckpoint: { id: 'cp-1' },
+    retryContext: { attempt: 2, lastError: null },
+    historyLength: 1,
+    runToken: 'run-123'
   });
 });
 

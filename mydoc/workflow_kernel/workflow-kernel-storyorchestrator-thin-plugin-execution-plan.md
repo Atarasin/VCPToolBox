@@ -1,5 +1,19 @@
 # StoryOrchestrator 薄型插件三步执行方案
 
+## 收官注记（2026-05-04）
+
+这份文档保留的是三步 follow-up 被提出时的执行计划，因此文中会出现当时的 `not-ready` 基线表述。
+
+当前状态已经更新为：
+
+- 三个计划中的 change 均已完成实现、验证、主 spec 同步和 archive
+- `workflow-kernel-storyorchestrator-adapter-thinning-phase-2` 已完成
+- `workflow-kernel-storyorchestrator-state-projection-boundaries-phase-2` 已完成
+- `workflow-kernel-plugin-sdk-helper-promotion-stabilization` 已完成
+- 最新 readiness 结论已更新为 `ready-with-notes`
+
+因此，本文现在更适合作为“这轮收口最初是如何规划的”之历史计划文档使用；如果需要当前结论，应优先阅读《`workflow-kernel-storyorchestrator-reference-plugin-readiness-review.md`》与《`workflow-kernel-storyorchestrator-final-convergence-wrap-up.md`》。
+
 ## 文档目标
 
 本文面向接下来继续推进 `StoryOrchestrator` 收敛的内部工程师。

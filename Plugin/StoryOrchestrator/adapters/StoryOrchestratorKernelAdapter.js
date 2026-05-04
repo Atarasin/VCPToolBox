@@ -29,6 +29,50 @@ const { SchemaValidator } = require('../utils/SchemaValidator');
 const workflowContracts = require('../config/workflow-contracts');
 const storySteps = require('../steps');
 
+const ADAPTER_SEAM_STATES = Object.freeze({
+  LONG_TERM_BRIDGE: 'long-term-bridge',
+  TRANSITIONAL_RESIDUE: 'transitional-residue'
+});
+
+const ADAPTER_SEAM_INVENTORY = Object.freeze([
+  Object.freeze({
+    id: 'kernel-control-plane',
+    label: 'Kernel Control Plane',
+    state: ADAPTER_SEAM_STATES.LONG_TERM_BRIDGE,
+    rationale: 'Creates the WorkflowKernel and repository bridge that remain the canonical execution handoff point for StoryOrchestrator.'
+  }),
+  Object.freeze({
+    id: 'kernel-primitive-bridge',
+    label: 'Kernel Primitive Bridge',
+    state: ADAPTER_SEAM_STATES.LONG_TERM_BRIDGE,
+    rationale: 'Registers kernel-native step handlers without turning the adapter into a second orchestration surface.'
+  }),
+  Object.freeze({
+    id: 'story-step-glue',
+    label: 'Story Step Glue',
+    state: ADAPTER_SEAM_STATES.LONG_TERM_BRIDGE,
+    rationale: 'Keeps plugin-owned step registration explicit while preventing generic SDK or platform semantics from leaking back into the adapter.'
+  }),
+  Object.freeze({
+    id: 'compatibility-event-bridge',
+    label: 'Compatibility Event Bridge',
+    state: ADAPTER_SEAM_STATES.TRANSITIONAL_RESIDUE,
+    rationale: 'Legacy event shaping still exists for compatibility, but it must remain a narrow delegation seam instead of regaining primary control semantics.'
+  }),
+  Object.freeze({
+    id: 'kernel-runtime-delegation',
+    label: 'Kernel Runtime Delegation',
+    state: ADAPTER_SEAM_STATES.LONG_TERM_BRIDGE,
+    rationale: 'The shouldContinue loop hook is a legitimate runtime handoff seam, not a place to grow a second control plane.'
+  }),
+  Object.freeze({
+    id: 'business-projection-bridge',
+    label: 'Business Projection Bridge',
+    state: ADAPTER_SEAM_STATES.TRANSITIONAL_RESIDUE,
+    rationale: 'Snapshot and recovery hooks are still adapter-adjacent, but phase 2 keeps them explicit and narrow until later state-boundary work can reduce them further.'
+  })
+]);
+
 class StoryOrchestratorKernelAdapter {
   constructor({ stateManager, agentDispatcher, chapterOperations, contentValidator, config, legacyEventListener = null }) {
     this.stateManager = stateManager;
@@ -51,6 +95,7 @@ class StoryOrchestratorKernelAdapter {
       byParser: {},
       byStep: {}
     };
+    this.initializedSeams = [];
   }
 
   async initialize() {
@@ -64,11 +109,8 @@ class StoryOrchestratorKernelAdapter {
     const stateRepository = this._createKernelStateRepository();
 
     this.kernel = this._createKernelControlPlane(stateRepository);
-    this._installKernelBridgeSteps();
-    this._installStoryStepGlue();
-    this._installCompatibilityBridge();
-    this._installKernelRuntimeBridge();
-    this._installProjectionBridge();
+    this.initializedSeams = ['kernel-control-plane'];
+    this._applyInitializationPlan(this._buildInitializationPlan());
     this._logInitializedKernelSeams();
   }
 
@@ -85,15 +127,67 @@ class StoryOrchestratorKernelAdapter {
     });
   }
 
+  getAdapterSeamReport() {
+    return ADAPTER_SEAM_INVENTORY.map((seam) => {
+      const installationIndex = this.initializedSeams.indexOf(seam.id);
+      return {
+        ...seam,
+        installed: installationIndex !== -1,
+        installationOrder: installationIndex === -1 ? null : installationIndex + 1
+      };
+    });
+  }
+
+  getAdapterSeam(seamId) {
+    const seam = this.getAdapterSeamReport().find((item) => item.id === seamId);
+    return seam || null;
+  }
+
+  _buildInitializationPlan() {
+    return [
+      {
+        seamId: 'kernel-primitive-bridge',
+        install: () => this._installKernelBridgeSteps()
+      },
+      {
+        seamId: 'story-step-glue',
+        install: () => this._installStoryStepGlue()
+      },
+      {
+        seamId: 'compatibility-event-bridge',
+        install: () => this._installCompatibilityBridge()
+      },
+      {
+        seamId: 'kernel-runtime-delegation',
+        install: () => this._installKernelRuntimeBridge()
+      },
+      {
+        seamId: 'business-projection-bridge',
+        install: () => this._installProjectionBridge()
+      }
+    ];
+  }
+
+  _applyInitializationPlan(plan) {
+    for (const seam of plan) {
+      seam.install();
+      this.initializedSeams.push(seam.seamId);
+    }
+  }
+
   _installKernelBridgeSteps() {
     this._registerBuiltInKernelSteps();
   }
 
   _installStoryStepGlue() {
+    // Story-specific step glue is a legal plugin seam, but keep it focused on
+    // domain handlers instead of letting generic platform semantics accumulate.
     this._registerCustomStepTypes();
   }
 
   _installCompatibilityBridge() {
+    // Compatibility events remain transitional residue; make them explicit so
+    // future cleanup does not confuse them with long-term bridge ownership.
     this._registerKernelEventCompatibilityBridge();
   }
 
@@ -104,10 +198,16 @@ class StoryOrchestratorKernelAdapter {
   }
 
   _installProjectionBridge() {
+    // Snapshot and recovery projection still sit near the adapter, but keep
+    // them behind lifecycle hooks rather than a broader coordination layer.
     this._registerBackupRestoreHooks();
   }
 
   _logInitializedKernelSeams() {
+    const installedSeams = this.getAdapterSeamReport()
+      .filter((seam) => seam.installed)
+      .map((seam) => `${seam.installationOrder}:${seam.id}:${seam.state}`);
+    console.log('[StoryOrchestratorKernelAdapter] Adapter seams:', installedSeams);
     console.log('[StoryOrchestratorKernelAdapter] WorkflowKernel initialized with step registry:',
       Array.from(this.kernel.stepRegistry.handlers.keys()));
   }

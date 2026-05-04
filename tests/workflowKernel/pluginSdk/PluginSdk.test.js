@@ -5,6 +5,9 @@ const {
   createSchemaValidationStepHandler,
   createParseStructuredDataStepHandler,
   createStructuredValidationStepHandler,
+  HELPER_SURFACE_STATES,
+  listSharedHelperFamilies,
+  getSharedHelperFamily,
   defineCheckpointPayloadContract,
   defineBusinessSnapshotContract,
   createSchemaValidationStepDefinition,
@@ -219,4 +222,20 @@ test('pluginSdk builders return reusable workflow fragments', () => {
   assert.equal(schemaStep.input.data.$ref, 'ctx.outputs.outline');
   assert.equal(checkpointStep.contract.checkpointType, 'review');
   assert.deepEqual(macro.steps, ['generateOutline', 'parseOutline', 'validateOutline', 'guardOutline']);
+});
+
+test('pluginSdk exposes helper surface inventory with plugin-owned concerns', () => {
+  const families = listSharedHelperFamilies();
+  const validationFamily = getSharedHelperFamily('structured-validation-orchestration');
+
+  assert.ok(Array.isArray(families));
+  assert.ok(families.length >= 4);
+  assert.ok(validationFamily);
+  assert.equal(validationFamily.state, HELPER_SURFACE_STATES.SHARED_WITH_PLUGIN_SUPPLIED_SEMANTICS);
+  assert.deepEqual(validationFamily.pluginOwnedConcerns, [
+    'prompt wording',
+    'verdict policy',
+    'domain-specific issue interpretation'
+  ]);
+  assert.ok(validationFamily.consumers.includes('story-orchestrator-steps'));
 });

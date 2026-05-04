@@ -2110,19 +2110,22 @@ class WorkflowEngine {
    * @returns {Object} 工作流状态
    */
   async getWorkflowStatus(storyId) {
-    const story = await this.stateManager.getStory(storyId);
-    if (!story) {
+    const workflow = typeof this.stateManager.getWorkflowCompatibilityView === 'function'
+      ? await this.stateManager.getWorkflowCompatibilityView(storyId)
+      : ((await this.stateManager.getStory(storyId))?.workflow || null);
+
+    if (!workflow) {
       return null;
     }
 
     return {
-      state: story.workflow?.state || 'idle',
-      currentPhase: story.workflow?.currentPhase || null,
-      currentStep: story.workflow?.currentStep || null,
-      activeCheckpoint: story.workflow?.activeCheckpoint || null,
-      retryContext: story.workflow?.retryContext || null,
-      historyLength: story.workflow?.history?.length || 0,
-      runToken: story.workflow?.runToken || null
+      state: workflow.state || 'idle',
+      currentPhase: workflow.currentPhase || null,
+      currentStep: workflow.currentStep || null,
+      activeCheckpoint: workflow.activeCheckpoint || null,
+      retryContext: workflow.retryContext || null,
+      historyLength: workflow.history?.length || 0,
+      runToken: workflow.runToken || null
     };
   }
 }

@@ -78,29 +78,31 @@
 
 ## 正式 Readiness Review 结论（2026-05-04）
 
-`workflow-kernel-reference-plugin-readiness-review` 进入实现后，当前仓库已经首次把“薄型参考插件 readiness”从阶段性口头判断推进成正式评审结论。
+`workflow-kernel-reference-plugin-readiness-review` 首次把“薄型参考插件 readiness”从阶段性口头判断推进成正式评审结论；而在随后完成的三项 follow-up change 全部实现、验证并归档后，这个正式结论已经继续更新。
 
 当前正式 outcome 是：
 
-- **`not-ready`**
+- **`ready-with-notes`**
 
-这不是因为 runtime replacement 重新变得不成立，而是因为最终结构收敛仍有三类 blocker 未完全关闭：
+它不表示 `StoryOrchestrator` 已经没有任何历史边界或 transition glue，而表示此前阻塞 readiness 的三类结构债已全部下降为受控 note：
 
-- `StoryOrchestratorKernelAdapter` 虽已完成第一轮职责切片，但仍未收缩到真正的 thin bridge 形态
-- `StateManager` / `StoryStateRepository` / `ArtifactManager` 虽已把业务投影与 compatibility bookkeeping 边界写实，但插件状态层中仍存在同层并存现实
-- shared helper / plugin SDK promotion 已完成第一批 family 的真实 adoption，但还没有稳定到足以把 `StoryOrchestrator` 宣称为最终参考样板
+- `StoryOrchestratorKernelAdapter` 已通过 seam inventory、initialization plan 与聚焦测试，收敛到更窄、更稳定的 bridge seam 形态
+- `StateManager` / `StoryStateRepository` / `ArtifactManager` 已通过 narrowed compatibility view、boundary summary 与聚焦测试，把状态误读风险降到可接受范围
+- shared helper / plugin SDK surface 已通过 helper family inventory、plugin-local boundary report 与 contract tests 稳定化，不再只是首批 adoption
 
-同时，下面这些事项已经不再构成 readiness 的主 blocker：
+同时，下面这些事项继续成立，但已不再构成 readiness 的主 blocker：
 
 - replacement certification 已成立
 - compatibility surface 的 retain/degrade 治理口径已正式化
-- shared plugin SDK 已具备最小真实通用性证明
+- adapter 仍有少量 transitional seam，但已显式且受控
+- 插件状态层仍保留 compatibility residue，但已被边界 API 与查询口径约束
+- helper promotion 仍以“做稳 shared surface”为目标，而不是无限扩大 SDK 面
 
 因此，当前最准确的统一口径进一步更新为：
 
-- `StoryOrchestrator` 已处于 thin reference plugin **候选态**
-- 但尚不宜宣称其已经达到 thin reference plugin **完成态**
-- 后续 follow-up 仍应继续围绕 adapter、状态边界与 helper promotion 三类剩余结构债逐项收口
+- `StoryOrchestrator` 已不只是 thin reference plugin **候选态**
+- 它已经达到可继续作为 thin reference plugin 复用的 **`ready-with-notes` 状态**
+- 后续工作更适合以 note-driven maintenance 和第二 consumer 验证继续推进，而不是重新回到 blocker-driven 大范围结构收口
 
 ## 文档目标
 
