@@ -53,6 +53,15 @@
 - `core/ArtifactManager.js` 已更明确地表现为 artifact projection / lookup 辅助层；即使 SQLite index 失败，artifact 落盘仍不应被解释成 runtime failure
 - 状态层后续的主要风险不再是“边界完全不可见”，而是维护者重新把 compatibility residue 扩张回 story-facing projection 或 runtime truth 判断路径
 
+## 当前 Helper Promotion 落点（2026-05-04）
+
+`workflow-kernel-plugin-sdk-helper-promotion` 的首批实现开始后，这份模块映射还应补充下面这些现实判断：
+
+- `modules/workflowKernel/pluginSdk/extraction.js` 已开始承接 extraction helper family 的 shared skeleton，包括 parser ordering、fallback 与 metrics wiring
+- `modules/workflowKernel/pluginSdk/structuredValidation.js` 已开始承接 structured validation helper family 的 shared skeleton，包括 validation result parsing 与 agent-backed validation step wiring
+- `steps/index.js` 现在更明确地处于“shared helper consumer + story-domain step owner”的混合状态；shared wiring 可继续上收，但 outline normalization 与 chapter generation orchestration 仍属插件私有
+- `utils/SchemaValidator.js` 依然主要承载 story-domain field rules；本轮真正上收的是 validation skeleton，而不是世界观/人物/大纲字段规则本身
+
 ## 模块总览表
 
 | 模块 | 当前主要职责 | 建议动作 | 最终去向 | 说明 |

@@ -57,6 +57,18 @@
 1. 看到 validator / chapter / step helper 时，先问“这里是故事规则，还是通用编排骨架”，不要直接把整文件视为 SDK 候选
 2. 看到状态字段或 adapter 逻辑时，先问“这是业务投影还是 runtime compatibility bookkeeping”，不要把插件私有投影误判为 kernel execution truth
 
+## Compatibility Surface 三态补充（2026-05-04）
+
+当某个模块已经被认定为 compatibility surface 时，当前不再只做“保留或删除”的二元判断，而改用下面三态：
+
+- **`retain-as-shell`**：仍有兼容入口、迁移缓冲或排障价值，因此继续保留，但只能做 delegation shell，禁止继续吸收主控制语义
+- **`degrade-entry`**：入口仍存在，但应收缩为更薄的兼容包装器、deprecated alias 或只读工件，不再作为首选执行来源
+- **`eligible-for-retirement`**：已经存在稳定替代路径，且验证证据足够，可以继续物理删除或进一步减少壳层
+
+使用这三态时还要额外记住一条：
+
+- compatibility retirement 的推进不等于 thin reference plugin readiness 完成；如果 adapter、状态边界或 helper 分层仍未收口，readiness 结论仍不能提前关闭
+
 ## 总览表
 
 | 职责域 | 目标动作 | 最终归属 | 目标态说明 |

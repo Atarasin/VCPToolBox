@@ -1,6 +1,8 @@
 /**
  * Legacy compatibility definition for StoryOrchestrator Phase 1.
  *
+ * Compatibility surface state: `degrade-entry`.
+ *
  * WorkflowEngine now derives phase runtime definitions from
  * `workflow-definition.js`, which is the canonical source of truth for
  * WorkflowKernel execution. This file remains as a compatibility artifact and

@@ -4,9 +4,15 @@ const { v4: uuidv4 } = require('uuid');
 const { Phase1_WorldBuilding } = require('./Phase1_WorldBuilding');
 const { Phase2_OutlineDrafting } = require('./Phase2_OutlineDrafting');
 const { Phase3_Refinement } = require('./Phase3_Refinement');
+const {
+  getCompatibilitySurface,
+  listCompatibilitySurfaces
+} = require('./CompatibilitySurfaceRegistry');
 
 /**
  * WorkflowEngine - StoryOrchestrator 的兼容工作流外壳。
+ *
+ * Compatibility surface state: `retain-as-shell`.
  *
  * 在 legacy 模式下，它仍执行手写 phase classes。
  * 在 kernel 模式下，它的长期职责是保留兼容入口并把控制面委托给
@@ -64,6 +70,20 @@ class WorkflowEngine {
    */
   _hasKernelControlPlane() {
     return this.useKernel && Boolean(this.kernelAdapter);
+  }
+
+  /**
+   * 公开兼容面清单，便于后续退役审查与测试验证。
+   */
+  getCompatibilitySurfaceReport() {
+    return listCompatibilitySurfaces();
+  }
+
+  /**
+   * 返回单个兼容面条目，供维护者或测试聚焦查看。
+   */
+  getCompatibilitySurface(surfaceId) {
+    return getCompatibilitySurface(surfaceId);
   }
 
   /**
@@ -2106,5 +2126,9 @@ class WorkflowEngine {
     };
   }
 }
+
+WorkflowEngine.compatibilitySurface = Object.freeze(
+  getCompatibilitySurface('workflow-engine') || {}
+);
 
 module.exports = { WorkflowEngine };

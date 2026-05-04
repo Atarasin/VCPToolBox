@@ -1,6 +1,8 @@
 /**
  * Phase2_OutlineDrafting - retained legacy phase implementation.
  *
+ * Compatibility surface state: `retain-as-shell`.
+ *
  * This module still backs compatibility flows, but it is no longer the
  * canonical source of StoryOrchestrator workflow control when kernel mode owns
  * the control plane.
@@ -9,6 +11,7 @@
 const { PromptBuilder } = require('../utils/PromptBuilder');
 const { SchemaValidator } = require('../utils/SchemaValidator');
 const { v4: uuidv4 } = require('uuid');
+const { getCompatibilitySurface } = require('./CompatibilitySurfaceRegistry');
 
 class Phase2_OutlineDrafting {
   constructor({ stateManager, agentDispatcher, chapterOperations, contentValidator, promptBuilder, config }) {
@@ -1649,5 +1652,9 @@ ${typeof feedback === 'string' ? feedback : JSON.stringify(feedback, null, 2)}
     return result;
   }
 }
+
+Phase2_OutlineDrafting.compatibilitySurface = Object.freeze(
+  getCompatibilitySurface('phase2-outline-drafting') || {}
+);
 
 module.exports = { Phase2_OutlineDrafting };

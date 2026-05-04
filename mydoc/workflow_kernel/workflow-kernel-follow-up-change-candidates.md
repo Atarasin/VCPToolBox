@@ -166,6 +166,12 @@
 
 这是非常值得做的 P1，但更适合作为 adapter / state 收口之后的下一批平台化 change。
 
+### 当前进度（2026-05-04）
+
+- 该 change 已经起为 active change：`workflow-kernel-plugin-sdk-helper-promotion`
+- 首批实现已开始把 extraction helper、structured validation helper 和 step wiring skeleton 上收到 `modules/workflowKernel/pluginSdk`
+- 当前采取的是 incremental adoption，而不是一次性把 `StoryOrchestrator` helper 模块整块迁出
+
 ## 候选 4：Compatibility Surface 退役标准化
 
 ### 推荐 change id

@@ -20,8 +20,11 @@ const { WorkflowKernel } = require('../../../modules/workflowKernel');
 const { StoryEventAdapter } = require('../../../modules/workflowKernel/adapters/StoryEventAdapter');
 const { StoryStateRepositoryAdapter } = require('../../../modules/workflowKernel/persistence/StoryStateRepositoryAdapter');
 const { WorkflowValidator } = require('../../../modules/workflowKernel/validators/WorkflowValidator');
-const { ExtractionLayer, ExtractionError } = require('../../../modules/workflowKernel/extraction/ExtractionLayer');
-const { createSchemaValidationStepHandler } = require('../../../modules/workflowKernel/pluginSdk');
+const {
+  createSchemaValidationStepHandler,
+  extractWithMetrics,
+  runExtractionStep
+} = require('../../../modules/workflowKernel/pluginSdk');
 const { SchemaValidator } = require('../utils/SchemaValidator');
 const workflowContracts = require('../config/workflow-contracts');
 const storySteps = require('../steps');
@@ -465,50 +468,10 @@ ${resolvedInput.stylePreference || '保持叙事流畅，注重人物刻画'}
    * @private
    */
   _runExtraction(result, step) {
-    const extractionConfig = step.extraction;
-    const logger = { log: console.log, error: console.error, warn: console.warn };
-    const extractionLayer = new ExtractionLayer(logger);
-
-    const options = {
-      schema: extractionConfig.schema,
-      requiredFields: extractionConfig.requiredFields,
-      defaultValue: extractionConfig.defaultValue,
-      parserOrder: extractionConfig.parserOrder || ['jsonBlock', 'jsonObject', 'xml', 'fallbackRaw'],
-      throwOnFailure: extractionConfig.throwOnFailure !== false
-    };
-
-    const maxAttempts = extractionConfig.maxAttempts || 1;
-    let lastError = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const extracted = extractionLayer.extract(result.content, options);
-        this._recordExtractionMetrics(step.id || step.agent, extracted.meta, true);
-        return {
-          status: 'completed',
-          output: {
-            content: result.content,
-            data: extracted.data,
-            meta: extracted.meta,
-            markers: result.markers,
-            raw: result.raw
-          }
-        };
-      } catch (err) {
-        lastError = err;
-        this._recordExtractionMetrics(step.id || step.agent, { attempts: [{ success: false, error: err.message }] }, false);
-        if (attempt < maxAttempts) {
-          console.log(`[StoryOrchestratorKernelAdapter] Extraction retry ${attempt + 1}/${maxAttempts} for step ${step.id || step.agent}`);
-        }
-      }
-    }
-
-    return {
-      status: 'failed',
-      error: lastError instanceof ExtractionError
-        ? lastError
-        : new ExtractionError('NO_MATCH', `Extraction failed after ${maxAttempts} attempt(s): ${lastError?.message}`, { cause: lastError })
-    };
+    return runExtractionStep(result, step, {
+      logger: { log: console.log, error: console.error, warn: console.warn },
+      onMetrics: this._recordExtractionMetrics.bind(this)
+    });
   }
 
   /**
@@ -516,20 +479,11 @@ ${resolvedInput.stylePreference || '保持叙事流畅，注重人物刻画'}
    * @private
    */
   _extractWithLayer(raw, options, stepId) {
-    const logger = { log: console.log, error: console.error, warn: console.warn };
-    const extractionLayer = new ExtractionLayer(logger);
-
-    try {
-      const extracted = extractionLayer.extract(raw, options);
-      this._recordExtractionMetrics(stepId, extracted.meta, true);
-      return extracted;
-    } catch (err) {
-      this._recordExtractionMetrics(stepId, { attempts: [{ success: false, error: err.message }] }, false);
-      if (options.throwOnFailure !== false) {
-        throw err;
-      }
-      return { data: options.defaultValue, meta: { attempts: [{ parser: 'none', success: false, error: err.message }], usedParser: null } };
-    }
+    return extractWithMetrics(raw, options, {
+      stepId,
+      logger: { log: console.log, error: console.error, warn: console.warn },
+      onMetrics: this._recordExtractionMetrics.bind(this)
+    });
   }
 
   /**
@@ -1265,12 +1219,24 @@ ${resolvedInput.stylePreference || '保持叙事流畅，注重人物刻画'}
       }
     }
 
-    const definitionPath = definitionRef === 'story-orchestrator-phase1'
+    // Keep the old phase-only ref readable for crash recovery, but degrade it
+    // into the canonical full workflow definition so new runtime behavior no
+    // longer depends on a separate compatibility-only definition file.
+    const normalizedDefinitionRef = this._normalizeRecoveryDefinitionRef(definitionRef);
+    const definitionPath = normalizedDefinitionRef === 'story-orchestrator-phase1'
       ? path.join(__dirname, '..', 'config', 'workflow-phase1.js')
       : path.join(__dirname, '..', 'config', 'workflow-definition.js');
 
     delete require.cache[require.resolve(definitionPath)];
     return require(definitionPath);
+  }
+
+  _normalizeRecoveryDefinitionRef(definitionRef) {
+    if (definitionRef === 'story-orchestrator-phase1') {
+      return 'story-orchestrator-v1';
+    }
+
+    return definitionRef || 'story-orchestrator-v1';
   }
 
   /**

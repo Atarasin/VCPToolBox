@@ -139,6 +139,33 @@ function createAdapterWithKernel() {
 /* ------------------------------------------------------------------ */
 
 describe('StoryOrchestratorKernelAdapter — backup/restore lifecycle', () => {
+  describe('compatibility definition degradation', () => {
+    it('normalizes legacy phase-only definition refs onto the full workflow definition', async () => {
+      const { adapter } = createAdapterWithKernel();
+      const storyId = 'story-legacy-definition-ref';
+
+      adapter.kernel.stateRepository = {
+        async get(id) {
+          if (id !== storyId) {
+            return null;
+          }
+          return {
+            workflowId: storyId,
+            definitionRef: 'story-orchestrator-phase1',
+            status: 'recovering'
+          };
+        }
+      };
+
+      const definition = await adapter._loadRecoveryDefinition(storyId);
+
+      assert.strictEqual(adapter._normalizeRecoveryDefinitionRef('story-orchestrator-phase1'), 'story-orchestrator-v1');
+      assert.strictEqual(definition.id, 'story-orchestrator-v1');
+      assert.ok(Array.isArray(definition.phases));
+      assert.ok(definition.phases.length >= 3);
+    });
+  });
+
   describe('beforeStep hook', () => {
     it('creates a snapshot before each step when granularity is every_step', async () => {
       const { adapter, stateManager } = createAdapterWithKernel();

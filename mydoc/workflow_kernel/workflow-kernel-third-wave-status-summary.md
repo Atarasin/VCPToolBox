@@ -164,8 +164,9 @@
 按当前 follow-up 进度，更具体的顺序已经变成：
 
 1. `adapter-thinning` 已完成并归档，adapter seam 已从黑箱混合层推进到可继续收薄的显式边界
-2. `state-projection-boundaries` 已完成首批实现与聚焦回归，正在把 `StateManager`、`StoryStateRepository`、`ArtifactManager` 的 business projection / artifact projection / compatibility residue 口径同步进长期文档与主 spec
-3. 在这两类核心结构债收紧之后，再决定是否进入 helper promotion、compatibility retirement criteria 与最终 readiness review
+2. `state-projection-boundaries` 已完成归档，`StateManager`、`StoryStateRepository`、`ArtifactManager` 的 business projection / artifact projection / compatibility residue 口径已经同步进长期文档与主 spec
+3. `plugin-sdk-helper-promotion` 已进入实现，开始把 extraction helper、structured validation helper 与 step wiring skeleton 以 shared plugin SDK surface 的形式落地，同时保留 story-domain prompts、schema rules 与 chapter policy 在插件内
+4. 在 helper promotion 第一批 family 稳定之后，再决定是否进入 compatibility retirement criteria 与最终 readiness review
 
 若继续执行这一步，建议配合阅读《`workflow-kernel-storyorchestrator-structural-convergence-audit.md`》，它记录了第三波后剩余模块的现实状态审查与最小收敛动作。
 

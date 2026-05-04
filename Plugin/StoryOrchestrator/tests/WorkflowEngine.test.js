@@ -209,6 +209,20 @@ describe('WorkflowEngine', () => {
     it('does not currently expose a public pause() method', () => {
       assert.strictEqual(typeof engine.pause, 'undefined');
     });
+
+    it('exposes compatibility surface classifications for retirement audits', () => {
+      const report = engine.getCompatibilitySurfaceReport();
+      const workflowEngineSurface = report.find((item) => item.id === 'workflow-engine');
+      const degradedDefinition = report.find((item) => item.id === 'workflow-phase1-definition');
+
+      assert.ok(Array.isArray(report));
+      assert.ok(workflowEngineSurface);
+      assert.strictEqual(workflowEngineSurface.state, 'retain-as-shell');
+      assert.match(workflowEngineSurface.readinessNote, /readiness/i);
+      assert.ok(degradedDefinition);
+      assert.strictEqual(degradedDefinition.state, 'degrade-entry');
+      assert.strictEqual(WorkflowEngine.compatibilitySurface.state, 'retain-as-shell');
+    });
   });
 
   describe('start(storyId)', () => {

@@ -1,7 +1,10 @@
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');
+const { getCompatibilitySurface } = require('./CompatibilitySurfaceRegistry');
 
 /**
  * Phase3_Refinement - retained legacy phase implementation.
+ *
+ * Compatibility surface state: `retain-as-shell`.
  *
  * It remains available for compatibility-driven entrypoints, but the canonical
  * workflow control path is now expected to flow through WorkflowKernel and the
@@ -681,5 +684,9 @@ class Phase3_Refinement {
     return Math.round((sum / validScores.length) * 10) / 10;
   }
 }
+
+Phase3_Refinement.compatibilitySurface = Object.freeze(
+  getCompatibilitySurface('phase3-refinement') || {}
+);
 
 module.exports = { Phase3_Refinement };

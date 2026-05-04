@@ -48,7 +48,59 @@
 
 - `StoryOrchestratorKernelAdapter` 虽已切职责，但仍未收缩到真正的 thin adapter 形态
 - `StateManager` / `StoryStateRepository` 中仍保留 runtime compatibility state，需要继续防止这些字段被误读为 kernel runtime truth
-- validator / step / chapter helper 的可复用骨架虽然已被显式标注，但尚未真正沉淀为独立 SDK surface
+- validator / step / chapter helper 的可复用骨架虽然已被显式标注，但尚未完全沉淀为稳定、充分验证的 SDK surface
+
+## Compatibility Retirement Governance 更新（2026-05-04）
+
+`workflow-kernel-storyorchestrator-compatibility-retirement-criteria` 进入实现后，compatibility surface 的治理口径进一步从“知道它们是壳层”推进到“知道它们当前处于哪种退役状态”：
+
+- `WorkflowEngine`、`Phase1_WorldBuilding`、`Phase2_OutlineDrafting`、`Phase3_Refinement` 当前按 `retain-as-shell` 处理，表示它们仍保留兼容入口或排障价值，但不得继续吸收新的主控制语义
+- `config/workflow-phase1.js` 当前按 `degrade-entry` 处理，表示旧的 phase-only `definitionRef` 仍可被识别，但恢复路径应优先收敛到 `workflow-definition.js`
+- 这类 retirement 进展只回答“兼容壳是否可以继续缩小”，不回答 `StoryOrchestrator` 是否已经达到 thin reference plugin readiness
+
+这意味着当前更准确的阶段性判断是：
+
+- compatibility shell 的继续保留、降级保留与未来退役已经开始具备正式判定标准
+- 但 readiness 结论仍然依赖 adapter、状态边界与 helper 分层是否继续收口，不能因为某个 compatibility entry 已收窄就提前宣布闭环
+
+## 当前 Helper Promotion 更新（2026-05-04）
+
+`workflow-kernel-plugin-sdk-helper-promotion` 进入实现后，当前目标态口径还应继续补充下面这些现实变化：
+
+- `modules/workflowKernel/pluginSdk` 已新增 shared extraction helper 与 structured validation helper，开始正式承接 parser ordering、fallback、metrics wiring、validation result parsing 这类通用骨架
+- `Plugin/StoryOrchestrator/steps/index.js` 已开始局部消费这些 shared helper，作为 reference plugin 的 incremental adoption 路径，而不是要求一次性重写全部 step
+- `PromptBuilder`、世界观/人物/大纲字段规则、outline normalization、章节修订策略等仍然保留在 `StoryOrchestrator` 内，说明本轮没有把 story-domain logic 错误提升成平台 API
+
+这意味着当前更精确的判断又前进一步：
+
+- `StoryOrchestrator` 已经不只是“标注哪些 helper 可复用”，而是开始通过 shared helper + reference consumption 的方式真正试运行 plugin SDK surface
+- 但 helper promotion 仍处于第一批 family 收敛阶段，尚未完成所有候选 helper 的长期稳定化，因此仍不能把 thin reference plugin readiness 视为已闭合
+
+## 正式 Readiness Review 结论（2026-05-04）
+
+`workflow-kernel-reference-plugin-readiness-review` 进入实现后，当前仓库已经首次把“薄型参考插件 readiness”从阶段性口头判断推进成正式评审结论。
+
+当前正式 outcome 是：
+
+- **`not-ready`**
+
+这不是因为 runtime replacement 重新变得不成立，而是因为最终结构收敛仍有三类 blocker 未完全关闭：
+
+- `StoryOrchestratorKernelAdapter` 虽已完成第一轮职责切片，但仍未收缩到真正的 thin bridge 形态
+- `StateManager` / `StoryStateRepository` / `ArtifactManager` 虽已把业务投影与 compatibility bookkeeping 边界写实，但插件状态层中仍存在同层并存现实
+- shared helper / plugin SDK promotion 已完成第一批 family 的真实 adoption，但还没有稳定到足以把 `StoryOrchestrator` 宣称为最终参考样板
+
+同时，下面这些事项已经不再构成 readiness 的主 blocker：
+
+- replacement certification 已成立
+- compatibility surface 的 retain/degrade 治理口径已正式化
+- shared plugin SDK 已具备最小真实通用性证明
+
+因此，当前最准确的统一口径进一步更新为：
+
+- `StoryOrchestrator` 已处于 thin reference plugin **候选态**
+- 但尚不宜宣称其已经达到 thin reference plugin **完成态**
+- 后续 follow-up 仍应继续围绕 adapter、状态边界与 helper promotion 三类剩余结构债逐项收口
 
 ## 文档目标
 

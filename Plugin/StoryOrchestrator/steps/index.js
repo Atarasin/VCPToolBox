@@ -11,7 +11,13 @@
  */
 
 const { resolveInput } = require('../../../modules/workflowKernel/steps/AgentCallStep');
-const { ExtractionLayer, ExtractionError } = require('../../../modules/workflowKernel/extraction/ExtractionLayer');
+const {
+  DEFAULT_EXTRACTION_PARSER_ORDER,
+  createParseStructuredDataStepHandler,
+  createStructuredValidationStepHandler,
+  runExtractionStep,
+  parseStructuredValidationResult
+} = require('../../../modules/workflowKernel/pluginSdk');
 const { PromptBuilder } = require('../utils/PromptBuilder');
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');
 
@@ -24,61 +30,17 @@ function recordExtractionMetrics(adapter, stepId, meta, success) {
   adapter._recordExtractionMetrics(stepId, meta, success);
 }
 
-function extractWithLayer(adapter, raw, options, stepId) {
-  const logger = { log: console.log, error: console.error, warn: console.warn };
-  const extractionLayer = new ExtractionLayer(logger);
-  try {
-    const extracted = extractionLayer.extract(raw, options);
-    recordExtractionMetrics(adapter, stepId, extracted.meta, true);
-    return extracted;
-  } catch (err) {
-    recordExtractionMetrics(adapter, stepId, { attempts: [{ success: false, error: err.message }] }, false);
-    if (options.throwOnFailure !== false) throw err;
-    return { data: options.defaultValue, meta: { attempts: [{ parser: 'none', success: false, error: err.message }], usedParser: null } };
-  }
+function createAdapterMetricRecorder(adapter) {
+  return (stepId, meta, success) => {
+    recordExtractionMetrics(adapter, stepId, meta, success);
+  };
 }
 
 function runExtraction(adapter, result, step) {
-  const extractionConfig = step.extraction;
-  const logger = { log: console.log, error: console.error, warn: console.warn };
-  const extractionLayer = new ExtractionLayer(logger);
-  const options = {
-    schema: extractionConfig.schema,
-    requiredFields: extractionConfig.requiredFields,
-    defaultValue: extractionConfig.defaultValue,
-    parserOrder: extractionConfig.parserOrder || ['jsonBlock', 'jsonObject', 'xml', 'fallbackRaw'],
-    throwOnFailure: extractionConfig.throwOnFailure !== false
-  };
-  const maxAttempts = extractionConfig.maxAttempts || 1;
-  let lastError = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const extracted = extractionLayer.extract(result.content, options);
-      recordExtractionMetrics(adapter, step.id || step.agent, extracted.meta, true);
-      return {
-        status: 'completed',
-        output: {
-          content: result.content,
-          data: extracted.data,
-          meta: extracted.meta,
-          markers: result.markers,
-          raw: result.raw
-        }
-      };
-    } catch (err) {
-      lastError = err;
-      recordExtractionMetrics(adapter, step.id || step.agent, { attempts: [{ success: false, error: err.message }] }, false);
-      if (attempt < maxAttempts) {
-        console.log(`[StoryOrchestratorKernelAdapter] Extraction retry ${attempt + 1}/${maxAttempts} for step ${step.id || step.agent}`);
-      }
-    }
-  }
-  return {
-    status: 'failed',
-    error: lastError instanceof ExtractionError
-      ? lastError
-      : new ExtractionError('NO_MATCH', `Extraction failed after ${maxAttempts} attempt(s): ${lastError?.message}`, { cause: lastError })
-  };
+  return runExtractionStep(result, step, {
+    logger: { log: console.log, error: console.error, warn: console.warn },
+    onMetrics: createAdapterMetricRecorder(adapter)
+  });
 }
 
 function normalizeOutline(data) {
@@ -199,141 +161,41 @@ function tryParseJsonOutline(content) {
   }
 }
 
-function determineSeverity(issue) {
-  const lower = issue.toLowerCase();
-  if (lower.includes('严重') || lower.includes('关键') || lower.includes('致命')) return 'critical';
-  if (lower.includes('重要') || lower.includes('较大')) return 'major';
-  return 'minor';
-}
-
-function parseValidationResult(content) {
-  const jsonMatch = content.match(/<<<VALIDATION_RESULT开始>>>([\s\S]*?)<<<VALIDATION_RESULT末>>>/);
-  const jsonBlockMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
-  let structuredResult = null;
-  if (jsonMatch && jsonMatch[1]) {
-    try { structuredResult = JSON.parse(jsonMatch[1].trim()); } catch (e) { /* ignore */ }
-  } else if (jsonBlockMatch && jsonBlockMatch[1]) {
-    try { structuredResult = JSON.parse(jsonBlockMatch[1].trim()); } catch (e) { /* ignore */ }
-  }
-  if (!structuredResult) {
-    try {
-      structuredResult = JSON.parse(content);
-    } catch (e) { /* ignore */ }
-  }
-  if (structuredResult && structuredResult.verdict) {
-    const blockingIssues = structuredResult.blockingIssues || [];
-    const nonBlockingIssues = structuredResult.nonBlockingIssues || [];
-
-    return {
-      verdict: structuredResult.verdict || 'FAIL',
-      passed: structuredResult.verdict !== 'FAIL',
-      hasWarnings: structuredResult.verdict === 'PASS_WITH_WARNINGS',
-      issues: buildIssueObjects(blockingIssues, nonBlockingIssues),
-      suggestions: structuredResult.suggestions || [],
-      schemaRisk: structuredResult.schemaRisk || 'unknown',
-      completenessRisk: structuredResult.completenessRisk || 'unknown',
-      blockingIssues,
-      nonBlockingIssues,
-      rawReport: content
-    };
-  }
-  const result = {
-    verdict: 'PASS',
-    passed: true,
-    hasWarnings: false,
-    issues: [],
-    suggestions: [],
-    schemaRisk: 'low',
-    completenessRisk: 'low',
-    blockingIssues: [],
-    nonBlockingIssues: [],
-    rawReport: content
-  };
-  // Try to extract explicit verdict from text before falling back to keyword matching
-  const explicitVerdictMatch = content.match(/["']?verdict["']?\s*[:：]\s*["']?(PASS|PASS_WITH_WARNINGS|FAIL)["']?/i);
-  if (explicitVerdictMatch) {
-    const explicitVerdict = explicitVerdictMatch[1].toUpperCase();
-    result.verdict = explicitVerdict;
-    result.passed = explicitVerdict !== 'FAIL';
-    result.hasWarnings = explicitVerdict === 'PASS_WITH_WARNINGS';
-  } else if (content.includes('不通过') || content.includes('失败')) {
-    result.passed = false;
-    result.verdict = 'FAIL';
-  } else if (content.includes('有条件通过') || content.includes('警告')) {
-    result.hasWarnings = true;
-    result.verdict = 'PASS_WITH_WARNINGS';
-  }
-  const issueMatches = content.match(/[-*•]\s*([^\n]*(?:问题|冲突|矛盾|不符|错误|风险)[^\n]*)/gi) || [];
-  result.issues = issueMatches.map(line => line.replace(/^[-*•]\s*/, '').trim()).filter(line => line.length > 5).map(issue => ({ description: issue, severity: determineSeverity(issue) }));
-  result.blockingIssues = result.issues.filter(i => i.severity === 'critical' || i.severity === 'major');
-  result.nonBlockingIssues = result.issues.filter(i => i.severity === 'minor');
-  const suggestionMatches = content.match(/[-*•]\s*([^\n]*(?:建议|修正|改进|调整)[^\n]*)/gi) || [];
-  result.suggestions = suggestionMatches.map(line => line.replace(/^[-*•]\s*/, '').trim()).filter(line => line.length > 5);
-  if (result.blockingIssues.length > 0) {
-    result.schemaRisk = 'high';
-    result.completenessRisk = 'high';
-    result.verdict = 'FAIL';
-    result.passed = false;
-  } else if (result.nonBlockingIssues.length > 0) {
-    result.schemaRisk = 'medium';
-    result.completenessRisk = 'medium';
-    if (result.verdict === 'PASS') {
-      result.verdict = 'PASS_WITH_WARNINGS';
-      result.hasWarnings = true;
-    }
-  }
-  return result;
-}
-
-function buildIssueObjects(blockingIssues = [], nonBlockingIssues = []) {
-  return [
-    ...blockingIssues.map((issue) => ({ description: issue, severity: 'major' })),
-    ...nonBlockingIssues.map((issue) => ({ description: issue, severity: 'minor' }))
-  ];
-}
-
 // ---------------------------------------------------------------------------
 // Step factories
 // ---------------------------------------------------------------------------
 
 function createParseAgentJsonStep(adapter) {
-  return async (step, stepContext) => {
-    const input = resolveInput(step.input, stepContext.context);
-    const raw = input.raw || '';
-    const extractionOptions = step.extraction || {
-      parserOrder: ['jsonBlock', 'jsonObject', 'xml', 'fallbackRaw'],
+  return createParseStructuredDataStepHandler({
+    getRaw: (input) => input.raw || '',
+    getExtractionOptions: (input, step) => step.extraction || {
+      parserOrder: DEFAULT_EXTRACTION_PARSER_ORDER,
       throwOnFailure: false,
-      defaultValue: { raw }
-    };
-    const result = extractWithLayer(adapter, raw, extractionOptions, step.id || 'parseAgentJson');
-    return { status: 'completed', output: result };
-  };
+      defaultValue: { raw: input.raw || '' }
+    },
+    logger: { log: console.log, error: console.error, warn: console.warn },
+    onMetrics: createAdapterMetricRecorder(adapter)
+  });
 }
 
 function createStoryValidateStep(adapter) {
-  return async (step, stepContext) => {
-    const input = resolveInput(step.input, stepContext.context);
-    const { validationType, worldview, characters, outline, storyPrompt } = input;
-    let prompt;
-    if (validationType === 'phase1') {
-      const content = JSON.stringify({ storyPrompt, worldview, characters }, null, 2);
-      prompt = PromptBuilder.buildWorldviewValidationPrompt({ content, worldview, characters });
-    } else if (validationType === 'outline') {
-      prompt = PromptBuilder.buildOutlineValidationPrompt(outline, { worldview, characters });
-    } else {
-      return { status: 'failed', error: new Error(`Unknown validationType: ${validationType}`) };
-    }
-    try {
-      const result = await adapter.agentDispatcher.delegate(AGENT_TYPES.LOGIC_VALIDATOR, prompt, {
-        timeoutMs: 300000,
-        temporaryContact: true
-      });
-      const validation = parseValidationResult(result.content);
-      return { status: 'completed', output: validation };
-    } catch (error) {
-      return { status: 'failed', error: new Error(`Validation agent failed: ${error.message}`) };
-    }
-  };
+  return createStructuredValidationStepHandler({
+    agentDispatcher: adapter.agentDispatcher,
+    getAgentType: () => AGENT_TYPES.LOGIC_VALIDATOR,
+    buildPrompt: ({ validationType, worldview, characters, outline, storyPrompt }) => {
+      if (validationType === 'phase1') {
+        const content = JSON.stringify({ storyPrompt, worldview, characters }, null, 2);
+        return PromptBuilder.buildWorldviewValidationPrompt({ content, worldview, characters });
+      }
+
+      if (validationType === 'outline') {
+        return PromptBuilder.buildOutlineValidationPrompt(outline, { worldview, characters });
+      }
+
+      throw new Error(`Unknown validationType: ${validationType}`);
+    },
+    parseResult: parseStructuredValidationResult
+  });
 }
 
 function createGenerateOutlineStep(adapter) {
@@ -364,21 +226,24 @@ function createGenerateOutlineStep(adapter) {
 }
 
 function createParseOutlineStep(adapter) {
-  return async (step, stepContext) => {
-    const { raw } = resolveInput(step.input, stepContext.context);
-    const extractionOptions = step.extraction || {
-      parserOrder: ['jsonBlock', 'jsonObject', 'xml', 'fallbackRaw'],
+  return createParseStructuredDataStepHandler({
+    getRaw: (input) => input.raw || '',
+    getExtractionOptions: (_input, step) => step.extraction || {
+      parserOrder: DEFAULT_EXTRACTION_PARSER_ORDER,
       throwOnFailure: false,
       defaultValue: null
-    };
-    const extracted = extractWithLayer(adapter, raw, extractionOptions, step.id || 'parseOutline');
-    if (extracted && extracted.data && Array.isArray(extracted.data.chapters) && extracted.data.chapters.length > 0) {
-      const normalized = normalizeOutline(extracted.data);
-      return { status: 'completed', output: { ...normalized, _extractionMeta: extracted.meta } };
-    }
-    const outline = parseOutline(raw);
-    return { status: 'completed', output: outline };
-  };
+    },
+    normalizeOutput: ({ extracted, raw }) => {
+      if (extracted && extracted.data && Array.isArray(extracted.data.chapters) && extracted.data.chapters.length > 0) {
+        const normalized = normalizeOutline(extracted.data);
+        return { ...normalized, _extractionMeta: extracted.meta };
+      }
+
+      return parseOutline(raw);
+    },
+    logger: { log: console.log, error: console.error, warn: console.warn },
+    onMetrics: createAdapterMetricRecorder(adapter)
+  });
 }
 
 function createProduceChaptersStep(adapter) {

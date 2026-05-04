@@ -1,6 +1,8 @@
 /**
  * Phase1_WorldBuilding - retained legacy phase implementation.
  *
+ * Compatibility surface state: `retain-as-shell`.
+ *
  * WorkflowKernel + `workflow-definition` now own the primary phase-control path.
  * This class remains to serve compatibility entrypoints while StoryOrchestrator
  * continues structural convergence, and should not absorb new primary workflow
@@ -9,6 +11,7 @@
 
 const { AGENT_TYPES } = require('../agents/AgentDefinitions');
 const { SchemaValidator } = require('../utils/SchemaValidator');
+const { getCompatibilitySurface } = require('./CompatibilitySurfaceRegistry');
 
 class Phase1_WorldBuilding {
   constructor({ stateManager, agentDispatcher, promptBuilder, config }) {
@@ -1425,5 +1428,9 @@ ${validationResult.suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
     }
   }
 }
+
+Phase1_WorldBuilding.compatibilitySurface = Object.freeze(
+  getCompatibilitySurface('phase1-world-building') || {}
+);
 
 module.exports = { Phase1_WorldBuilding };

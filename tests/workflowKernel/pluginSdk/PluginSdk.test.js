@@ -3,12 +3,15 @@ const assert = require('node:assert/strict');
 
 const {
   createSchemaValidationStepHandler,
+  createParseStructuredDataStepHandler,
+  createStructuredValidationStepHandler,
   defineCheckpointPayloadContract,
   defineBusinessSnapshotContract,
   createSchemaValidationStepDefinition,
   createHumanReviewCheckpointStep,
   createPromptRevisionMacro,
-  projectContractFields
+  projectContractFields,
+  parseStructuredValidationResult
 } = require('../../../modules/workflowKernel/pluginSdk');
 
 test('createSchemaValidationStepHandler validates known schema types', async () => {
@@ -65,6 +68,102 @@ test('createSchemaValidationStepHandler rejects unknown schema types', async () 
 
   assert.equal(result.status, 'failed');
   assert.match(result.error.message, /Unknown schema type/);
+});
+
+test('createParseStructuredDataStepHandler extracts structured data with fallback-safe defaults', async () => {
+  const metrics = [];
+  const handler = createParseStructuredDataStepHandler({
+    getExtractionOptions: (input) => ({
+      parserOrder: ['jsonObject'],
+      throwOnFailure: false,
+      defaultValue: { raw: input.raw }
+    }),
+    onMetrics: (stepId, meta, success) => metrics.push({ stepId, meta, success })
+  });
+
+  const result = await handler(
+    {
+      id: 'parseDemo',
+      input: {
+        raw: { $ref: 'ctx.outputs.rawPayload' }
+      }
+    },
+    {
+      context: {
+        outputs: {
+          rawPayload: '{"title":"demo"}'
+        }
+      }
+    }
+  );
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.output.data, { title: 'demo' });
+  assert.equal(result.output.meta.usedParser, 'jsonObject');
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].stepId, 'parseDemo');
+  assert.equal(metrics[0].success, true);
+});
+
+test('parseStructuredValidationResult keeps blocking/non-blocking issue lists while exposing structured issue objects', () => {
+  const result = parseStructuredValidationResult(JSON.stringify({
+    verdict: 'PASS_WITH_WARNINGS',
+    blockingIssues: ['主线冲突'],
+    nonBlockingIssues: ['节奏偏慢'],
+    suggestions: ['提前埋设线索'],
+    schemaRisk: false,
+    completenessRisk: false
+  }));
+
+  assert.equal(result.verdict, 'PASS_WITH_WARNINGS');
+  assert.deepEqual(result.blockingIssues, ['主线冲突']);
+  assert.deepEqual(result.nonBlockingIssues, ['节奏偏慢']);
+  assert.deepEqual(result.issues, [
+    { description: '主线冲突', severity: 'major' },
+    { description: '节奏偏慢', severity: 'minor' }
+  ]);
+});
+
+test('createStructuredValidationStepHandler delegates prompt construction while keeping domain rules outside the shared contract', async () => {
+  const calls = [];
+  const handler = createStructuredValidationStepHandler({
+    agentDispatcher: {
+      delegate: async (agentType, prompt, options) => {
+        calls.push({ agentType, prompt, options });
+        return {
+          content: JSON.stringify({
+            verdict: 'PASS',
+            blockingIssues: [],
+            nonBlockingIssues: [],
+            suggestions: []
+          })
+        };
+      }
+    },
+    buildPrompt: ({ outline }) => `validate outline with ${outline.chapters.length} chapters`
+  });
+
+  const result = await handler(
+    {
+      id: 'validateOutline',
+      input: {
+        outline: { $ref: 'ctx.outputs.outline' }
+      }
+    },
+    {
+      context: {
+        outputs: {
+          outline: { chapters: [{ title: '启程' }] }
+        }
+      }
+    }
+  );
+
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output.verdict, 'PASS');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].agentType, 'logicValidator');
+  assert.match(calls[0].prompt, /1 chapters/);
 });
 
 test('projectContractFields projects string and function descriptors', () => {
