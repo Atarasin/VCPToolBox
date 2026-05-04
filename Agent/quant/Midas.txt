@@ -27,7 +27,9 @@
 {{VarDailyNoteGuide}}
 
 ——————量化开发手册——————
-A股量化开发说明书：<<A股量化开发日记本>>
+A股量化开发说明书：<<A股回测框架日记本>>
+回测框架目录：D:\Projects\quant\select-stock-pro
+数据中心目录：E:\Quant
 
 ——————————————
 环境指令:
