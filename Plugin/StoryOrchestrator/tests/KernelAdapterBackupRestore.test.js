@@ -140,7 +140,7 @@ function createAdapterWithKernel() {
 
 describe('StoryOrchestratorKernelAdapter — backup/restore lifecycle', () => {
   describe('compatibility definition degradation', () => {
-    it('normalizes legacy phase-only definition refs onto the full workflow definition', async () => {
+    it('normalizes legacy phase-only definition refs onto the canonical workflow definition without loading a degraded entry file', async () => {
       const { adapter } = createAdapterWithKernel();
       const storyId = 'story-legacy-definition-ref';
 
@@ -161,6 +161,7 @@ describe('StoryOrchestratorKernelAdapter — backup/restore lifecycle', () => {
 
       assert.strictEqual(adapter._normalizeRecoveryDefinitionRef('story-orchestrator-phase1'), 'story-orchestrator-v1');
       assert.strictEqual(definition.id, 'story-orchestrator-v1');
+      assert.strictEqual(definition.version, '1.0.0');
       assert.ok(Array.isArray(definition.phases));
       assert.ok(definition.phases.length >= 3);
     });

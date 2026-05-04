@@ -119,6 +119,10 @@ shared surface 现在已经够稳，可以作为参考样板继续使用；但�
 3. 等下一个真实 workflow plugin 接入时，再利用第二 consumer 证据决定 shared surface 是否继续扩张
 4. 只有当某个 note 再次演化成真实结构风险时，才起新的小范围 follow-up change
 
+## 补充文档
+
+如果后续要继续推进兼容层退役，可配合阅读《StoryOrchestrator legacy path 退役清单》。这份清单专门回答哪些 legacy surface 仍必须保留、哪些只能先降级收纳、以及什么条件下才能安全进入退役。
+
 ## 推荐统一表述
 
 如果后续有人问“现在 `StoryOrchestrator` 到底算不算理想化参考插件”，建议统一回答：

@@ -1319,19 +1319,19 @@ ${resolvedInput.stylePreference || '保持叙事流畅，注重人物刻画'}
       }
     }
 
-    // Keep the old phase-only ref readable for crash recovery, but degrade it
-    // into the canonical full workflow definition so new runtime behavior no
-    // longer depends on a separate compatibility-only definition file.
-    const normalizedDefinitionRef = this._normalizeRecoveryDefinitionRef(definitionRef);
-    const definitionPath = normalizedDefinitionRef === 'story-orchestrator-phase1'
-      ? path.join(__dirname, '..', 'config', 'workflow-phase1.js')
-      : path.join(__dirname, '..', 'config', 'workflow-definition.js');
+    // Keep the old phase-only ref readable as migration input, but normalize it
+    // onto the canonical full workflow definition so recovery no longer depends
+    // on a separate compatibility-only definition file.
+    this._normalizeRecoveryDefinitionRef(definitionRef);
+    const definitionPath = path.join(__dirname, '..', 'config', 'workflow-definition.js');
 
     delete require.cache[require.resolve(definitionPath)];
     return require(definitionPath);
   }
 
   _normalizeRecoveryDefinitionRef(definitionRef) {
+    // Accept the old phase-only alias as migration input, but do not preserve
+    // it as a first-class supported definition entry.
     if (definitionRef === 'story-orchestrator-phase1') {
       return 'story-orchestrator-v1';
     }

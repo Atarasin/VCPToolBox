@@ -169,11 +169,11 @@ Plugin/StoryOrchestrator/
 │   ├── StoryOrchestrator.js   # 主入口
 │   ├── WorkflowEngine.js
 │   ├── StateManager.js
-│   ├── Phase1_WorldBuilding.js
-│   ├── Phase2_OutlineDrafting.js
-│   ├── Phase3_Refinement.js
+│   ├── CompatibilitySurfaceRegistry.js
 │   ├── ChapterOperations.js
 │   └── ContentValidator.js
+├── adapters/                  # Kernel 适配层
+│   └── StoryOrchestratorKernelAdapter.js
 ├── utils/                     # 工具模块
 │   ├── PromptBuilder.js
 │   ├── ValidationSchemas.js

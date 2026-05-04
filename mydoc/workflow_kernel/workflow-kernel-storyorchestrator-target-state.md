@@ -20,7 +20,7 @@
 
 `workflow-kernel-storyorchestrator-structural-convergence` 进入实现后，当前仓库已经进一步把“reference consumer 候选态”和“薄型参考插件终态”之间的差距写实为下面几类事实：
 
-- `WorkflowEngine`、`Phase1/2/3` 和 `workflow-phase1` 已被明确标注为 compatibility shell / compatibility artifact，不再作为未来新增主控制逻辑的承接点
+- `WorkflowEngine` 仍保留为 compatibility shell；`Phase1/2/3` phase-class runtime shells 已退役，原 `workflow-phase1` degraded entry 仅剩输入归一规则
 - `StoryOrchestratorKernelAdapter` 已完成第一轮职责切片，至少能区分 kernel bridge、business snapshot projector、legacy event compatibility 与 helper glue
 - `StateManager`、`StoryStateRepository`、`ArtifactManager` 已把业务投影与 runtime compatibility state 的边界写得更清楚，但仍未完全摆脱同层共存
 - `ContentValidator`、`ChapterOperations`、`steps/index`、`SchemaValidator` 已开始显式区分“可复用编排骨架”和“故事领域规则”，避免继续用“整块迁移到 SDK”这种过度泛化口径描述它们
@@ -54,8 +54,8 @@
 
 `workflow-kernel-storyorchestrator-compatibility-retirement-criteria` 进入实现后，compatibility surface 的治理口径进一步从“知道它们是壳层”推进到“知道它们当前处于哪种退役状态”：
 
-- `WorkflowEngine`、`Phase1_WorldBuilding`、`Phase2_OutlineDrafting`、`Phase3_Refinement` 当前按 `retain-as-shell` 处理，表示它们仍保留兼容入口或排障价值，但不得继续吸收新的主控制语义
-- `config/workflow-phase1.js` 当前按 `degrade-entry` 处理，表示旧的 phase-only `definitionRef` 仍可被识别，但恢复路径应优先收敛到 `workflow-definition.js`
+- `WorkflowEngine` 当前按 `retain-as-shell` 处理，表示它仍保留兼容入口与状态投影职责；`Phase1_WorldBuilding`、`Phase2_OutlineDrafting`、`Phase3_Refinement` 已退出支持的 runtime surface
+- 旧的 `story-orchestrator-phase1` phase-only `definitionRef` 仍可被识别，但只作为迁移输入被立即归一到 `workflow-definition.js`，不再对应独立的 degraded entry 文件
 - 这类 retirement 进展只回答“兼容壳是否可以继续缩小”，不回答 `StoryOrchestrator` 是否已经达到 thin reference plugin readiness
 
 这意味着当前更准确的阶段性判断是：
@@ -202,7 +202,7 @@ StoryOrchestrator
 这一阶段完成后，它应进入以下状态：
 
 - `WorkflowKernel` 成为主要执行控制面
-- `WorkflowEngine` 只剩兼容壳、门面，或退出主路径
+- `WorkflowEngine` 只剩兼容壳、门面，phase-class runtime 已退出主路径
 - 恢复、回滚、phase 重启、auto-approve 推进都由内核统一主导
 - workflow definition 开始成为行为的主要来源，而不是“内核 + adapter + 旧引擎”的混合产物
 

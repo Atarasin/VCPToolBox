@@ -36,11 +36,11 @@ flowchart LR
 | 组件 | 文件路径 | 职责 |
 |------|----------|------|
 | `StoryOrchestrator` | `core/StoryOrchestrator.js` | 对外入口，处理 ToolCall 命令，协调各子模块 |
-| `WorkflowEngine` | `core/WorkflowEngine.js` | 工作流编排引擎，管理 Phase 切换、检查点等待/恢复、重试、崩溃恢复 |
+| `WorkflowEngine` | `core/WorkflowEngine.js` | 兼容门面：保留 start/resume/recover/retry 入口、状态投影与事件委托；实际执行控制权属于 WorkflowKernel |
 | `StateManager` | `core/StateManager.js` | 故事状态持久化（SQLite + JSON 双写）、快照（Snapshot）、检查点（Checkpoint）、Artifacts |
-| `Phase1_WorldBuilding` | `core/Phase1_WorldBuilding.js` | Phase 1 执行逻辑：世界观 + 人物设计、校验、自动修订 |
-| `Phase2_OutlineDrafting` | `core/Phase2_OutlineDrafting.js` | Phase 2 执行逻辑：大纲生成、逻辑校验、逐章正文生产 |
-| `Phase3_Refinement` | `core/Phase3_Refinement.js` | Phase 3 执行逻辑：润色循环、整体校验、质量评分、终校定稿 |
+| `StoryOrchestratorKernelAdapter` | `adapters/StoryOrchestratorKernelAdapter.js` | Kernel bridge：安装 workflow definition、自定义 step、事件兼容与状态投影 |
+| `workflow-definition` | `config/workflow-definition.js` | 声明式 workflow definition：phase/step/checkpoint 布局与恢复边界的 canonical source |
+| `CompatibilitySurfaceRegistry` | `core/CompatibilitySurfaceRegistry.js` | 兼容面清单：显式记录保留壳、退役项与替代路径 |
 | `ChapterOperations` | `core/ChapterOperations.js` | 章节级操作：撰写草稿、评审、修订、润色、细节填充、字数扩充 |
 | `ContentValidator` | `core/ContentValidator.js` | 内容一致性校验：世界观、人物、情节逻辑；输出结构化校验报告与质量评分 |
 | `AgentDispatcher` | `agents/AgentDispatcher.js` | Agent 调度器，支持同步/异步调用、并行/串行派发 |
@@ -237,8 +237,8 @@ stateDiagram-v2
 ### 6.2 检查点超时自动批准
 
 - 默认超时：`USER_CHECKPOINT_TIMEOUT_MS = 86400000`（24 小时）
-- `WorkflowEngine` 启动定时器（默认 60 秒一次）扫描过期检查点
-- 过期后若 `autoContinueOnTimeout = true`，则自动批准并推进到下一阶段
+- `WorkflowEngine` 保留兼容级定时器，但在当前实现中只报告 timeout continuation 已由 kernel control plane 持有
+- 过期后的自动推进由 kernel checkpoint runtime 负责；已退役 phase-class fallback 不再作为支持路径
 
 ### 6.3 用户确认接口
 
@@ -346,9 +346,9 @@ flowchart TD
 | 工作流入口 | `core/StoryOrchestrator.js` |
 | 工作流编排 | `core/WorkflowEngine.js` |
 | 状态管理 | `core/StateManager.js` |
-| Phase 1 实现 | `core/Phase1_WorldBuilding.js` |
-| Phase 2 实现 | `core/Phase2_OutlineDrafting.js` |
-| Phase 3 实现 | `core/Phase3_Refinement.js` |
+| Kernel 适配层 | `adapters/StoryOrchestratorKernelAdapter.js` |
+| Workflow 定义 | `config/workflow-definition.js` |
+| 兼容面清单 | `core/CompatibilitySurfaceRegistry.js` |
 | 章节操作 | `core/ChapterOperations.js` |
 | 内容校验 | `core/ContentValidator.js` |
 | Agent 调度 | `agents/AgentDispatcher.js` |

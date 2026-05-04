@@ -58,7 +58,7 @@ Phase 3: 润色与终稿
 ## Phase 1: 世界观与人设搭建
 
 **Phase ID:** `phase1`  
-**Legacy equivalent:** `Phase1_WorldBuilding.run()`
+**Historical source before retirement:** `Phase1_WorldBuilding.run()`
 
 ### Steps
 
@@ -97,7 +97,7 @@ Phase 3: 润色与终稿
 ## Phase 2: 大纲与正文生产
 
 **Phase ID:** `phase2`  
-**Legacy equivalent:** `Phase2_OutlineDrafting.run()` + `continueFromCheckpoint()`
+**Historical source before retirement:** `Phase2_OutlineDrafting.run()` + `continueFromCheckpoint()`
 
 ### Steps
 
@@ -142,7 +142,7 @@ Phase 3: 润色与终稿
 ## Phase 3: 润色与终稿
 
 **Phase ID:** `phase3`  
-**Legacy equivalent:** `Phase3_Refinement.run()` + `continueFromCheckpoint()`
+**Historical source before retirement:** `Phase3_Refinement.run()` + `continueFromCheckpoint()`
 
 ### Steps
 
@@ -231,7 +231,7 @@ Builds outline prompt via `PromptBuilder.buildOutlinePrompt()` and delegates to 
 
 ### `parseOutline`
 
-Parses outline from text using the same logic as `Phase2_OutlineDrafting._parseOutline()`.
+Parses outline text using the shared normalization rules preserved by the kernel adapter.
 
 **Input:**
 - `raw` (string): Raw outline text
@@ -352,10 +352,10 @@ After workflow completion (or at checkpoint boundaries), the following outputs a
 
 | Phase | Step ID | Checkpoint Type | Legacy Equivalent |
 |-------|---------|-----------------|-------------------|
-| Phase 1 | `checkpointPhase1` | `phase1_worldview_confirmation` | `Phase1_WorldBuilding._createCheckpoint()` |
-| Phase 2 | `checkpointOutline` | `phase2_outline_confirmation` | `Phase2_OutlineDrafting` outline checkpoint |
-| Phase 2 | `checkpointContent` | `phase2_content_confirmation` | `Phase2_OutlineDrafting` content checkpoint |
-| Phase 3 | `checkpointFinal` | `final_acceptance` | `Phase3_Refinement._createFinalAcceptanceCheckpoint()` |
+| Phase 1 | `checkpointPhase1` | `phase1_worldview_confirmation` | Historical phase1 worldview review checkpoint |
+| Phase 2 | `checkpointOutline` | `phase2_outline_confirmation` | Historical phase2 outline review checkpoint |
+| Phase 2 | `checkpointContent` | `phase2_content_confirmation` | Historical phase2 content review checkpoint |
+| Phase 3 | `checkpointFinal` | `final_acceptance` | Historical phase3 final acceptance checkpoint |
 
 ---
 
@@ -390,7 +390,7 @@ The workflow supports the same recovery actions as the legacy engine:
 
 ### What's Changed
 
-1. **Phase classes → Step graph:** Imperative `Phase1_WorldBuilding.run()` etc. replaced by declarative step definitions.
+1. **Phase classes -> step graph:** Imperative `Phase1_WorldBuilding.run()` style orchestration has been retired and replaced by declarative step definitions.
 2. **State management:** WorkflowKernel persists execution cursor and context independently via `StoryStateRepositoryAdapter`.
 3. **Event schema:** Kernel emits generic events (`workflow.step_completed`, `workflow.checkpoint_pending`); `StoryEventAdapter` maps to legacy event names for backward compatibility.
 
@@ -399,7 +399,7 @@ The workflow supports the same recovery actions as the legacy engine:
 1. **Agent definitions:** Same agent types (`worldBuilder`, `characterDesigner`, `plotArchitect`, etc.).
 2. **Prompt building:** `PromptBuilder` utilities reused by custom step handlers.
 3. **Schema validation:** `SchemaValidator` reused unchanged.
-4. **Checkpoint semantics:** Same checkpoint types, same timeout behavior, same auto-continue settings.
+4. **Checkpoint semantics:** Same checkpoint types and review semantics are preserved, but timeout continuation is now kernel-owned rather than phase-class owned.
 5. **Chapter operations:** `ChapterOperations` methods reused by `produceChapters` and `polishChapters` handlers.
 6. **Content validation:** `ContentValidator` methods reused by custom step handlers.
 
@@ -407,11 +407,11 @@ The workflow supports the same recovery actions as the legacy engine:
 
 ```javascript
 // config.env
-USE_WORKFLOW_KERNEL=true   // Use declarative workflow (this definition)
-USE_WORKFLOW_KERNEL=false  // Use legacy phase classes
+USE_WORKFLOW_KERNEL=true   // Preferred and supported runtime path
+USE_WORKFLOW_KERNEL=false  // Compatibility flag only; WorkflowEngine still requires kernel control plane
 ```
 
-When `USE_WORKFLOW_KERNEL=true`, `WorkflowEngine` initializes `StoryOrchestratorKernelAdapter` and delegates phase execution to `WorkflowKernel`. When `false`, the original `phases.phase1.run()`, `phases.phase2.run()`, `phases.phase3.run()` code paths execute.
+When `WorkflowEngine` initializes, it now installs `StoryOrchestratorKernelAdapter` and delegates supported runtime execution to `WorkflowKernel`. `USE_WORKFLOW_KERNEL` remains readable for diagnostics and rollout bookkeeping, but phase-class fallback runtime is retired and is no longer a supported execution mode.
 
 ---
 
