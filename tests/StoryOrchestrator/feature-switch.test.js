@@ -413,3 +413,41 @@ test('startStoryProject returns error on validation failure', async () => {
   // We just assert that the method handles validation gracefully
   assert.ok(result.status === 'error' || result.status === 'success');
 });
+
+test('legacy chapter-level commands are no longer exposed through processToolCall', async () => {
+  const orchestrator = createOrchestratorWithMocks({ useKernel: false });
+  const removedCommands = [
+    'CreateChapterDraft',
+    'ReviewChapter',
+    'ReviseChapter',
+    'PolishChapter',
+    'ValidateConsistency',
+    'CountChapterMetrics',
+    'RetryChapter'
+  ];
+
+  for (const command of removedCommands) {
+    const result = await orchestrator.processToolCall({ command });
+    assert.equal(result.status, 'error');
+    assert.equal(result.error, `Unknown command: ${command}`);
+  }
+});
+
+test('only retained public command helpers remain on StoryOrchestrator', () => {
+  const orchestrator = createOrchestratorWithMocks({ useKernel: false });
+
+  assert.equal(typeof orchestrator.startStoryProject, 'function');
+  assert.equal(typeof orchestrator.queryStoryStatus, 'function');
+  assert.equal(typeof orchestrator.userConfirmCheckpoint, 'function');
+  assert.equal(typeof orchestrator.exportStory, 'function');
+  assert.equal(typeof orchestrator.recoverStoryWorkflow, 'function');
+  assert.equal(typeof orchestrator.retryPhase, 'function');
+
+  assert.equal(typeof orchestrator.createChapterDraft, 'undefined');
+  assert.equal(typeof orchestrator.reviewChapter, 'undefined');
+  assert.equal(typeof orchestrator.reviseChapter, 'undefined');
+  assert.equal(typeof orchestrator.polishChapter, 'undefined');
+  assert.equal(typeof orchestrator.validateConsistency, 'undefined');
+  assert.equal(typeof orchestrator.countChapterMetrics, 'undefined');
+  assert.equal(typeof orchestrator.retryChapter, 'undefined');
+});

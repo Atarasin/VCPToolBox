@@ -137,30 +137,6 @@ class StoryOrchestrator {
     return workflowLifecycleCommands.userConfirmCheckpoint(this, args);
   }
 
-  async createChapterDraft(args) {
-    return chapterCommands.createChapterDraft(this, args);
-  }
-
-  async reviewChapter(args) {
-    return chapterCommands.reviewChapter(this, args);
-  }
-
-  async reviseChapter(args) {
-    return chapterCommands.reviseChapter(this, args);
-  }
-
-  async polishChapter(args) {
-    return chapterCommands.polishChapter(this, args);
-  }
-
-  async validateConsistency(args) {
-    return chapterCommands.validateConsistency(this, args);
-  }
-
-  async countChapterMetrics(args) {
-    return chapterCommands.countChapterMetrics(this, args);
-  }
-
   async exportStory(args) {
     return chapterCommands.exportStory(this, args);
   }
@@ -171,10 +147,6 @@ class StoryOrchestrator {
 
   async retryPhase(args) {
     return workflowLifecycleCommands.retryPhase(this, args);
-  }
-
-  async retryChapter(args) {
-    return workflowLifecycleCommands.retryChapter(this, args);
   }
 
   _createMetrics() {

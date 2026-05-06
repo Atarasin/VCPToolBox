@@ -12,6 +12,7 @@ class StateManager {
     this.initialized = false;
     this.repository = new StoryStateRepository();
     this.artifactManager = new ArtifactManager(this.repository);
+    this.saveQueues = new Map();
   }
 
   async initialize() {
@@ -800,19 +801,40 @@ class StateManager {
   }
 
   async _saveStory(storyId, story) {
-    const statePath = this.getStatePath(storyId);
-    const tempPath = `${statePath}.tmp`;
+    return this._queueStorySave(storyId, async () => {
+      const statePath = this.getStatePath(storyId);
+      const tempPath = this._buildTempStatePath(statePath);
 
-    try {
-      await fs.mkdir(path.dirname(statePath), { recursive: true });
-      await fs.writeFile(tempPath, JSON.stringify(story, null, 2), 'utf8');
-      await fs.rename(tempPath, statePath);
-    } catch (error) {
       try {
-        await fs.unlink(tempPath);
-      } catch {}
-      throw error;
-    }
+        await fs.mkdir(path.dirname(statePath), { recursive: true });
+        await fs.writeFile(tempPath, JSON.stringify(story, null, 2), 'utf8');
+        await fs.rename(tempPath, statePath);
+      } catch (error) {
+        try {
+          await fs.unlink(tempPath);
+        } catch {}
+        throw error;
+      }
+    });
+  }
+
+  _buildTempStatePath(statePath) {
+    return `${statePath}.${process.pid}.${Date.now()}.${uuidv4().replace(/-/g, '').substring(0, 8)}.tmp`;
+  }
+
+  _queueStorySave(storyId, saveOperation) {
+    const previous = this.saveQueues.get(storyId) || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(saveOperation);
+
+    this.saveQueues.set(storyId, next);
+
+    return next.finally(() => {
+      if (this.saveQueues.get(storyId) === next) {
+        this.saveQueues.delete(storyId);
+      }
+    });
   }
 
   async deleteStory(storyId) {

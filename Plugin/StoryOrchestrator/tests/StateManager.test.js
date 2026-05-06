@@ -751,5 +751,78 @@ describe('StateManager', () => {
       await manager.updateStory(storyId, { status: 'updated' });
       assert.ok(mockFileData[statePath]);
     });
+
+    it('should use distinct temp file paths when concurrent saves target the same story', async () => {
+      const created = await manager.createStory('Test');
+      const storyId = created.id;
+      const tempWritePaths = [];
+      const originalMockWriteFile = fs.promises.writeFile;
+
+      fs.promises.writeFile = async (filePath, content, encoding) => {
+        tempWritePaths.push(filePath);
+        return originalMockWriteFile(filePath, content, encoding);
+      };
+
+      try {
+        await Promise.all([
+          manager._saveStory(storyId, { ...created, marker: 'first' }),
+          manager._saveStory(storyId, { ...created, marker: 'second' })
+        ]);
+      } finally {
+        fs.promises.writeFile = originalMockWriteFile;
+      }
+
+      const distinctTempPaths = new Set(tempWritePaths.filter((filePath) => filePath.includes('.tmp')));
+      assert.ok(distinctTempPaths.size >= 2);
+    });
+
+    it('should keep the state file parseable during concurrent writes for the same story', async () => {
+      const created = await manager.createStory('Test');
+      const storyId = created.id;
+      const realStatePath = path.join(tempDir, `${storyId}.json`);
+      const realTempPath = `${realStatePath}.tmp`;
+
+      manager.getStatePath = () => realStatePath;
+
+      restoreFs();
+      await fs.promises.mkdir(path.dirname(realStatePath), { recursive: true });
+
+      const originalWrite = fs.promises.writeFile;
+      fs.promises.writeFile = async (filePath, content, encoding) => {
+        await originalWrite(filePath, content, encoding);
+
+        // Delay one writer after the temp file is written so another concurrent
+        // save can reuse the same temp path and expose race conditions.
+        if (filePath === realTempPath && String(content).includes('"marker": "slow"')) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      };
+
+      const fastStory = {
+        ...created,
+        marker: 'fast',
+        payload: 'F'.repeat(2048)
+      };
+      const slowStory = {
+        ...created,
+        marker: 'slow',
+        payload: 'S'.repeat(60000)
+      };
+
+      try {
+        const writes = [];
+        for (let i = 0; i < 20; i++) {
+          writes.push(manager._saveStory(storyId, slowStory));
+          writes.push(manager._saveStory(storyId, fastStory));
+        }
+
+        await Promise.allSettled(writes);
+
+        const persisted = await fs.promises.readFile(realStatePath, 'utf8');
+        assert.doesNotThrow(() => JSON.parse(persisted));
+      } finally {
+        fs.promises.writeFile = originalWrite;
+      }
+    });
   });
 });
