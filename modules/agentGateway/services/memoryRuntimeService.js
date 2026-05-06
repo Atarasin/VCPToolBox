@@ -11,6 +11,9 @@ const {
 const {
     createAuditLogger
 } = require('../infra/auditLogger');
+const {
+    resolveConfiguredAgentMemoryPolicy
+} = require('../policy/mcpAgentMemoryPolicy');
 
 function normalizeMemoryString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -146,7 +149,7 @@ function getRagConfig(pluginManager) {
     };
 }
 
-function buildAgentAliases(agentId, maid) {
+function buildAgentAliases(agentId) {
     const aliases = new Set();
     const addAlias = (value) => {
         const normalizedValue = normalizeMemoryString(value);
@@ -162,12 +165,11 @@ function buildAgentAliases(agentId, maid) {
     };
 
     addAlias(agentId);
-    addAlias(maid);
     return aliases;
 }
 
-function collectConfiguredDiaries(agentId, maid, ragConfig) {
-    const agentAliases = buildAgentAliases(agentId, maid);
+function collectConfiguredDiaries(agentId, ragConfig) {
+    const agentAliases = buildAgentAliases(agentId);
     const configuredDiaries = new Set();
 
     for (const alias of agentAliases) {
@@ -185,7 +187,7 @@ function collectConfiguredDiaries(agentId, maid, ragConfig) {
     };
 }
 
-function isDiaryAllowed({ diaryName, agentId, maid, ragConfig }) {
+function isDiaryAllowed({ diaryName, agentId, ragConfig }) {
     const normalizedDiaryName = normalizeMemoryString(diaryName);
     if (!normalizedDiaryName) {
         return false;
@@ -194,7 +196,7 @@ function isDiaryAllowed({ diaryName, agentId, maid, ragConfig }) {
         return true;
     }
 
-    const { agentAliases, configuredDiaries } = collectConfiguredDiaries(agentId, maid, ragConfig);
+    const { agentAliases, configuredDiaries } = collectConfiguredDiaries(agentId, ragConfig);
     if (configuredDiaries.size > 0) {
         return configuredDiaries.has(normalizedDiaryName);
     }
@@ -256,16 +258,16 @@ function resolveMemoryDateParts(timestampValue) {
     };
 }
 
-function buildMemoryWriteMaid({ diaryName, target, requestContext }) {
+function buildMemoryWriteMaid({ diaryName, agentId }) {
+    const configuredPolicy = resolveConfiguredAgentMemoryPolicy({ agentId });
+    const configuredMaid = normalizeMemoryString(configuredPolicy.maid);
+    if (!configuredMaid) {
+        return '';
+    }
     const requestedAuthor = normalizeMemoryString(
-        target?.maid ||
-        target?.author ||
-        target?.agent ||
-        requestContext?.agentId ||
-        requestContext?.source
-    ) || 'OpenClaw';
-    const normalizedAuthor = requestedAuthor.replace(/^\[[^\]]*\]/, '').trim() || 'OpenClaw';
-    return `[${diaryName}]${normalizedAuthor}`;
+        configuredMaid
+    );
+    return `[${diaryName}]${requestedAuthor}`;
 }
 
 function normalizeMemoryMetadata(metadata) {
@@ -426,7 +428,6 @@ function createMemoryRuntimeService(deps = {}) {
                 ? authContextResolver({
                     authContext: body?.authContext,
                     requestContext,
-                    maid: body?.target?.maid,
                     adapter: requestContext.runtime
                 })
                 : requestContext;
@@ -498,7 +499,7 @@ function createMemoryRuntimeService(deps = {}) {
                     });
                 } else {
                     const ragConfig = getRagConfig(pluginManager);
-                    if (!isDiaryAllowed({ diaryName: targetDiary, agentId, maid: target.maid, ragConfig })) {
+                    if (!isDiaryAllowed({ diaryName: targetDiary, agentId, ragConfig })) {
                         throw new Error('Requested diary target is not allowed for this agent');
                     }
                 }
@@ -587,9 +588,21 @@ function createMemoryRuntimeService(deps = {}) {
             try {
                 const maid = buildMemoryWriteMaid({
                     diaryName: targetDiary,
-                    target,
-                    requestContext
+                    agentId
                 });
+                if (!maid) {
+                    return {
+                        success: false,
+                        requestId,
+                        status: 500,
+                        code: OPENCLAW_ERROR_CODES.MEMORY_WRITE_ERROR,
+                        error: 'Configured memory write maid is required for this agent',
+                        details: {
+                            agentId,
+                            policySource: 'mcp_agent_memory_policy'
+                        }
+                    };
+                }
                 const content = buildMemoryWriteContent({
                     text: memoryText,
                     timeLabel,

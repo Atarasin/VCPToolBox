@@ -158,8 +158,7 @@ function cloneToolInvocationResult(result, requestId) {
 function createBridgeRequestBody(args, requestContext, bridgeToolName) {
     return {
         target: {
-            diary: args.diary,
-            maid: args.maid
+            diary: args.diary
         },
         memory: {
             text: args.text,
@@ -221,7 +220,6 @@ function createToolRuntimeService(deps = {}) {
                 ? authContextResolver({
                     authContext: body?.authContext,
                     requestContext,
-                    maid: body?.maid,
                     adapter: requestContext.runtime
                 })
                 : requestContext;

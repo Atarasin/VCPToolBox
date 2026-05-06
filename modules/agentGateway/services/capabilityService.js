@@ -150,7 +150,7 @@ function getToolTimeoutMs(plugin) {
     return Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : 0;
 }
 
-function buildAgentAliases(agentId, maid) {
+function buildAgentAliases(agentId) {
     const aliases = new Set();
     const addAlias = (value) => {
         const normalizedValue = normalizeCapabilityString(value);
@@ -166,12 +166,11 @@ function buildAgentAliases(agentId, maid) {
     };
 
     addAlias(agentId);
-    addAlias(maid);
     return aliases;
 }
 
-function collectConfiguredDiaries(agentId, maid, ragConfig) {
-    const agentAliases = buildAgentAliases(agentId, maid);
+function collectConfiguredDiaries(agentId, ragConfig) {
+    const agentAliases = buildAgentAliases(agentId);
     const configuredDiaries = new Set();
 
     for (const alias of agentAliases) {
@@ -189,7 +188,7 @@ function collectConfiguredDiaries(agentId, maid, ragConfig) {
     };
 }
 
-function resolveAllowedDiaries({ agentId, maid, availableDiaries, ragConfig }) {
+function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
     const normalizedDiaries = normalizeCapabilityStringArray(availableDiaries);
     if (normalizedDiaries.length === 0) {
         return [];
@@ -198,7 +197,7 @@ function resolveAllowedDiaries({ agentId, maid, availableDiaries, ragConfig }) {
         return normalizedDiaries;
     }
 
-    const { agentAliases, configuredDiaries } = collectConfiguredDiaries(agentId, maid, ragConfig);
+    const { agentAliases, configuredDiaries } = collectConfiguredDiaries(agentId, ragConfig);
     if (configuredDiaries.size > 0) {
         return normalizedDiaries.filter((diaryName) => configuredDiaries.has(diaryName));
     }
@@ -319,7 +318,7 @@ function createCapabilityService(deps = {}) {
         : null;
 
     return {
-        async getMemoryTargets({ agentId, maid, authContext }) {
+        async getMemoryTargets({ agentId, authContext }) {
             const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
             const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
             const resolvedAuthContext = authContextResolver
@@ -330,10 +329,9 @@ function createCapabilityService(deps = {}) {
                         source: 'capability-service',
                         runtime: 'gateway'
                     },
-                    maid,
                     adapter: 'gateway'
                 })
-                : { agentId, maid };
+                : { agentId };
             const allowedDiaries = agentPolicyResolver
                 ? (await agentPolicyResolver.resolvePolicy({
                     authContext: resolvedAuthContext,
@@ -341,7 +339,6 @@ function createCapabilityService(deps = {}) {
                 })).allowedDiaryNames
                 : resolveAllowedDiaries({
                     agentId,
-                    maid,
                     availableDiaries,
                     ragConfig: getRagConfig(pluginManager)
                 });
@@ -351,7 +348,7 @@ function createCapabilityService(deps = {}) {
                 .sort((left, right) => left.localeCompare(right))
                 .map((diaryName) => createTargetDescriptor(diaryName));
         },
-        async getCapabilities({ agentId, maid, includeMemoryTargets = true, authContext }) {
+        async getCapabilities({ agentId, includeMemoryTargets = true, authContext }) {
             const ragPlugin = getRagPlugin(pluginManager);
             const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
             const resolvedAuthContext = authContextResolver
@@ -362,17 +359,16 @@ function createCapabilityService(deps = {}) {
                         source: 'capability-service',
                         runtime: 'gateway'
                     },
-                    maid,
                     adapter: 'gateway'
                 })
-                : { agentId, maid };
+                : { agentId };
             const resolvedPolicy = agentPolicyResolver
                 ? await agentPolicyResolver.resolvePolicy({
                     authContext: resolvedAuthContext
                 })
                 : null;
             const memoryTargets = includeMemoryTargets
-                ? await this.getMemoryTargets({ agentId, maid, authContext: resolvedAuthContext })
+                ? await this.getMemoryTargets({ agentId, authContext: resolvedAuthContext })
                 : [];
 
             const tools = Array.from(pluginManager.plugins.values())

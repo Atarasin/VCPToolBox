@@ -370,8 +370,7 @@ function buildManagedToolContextInput(input, args) {
                 ...((input.requestContext && typeof input.requestContext === 'object') ? input.requestContext : {})
             }
             : input.requestContext,
-        authContext: input.authContext || args.authContext,
-        maid: input.maid || args.maid || args.target?.maid || input.requestContext?.maid
+        authContext: input.authContext || args.authContext
     };
 }
 
@@ -428,11 +427,7 @@ function applyAgentDiaryPolicyToGatewayArgs(name, args, input = {}) {
         contextInput.agentId || contextInput.requestContext?.agentId || process.env.VCP_MCP_DEFAULT_AGENT_ID,
         256
     );
-    const maid = normalizeMcpString(
-        contextInput.maid || contextInput.requestContext?.maid || agentId,
-        256
-    );
-    const policy = resolveConfiguredAgentMemoryPolicy({ agentId, maid });
+    const policy = resolveConfiguredAgentMemoryPolicy({ agentId });
 
     if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
         return {
@@ -540,7 +535,6 @@ function buildMcpContexts(bundle, input = {}, defaultSource) {
         ? input.requestContext
         : {};
     const agentId = normalizeMcpString(input.agentId || requestInput.agentId);
-    const maid = normalizeMcpString(input.maid || requestInput.maid || agentId);
     const sessionId = normalizeMcpString(input.sessionId || requestInput.sessionId);
     const requestContext = normalizeRequestContext({
         ...requestInput,
@@ -557,12 +551,10 @@ function buildMcpContexts(bundle, input = {}, defaultSource) {
         authContext: input.authContext,
         requestContext,
         agentId: requestContext.agentId,
-        maid,
         adapter: 'mcp'
     });
 
     return {
-        maid,
         requestContext,
         authContext
     };
@@ -678,7 +670,7 @@ async function executeGatewayManagedOperation({
     execute
 }) {
     const contextInput = buildManagedToolContextInput(input, args);
-    const { maid, requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
+    const { requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
     if (requiresJobIdentity) {
         ensureJobIdentity(requestContext, authContext, `tools/call:${name}`);
     } else if (requiresAgentOnly) {
@@ -691,7 +683,6 @@ async function executeGatewayManagedOperation({
         ...args,
         authContext,
         requestContext,
-        maid,
         options: {
             ...((args.options && typeof args.options === 'object') ? args.options : {}),
             ...((input.options && typeof input.options === 'object') ? input.options : {})
@@ -718,7 +709,6 @@ async function executeGatewayManagedOperation({
     try {
         result = await execute({
             body,
-            maid,
             requestContext,
             authContext,
             operationControl
@@ -1037,13 +1027,12 @@ function createMcpAdapter(pluginManager, options = {}) {
         supportedPromptNames: gatewayManagedPrompts.map((prompt) => prompt.name),
         async listTools(input = {}) {
             const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, pluginManager));
-            const { maid, requestContext, authContext } = buildMcpContexts(bundle, scopedInput, 'mcp-tools-list');
+            const { requestContext, authContext } = buildMcpContexts(bundle, scopedInput, 'mcp-tools-list');
             let publishedTools = [...gatewayManagedTools];
 
             if (requestContext.agentId) {
                 const capabilities = await capabilityService.getCapabilities({
                     agentId: requestContext.agentId,
-                    maid,
                     includeMemoryTargets: false,
                     authContext
                 });
@@ -1134,7 +1123,6 @@ function createMcpAdapter(pluginManager, options = {}) {
                     args,
                     requestContext,
                     authContext,
-                    maid: input.maid,
                     options: input.options
                 },
                 startedAt: Date.now(),
@@ -1187,7 +1175,7 @@ function createMcpAdapter(pluginManager, options = {}) {
 
             const resourceAgentId = parsed.agentId || input.agentId || input.requestContext?.agentId;
             const { kind, agentId, jobId } = parsed;
-            const { maid, requestContext, authContext } = buildMcpContexts(bundle, {
+            const { requestContext, authContext } = buildMcpContexts(bundle, {
                 ...input,
                 ...(resourceAgentId ? { agentId: resourceAgentId } : {})
             }, 'mcp-resources-read');
@@ -1202,24 +1190,20 @@ function createMcpAdapter(pluginManager, options = {}) {
                 if (kind === MCP_RESOURCE_KINDS.CAPABILITIES) {
                     payload = await capabilityService.getCapabilities({
                         agentId,
-                        maid,
                         includeMemoryTargets: true,
                         authContext
                     });
                 } else if (kind === MCP_RESOURCE_KINDS.MEMORY_TARGETS) {
                     payload = await capabilityService.getMemoryTargets({
                         agentId,
-                        maid,
                         authContext
                     });
                 } else if (kind === MCP_RESOURCE_KINDS.AGENT_PROFILE) {
                     payload = await agentRegistryService.getAgentProfile(agentId, {
-                        maid,
                         authContext
                     });
                 } else if (kind === MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE) {
                     payload = await agentRegistryService.getPromptTemplatePreview(agentId, {
-                        maid,
                         authContext
                     });
                 } else if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {

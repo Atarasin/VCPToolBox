@@ -114,7 +114,6 @@ function createAuthContextSchema() {
             requestId: { type: 'string' },
             sessionId: { type: 'string' },
             agentId: { type: 'string' },
-            maid: { type: 'string' },
             source: { type: 'string' },
             runtime: { type: 'string' },
             adapter: { type: 'string' },
@@ -341,7 +340,6 @@ function createPublishedOpenApiDocument() {
                     operationId: 'getAgentGatewayCapabilities',
                     parameters: [
                         { $ref: '#/components/parameters/AgentIdQuery' },
-                        { $ref: '#/components/parameters/MaidQuery' },
                         {
                             name: 'includeMemoryTargets',
                             in: 'query',
@@ -437,7 +435,6 @@ function createPublishedOpenApiDocument() {
                     operationId: 'listAgentGatewayMemoryTargets',
                     parameters: [
                         { $ref: '#/components/parameters/AgentIdQuery' },
-                        { $ref: '#/components/parameters/MaidQuery' },
                         { $ref: '#/components/parameters/RequestIdQuery' },
                         { $ref: '#/components/parameters/SourceQuery' },
                         { $ref: '#/components/parameters/RuntimeQuery' }
@@ -707,12 +704,6 @@ function createPublishedOpenApiDocument() {
                 },
                 JobIdQuery: {
                     name: 'jobId',
-                    in: 'query',
-                    required: false,
-                    schema: { type: 'string' }
-                },
-                MaidQuery: {
-                    name: 'maid',
                     in: 'query',
                     required: false,
                     schema: { type: 'string' }
@@ -1416,7 +1407,6 @@ function createPublishedOpenApiDocument() {
                         query: { type: 'string' },
                         diary: { type: 'string' },
                         diaries: { type: 'array', items: { type: 'string' } },
-                        maid: { type: 'string' },
                         mode: {
                             type: 'string',
                             enum: ['rag', 'hybrid', 'auto']
@@ -1466,8 +1456,7 @@ function createPublishedOpenApiDocument() {
                             type: 'object',
                             required: ['diary'],
                             properties: {
-                                diary: { type: 'string' },
-                                maid: { type: 'string' }
+                                diary: { type: 'string' }
                             }
                         },
                         memory: {
@@ -1530,7 +1519,6 @@ function createPublishedOpenApiDocument() {
                         },
                         diary: { type: 'string' },
                         diaries: { type: 'array', items: { type: 'string' } },
-                        maid: { type: 'string' },
                         mode: {
                             type: 'string',
                             enum: ['rag', 'hybrid', 'auto']
@@ -1582,7 +1570,6 @@ function createPublishedOpenApiDocument() {
                             type: 'object',
                             additionalProperties: true
                         },
-                        maid: { type: 'string' },
                         options: {
                             type: 'object',
                             properties: {
@@ -1655,7 +1642,6 @@ function createPublishedOpenApiDocument() {
                 JobCancelRequest: {
                     type: 'object',
                     properties: {
-                        maid: { type: 'string' },
                         requestContext: { $ref: '#/components/schemas/RequestContext' },
                         authContext: { $ref: '#/components/schemas/AuthContext' }
                     }

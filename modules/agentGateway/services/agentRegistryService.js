@@ -448,13 +448,11 @@ function createAgentRegistryService(deps = {}) {
         const [capabilities, memoryTargets] = await Promise.all([
             capabilityService.getCapabilities({
                 agentId,
-                maid: options.maid || agentId,
                 includeMemoryTargets: false,
                 authContext: options.authContext
             }),
             capabilityService.getMemoryTargets({
                 agentId,
-                maid: options.maid || agentId,
                 authContext: options.authContext
             })
         ]);

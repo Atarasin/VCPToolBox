@@ -29,17 +29,15 @@ test('authContextResolver builds canonical transitional auth context', () => {
             source: 'agent-gateway-tool',
             runtime: 'native'
         },
-        maid: 'Nova',
         adapter: 'native'
     });
 
     assert.equal(authContext.requestId, 'req-auth-001');
     assert.equal(authContext.sessionId, 'sess-auth-001');
     assert.equal(authContext.agentId, 'agent.nova');
-    assert.equal(authContext.maid, 'Nova');
     assert.equal(authContext.authMode, 'admin_transition');
     assert.equal(authContext.isTransitionalAuth, true);
-    assert.deepEqual(authContext.agentIdentity.aliases.includes('Nova'), true);
+    assert.deepEqual(authContext.agentIdentity.aliases.includes('agent.nova'), true);
     assert.equal(authContext.gatewayIdentity.adapter, 'native');
 });
 
@@ -58,7 +56,6 @@ test('authContextResolver builds canonical dedicated gateway auth context', () =
             gatewayId: 'gw-nova',
             roles: ['gateway_client']
         },
-        maid: 'Nova',
         adapter: 'native'
     });
 
@@ -228,6 +225,56 @@ test('agentPolicyResolver keeps allowed canonical diary scopes even before diari
             diaryName: '阿里阿德涅的知识日记本',
             authContext
         }), true);
+    } finally {
+        if (previousPolicyPath === undefined) {
+            delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        } else {
+            process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPolicyPath;
+        }
+    }
+});
+
+test('agentPolicyResolver resolves MCP memory policy strictly by agentId', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agw-policy-agentid-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+    const previousPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+
+    await fs.writeFile(policyPath, JSON.stringify({
+        agents: {
+            MCPMidas: {
+                allowedDiaries: [
+                    '迈达斯日记本',
+                    '迈达斯量化工程日记本'
+                ],
+                defaultDiaries: [
+                    '迈达斯日记本'
+                ]
+            }
+        }
+    }, null, 2), 'utf8');
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+
+    try {
+        const pluginManager = createPluginManager();
+        const resolver = createAgentPolicyResolver({ pluginManager });
+        const authContext = resolveAuthContext({
+            requestContext: {
+                requestId: 'req-auth-005',
+                sessionId: 'sess-auth-005',
+                agentId: 'MCPMidas',
+                source: 'mcp',
+                runtime: 'mcp'
+            }
+        });
+
+        const policy = await resolver.resolvePolicy({
+            authContext,
+            availableDiaries: []
+        });
+
+        assert.deepEqual(policy.allowedDiaryNames, ['迈达斯', '迈达斯量化工程']);
+        assert.deepEqual(policy.defaultDiaryNames, ['迈达斯']);
+        assert.equal(policy.policySource, 'mcp_agent_memory_policy');
     } finally {
         if (previousPolicyPath === undefined) {
             delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;

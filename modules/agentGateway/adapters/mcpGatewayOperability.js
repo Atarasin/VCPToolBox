@@ -29,10 +29,6 @@ function buildGatewayManagedClientPayload(input = {}, args = {}) {
     if (input.authContext && typeof input.authContext === 'object' && !Array.isArray(input.authContext)) {
         payload.authContext = input.authContext;
     }
-    if (typeof input.maid === 'string' && input.maid.trim()) {
-        payload.maid = input.maid.trim();
-    }
-
     return payload;
 }
 

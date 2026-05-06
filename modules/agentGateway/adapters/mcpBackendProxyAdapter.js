@@ -494,8 +494,7 @@ function applyAgentDiaryPolicyToBody(name, body = {}) {
     }
 
     const agentId = normalizeMcpString(body?.requestContext?.agentId || body?.agentId, 256);
-    const maid = normalizeMcpString(body?.maid || body?.requestContext?.maid || agentId, 256);
-    const policy = resolveConfiguredAgentMemoryPolicy({ agentId, maid });
+    const policy = resolveConfiguredAgentMemoryPolicy({ agentId });
 
     if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
         return {
@@ -587,7 +586,6 @@ function buildBody(input, args, { requireSession = true, defaultAgentId = '', de
     return {
         ...(args && typeof args === 'object' ? args : {}),
         ...(input?.authContext ? { authContext: input.authContext } : {}),
-        ...(input?.maid ? { maid: input.maid } : {}),
         requestContext
     };
 }
@@ -605,7 +603,6 @@ function buildJobQuery(input, args, defaultAgentId = '', defaultSessionId = 'mcp
         agentId: normalizeMcpString(input?.agentId || args?.agentId || requestContext.agentId || authContext.agentId || defaultAgentId, 256),
         sessionId: normalizeMcpString(input?.sessionId || args?.sessionId || requestContext.sessionId || authContext.sessionId || defaultSessionId, 256),
         gatewayId: normalizeMcpString(requestContext.gatewayId || authContext.gatewayId, 256),
-        maid: normalizeMcpString(input?.maid || requestContext.maid || authContext.maid, 256),
         jobId: normalizeMcpString(args?.jobId, 256)
     };
 }
@@ -854,8 +851,7 @@ function createBackendProxyMcpAdapter({
                 }, 'resources/read', defaultAgentId);
                 const response = await backendClient.getMemoryTargets({
                     agentId,
-                    requestId: normalizeMcpString(input.requestContext?.requestId, 128),
-                    maid: normalizeMcpString(input.maid || input.requestContext?.maid, 256)
+                    requestId: normalizeMcpString(input.requestContext?.requestId, 128)
                 }, input.signal ? { signal: input.signal } : undefined);
                 const result = normalizeNativeResult(response);
                 if (!result.success) {

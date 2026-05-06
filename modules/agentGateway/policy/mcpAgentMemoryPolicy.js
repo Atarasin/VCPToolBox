@@ -96,14 +96,17 @@ function normalizeAgentMemoryPolicyEntry(entry) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
         return {
             allowedDiaries: [],
-            defaultDiaries: []
+            defaultDiaries: [],
+            maid: ''
         };
     }
     const allowedDiaries = normalizePolicyStringArray(entry.allowedDiaries || entry.allowedDiaryNames);
     const defaultDiaries = normalizePolicyStringArray(entry.defaultDiaries || entry.defaultDiaryNames);
+    const maid = normalizePolicyString(entry.maid || entry.memoryWriteMaid || entry.author);
     return {
         allowedDiaries,
-        defaultDiaries: defaultDiaries.length > 0 ? defaultDiaries : allowedDiaries
+        defaultDiaries: defaultDiaries.length > 0 ? defaultDiaries : allowedDiaries,
+        maid
     };
 }
 
@@ -147,9 +150,9 @@ function loadAgentMemoryPolicyConfig() {
     }
 }
 
-function resolveConfiguredAgentMemoryPolicy({ agentId, maid } = {}) {
+function resolveConfiguredAgentMemoryPolicy({ agentId } = {}) {
     const config = loadAgentMemoryPolicyConfig();
-    const agentAliases = buildAgentAliases(agentId, maid);
+    const agentAliases = buildAgentAliases(agentId);
 
     for (const alias of agentAliases) {
         const matched = normalizeAgentMemoryPolicyEntry(config.agents?.[alias]);
@@ -157,7 +160,8 @@ function resolveConfiguredAgentMemoryPolicy({ agentId, maid } = {}) {
             return {
                 matchedAlias: alias,
                 allowedDiaryNames: matched.allowedDiaries,
-                defaultDiaryNames: matched.defaultDiaries
+                defaultDiaryNames: matched.defaultDiaries,
+                maid: matched.maid
             };
         }
     }
@@ -167,14 +171,16 @@ function resolveConfiguredAgentMemoryPolicy({ agentId, maid } = {}) {
         return {
             matchedAlias: '*',
             allowedDiaryNames: wildcardEntry.allowedDiaries,
-            defaultDiaryNames: wildcardEntry.defaultDiaries
+            defaultDiaryNames: wildcardEntry.defaultDiaries,
+            maid: wildcardEntry.maid
         };
     }
 
     return {
         matchedAlias: '',
         allowedDiaryNames: [],
-        defaultDiaryNames: []
+        defaultDiaryNames: [],
+        maid: ''
     };
 }
 

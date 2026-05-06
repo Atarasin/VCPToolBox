@@ -55,7 +55,7 @@ test('CapabilityService builds compatible capabilities and scope-filtered target
     assert.equal(chromeBridge.invocationCommands.length, 2);
 });
 
-test('CapabilityService derives memory targets from maid aliases when explicit policy exists', async () => {
+test('CapabilityService derives memory targets from direct agentId mappings when explicit policy exists', async () => {
     const pluginManager = createPluginManager({
         openClawBridgeConfig: {
             rag: {
@@ -69,8 +69,7 @@ test('CapabilityService derives memory targets from maid aliases when explicit p
     const service = createCapabilityService({ pluginManager });
 
     const targets = await service.getMemoryTargets({
-        agentId: 'agent.unknown',
-        maid: 'Nova'
+        agentId: 'Nova'
     });
 
     assert.deepEqual(targets.map((target) => target.id), ['Nova']);

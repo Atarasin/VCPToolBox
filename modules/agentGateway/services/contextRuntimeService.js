@@ -157,7 +157,7 @@ function getRagConfig(pluginManager) {
     };
 }
 
-function buildAgentAliases(agentId, maid) {
+function buildAgentAliases(agentId) {
     const aliases = new Set();
     const addAlias = (value) => {
         const normalizedValue = normalizeContextString(value);
@@ -173,12 +173,11 @@ function buildAgentAliases(agentId, maid) {
     };
 
     addAlias(agentId);
-    addAlias(maid);
     return aliases;
 }
 
-function collectConfiguredDiaries(agentId, maid, ragConfig) {
-    const agentAliases = buildAgentAliases(agentId, maid);
+function collectConfiguredDiaries(agentId, ragConfig) {
+    const agentAliases = buildAgentAliases(agentId);
     const configuredDiaries = new Set();
 
     for (const alias of agentAliases) {
@@ -196,7 +195,7 @@ function collectConfiguredDiaries(agentId, maid, ragConfig) {
     };
 }
 
-function resolveAllowedDiaries({ agentId, maid, availableDiaries, ragConfig }) {
+function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
     const normalizedDiaries = normalizeContextStringArray(availableDiaries);
     if (normalizedDiaries.length === 0) {
         return [];
@@ -205,7 +204,7 @@ function resolveAllowedDiaries({ agentId, maid, availableDiaries, ragConfig }) {
         return normalizedDiaries;
     }
 
-    const { agentAliases, configuredDiaries } = collectConfiguredDiaries(agentId, maid, ragConfig);
+    const { agentAliases, configuredDiaries } = collectConfiguredDiaries(agentId, ragConfig);
     if (configuredDiaries.size > 0) {
         return normalizedDiaries.filter((diaryName) => configuredDiaries.has(diaryName));
     }
@@ -609,7 +608,6 @@ async function collectRagItems({
     requestedDiaries,
     adapterAppliedDefaultDiaryPolicy = false,
     agentId,
-    maid,
     authContext,
     ragOptions,
     embeddingUtilsLoader,
@@ -628,7 +626,6 @@ async function collectRagItems({
         ? resolvedPolicy.allowedDiaryNames
         : resolveAllowedDiaries({
             agentId,
-            maid,
             availableDiaries,
             ragConfig: getRagConfig(pluginManager)
         });
@@ -849,13 +846,11 @@ function createContextRuntimeService(deps = {}) {
         async search({ body, startedAt, defaultSource }) {
             const query = normalizeContextString(body?.query);
             const { diary, diaries: requestedDiaries } = resolveDiarySelection(body);
-            const maid = normalizeContextString(body?.maid);
             const requestContext = normalizeContextRequestContext(body?.requestContext, defaultSource);
             const authContext = authContextResolver
                 ? authContextResolver({
                     authContext: body?.authContext,
                     requestContext,
-                    maid,
                     adapter: requestContext.runtime
                 })
                 : requestContext;
@@ -913,7 +908,6 @@ function createContextRuntimeService(deps = {}) {
                     requestedDiaries,
                     adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true,
                     agentId,
-                    maid,
                     authContext,
                     ragOptions,
                     embeddingUtilsLoader,
@@ -988,7 +982,6 @@ function createContextRuntimeService(deps = {}) {
                 ? authContextResolver({
                     authContext: body?.authContext,
                     requestContext,
-                    maid: body?.maid,
                     adapter: requestContext.runtime
                 })
                 : requestContext;
@@ -996,7 +989,6 @@ function createContextRuntimeService(deps = {}) {
             const agentId = normalizeContextString(body?.agentId || requestContext.agentId);
             const sessionId = normalizeContextString(body?.sessionId || requestContext.sessionId);
             const source = requestContext.source;
-            const maid = normalizeContextString(body?.maid);
             const { diary, diaries: requestedDiaries } = resolveDiarySelection(body);
             const query = buildRecallQuery(body);
             const maxBlocks = parseContextInteger(body?.maxBlocks, DEFAULT_CONTEXT_MAX_BLOCKS, 1, MAX_RAG_K);
@@ -1067,7 +1059,6 @@ function createContextRuntimeService(deps = {}) {
                     requestedDiaries,
                     adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true,
                     agentId,
-                    maid,
                     authContext,
                     ragOptions,
                     embeddingUtilsLoader,

@@ -19,7 +19,7 @@ function normalizeAuthStringArray(value) {
     return [];
 }
 
-function buildAgentAliases(agentId, maid) {
+function buildAgentAliases(agentId) {
     const aliases = new Set();
     const addAlias = (value) => {
         const normalizedValue = normalizeAuthString(value);
@@ -35,7 +35,6 @@ function buildAgentAliases(agentId, maid) {
     };
 
     addAlias(agentId);
-    addAlias(maid);
     return Array.from(aliases);
 }
 
@@ -57,10 +56,6 @@ function resolveAuthContext(input = {}, options = {}) {
     );
     const agentId = normalizeAuthString(
         providedAuthContext.agentId || input.agentId || requestContext.agentId,
-        128
-    );
-    const maid = normalizeAuthString(
-        providedAuthContext.maid || input.maid || requestContext.maid,
         128
     );
     const sessionId = normalizeAuthString(
@@ -105,7 +100,6 @@ function resolveAuthContext(input = {}, options = {}) {
         requestId,
         sessionId,
         agentId,
-        maid,
         source,
         runtime,
         adapter,
@@ -125,8 +119,7 @@ function resolveAuthContext(input = {}, options = {}) {
         },
         agentIdentity: {
             id: agentId,
-            maid,
-            aliases: buildAgentAliases(agentId, maid)
+            aliases: buildAgentAliases(agentId)
         },
         sessionIdentity: {
             id: sessionId,

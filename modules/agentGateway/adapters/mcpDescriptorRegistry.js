@@ -181,19 +181,32 @@ function createGatewayManagedToolDescriptors({
                 additionalProperties: false,
                 required: ['agentId'],
                 properties: {
-                    agentId: { type: 'string' },
+                    agentId: {
+                        type: 'string',
+                        description: 'Target agent identifier used to resolve the rendered bootstrap prompt.'
+                    },
                     variables: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Optional prompt template variables applied before rendering.'
                     },
-                    model: { type: 'string' },
-                    maxLength: { type: 'integer', minimum: 1 },
+                    model: {
+                        type: 'string',
+                        description: 'Optional model identifier forwarded to the render behavior.'
+                    },
+                    maxLength: {
+                        type: 'integer',
+                        minimum: 1,
+                        description: 'Optional maximum length for the rendered prompt output.'
+                    },
                     context: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Optional extra render context merged into the prompt rendering input.'
                     },
                     messages: {
                         type: 'array',
+                        description: 'Optional recent conversation messages used as render context.',
                         items: {
                             type: 'object',
                             additionalProperties: true
@@ -211,7 +224,10 @@ function createGatewayManagedToolDescriptors({
                 additionalProperties: false,
                 required: ['jobId'],
                 properties: {
-                    jobId: { type: 'string' }
+                    jobId: {
+                        type: 'string',
+                        description: 'Canonical Agent Gateway job identifier to read.'
+                    }
                 }
             }
         }),
@@ -224,7 +240,10 @@ function createGatewayManagedToolDescriptors({
                 additionalProperties: false,
                 required: ['jobId'],
                 properties: {
-                    jobId: { type: 'string' }
+                    jobId: {
+                        type: 'string',
+                        description: 'Canonical Agent Gateway job identifier to cancel.'
+                    }
                 }
             }
         }),
@@ -237,25 +256,53 @@ function createGatewayManagedToolDescriptors({
                 additionalProperties: false,
                 required: ['query'],
                 properties: {
-                    query: { type: 'string' },
-                    diary: { type: 'string' },
+                    agentId: {
+                        type: 'string',
+                        description: 'Agent identifier used to resolve diary access policy for this search.'
+                    },
+                    query: {
+                        type: 'string',
+                        description: 'Search query used to retrieve relevant memory entries.'
+                    },
+                    diary: {
+                        type: 'string',
+                        description: 'Optional single diary target. Automatically merged into `diaries` when provided.'
+                    },
                     diaries: {
                         type: 'array',
+                        description: 'Optional explicit list of diary targets to search within.',
                         items: { type: 'string' }
                     },
-                    maid: { type: 'string' },
                     mode: {
                         type: 'string',
-                        enum: ['rag', 'hybrid', 'auto']
+                        enum: ['rag', 'hybrid', 'auto'],
+                        description: 'Retrieval mode: `rag` uses baseline retrieval, `hybrid` enables the richer retrieval defaults, and `auto` is currently reserved for future automatic strategy selection.'
                     },
-                    k: { type: 'integer', minimum: 1 },
-                    timeAware: { type: 'boolean' },
-                    groupAware: { type: 'boolean' },
-                    rerank: { type: 'boolean' },
-                    tagMemo: { type: 'boolean' },
+                    k: {
+                        type: 'integer',
+                        minimum: 1,
+                        description: 'Maximum number of candidate memories to retrieve.'
+                    },
+                    timeAware: {
+                        type: 'boolean',
+                        description: 'Whether to apply time-aware retrieval heuristics.'
+                    },
+                    groupAware: {
+                        type: 'boolean',
+                        description: 'Whether to apply semantic group activation during retrieval.'
+                    },
+                    rerank: {
+                        type: 'boolean',
+                        description: 'Whether to rerank retrieved candidates before returning results.'
+                    },
+                    tagMemo: {
+                        type: 'boolean',
+                        description: 'Whether to boost matches using core memory tag signals.'
+                    },
                     options: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Optional adapter-specific search options.'
                     }
                 }
             }
@@ -268,31 +315,66 @@ function createGatewayManagedToolDescriptors({
                 type: 'object',
                 additionalProperties: false,
                 properties: {
-                    query: { type: 'string' },
+                    agentId: {
+                        type: 'string',
+                        description: 'Agent identifier used to resolve diary access policy for context assembly.'
+                    },
+                    query: {
+                        type: 'string',
+                        description: 'Optional explicit recall query. When omitted, the service derives one from `recentMessages`.'
+                    },
                     recentMessages: {
                         type: 'array',
+                        description: 'Optional recent messages used to derive the recall query and context.',
                         items: {
                             type: 'object',
                             additionalProperties: true
                         }
                     },
-                    diary: { type: 'string' },
+                    diary: {
+                        type: 'string',
+                        description: 'Optional single diary target. Automatically merged into `diaries` when provided.'
+                    },
                     diaries: {
                         type: 'array',
+                        description: 'Optional explicit list of diary targets to assemble context from.',
                         items: { type: 'string' }
                     },
-                    maid: { type: 'string' },
-                    maxBlocks: { type: 'integer', minimum: 1 },
-                    tokenBudget: { type: 'integer', minimum: 1 },
-                    minScore: { type: 'number' },
+                    maxBlocks: {
+                        type: 'integer',
+                        minimum: 1,
+                        description: 'Maximum number of recall blocks to return.'
+                    },
+                    tokenBudget: {
+                        type: 'integer',
+                        minimum: 1,
+                        description: 'Approximate token budget reserved for assembled recall context.'
+                    },
+                    minScore: {
+                        type: 'number',
+                        description: 'Minimum retrieval score threshold for keeping recall blocks.'
+                    },
                     mode: {
                         type: 'string',
-                        enum: ['rag', 'hybrid', 'auto']
+                        enum: ['rag', 'hybrid', 'auto'],
+                        description: 'Retrieval mode: `rag` uses baseline retrieval, `hybrid` enables the richer retrieval defaults, and `auto` is currently reserved for future automatic strategy selection.'
                     },
-                    timeAware: { type: 'boolean' },
-                    groupAware: { type: 'boolean' },
-                    rerank: { type: 'boolean' },
-                    tagMemo: { type: 'boolean' }
+                    timeAware: {
+                        type: 'boolean',
+                        description: 'Whether to apply time-aware retrieval heuristics.'
+                    },
+                    groupAware: {
+                        type: 'boolean',
+                        description: 'Whether to apply semantic group activation during retrieval.'
+                    },
+                    rerank: {
+                        type: 'boolean',
+                        description: 'Whether to rerank retrieved candidates before building recall blocks.'
+                    },
+                    tagMemo: {
+                        type: 'boolean',
+                        description: 'Whether to boost matches using core memory tag signals.'
+                    }
                 }
             }
         }),
@@ -305,35 +387,53 @@ function createGatewayManagedToolDescriptors({
                 additionalProperties: false,
                 required: ['target', 'memory'],
                 properties: {
+                    agentId: {
+                        type: 'string',
+                        description: 'Agent identifier used to resolve memory target policy and configured write maid.'
+                    },
                     target: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Write target definition. Typically contains the destination diary.'
                     },
                     memory: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Memory payload to persist, including text, tags, and optional metadata.'
                     },
                     metadata: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Optional top-level metadata shortcut merged into the memory payload.'
                     },
                     tags: {
                         type: 'array',
+                        description: 'Optional top-level tag shortcut merged into the memory payload.',
                         items: { type: 'string' }
                     },
-                    diary: { type: 'string' },
-                    text: { type: 'string' },
+                    diary: {
+                        type: 'string',
+                        description: 'Optional top-level diary shortcut merged into `target.diary`.'
+                    },
+                    text: {
+                        type: 'string',
+                        description: 'Optional top-level text shortcut merged into `memory.text`.'
+                    },
                     timestamp: {
                         oneOf: [
                             { type: 'string' },
                             { type: 'number' }
-                        ]
+                        ],
+                        description: 'Optional timestamp shortcut merged into `memory.timestamp`.'
                     },
-                    maid: { type: 'string' },
-                    idempotencyKey: { type: 'string' },
+                    idempotencyKey: {
+                        type: 'string',
+                        description: 'Optional idempotency key used to deduplicate repeated writes.'
+                    },
                     options: {
                         type: 'object',
-                        additionalProperties: true
+                        additionalProperties: true,
+                        description: 'Optional write controls such as deduplication and bridge tool settings.'
                     }
                 }
             }

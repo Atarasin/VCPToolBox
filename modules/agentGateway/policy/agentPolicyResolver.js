@@ -141,10 +141,9 @@ function filterAvailableDiaries(availableDiaries, allowedDiaryNames) {
 function resolveDiaryScopes({ authContext, availableDiaries, pluginManager }) {
     const ragConfig = getRagConfig(pluginManager);
     const policyConfig = getPolicyConfig(pluginManager);
-    const agentAliases = buildAgentAliases(authContext.agentId, authContext.maid);
+    const agentAliases = buildAgentAliases(authContext.agentId);
     const configuredMemoryPolicy = resolveConfiguredAgentMemoryPolicy({
-        agentId: authContext.agentId,
-        maid: authContext.maid
+        agentId: authContext.agentId
     });
     const explicitDiaryScopes = normalizePolicyStringArray(
         resolveAliasValue(policyConfig.agentPolicyMap, agentAliases, 'diaryScopes') ||
@@ -214,7 +213,7 @@ function resolveDiaryScopes({ authContext, availableDiaries, pluginManager }) {
 
 function resolveToolScopes({ authContext, pluginManager }) {
     const policyConfig = getPolicyConfig(pluginManager);
-    const agentAliases = buildAgentAliases(authContext.agentId, authContext.maid);
+    const agentAliases = buildAgentAliases(authContext.agentId);
     const explicitToolScopes = normalizePolicyStringArray(
         resolveAliasValue(policyConfig.agentPolicyMap, agentAliases, 'toolScopes')
     );

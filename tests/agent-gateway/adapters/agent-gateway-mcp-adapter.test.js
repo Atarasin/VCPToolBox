@@ -26,6 +26,7 @@ test.before(async () => {
     await fs.writeFile(policyPath, JSON.stringify({
         agents: {
             Ariadne: {
+                maid: 'Ariadne',
                 allowedDiaries: ['Nova', 'SharedMemory'],
                 defaultDiaries: ['Nova']
             }
@@ -288,8 +289,26 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(chromeBridgeTool.annotations.pluginType, 'hybridservice');
     assert.ok(bootstrapTool && bootstrapTool.inputSchema);
     assert.equal(bootstrapTool.annotations.gatewayManaged, true);
+    assert.equal(
+        bootstrapTool.inputSchema.properties.agentId.description,
+        'Target agent identifier used to resolve the rendered bootstrap prompt.'
+    );
     assert.ok(memorySearchTool && memorySearchTool.inputSchema);
     assert.equal(memorySearchTool.annotations.gatewayManaged, true);
+    assert.equal(
+        memorySearchTool.inputSchema.properties.query.description,
+        'Search query used to retrieve relevant memory entries.'
+    );
+    assert.equal(
+        memorySearchTool.inputSchema.properties.diaries.description,
+        'Optional explicit list of diary targets to search within.'
+    );
+    const memoryWriteTool = result.tools.find((tool) => tool.name === 'gateway_memory_write');
+    assert.ok(memoryWriteTool && memoryWriteTool.inputSchema);
+    assert.equal(
+        memoryWriteTool.inputSchema.properties.agentId.description,
+        'Agent identifier used to resolve memory target policy and configured write maid.'
+    );
 });
 
 test('MCP adapter executes agent bootstrap through shared render behavior and returns a concise summary', async () => {
