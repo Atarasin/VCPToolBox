@@ -308,7 +308,7 @@ class WorkflowKernel {
       return record;
     }
 
-    await this._runWorkflow(workflowId);
+    await this._runWorkflow(workflowId, continuation.resumeMode ? { resumeMode: continuation.resumeMode } : undefined);
     return record;
   }
 
@@ -371,7 +371,15 @@ class WorkflowKernel {
     }
 
     let runtime = active;
-    if (!runtime && record) {
+    const shouldRehydrateActiveRuntime = Boolean(runtime?.stateMachine?.isTerminal());
+    if (shouldRehydrateActiveRuntime) {
+      runtime = this._rehydrateWorkflow(
+        workflowId,
+        effectiveRecord,
+        runtime.definition || options.definition || { id: effectiveRecord.definitionRef, phases: [] },
+        EXECUTION_STATES.RECOVERING
+      );
+    } else if (!runtime && record) {
       const hydrated = this._rehydrateWorkflow(
         workflowId,
         effectiveRecord,
@@ -798,7 +806,8 @@ class WorkflowKernel {
       executionCursor: record.executionCursor,
       context: record.context,
       checkpointState: record.checkpointState,
-      retryContext: record.retryContext
+      retryContext: record.retryContext,
+      runToken: record.runToken
     });
 
     if (recoveryAction === 'rollback') {
@@ -907,13 +916,19 @@ class WorkflowKernel {
       });
 
       if (rejectionResolution.action === 'retry') {
-        this._rewindCursorForCheckpointRetry(record);
+        const retryPlan = this._resolveCheckpointRetryPlan(
+          record,
+          this.activeWorkflows.get(record.workflowId)?.definition,
+          resolvedCheckpoint
+        );
+        this._applyCheckpointRetryPlan(record, retryPlan);
         this._syncRetryContext(record, resolvedCheckpoint);
         return {
           kind: 'retry_previous_step',
           eventType: 'workflow.checkpoint_rejected',
           reason: 'checkpoint_rejected:retry',
-          rejectStrategy: rejectionResolution.action
+          rejectStrategy: rejectionResolution.action,
+          resumeMode: retryPlan.resumeMode
         };
       }
 
@@ -939,19 +954,91 @@ class WorkflowKernel {
     return actionMap[resolvedCheckpoint.action];
   }
 
-  _rewindCursorForCheckpointRetry(record) {
+  _resolveCheckpointRetryPlan(record, definition, resolvedCheckpoint) {
+    const recoveryState = normalizeRecoveryState(record);
+    const currentCursor = recoveryState.currentCursor || null;
     const phaseCursor = record.executionCursor.find((cursor) => cursor.phase !== undefined);
     const stepCursor = record.executionCursor.find((cursor) => cursor.step !== undefined);
-    if (!phaseCursor || !stepCursor) {
-      return;
+    const phaseIndex = currentCursor?.phaseIndex ?? phaseCursor?.phase ?? 0;
+    const checkpointStepIndex = currentCursor?.stepIndex ?? stepCursor?.step ?? -1;
+    const boundaries = Array.isArray(recoveryState.rollbackBoundaries) ? recoveryState.rollbackBoundaries : [];
+
+    const candidate = boundaries
+      .filter((boundary) => {
+        if (boundary.rollbackSafe === false) {
+          return false;
+        }
+        if (boundary.phaseIndex !== phaseIndex) {
+          return false;
+        }
+        if (!Number.isInteger(boundary.stepIndex) || boundary.stepIndex < 0) {
+          return false;
+        }
+        if ((boundary.stepIndex ?? -1) >= checkpointStepIndex) {
+          return false;
+        }
+        if (boundary.boundaryType === 'checkpoint_boundary') {
+          return false;
+        }
+        if (boundary.stepType === 'guard' || boundary.stepType === 'checkpoint') {
+          return false;
+        }
+        return Array.isArray(boundary.executionCursor);
+      })
+      .pop();
+
+    if (candidate) {
+      return {
+        executionCursor: candidate.executionCursor,
+        resumeMode: 'current',
+        cursor: {
+          phaseId: candidate.phaseId,
+          phaseIndex: candidate.phaseIndex,
+          stepId: candidate.stepId,
+          stepIndex: candidate.stepIndex,
+          boundaryType: candidate.boundaryType,
+          runToken: record.runToken,
+          resumeAction: 'resume_step',
+          rollbackSafe: true,
+          stepType: candidate.stepType || null,
+          executionCursor: candidate.executionCursor,
+          checkpointId: null,
+          source: 'checkpoint_retry',
+          updatedAt: new Date().toISOString(),
+          rejectedCheckpointId: resolvedCheckpoint.checkpointId
+        }
+      };
     }
 
-    // `_runWorkflow()` resumes from the step after the cursor, so we rewind
-    // to just before the preceding business step.
-    record.executionCursor = [
-      { phase: phaseCursor.phase },
-      { step: Math.max(stepCursor.step - 2, -1) }
-    ];
+    const phaseId = this._phaseIdFor(definition, phaseIndex);
+    return {
+      executionCursor: toBoundaryCursor(phaseIndex, -1),
+      resumeMode: 'next',
+      cursor: {
+        phaseId,
+        phaseIndex,
+        stepId: null,
+        stepIndex: -1,
+        boundaryType: 'phase_boundary',
+        runToken: record.runToken,
+        resumeAction: 'resume_next',
+        rollbackSafe: true,
+        stepType: null,
+        executionCursor: toBoundaryCursor(phaseIndex, -1),
+        checkpointId: null,
+        source: 'checkpoint_retry',
+        updatedAt: new Date().toISOString(),
+        rejectedCheckpointId: resolvedCheckpoint.checkpointId
+      }
+    };
+  }
+
+  _applyCheckpointRetryPlan(record, plan) {
+    record.executionCursor = plan.executionCursor;
+    this._commitRecoveryState(record, {
+      ...normalizeRecoveryState(record),
+      currentCursor: plan.cursor
+    });
   }
 
   _rewindCursorToPhaseStart(record) {

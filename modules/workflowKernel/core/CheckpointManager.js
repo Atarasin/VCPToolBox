@@ -122,6 +122,9 @@ class CheckpointManager {
     this.pollTimer = setInterval(() => {
       void this._checkExpired();
     }, this.pollIntervalMs);
+    if (typeof this.pollTimer.unref === 'function') {
+      this.pollTimer.unref();
+    }
   }
 
   _stopPollingIfEmpty() {

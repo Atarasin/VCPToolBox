@@ -1,8 +1,14 @@
 'use strict';
-const {
-  getCompatibilitySurface,
-  listCompatibilitySurfaces
-} = require('./CompatibilitySurfaceRegistry');
+
+const WORKFLOW_ENGINE_COMPATIBILITY_SURFACE = Object.freeze({
+  id: 'workflow-engine',
+  label: 'WorkflowEngine',
+  modulePath: 'Plugin/StoryOrchestrator/core/WorkflowEngine.js',
+  state: 'retain-as-shell',
+  replacementPath: 'WorkflowKernel control plane via StoryOrchestratorKernelAdapter',
+  rationale: 'Still exposes start/resume/recover/retry compatibility entrypoints and diagnostic delegation, but phase execution now belongs to WorkflowKernel and must not return to phase-class shells.',
+  readinessNote: 'Retention of WorkflowEngine as a shell does not imply thin reference plugin readiness.'
+});
 
 /**
  * WorkflowEngine - StoryOrchestrator 的兼容工作流外壳。
@@ -53,12 +59,25 @@ class WorkflowEngine {
     return Boolean(this.kernelAdapter);
   }
 
+  bindKernelAdapter(kernelAdapter) {
+    this.kernelAdapter = kernelAdapter || null;
+    return this;
+  }
+
+  createLegacyEventListener() {
+    return async (workflowId, event) => {
+      await this._notify(workflowId, event.eventType, event.payload);
+    };
+  }
+
   getCompatibilitySurfaceReport() {
-    return listCompatibilitySurfaces();
+    return [WorkflowEngine.compatibilitySurface];
   }
 
   getCompatibilitySurface(surfaceId) {
-    return getCompatibilitySurface(surfaceId);
+    return surfaceId === WorkflowEngine.compatibilitySurface.id
+      ? WorkflowEngine.compatibilitySurface
+      : null;
   }
 
   async initialize() {
@@ -73,27 +92,8 @@ class WorkflowEngine {
       await this.stateManager.initialize();
     }
 
-    try {
-      const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
-      this.kernelAdapter = new StoryOrchestratorKernelAdapter({
-        stateManager: this.stateManager,
-        agentDispatcher: this.agentDispatcher,
-        chapterOperations: this.chapterOperations,
-        contentValidator: this.contentValidator,
-        config: {
-          ...this.config,
-          // Supported runtime execution is adapter-owned even if callers still
-          // route through the compatibility facade.
-          USE_WORKFLOW_KERNEL: true
-        },
-        legacyEventListener: async (workflowId, event) => {
-          await this._notify(workflowId, event.eventType, event.payload);
-        }
-      });
+    if (this._hasKernelControlPlane() && typeof this.kernelAdapter.initialize === 'function') {
       await this.kernelAdapter.initialize();
-    } catch (err) {
-      console.error('[WorkflowEngine] Failed to initialize WorkflowKernel adapter:', err.message);
-      this.kernelAdapter = null;
     }
 
     this.initialized = true;
@@ -473,8 +473,6 @@ class WorkflowEngine {
   }
 }
 
-WorkflowEngine.compatibilitySurface = Object.freeze(
-  getCompatibilitySurface('workflow-engine') || {}
-);
+WorkflowEngine.compatibilitySurface = WORKFLOW_ENGINE_COMPATIBILITY_SURFACE;
 
 module.exports = { WorkflowEngine };

@@ -167,9 +167,8 @@ Plugin/StoryOrchestrator/
 │   └── AgentDispatcher.js
 ├── core/                      # 核心模块
 │   ├── StoryOrchestrator.js   # 主入口
-│   ├── WorkflowEngine.js
+│   ├── WorkflowEngine.js         # 兼容门面，内含本地 compatibility metadata
 │   ├── StateManager.js
-│   ├── CompatibilitySurfaceRegistry.js
 │   ├── ChapterOperations.js
 │   └── ContentValidator.js
 ├── adapters/                  # Kernel 适配层

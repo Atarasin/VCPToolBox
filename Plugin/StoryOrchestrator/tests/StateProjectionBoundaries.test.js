@@ -261,7 +261,8 @@ test('WorkflowEngine.getWorkflowStatus reads the narrowed compatibility view whe
     activeCheckpoint: { id: 'cp-1' },
     retryContext: { attempt: 2, lastError: null },
     historyLength: 1,
-    runToken: 'run-123'
+    runToken: 'run-123',
+    recoveryCursor: null
   });
 });
 

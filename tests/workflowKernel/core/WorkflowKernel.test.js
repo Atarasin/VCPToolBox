@@ -236,6 +236,101 @@ describe('WorkflowKernel', () => {
     assert.ok(events.filter((event) => event.type === 'workflow.checkpoint_pending').length >= 2);
   });
 
+  it('selects a re-executable retry boundary for long checkpoint review chains', async () => {
+    kernel = new WorkflowKernel({});
+    kernel.registerStepType('parallelGroup', async () => ({ status: 'completed', output: 'generated' }));
+    kernel.registerStepType('guard', async () => ({ status: 'completed', output: true }));
+    kernel.registerStepType('checkpoint', async () => ({
+      status: 'waiting_checkpoint',
+      checkpoint: {
+        checkpointId: 'cp-long-chain',
+        type: 'review',
+        promptTemplate: 'Review',
+        onCheckpointReject: 'retry',
+        metadata: { stepId: 'cp-step' }
+      }
+    }));
+
+    const definition = {
+      id: 'reject-retry-boundary-test',
+      phases: [{
+        id: 'p1',
+        steps: [
+          { id: 'generate-world', type: 'parallelGroup', outputKey: 'generatedWorld' },
+          { id: 'guard-parse', type: 'guard' },
+          { id: 'guard-validate', type: 'guard' },
+          { id: 'cp-step', type: 'checkpoint' }
+        ]
+      }]
+    };
+
+    await kernel.execute('wf-reject-retry-boundary', definition);
+    const active = kernel.activeWorkflows.get('wf-reject-retry-boundary');
+    const retryPlan = kernel._resolveCheckpointRetryPlan(active.record, definition, {
+      checkpointId: 'cp-long-chain',
+      metadata: { stepId: 'cp-step' }
+    });
+
+    assert.deepStrictEqual(retryPlan.executionCursor, [{ phase: 0 }, { step: 0 }]);
+    assert.strictEqual(retryPlan.resumeMode, 'current');
+    assert.strictEqual(retryPlan.cursor.stepId, 'generate-world');
+    assert.strictEqual(retryPlan.cursor.resumeAction, 'resume_step');
+    assert.strictEqual(retryPlan.cursor.boundaryType, 'parallel_group_boundary');
+  });
+
+  it('resume with reject re-runs the business boundary instead of looping on downstream guards', async () => {
+    const stepOrder = [];
+    kernel = new WorkflowKernel({});
+    kernel.registerStepType('parallelGroup', async (step) => {
+      stepOrder.push(step.id);
+      return { status: 'completed', output: step.id };
+    });
+    kernel.registerStepType('guard', async (step) => {
+      stepOrder.push(step.id);
+      return { status: 'completed', output: true };
+    });
+    kernel.registerStepType('checkpoint', async () => ({
+      status: 'waiting_checkpoint',
+      checkpoint: {
+        checkpointId: 'cp-long-chain-runtime',
+        type: 'review',
+        promptTemplate: 'Review',
+        onCheckpointReject: 'retry',
+        metadata: { stepId: 'cp-step' }
+      }
+    }));
+
+    const definition = {
+      id: 'reject-retry-runtime-test',
+      phases: [{
+        id: 'p1',
+        steps: [
+          { id: 'generate-world', type: 'parallelGroup', outputKey: 'generatedWorld' },
+          { id: 'guard-parse', type: 'guard' },
+          { id: 'guard-validate', type: 'guard' },
+          { id: 'cp-step', type: 'checkpoint' }
+        ]
+      }]
+    };
+
+    await kernel.execute('wf-reject-retry-runtime', definition);
+    const record = await kernel.resume('wf-reject-retry-runtime', {
+      checkpointId: 'cp-long-chain-runtime',
+      action: 'reject',
+      feedback: 'Please regenerate'
+    });
+
+    assert.strictEqual(record.status, EXECUTION_STATES.WAITING_CHECKPOINT);
+    assert.deepStrictEqual(stepOrder, [
+      'generate-world',
+      'guard-parse',
+      'guard-validate',
+      'generate-world',
+      'guard-parse',
+      'guard-validate'
+    ]);
+  });
+
   it('resume with modify emits a distinct event and persists checkpoint resolution state', async () => {
     const events = [];
     kernel = new WorkflowKernel({});
@@ -616,6 +711,120 @@ describe('WorkflowKernel', () => {
     assert.strictEqual(record.context.outputs.p2Out2, 'p2s2-done');
     assert.ok(events.some((event) => event.type === 'workflow.recovered'));
     assert.ok(updates.some((entry) => entry.patch.retryContext?.__recovery?.lastRecoveryAction === 'restart_phase'));
+  });
+
+  it('recover restart_phase rebuilds a failed active runtime before re-entering execution', async () => {
+    const events = [];
+    const updates = [];
+    const stepOrder = [];
+    let attempts = 0;
+
+    kernel = new WorkflowKernel({
+      stateRepository: {
+        create: async () => {},
+        get: async () => null,
+        update: async (workflowId, patch) => updates.push({ workflowId, patch }),
+        appendHistory: async (_workflowId, event) => events.push(event)
+      }
+    });
+    kernel.registerStepType('noop', async (step) => {
+      stepOrder.push(step.id);
+      return { status: 'completed', output: `${step.id}-done` };
+    });
+    kernel.registerStepType('flakyOnce', async (step) => {
+      stepOrder.push(step.id);
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('boom-once');
+      }
+      return { status: 'completed', output: `${step.id}-recovered` };
+    });
+
+    const definition = {
+      id: 'restart-phase-active-failed',
+      phases: [
+        {
+          id: 'p1',
+          steps: [{ id: 'p1s1', type: 'noop', outputKey: 'p1Out' }]
+        },
+        {
+          id: 'p2',
+          steps: [
+            { id: 'p2s1', type: 'flakyOnce', outputKey: 'p2Out1' },
+            { id: 'p2s2', type: 'noop', outputKey: 'p2Out2' }
+          ]
+        }
+      ]
+    };
+
+    const failedRecord = await kernel.execute('wf-active-failed-restart', definition);
+    assert.strictEqual(failedRecord.status, EXECUTION_STATES.FAILED);
+    assert.ok(kernel.activeWorkflows.has('wf-active-failed-restart'));
+
+    const failedRunToken = failedRecord.runToken;
+    const record = await kernel.recover('wf-active-failed-restart', {
+      definition,
+      recoveryAction: 'restart_phase',
+      targetPhase: 'p2'
+    });
+
+    assert.strictEqual(record.status, EXECUTION_STATES.COMPLETED);
+    assert.deepStrictEqual(stepOrder, ['p1s1', 'p2s1', 'p2s1', 'p2s2']);
+    assert.strictEqual(record.context.outputs.p1Out, 'p1s1-done');
+    assert.strictEqual(record.context.outputs.p2Out1, 'p2s1-recovered');
+    assert.strictEqual(record.context.outputs.p2Out2, 'p2s2-done');
+    assert.notStrictEqual(record.runToken, failedRunToken);
+    assert.ok(events.some((event) => event.type === 'workflow.recovered'));
+    assert.ok(events.filter((event) => event.type === 'workflow.step_started' && event.payload.stepId === 'p2s1').length >= 2);
+    assert.ok(updates.some((entry) => entry.patch.status === EXECUTION_STATES.RUNNING));
+  });
+
+  it('recover restart_phase from a failed active runtime emits runnable recovery state before new execution activity', async () => {
+    const events = [];
+
+    kernel = new WorkflowKernel({
+      stateRepository: {
+        create: async () => {},
+        get: async () => null,
+        update: async () => {},
+        appendHistory: async (_workflowId, event) => events.push(event)
+      }
+    });
+    let attempts = 0;
+    kernel.registerStepType('flakyOnce', async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('first-attempt-failed');
+      }
+      return { status: 'completed', output: 'recovered' };
+    });
+
+    const definition = {
+      id: 'failed-recovery-event-test',
+      phases: [{
+        id: 'phase1',
+        steps: [{ id: 'recover-me', type: 'flakyOnce', outputKey: 'recoverOut' }]
+      }]
+    };
+
+    const failedRecord = await kernel.execute('wf-failed-recovery-event', definition);
+    assert.strictEqual(failedRecord.status, EXECUTION_STATES.FAILED);
+
+    const record = await kernel.recover('wf-failed-recovery-event', {
+      definition,
+      recoveryAction: 'restart_phase',
+      targetPhase: 'phase1'
+    });
+
+    const recoveredEvent = events.find((event) => event.type === 'workflow.recovered');
+    const recoverIndex = events.findIndex((event) => event.type === 'workflow.recovered');
+    const nextStepStarted = events.slice(recoverIndex + 1).find((event) => event.type === 'workflow.step_started');
+
+    assert.strictEqual(record.status, EXECUTION_STATES.COMPLETED);
+    assert.ok(recoveredEvent);
+    assert.strictEqual(recoveredEvent.status, EXECUTION_STATES.RUNNING);
+    assert.ok(nextStepStarted, 'recovery should be followed by a new step_started event');
+    assert.strictEqual(nextStepStarted.payload.stepId, 'recover-me');
   });
 
   it('recover rollback rejects when no rollback-safe boundary is available', async () => {

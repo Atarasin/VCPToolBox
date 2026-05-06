@@ -114,6 +114,20 @@ class StoryOrchestratorKernelAdapter {
     this._logInitializedKernelSeams();
   }
 
+  async shutdown() {
+    if (!this.kernel) {
+      return;
+    }
+
+    // Checkpoint polling must be torn down so tests and short-lived CLI runs
+    // do not keep the process alive after execution reaches a pending checkpoint.
+    this.kernel.checkpointManager?.destroy?.();
+    this.kernel.activeWorkflows?.clear?.();
+    this.kernel = null;
+    this.eventAdapter = null;
+    this.initializedSeams = [];
+  }
+
   _createKernelStateRepository() {
     return new StoryStateRepositoryAdapter(this.stateManager.repository || this.stateManager);
   }

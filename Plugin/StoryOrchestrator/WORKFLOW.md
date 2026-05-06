@@ -40,7 +40,7 @@ flowchart LR
 | `StateManager` | `core/StateManager.js` | 故事状态持久化（SQLite + JSON 双写）、快照（Snapshot）、检查点（Checkpoint）、Artifacts |
 | `StoryOrchestratorKernelAdapter` | `adapters/StoryOrchestratorKernelAdapter.js` | Kernel bridge：安装 workflow definition、自定义 step、事件兼容与状态投影 |
 | `workflow-definition` | `config/workflow-definition.js` | 声明式 workflow definition：phase/step/checkpoint 布局与恢复边界的 canonical source |
-| `CompatibilitySurfaceRegistry` | `core/CompatibilitySurfaceRegistry.js` | 兼容面清单：显式记录保留壳、退役项与替代路径 |
+| `WorkflowEngine compatibility metadata` | `core/WorkflowEngine.js` | 兼容面元数据：记录保留壳、退役项与替代路径，随 façade 本地定义 |
 | `ChapterOperations` | `core/ChapterOperations.js` | 章节级操作：撰写草稿、评审、修订、润色、细节填充、字数扩充 |
 | `ContentValidator` | `core/ContentValidator.js` | 内容一致性校验：世界观、人物、情节逻辑；输出结构化校验报告与质量评分 |
 | `AgentDispatcher` | `agents/AgentDispatcher.js` | Agent 调度器，支持同步/异步调用、并行/串行派发 |
@@ -348,7 +348,7 @@ flowchart TD
 | 状态管理 | `core/StateManager.js` |
 | Kernel 适配层 | `adapters/StoryOrchestratorKernelAdapter.js` |
 | Workflow 定义 | `config/workflow-definition.js` |
-| 兼容面清单 | `core/CompatibilitySurfaceRegistry.js` |
+| 兼容面清单 | `core/WorkflowEngine.js` |
 | 章节操作 | `core/ChapterOperations.js` |
 | 内容校验 | `core/ContentValidator.js` |
 | Agent 调度 | `agents/AgentDispatcher.js` |

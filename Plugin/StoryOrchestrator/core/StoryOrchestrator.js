@@ -1,14 +1,27 @@
-const { StateManager } = require('./StateManager');
-const { ChapterOperations } = require('./ChapterOperations');
-const { ContentValidator } = require('./ContentValidator');
-const { AgentDispatcher } = require('../../../modules/agentDispatcher');
-const { WorkflowEngine } = require('./WorkflowEngine');
-const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
-const { validateInput } = require('../utils/ValidationSchemas');
-const { TextMetrics } = require('../utils/TextMetrics');
-const path = require('path');
 const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
+const path = require('path');
+
+const { AgentDispatcher } = require('../../../modules/agentDispatcher');
+const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
+const { TextMetrics } = require('../utils/TextMetrics');
+const { ChapterOperations } = require('./ChapterOperations');
+const { commandMap, chapterCommands, workflowLifecycleCommands } = require('./commands');
+const { ContentValidator } = require('./ContentValidator');
+const { StateManager } = require('./StateManager');
+const {
+  exportAsMarkdown,
+  exportAsPlainText
+} = require('./services/storyExport');
+const { getPlaceholderValue } = require('./services/storyPlaceholders');
+const {
+  calculateProgress,
+  calculateTotalWordCount,
+  getCurrentCheckpointId,
+  getCurrentPhase,
+  getPhaseName,
+  isCheckpointPending
+} = require('./services/storyProjection');
+const { WorkflowEngine } = require('./WorkflowEngine');
 
 class StoryOrchestrator {
   constructor() {
@@ -26,25 +39,25 @@ class StoryOrchestrator {
 
   async initialize(config, dependencies) {
     console.log('[StoryOrchestrator] Initializing...');
-    
+
     this.globalConfig = config || {};
-    
+
     const pluginConfigPath = path.join(__dirname, '..', 'config.env');
     if (fs.existsSync(pluginConfigPath)) {
       const envConfig = require('dotenv').parse(fs.readFileSync(pluginConfigPath));
       this.globalConfig = { ...envConfig, ...this.globalConfig };
       console.log(`[StoryOrchestrator] Loaded config from ${pluginConfigPath}`);
     }
-    
+
     await this.stateManager.initialize();
-    
+
     this.agentDispatcher = new AgentDispatcher(this.globalConfig, this.stateManager);
     await this.agentDispatcher.initialize();
-    
+
     this.chapterOperations = new ChapterOperations(this.agentDispatcher, this.stateManager);
     this.contentValidator = new ContentValidator(this.agentDispatcher);
-    
-    // Initialize WorkflowEngine with all dependencies
+
+    // The entry remains responsible for wiring the compatibility facade to the kernel adapter.
     this.workflowEngine = new WorkflowEngine({
       stateManager: this.stateManager,
       agentDispatcher: this.agentDispatcher,
@@ -52,9 +65,7 @@ class StoryOrchestrator {
       contentValidator: this.contentValidator,
       config: this.globalConfig
     });
-    await this.workflowEngine.initialize();
 
-    // Initialize WorkflowKernel adapter if feature flag enabled
     this.useKernel = this.globalConfig.USE_WORKFLOW_KERNEL === 'true' || this.globalConfig.USE_WORKFLOW_KERNEL === true;
     if (this.useKernel) {
       try {
@@ -63,17 +74,22 @@ class StoryOrchestrator {
           agentDispatcher: this.agentDispatcher,
           chapterOperations: this.chapterOperations,
           contentValidator: this.contentValidator,
-          config: this.globalConfig
+          config: this.globalConfig,
+          legacyEventListener: this.workflowEngine.createLegacyEventListener()
         });
         await this.kernelAdapter.initialize();
+        this.workflowEngine.bindKernelAdapter(this.kernelAdapter);
         console.log('[StoryOrchestrator] WorkflowKernel adapter initialized');
       } catch (err) {
         console.error('[StoryOrchestrator] Failed to initialize WorkflowKernel adapter:', err.message);
         console.log('[StoryOrchestrator] Falling back to legacy WorkflowEngine');
         this.useKernel = false;
         this.kernelAdapter = null;
+        this.workflowEngine.bindKernelAdapter(null);
       }
     }
+
+    await this.workflowEngine.initialize();
 
     console.log('[StoryOrchestrator] Initialized successfully (kernel:', this.useKernel, ')');
   }
@@ -87,44 +103,19 @@ class StoryOrchestrator {
   }
 
   async processToolCall(args) {
-    const { command } = args;
-    
+    const command = args?.command;
     console.log(`[StoryOrchestrator] Processing command: ${command}`);
-    
+
     try {
-      switch (command) {
-        case 'StartStoryProject':
-          return await this.startStoryProject(args);
-        case 'QueryStoryStatus':
-          return await this.queryStoryStatus(args);
-        case 'UserConfirmCheckpoint':
-          return await this.userConfirmCheckpoint(args);
-        case 'CreateChapterDraft':
-          return await this.createChapterDraft(args);
-        case 'ReviewChapter':
-          return await this.reviewChapter(args);
-        case 'ReviseChapter':
-          return await this.reviseChapter(args);
-        case 'PolishChapter':
-          return await this.polishChapter(args);
-        case 'ValidateConsistency':
-          return await this.validateConsistency(args);
-        case 'CountChapterMetrics':
-          return await this.countChapterMetrics(args);
-        case 'ExportStory':
-          return await this.exportStory(args);
-        case 'RecoverStoryWorkflow':
-          return await this.recoverStoryWorkflow(args);
-        case 'RetryPhase':
-          return await this.retryPhase(args);
-        case 'RetryChapter':
-          return await this.retryChapter(args);
-        default:
-          return {
-            status: 'error',
-            error: `Unknown command: ${command}`
-          };
+      const handler = commandMap[command];
+      if (!handler) {
+        return {
+          status: 'error',
+          error: `Unknown command: ${command}`
+        };
       }
+
+      return await handler(this, args);
     } catch (error) {
       console.error(`[StoryOrchestrator] Error processing ${command}:`, error);
       return {
@@ -135,475 +126,56 @@ class StoryOrchestrator {
   }
 
   async startStoryProject(args) {
-    const validation = validateInput('startStoryProject', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const story = await this.stateManager.createStory(args.story_prompt, {
-      target_word_count: args.target_word_count,
-      genre: args.genre,
-      style_preference: args.style_preference
-    });
-
-    if (this.useKernel && this.kernelAdapter) {
-      this._logRoutingDecision('StartStoryProject', story.id, 'kernel');
-
-      // Set up initial workflow state for kernel path
-      const runToken = uuidv4();
-      await this.stateManager.updateWorkflow(story.id, {
-        state: 'running',
-        currentPhase: 'phase1',
-        currentStep: 'initial',
-        retryContext: {
-          phase: 'phase1',
-          step: 'initial',
-          attempt: 0,
-          maxAttempts: this.globalConfig.MAX_PHASE_RETRY_ATTEMPTS || 3,
-          lastError: null
-        },
-        runToken
-      });
-      await this.stateManager.updateStory(story.id, {
-        status: 'phase1_running'
-      });
-
-      // Run via kernel adapter (fire-and-forget background execution)
-      this.kernelAdapter.executeWorkflow(story.id, {
-        storyPrompt: args.story_prompt,
-        targetWordCount: {
-          min: args.target_word_count || 2500,
-          max: (args.target_word_count || 2500) + 1000
-        },
-        genre: args.genre,
-        stylePreference: args.style_preference
-      }).then(result => {
-        const outcome = result.status === 'completed' ? 'success' : 'failure';
-        this._recordOutcome('kernel', outcome, { storyId: story.id, command: 'StartStoryProject' });
-      }).catch(err => {
-        console.error('[StoryOrchestrator] Kernel workflow start error:', err);
-        this._recordOutcome('kernel', 'error', { storyId: story.id, command: 'StartStoryProject', error: err.message });
-      });
-    } else {
-      this._logRoutingDecision('StartStoryProject', story.id, 'legacy');
-
-      this.workflowEngine.start(story.id).then(result => {
-        const outcome = result?.status === 'error' ? 'failure' : 'success';
-        this._recordOutcome('legacy', outcome, { storyId: story.id, command: 'StartStoryProject' });
-      }).catch(err => {
-        console.error('[StoryOrchestrator] Workflow start error:', err);
-        this._recordOutcome('legacy', 'error', { storyId: story.id, command: 'StartStoryProject', error: err.message });
-      });
-    }
-
-    return {
-      status: 'success',
-      result: {
-        story_id: story.id,
-        status: story.status,
-        message: '故事项目已启动，正在执行第一阶段：世界观与人设搭建',
-        routing_path: this.useKernel && this.kernelAdapter ? 'kernel' : 'legacy'
-      }
-    };
+    return workflowLifecycleCommands.startStoryProject(this, args);
   }
 
   async queryStoryStatus(args) {
-    const validation = validateInput('queryStoryStatus', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const story = await this.stateManager.getStory(args.story_id);
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const progress = this._calculateProgress(story);
-    const workflowStatus = await this.workflowEngine.getWorkflowStatus(args.story_id);
-
-    let kernelStatus = null;
-    if (this.useKernel && this.kernelAdapter) {
-      try {
-        kernelStatus = await this.kernelAdapter.getStatus(args.story_id);
-      } catch (err) {
-        console.warn('[StoryOrchestrator] Failed to get kernel status:', err.message);
-      }
-    }
-
-    // Kernel path: prefer kernelStatus for checkpoint info (handles optimistic-lock sync failures)
-    const checkpointPending = kernelStatus?.activeCheckpoint
-      ? true
-      : this._isCheckpointPending(story);
-    const checkpointId = kernelStatus?.activeCheckpoint
-      ? kernelStatus.activeCheckpoint
-      : this._getCurrentCheckpointId(story);
-
-    return {
-      status: 'success',
-      result: {
-        story_id: story.id,
-        phase: this._getCurrentPhase(story),
-        phase_name: this._getPhaseName(story),
-        status: story.status,
-        progress_percent: progress,
-        checkpoint_pending: checkpointPending,
-        checkpoint_id: checkpointId,
-        chapters_completed: story.phase2?.chapters?.length || 0,
-        total_word_count: this._calculateTotalWordCount(story),
-        updated_at: story.updatedAt,
-        workflow_state: workflowStatus?.state || 'idle',
-        current_step: workflowStatus?.currentStep || null,
-        active_checkpoint: workflowStatus?.activeCheckpoint || null,
-        retry_attempt: workflowStatus?.retryContext?.attempt || 0,
-        last_error: workflowStatus?.retryContext?.lastError || null,
-        kernel_state: kernelStatus?.state || null,
-        kernel_current_step: kernelStatus?.currentStep || null,
-        routing_path: this.useKernel && this.kernelAdapter ? 'kernel' : 'legacy'
-      }
-    };
+    return workflowLifecycleCommands.queryStoryStatus(this, args);
   }
 
   async userConfirmCheckpoint(args) {
-    if (args.approval === 'true') args.approval = true;
-    if (args.approval === 'false') args.approval = false;
-
-    const validation = validateInput('userConfirmCheckpoint', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const { story_id, checkpoint_id, approval, feedback, chapter_number } = args;
-    const story = await this.stateManager.getStory(story_id);
-
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const normalizedCheckpointDecision = {
-      checkpointId: checkpoint_id,
-      approval,
-      action: approval ? 'approve' : 'reject',
-      feedback,
-      chapter_number: chapter_number || null
-    };
-
-    let result;
-    if (this.useKernel && this.kernelAdapter) {
-      this._logRoutingDecision('UserConfirmCheckpoint', story_id, 'kernel');
-      try {
-        result = await this.kernelAdapter.resume(story_id, normalizedCheckpointDecision);
-        const outcome = result.status === 'error' ? 'failure' : 'success';
-        this._recordOutcome('kernel', outcome, { storyId: story_id, command: 'UserConfirmCheckpoint', checkpointId: checkpoint_id });
-      } catch (error) {
-        const kernelInactive = /is not active/i.test(error.message || '');
-        if (!kernelInactive) {
-          throw error;
-        }
-
-        // Recovery and panel review can expose a persisted checkpoint without an in-memory
-        // kernel workflow. Fall back to the state-driven engine so approval still works.
-        this._logRoutingDecision('UserConfirmCheckpoint', story_id, 'legacy-fallback');
-        result = await this.workflowEngine.resume(story_id, normalizedCheckpointDecision);
-        const outcome = result.status === 'error' ? 'failure' : 'success';
-        this._recordOutcome('legacy', outcome, {
-          storyId: story_id,
-          command: 'UserConfirmCheckpoint',
-          checkpointId: checkpoint_id,
-          fallbackReason: error.message
-        });
-      }
-    } else {
-      this._logRoutingDecision('UserConfirmCheckpoint', story_id, 'legacy');
-      result = await this.workflowEngine.resume(story_id, normalizedCheckpointDecision);
-      const outcome = result.status === 'error' ? 'failure' : 'success';
-      this._recordOutcome('legacy', outcome, { storyId: story_id, command: 'UserConfirmCheckpoint', checkpointId: checkpoint_id });
-    }
-
-    return {
-      status: result.status === 'error' ? 'error' : 'success',
-      result: result
-    };
+    return workflowLifecycleCommands.userConfirmCheckpoint(this, args);
   }
 
   async createChapterDraft(args) {
-    const validation = validateInput('createChapterDraft', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const result = await this.chapterOperations.createChapterDraft(
-      args.story_id,
-      args.chapter_number,
-      {
-        targetWordCount: args.target_word_count,
-        outlineContext: args.outline_context
-      }
-    );
-
-    return {
-      status: 'success',
-      result: {
-        story_id: args.story_id,
-        chapter_number: args.chapter_number,
-        content: result.content,
-        metrics: result.metrics,
-        was_expanded: result.wasExpanded
-      }
-    };
+    return chapterCommands.createChapterDraft(this, args);
   }
 
   async reviewChapter(args) {
-    const validation = validateInput('reviewChapter', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const result = await this.chapterOperations.reviewChapter(
-      args.story_id,
-      args.chapter_number,
-      args.chapter_content,
-      { reviewFocus: args.review_focus }
-    );
-
-    return {
-      status: 'success',
-      result
-    };
+    return chapterCommands.reviewChapter(this, args);
   }
 
   async reviseChapter(args) {
-    const validation = validateInput('reviseChapter', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const result = await this.chapterOperations.reviseChapter(
-      args.story_id,
-      args.chapter_number,
-      args.chapter_content,
-      {
-        revisionInstructions: args.revision_instructions,
-        issues: args.issues,
-        maxRewriteRatio: args.max_rewrite_ratio
-      }
-    );
-
-    return {
-      status: 'success',
-      result
-    };
+    return chapterCommands.reviseChapter(this, args);
   }
 
   async polishChapter(args) {
-    const validation = validateInput('polishChapter', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const result = await this.chapterOperations.polishChapter(
-      args.story_id,
-      args.chapter_number,
-      args.chapter_content,
-      { polishFocus: args.polish_focus }
-    );
-
-    return {
-      status: 'success',
-      result
-    };
+    return chapterCommands.polishChapter(this, args);
   }
 
   async validateConsistency(args) {
-    const validation = validateInput('validateConsistency', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const story = await this.stateManager.getStory(args.story_id);
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const storyBible = await this.stateManager.getStoryBible(args.story_id);
-    if (!storyBible) {
-      return { status: 'error', error: 'Story Bible not found' };
-    }
-
-    const previousChapters = story.phase2?.chapters || [];
-    
-    let result;
-    switch (args.validation_type) {
-      case 'worldview':
-        result = await this.contentValidator.validateWorldview(args.story_id, args.content, storyBible);
-        break;
-      case 'character':
-        result = await this.contentValidator.validateCharacters(args.story_id, args.content, storyBible);
-        break;
-      case 'plot':
-        result = await this.contentValidator.validatePlot(args.story_id, args.content, storyBible, previousChapters);
-        break;
-      default:
-        result = await this.contentValidator.comprehensiveValidation(
-          args.story_id,
-          0,
-          args.content,
-          storyBible,
-          previousChapters
-        );
-    }
-
-    return {
-      status: 'success',
-      result
-    };
+    return chapterCommands.validateConsistency(this, args);
   }
 
   async countChapterMetrics(args) {
-    const validation = validateInput('countChapterMetrics', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const result = this.chapterOperations.countChapterLength(
-      args.chapter_content,
-      args.target_min,
-      args.target_max,
-      {
-        countMode: args.count_mode,
-        lengthPolicy: args.length_policy
-      }
-    );
-
-    return {
-      status: 'success',
-      result
-    };
+    return chapterCommands.countChapterMetrics(this, args);
   }
 
   async exportStory(args) {
-    const validation = validateInput('exportStory', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const story = await this.stateManager.getStory(args.story_id);
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const format = args.format || 'markdown';
-    const chapters = story.phase2?.chapters || [];
-    
-    let content;
-    switch (format) {
-      case 'json':
-        content = JSON.stringify(story, null, 2);
-        break;
-      case 'txt':
-        content = this._exportAsPlainText(story);
-        break;
-      case 'markdown':
-      default:
-        content = this._exportAsMarkdown(story);
-    }
-
-    const totalWordCount = this._calculateTotalWordCount(story);
-
-    return {
-      status: 'success',
-      result: {
-        story_id: args.story_id,
-        format,
-        content,
-        word_count: totalWordCount,
-        chapter_count: chapters.length,
-        exported_at: new Date().toISOString()
-      }
-    };
+    return chapterCommands.exportStory(this, args);
   }
 
   async recoverStoryWorkflow(args) {
-    const validation = validateInput('recoverStoryWorkflow', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const story = await this.stateManager.getStory(args.story_id);
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const recoveryOptions = {
-      recoveryAction: args.recovery_action || 'continue',
-      targetPhase: args.target_phase,
-      targetCheckpoint: args.target_checkpoint,
-      feedback: args.feedback
-    };
-
-    const result = await this.workflowEngine.recover(args.story_id, recoveryOptions);
-
-    return {
-      status: result.status === 'error' ? 'error' : 'success',
-      result
-    };
+    return workflowLifecycleCommands.recoverStoryWorkflow(this, args);
   }
 
   async retryPhase(args) {
-    const validation = validateInput('retryPhase', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const story = await this.stateManager.getStory(args.story_id);
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const result = await this.workflowEngine.retryPhase(
-      args.story_id,
-      args.phase_name,
-      args.reason || 'Manual retry requested'
-    );
-
-    if (result.status === 'failed') {
-      return {
-        status: 'error',
-        error: result.error || 'Retry failed',
-        result
-      };
-    }
-
-    return {
-      status: result.status === 'error' ? 'error' : 'success',
-      result
-    };
+    return workflowLifecycleCommands.retryPhase(this, args);
   }
 
   async retryChapter(args) {
-    const validation = validateInput('retryChapter', args);
-    if (!validation.valid) {
-      return { status: 'error', error: validation.errors.join(', ') };
-    }
-
-    const { story_id, chapter_number, phase_name, feedback } = args;
-    const story = await this.stateManager.getStory(story_id);
-    if (!story) {
-      return { status: 'error', error: 'Story not found' };
-    }
-
-    const result = await this.workflowEngine.handleChapterRetry(story_id, {
-      phase: phase_name,
-      chapter_number,
-      feedback
-    });
-
-    return {
-      status: result.status === 'error' ? 'error' : 'success',
-      result
-    };
+    return workflowLifecycleCommands.retryChapter(this, args);
   }
-
-  // ==================== Feature Switch Metrics & Observability ====================
 
   _createMetrics() {
     return {
@@ -614,194 +186,74 @@ class StoryOrchestrator {
     };
   }
 
-  _logRoutingDecision(command, storyId, path) {
+  _logRoutingDecision(command, storyId, pathName) {
     const entry = {
       timestamp: new Date().toISOString(),
       command,
       storyId,
-      path,
+      path: pathName,
       useKernel: this.useKernel,
       kernelAdapterReady: !!this.kernelAdapter
     };
     this.metrics.routingDecisions.push(entry);
-    // Keep last 100 decisions
     if (this.metrics.routingDecisions.length > 100) {
       this.metrics.routingDecisions = this.metrics.routingDecisions.slice(-100);
     }
-    console.log(`[StoryOrchestrator] Routing decision: command=${command} story=${storyId} path=${path}`);
+    console.log(`[StoryOrchestrator] Routing decision: command=${command} story=${storyId} path=${pathName}`);
   }
 
-  _recordOutcome(path, outcome, details = {}) {
-    if (!this.metrics[path]) return;
-    this.metrics[path][outcome] = (this.metrics[path][outcome] || 0) + 1;
-    this.metrics[path].total += 1;
-    console.log(`[StoryOrchestrator] Outcome recorded: path=${path} outcome=${outcome}`, details);
+  _recordOutcome(pathName, outcome, details = {}) {
+    if (!this.metrics[pathName]) return;
+    this.metrics[pathName][outcome] = (this.metrics[pathName][outcome] || 0) + 1;
+    this.metrics[pathName].total += 1;
+    console.log(`[StoryOrchestrator] Outcome recorded: path=${pathName} outcome=${outcome}`, details);
   }
 
   getMetrics() {
-    const now = new Date().toISOString();
     return {
       ...this.metrics,
       currentConfig: {
         USE_WORKFLOW_KERNEL: this.useKernel,
         kernelAdapterInitialized: !!this.kernelAdapter
       },
-      queriedAt: now
+      queriedAt: new Date().toISOString()
     };
   }
 
   async getPlaceholderValue(placeholder) {
-    if (placeholder === 'StoryOrchestratorStatus') {
-      const stories = await this.stateManager.listStories();
-      const activeStories = [];
-      
-      for (const storyId of stories.slice(0, 5)) {
-        const story = await this.stateManager.getStory(storyId);
-        if (story && !story.finalOutput) {
-          activeStories.push({
-            id: storyId,
-            phase: this._getPhaseName(story),
-            progress: this._calculateProgress(story)
-          });
-        }
-      }
-
-      return JSON.stringify(activeStories, null, 2);
-    }
-
-    if (placeholder === 'StoryBible') {
-      const stories = await this.stateManager.listStories();
-      const activeStories = [];
-      
-      for (const storyId of stories.slice(0, 3)) {
-        const story = await this.stateManager.getStory(storyId);
-        if (story && !story.finalOutput && (story.phase1?.worldview || story.phase1?.characters)) {
-          activeStories.push({
-            id: storyId,
-            genre: story.genre,
-            worldview: story.phase1?.worldview || null,
-            characters: story.phase1?.characters || null,
-            plot_outline: story.phase2?.outline || null
-          });
-        }
-      }
-
-      if (activeStories.length === 0) {
-        return 'No active story projects with bible data';
-      }
-      return JSON.stringify(activeStories, null, 2);
-    }
-
-    return null;
+    return getPlaceholderValue(this, placeholder);
   }
 
   _calculateProgress(story) {
-    if (!story) return 0;
-    
-    if (story.finalOutput) return 100;
-    
-    const phaseWeights = { phase1: 30, phase2: 50, phase3: 20 };
-    let progress = 0;
-
-    if (story.phase1?.userConfirmed) {
-      progress += phaseWeights.phase1;
-    } else if (story.phase1?.worldview) {
-      progress += phaseWeights.phase1 * 0.7;
-    }
-
-    if (story.phase2?.userConfirmed) {
-      progress += phaseWeights.phase2;
-    } else if (story.phase2?.chapters?.length > 0) {
-      const totalChapters = story.phase2.outline?.chapters?.length || 5;
-      progress += phaseWeights.phase2 * (story.phase2.chapters.length / totalChapters) * 0.8;
-    }
-
-    if (story.phase3?.userConfirmed) {
-      progress += phaseWeights.phase3;
-    } else if (story.phase3?.polishedChapters?.length > 0) {
-      const totalChapters = story.phase2?.chapters?.length || 5;
-      progress += phaseWeights.phase3 * (story.phase3.polishedChapters.length / totalChapters) * 0.8;
-    }
-
-    return Math.round(progress);
+    return calculateProgress(story);
   }
 
   _getCurrentPhase(story) {
-    const workflowPhase = story.workflow?.currentPhase;
-    if (workflowPhase === 'phase1') return 1;
-    if (workflowPhase === 'phase2') return 2;
-    if (workflowPhase === 'phase3') return 3;
-    if (workflowPhase === 'completed' || story.phase3?.userConfirmed) return 4;
-    if (story.phase2?.userConfirmed) return 3;
-    if (story.phase1?.userConfirmed) return 2;
-    return 1;
+    return getCurrentPhase(story);
   }
 
   _getPhaseName(story) {
-    const phases = {
-      1: '世界观与人设搭建',
-      2: '大纲与正文生产',
-      3: '润色与终稿',
-      4: '已完成'
-    };
-    return phases[this._getCurrentPhase(story)];
+    return getPhaseName(story);
   }
 
   _isCheckpointPending(story) {
-    // First check workflow's activeCheckpoint
-    if (story.workflow?.activeCheckpoint) {
-      return story.workflow.activeCheckpoint.status === 'pending';
-    }
-    // Fall back to legacy phase-based check
-    if (!story.phase1?.userConfirmed) return story.phase1?.status === 'pending_confirmation';
-    if (!story.phase2?.userConfirmed) return story.phase2?.status === 'pending_confirmation';
-    if (!story.phase3?.userConfirmed) return story.phase3?.status === 'pending_confirmation';
-    return false;
+    return isCheckpointPending(story);
   }
 
   _getCurrentCheckpointId(story) {
-    // First check workflow's activeCheckpoint
-    if (story.workflow?.activeCheckpoint) {
-      return story.workflow.activeCheckpoint.id;
-    }
-    // Fall back to legacy phase-based check
-    if (!story.phase1?.userConfirmed) return story.phase1?.checkpointId;
-    if (!story.phase2?.userConfirmed) return story.phase2?.checkpointId;
-    if (!story.phase3?.userConfirmed) return story.phase3?.checkpointId;
-    return null;
+    return getCurrentCheckpointId(story);
   }
 
   _calculateTotalWordCount(story) {
-    if (!story?.phase2?.chapters) return 0;
-    return story.phase2.chapters.reduce((sum, ch) => {
-      return sum + (ch.metrics?.counts?.chineseChars || 0);
-    }, 0);
+    return calculateTotalWordCount(story);
   }
 
   _exportAsMarkdown(story) {
-    const chapters = story.phase3?.polishedChapters || story.phase2?.chapters || [];
-    const lines = [`# ${story.title || story.config?.title || '故事创作'}`, ''];
-    
-    if (story.phase1?.worldview?.setting) {
-      lines.push('## 世界观', '', story.phase1.worldview.setting, '');
-    }
-
-    chapters.forEach((ch, index) => {
-      const chapterNumber = ch.number || ch.chapterNum || ch.chapterNumber || (index + 1);
-      const title = ch.title || `第${chapterNumber}章`;
-      
-      // Filter out raw validation/diff metadata from content if present
-      let cleanContent = ch.content || '';
-      
-      lines.push(`## ${title}`, '', cleanContent, '');
-    });
-
-    return lines.join('\n');
+    return exportAsMarkdown(story);
   }
 
   _exportAsPlainText(story) {
-    const chapters = story.phase3?.polishedChapters || story.phase2?.chapters || [];
-    return chapters.map(ch => ch.content || '').join('\n\n');
+    return exportAsPlainText(story);
   }
 }
 

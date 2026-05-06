@@ -1934,7 +1934,7 @@ Each agent supports the following configuration via `config.env`:
 | Agent Dispatcher | `Plugin/StoryOrchestrator/agents/AgentDispatcher.js` |
 | Kernel Adapter | `Plugin/StoryOrchestrator/adapters/StoryOrchestratorKernelAdapter.js` |
 | Workflow Definition | `Plugin/StoryOrchestrator/config/workflow-definition.js` |
-| Compatibility Surface Registry | `Plugin/StoryOrchestrator/core/CompatibilitySurfaceRegistry.js` |
+| WorkflowEngine Compatibility Metadata | `Plugin/StoryOrchestrator/core/WorkflowEngine.js` |
 | Chapter Operations | `Plugin/StoryOrchestrator/core/ChapterOperations.js` |
 | Content Validator | `Plugin/StoryOrchestrator/core/ContentValidator.js` |
 | Validation Schemas | `Plugin/StoryOrchestrator/utils/ValidationSchemas.js` |

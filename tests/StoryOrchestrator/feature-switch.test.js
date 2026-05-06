@@ -350,6 +350,20 @@ test('queryStoryStatus handles kernel adapter getStatus failure gracefully', asy
   assert.equal(result.result.kernel_state, null);
 });
 
+test('processToolCall delegates through command map while preserving response shape', async () => {
+  const orchestrator = createOrchestratorWithMocks({ useKernel: false });
+
+  const result = await orchestrator.processToolCall({
+    command: 'QueryStoryStatus',
+    story_id: 'story-test001'
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.result.story_id, 'story-test001');
+  assert.equal(result.result.routing_path, 'legacy');
+  assert.equal(result.result.workflow_state, 'running');
+});
+
 // ------------------------------------------------------------------
 // Tests — Initialization
 // ------------------------------------------------------------------

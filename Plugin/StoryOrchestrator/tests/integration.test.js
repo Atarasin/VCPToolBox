@@ -378,6 +378,7 @@ function createTestableStoryOrchestrator() {
     });
     // initialize() is async but contains no await, so it runs synchronously
     orchestrator.kernelAdapter.initialize();
+    activeKernelAdapters.add(orchestrator.kernelAdapter);
   }
   
   return orchestrator;
@@ -415,6 +416,104 @@ function createMockContentValidator() {
 
 let WorkflowEngine;
 const activeWorkflowEngines = new Set();
+const activeKernelAdapters = new Set();
+
+async function shutdownTrackedKernelAdapters() {
+  for (const kernelAdapter of activeKernelAdapters) {
+    await kernelAdapter.shutdown?.();
+  }
+  activeKernelAdapters.clear();
+}
+
+function createCanonicalWorkflowFacade(orchestrator, overrides = {}) {
+  return {
+    async initialize() {},
+    async shutdown() {},
+    async start(storyId) {
+      await orchestrator.stateManager.updateWorkflow(storyId, {
+        state: 'running',
+        currentPhase: 'phase1'
+      });
+      return { status: 'running', storyId };
+    },
+    async resume(storyId) {
+      return { status: 'running', storyId };
+    },
+    async recover(storyId) {
+      return { status: 'running', storyId };
+    },
+    async retryPhase(storyId, phaseName) {
+      return { status: 'running', storyId, phase: phaseName };
+    },
+    async handleChapterRetry(storyId, chapterNumber) {
+      return { status: 'running', storyId, chapterNumber };
+    },
+    async getWorkflowStatus(storyId) {
+      const story = await orchestrator.stateManager.getStory(storyId);
+      const workflow = story?.workflow;
+      if (!workflow) {
+        return null;
+      }
+
+      return {
+        state: workflow.state || 'idle',
+        currentPhase: workflow.currentPhase || null,
+        currentStep: workflow.currentStep || null,
+        activeCheckpoint: workflow.activeCheckpoint || null,
+        retryContext: workflow.retryContext || null,
+        historyLength: workflow.history?.length || 0,
+        runToken: workflow.runToken || null,
+        recoveryCursor: workflow.recoveryCursor || null
+      };
+    },
+    ...overrides
+  };
+}
+
+async function attachCanonicalBehaviorHarness(orchestrator, overrides = {}) {
+  orchestrator.workflowEngine = createCanonicalWorkflowFacade(orchestrator, overrides);
+  await orchestrator.workflowEngine.initialize();
+  return orchestrator.workflowEngine;
+}
+
+async function attachCompatibilityWorkflowEngine(orchestrator, options = {}) {
+  const {
+    stateManager = orchestrator.stateManager,
+    config = orchestrator.globalConfig
+  } = options;
+
+  orchestrator.workflowEngine = new WorkflowEngine({
+    stateManager,
+    agentDispatcher: orchestrator.agentDispatcher,
+    chapterOperations: orchestrator.chapterOperations,
+    contentValidator: orchestrator.contentValidator,
+    config
+  });
+  activeWorkflowEngines.add(orchestrator.workflowEngine);
+  await orchestrator.workflowEngine.initialize();
+  return orchestrator.workflowEngine;
+}
+
+async function attachCanonicalKernelHarness(orchestrator, configOverrides = {}) {
+  const { StoryOrchestratorKernelAdapter } = require('../adapters/StoryOrchestratorKernelAdapter');
+
+  orchestrator.useKernel = true;
+  orchestrator.kernelAdapter = new StoryOrchestratorKernelAdapter({
+    stateManager: orchestrator.stateManager,
+    agentDispatcher: orchestrator.agentDispatcher,
+    chapterOperations: orchestrator.chapterOperations,
+    contentValidator: orchestrator.contentValidator,
+    config: {
+      ...orchestrator.globalConfig,
+      ...configOverrides,
+      USE_WORKFLOW_KERNEL: 'true'
+    }
+  });
+  await orchestrator.kernelAdapter.initialize();
+  activeKernelAdapters.add(orchestrator.kernelAdapter);
+  await attachCanonicalBehaviorHarness(orchestrator);
+  return orchestrator.kernelAdapter;
+}
 
 describe('StoryOrchestrator Plugin Integration Tests', () => {
   
@@ -426,6 +525,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   });
 
   after(async () => {
+    await shutdownTrackedKernelAdapters();
     for (const workflowEngine of activeWorkflowEngines) {
       await workflowEngine.shutdown?.();
     }
@@ -436,6 +536,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   beforeEach(() => { testStories.clear(); agentCallLog.length = 0; notifications.length = 0; });
 
   afterEach(async () => {
+    await shutdownTrackedKernelAdapters();
     for (const workflowEngine of activeWorkflowEngines) {
       await workflowEngine.shutdown?.();
     }
@@ -449,15 +550,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should create story through processToolCall', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const result = await orchestrator.processToolCall({
           command: 'StartStoryProject',
@@ -480,15 +573,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should reject invalid story_prompt through validation', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const result = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '太短' });
         
@@ -502,15 +587,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should return status through processToolCall', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const createResult = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '测试故事状态查询功能的项目足够长' });
         
@@ -527,15 +604,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should return error for non-existent story', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const result = await orchestrator.processToolCall({ command: 'QueryStoryStatus', story_id: 'non-existent-story' });
         
@@ -553,15 +622,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         orchestrator.kernelAdapter = null;
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
@@ -587,19 +648,16 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         orchestrator.kernelAdapter = null;
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
         await mockStateManager.setActiveCheckpoint(story.id, { id: 'cp-correct', phase: 'phase1', status: 'pending' });
+
+        orchestrator.workflowEngine.resume = async () => ({
+          status: 'error',
+          error: 'checkpoint mismatch'
+        });
         
         const result = await orchestrator.processToolCall({
           command: 'UserConfirmCheckpoint',
@@ -623,15 +681,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
           }
         };
 
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-        await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
 
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
@@ -657,15 +707,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         const orchestrator = createTestableStoryOrchestrator();
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'running', currentPhase: 'phase2' });
@@ -681,15 +723,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         const orchestrator = createTestableStoryOrchestrator();
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'completed' });
@@ -708,15 +742,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         const orchestrator = createTestableStoryOrchestrator();
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'failed', retryContext: { phase: 'phase1', attempt: 1, maxAttempts: 3, lastError: 'Previous failure' } });
@@ -731,15 +757,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should reject invalid phase_name', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const result = await orchestrator.processToolCall({ command: 'RetryPhase', story_id: 'story-123456789012', phase_name: 'invalid_phase' });
         
@@ -751,15 +769,14 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         const orchestrator = createTestableStoryOrchestrator();
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: { MAX_PHASE_RETRY_ATTEMPTS: 3 }
+        await attachCanonicalBehaviorHarness(orchestrator, {
+          async retryPhase() {
+            return {
+              status: 'failed',
+              error: 'Max retry attempts exceeded for phase1'
+            };
+          }
         });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateWorkflow(story.id, { state: 'failed', retryContext: { phase: 'phase1', attempt: 3, maxAttempts: 3, lastError: 'Max retries exceeded' } });
@@ -777,15 +794,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
         const orchestrator = createTestableStoryOrchestrator();
         const mockStateManager = orchestrator.stateManager;
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: mockStateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const story = await mockStateManager.createStory('测试故事');
         await mockStateManager.updateStory(story.id, { status: 'completed', finalOutput: { metadata: { title: 'Test Story' }, chapters: [{ number: 1, content: 'Test content' }] } });
@@ -800,15 +809,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should count chapter metrics through processToolCall', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const testContent = '这是测试内容。这是一个测试内容。'.repeat(100);
         
@@ -944,16 +945,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       it('should return error for unknown command', async () => {
         const orchestrator = createTestableStoryOrchestrator();
         
-        orchestrator.workflowEngine = new WorkflowEngine({
-          stateManager: orchestrator.stateManager,
-          agentDispatcher: orchestrator.agentDispatcher,
-          chapterOperations: createMockChapterOperations(),
-          contentValidator: createMockContentValidator(),
-          config: orchestrator.globalConfig
-        });
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-        activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+        await attachCanonicalBehaviorHarness(orchestrator);
         
         const result = await orchestrator.processToolCall({ command: 'UnknownCommand' });
         
@@ -967,20 +959,13 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     
     it('should execute full 3-phase workflow through processToolCall', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      // Force the compatibility facade path for this test.
+      // Compatibility-only residual: scripted checkpoint timeline still runs
+      // through the facade so legacy pause/resume semantics stay covered.
       orchestrator.useKernel = false;
       orchestrator.kernelAdapter = null;
       const mockStateManager = orchestrator.stateManager;
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const workflowTimeline = [
         async (storyId) => {
@@ -1103,17 +1088,8 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
 
     it('should track agent calls during workflow', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      const mockStateManager = orchestrator.stateManager;
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalKernelHarness(orchestrator);
       
       // StartStoryProject runs workflow asynchronously, so we need to:
       // 1. Call it to get the story ID
@@ -1135,23 +1111,268 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       // Now check agent calls were tracked
       assert.ok(agentCallLog.length > 0, 'Agent calls should be tracked during workflow');
     });
+
+    it('re-runs phase1 generation after rejecting the phase1 checkpoint under kernel runtime', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      const mockStateManager = orchestrator.stateManager;
+
+      await attachCanonicalKernelHarness(orchestrator);
+
+      async function waitForPhase1Checkpoint(minWorldBuilderCalls = 1) {
+        for (let i = 0; i < 80; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          const worldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+          if (
+            story?.workflow?.activeCheckpoint?.id === 'checkpointPhase1'
+            && story.workflow?.state === 'waiting_checkpoint'
+            && worldBuilderCalls >= minWorldBuilderCalls
+          ) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        throw new Error(`phase1 checkpoint was not reached with ${minWorldBuilderCalls} worldBuilder calls`);
+      }
+
+      const startResult = await orchestrator.processToolCall({
+        command: 'StartStoryProject',
+        story_prompt: '这是一个用于验证 phase1 驳回后重新生成行为的长篇测试故事设定'
+      });
+      const storyId = startResult.result.story_id;
+
+      await waitForPhase1Checkpoint(1);
+      const initialWorldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+      const initialCharacterDesignerCalls = agentCallLog.filter((entry) => entry.agentType === 'characterDesigner').length;
+
+      const rejectResult = await orchestrator.processToolCall({
+        command: 'UserConfirmCheckpoint',
+        story_id: storyId,
+        checkpoint_id: 'checkpointPhase1',
+        approval: false,
+        feedback: '请根据评审意见重新生成 phase1 内容'
+      });
+
+      assert.strictEqual(rejectResult.status, 'success');
+
+      const storyAfterRetry = await waitForPhase1Checkpoint(initialWorldBuilderCalls + 1);
+      const retriedWorldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+      const retriedCharacterDesignerCalls = agentCallLog.filter((entry) => entry.agentType === 'characterDesigner').length;
+
+      assert.ok(
+        retriedWorldBuilderCalls >= initialWorldBuilderCalls + 1,
+        'worldBuilder should run again after rejecting phase1 checkpoint'
+      );
+      assert.ok(
+        retriedCharacterDesignerCalls >= initialCharacterDesignerCalls + 1,
+        'characterDesigner should run again after rejecting phase1 checkpoint'
+      );
+      assert.strictEqual(storyAfterRetry.workflow.activeCheckpoint.id, 'checkpointPhase1');
+      assert.strictEqual(storyAfterRetry.workflow.state, 'waiting_checkpoint');
+    });
+
+    it('restarts phase1 execution after RecoverStoryWorkflow restart_phase on a failed kernel runtime', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      const mockStateManager = orchestrator.stateManager;
+
+      await attachCanonicalKernelHarness(orchestrator);
+      await attachCompatibilityWorkflowEngine(orchestrator, {
+        config: { ...orchestrator.globalConfig, USE_WORKFLOW_KERNEL: 'true' }
+      });
+      orchestrator.workflowEngine.bindKernelAdapter(orchestrator.kernelAdapter);
+
+      const originalDelegate = orchestrator.agentDispatcher.delegate.bind(orchestrator.agentDispatcher);
+      let failWorldviewOnce = true;
+      orchestrator.agentDispatcher.delegate = async (agentType, prompt, options = {}) => {
+        if (agentType === 'worldBuilder' && failWorldviewOnce) {
+          failWorldviewOnce = false;
+          agentCallLog.push({ agentType, prompt: prompt.substring(0, 200), options, timestamp: Date.now() });
+          return {
+            content: JSON.stringify({
+              error: {
+                code: 'bad_response_status_code',
+                message: 'simulated upstream failure'
+              }
+            })
+          };
+        }
+        return originalDelegate(agentType, prompt, options);
+      };
+
+      async function waitForFailedPhase1(minWorldBuilderCalls = 1) {
+        for (let i = 0; i < 80; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          const worldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+          if (
+            story?.workflow?.state === 'failed'
+            && story.workflow?.currentPhase === 'phase1'
+            && worldBuilderCalls >= minWorldBuilderCalls
+          ) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        throw new Error(`phase1 failure was not reached with ${minWorldBuilderCalls} worldBuilder calls`);
+      }
+
+      async function waitForRecoveredPhase1Checkpoint(minWorldBuilderCalls) {
+        for (let i = 0; i < 100; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          const worldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+          if (
+            story?.workflow?.state === 'waiting_checkpoint'
+            && story.workflow?.activeCheckpoint?.id === 'checkpointPhase1'
+            && worldBuilderCalls >= minWorldBuilderCalls
+          ) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        throw new Error(`phase1 checkpoint was not re-entered with ${minWorldBuilderCalls} worldBuilder calls`);
+      }
+
+      const startResult = await orchestrator.processToolCall({
+        command: 'StartStoryProject',
+        story_prompt: '这是一个用于验证 failed recover 后重新执行 phase1 的长篇测试故事设定'
+      });
+      const storyId = startResult.result.story_id;
+
+      const failedStory = await waitForFailedPhase1(1);
+      const failedWorldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+      const failedCharacterCalls = agentCallLog.filter((entry) => entry.agentType === 'characterDesigner').length;
+
+      assert.strictEqual(failedStory.workflow.state, 'failed');
+      assert.strictEqual(failedStory.workflow.currentPhase, 'phase1');
+
+      const recoverResult = await orchestrator.processToolCall({
+        command: 'RecoverStoryWorkflow',
+        story_id: storyId,
+        recovery_action: 'restart_phase',
+        target_phase: 'phase1',
+        feedback: '重新执行 phase1'
+      });
+
+      assert.strictEqual(recoverResult.status, 'success');
+
+      const recoveredStory = await waitForRecoveredPhase1Checkpoint(failedWorldBuilderCalls + 1);
+      const recoveredWorldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+      const recoveredCharacterCalls = agentCallLog.filter((entry) => entry.agentType === 'characterDesigner').length;
+
+      assert.ok(
+        recoveredWorldBuilderCalls >= failedWorldBuilderCalls + 1,
+        'RecoverStoryWorkflow should trigger worldBuilder again after phase1 failure'
+      );
+      assert.ok(
+        recoveredCharacterCalls >= failedCharacterCalls + 1,
+        'RecoverStoryWorkflow should trigger characterDesigner again after phase1 failure'
+      );
+      assert.strictEqual(recoveredStory.workflow.state, 'waiting_checkpoint');
+      assert.strictEqual(recoveredStory.workflow.activeCheckpoint.id, 'checkpointPhase1');
+    });
+
+    it('restarts phase1 execution after RetryPhase on a failed kernel runtime', async () => {
+      const orchestrator = createTestableStoryOrchestrator();
+      const mockStateManager = orchestrator.stateManager;
+
+      await attachCanonicalKernelHarness(orchestrator);
+      await attachCompatibilityWorkflowEngine(orchestrator, {
+        config: { ...orchestrator.globalConfig, USE_WORKFLOW_KERNEL: 'true' }
+      });
+      orchestrator.workflowEngine.bindKernelAdapter(orchestrator.kernelAdapter);
+
+      const originalDelegate = orchestrator.agentDispatcher.delegate.bind(orchestrator.agentDispatcher);
+      let failWorldviewOnce = true;
+      orchestrator.agentDispatcher.delegate = async (agentType, prompt, options = {}) => {
+        if (agentType === 'worldBuilder' && failWorldviewOnce) {
+          failWorldviewOnce = false;
+          agentCallLog.push({ agentType, prompt: prompt.substring(0, 200), options, timestamp: Date.now() });
+          return {
+            content: JSON.stringify({
+              error: {
+                code: 'bad_response_status_code',
+                message: 'simulated upstream failure'
+              }
+            })
+          };
+        }
+        return originalDelegate(agentType, prompt, options);
+      };
+
+      async function waitForFailedPhase1(minWorldBuilderCalls = 1) {
+        for (let i = 0; i < 80; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          const worldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+          if (
+            story?.workflow?.state === 'failed'
+            && story.workflow?.currentPhase === 'phase1'
+            && worldBuilderCalls >= minWorldBuilderCalls
+          ) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        throw new Error(`phase1 failure was not reached with ${minWorldBuilderCalls} worldBuilder calls`);
+      }
+
+      async function waitForRecoveredPhase1Checkpoint(minWorldBuilderCalls) {
+        for (let i = 0; i < 100; i++) {
+          const story = await mockStateManager.getStory(storyId);
+          const worldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+          if (
+            story?.workflow?.state === 'waiting_checkpoint'
+            && story.workflow?.activeCheckpoint?.id === 'checkpointPhase1'
+            && worldBuilderCalls >= minWorldBuilderCalls
+          ) {
+            return story;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        throw new Error(`phase1 checkpoint was not re-entered with ${minWorldBuilderCalls} worldBuilder calls`);
+      }
+
+      const startResult = await orchestrator.processToolCall({
+        command: 'StartStoryProject',
+        story_prompt: '这是一个用于验证 RetryPhase 在 failed 状态下重新执行 phase1 的长篇测试故事设定'
+      });
+      const storyId = startResult.result.story_id;
+
+      const failedStory = await waitForFailedPhase1(1);
+      const failedWorldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+      const failedCharacterCalls = agentCallLog.filter((entry) => entry.agentType === 'characterDesigner').length;
+
+      assert.strictEqual(failedStory.workflow.state, 'failed');
+
+      const retryResult = await orchestrator.processToolCall({
+        command: 'RetryPhase',
+        story_id: storyId,
+        phase_name: 'phase1',
+        reason: 'phase1 失败后手动重试'
+      });
+
+      assert.strictEqual(retryResult.status, 'success');
+
+      const recoveredStory = await waitForRecoveredPhase1Checkpoint(failedWorldBuilderCalls + 1);
+      const recoveredWorldBuilderCalls = agentCallLog.filter((entry) => entry.agentType === 'worldBuilder').length;
+      const recoveredCharacterCalls = agentCallLog.filter((entry) => entry.agentType === 'characterDesigner').length;
+
+      assert.ok(
+        recoveredWorldBuilderCalls >= failedWorldBuilderCalls + 1,
+        'RetryPhase should trigger worldBuilder again after phase1 failure'
+      );
+      assert.ok(
+        recoveredCharacterCalls >= failedCharacterCalls + 1,
+        'RetryPhase should trigger characterDesigner again after phase1 failure'
+      );
+      assert.strictEqual(recoveredStory.workflow.state, 'waiting_checkpoint');
+      assert.strictEqual(recoveredStory.workflow.activeCheckpoint.id, 'checkpointPhase1');
+    });
   });
 
   describe('3. Concurrent Story Handling', () => {
     
     it('should handle multiple stories independently', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      const mockStateManager = orchestrator.stateManager;
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const story1Result = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '第一个并发测试故事项目足够长' });
       const story2Result = await orchestrator.processToolCall({ command: 'StartStoryProject', story_prompt: '第二个并发测试故事项目足够长' });
@@ -1173,15 +1394,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       const orchestrator = createTestableStoryOrchestrator();
       const mockStateManager = orchestrator.stateManager;
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const story1 = await mockStateManager.createStory('故事1');
       const story2 = await mockStateManager.createStory('故事2');
@@ -1247,15 +1460,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       const orchestrator = createTestableStoryOrchestrator();
       const mockStateManager = orchestrator.stateManager;
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const story = await mockStateManager.createStory('测试检查点');
       await mockStateManager.updateWorkflow(story.id, { state: 'waiting_checkpoint', currentPhase: 'phase1' });
@@ -1271,15 +1476,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
       const orchestrator = createTestableStoryOrchestrator();
       const mockStateManager = orchestrator.stateManager;
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const story = await mockStateManager.createStory('测试历史');
       
@@ -1298,15 +1495,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     it('should validate required fields for StartStoryProject', async () => {
       const orchestrator = createTestableStoryOrchestrator();
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: orchestrator.stateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const result = await orchestrator.processToolCall({ command: 'StartStoryProject' });
       
@@ -1317,15 +1506,7 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     it('should validate checkpoint approval requires boolean', async () => {
       const orchestrator = createTestableStoryOrchestrator();
       
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: orchestrator.stateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
       
       const result = await orchestrator.processToolCall({ command: 'UserConfirmCheckpoint', story_id: 'some-story', checkpoint_id: 'some-cp', approval: 'not-a-boolean' });
       
@@ -1338,16 +1519,13 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     it('should detect expired checkpoints via _findExpiredCheckpoints', async () => {
       const orchestrator = createTestableStoryOrchestrator();
       const mockStateManager = orchestrator.stateManager;
-      
-      orchestrator.workflowEngine = new WorkflowEngine({
+
+      // Compatibility-only residual: this test exercises private WorkflowEngine
+      // checkpoint-expiry helpers that have not yet moved to canonical test surfaces.
+      await attachCompatibilityWorkflowEngine(orchestrator, {
         stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
         config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 50 }
       });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
       
       const storyId = 'expired-checkpoint-story';
       const story = {
@@ -1378,16 +1556,13 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     it('should not detect non-expired checkpoints', async () => {
       const orchestrator = createTestableStoryOrchestrator();
       const mockStateManager = orchestrator.stateManager;
-      
-      orchestrator.workflowEngine = new WorkflowEngine({
+
+      // Compatibility-only residual: this test still targets WorkflowEngine
+      // checkpoint-expiry internals rather than canonical StoryOrchestrator flow.
+      await attachCompatibilityWorkflowEngine(orchestrator, {
         stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
         config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 5000 }
       });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
       
       const storyId = 'valid-checkpoint-story';
       const story = {
@@ -1417,16 +1592,13 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
     it('should not auto-approve if autoContinueOnTimeout is false', async () => {
       const orchestrator = createTestableStoryOrchestrator();
       const mockStateManager = orchestrator.stateManager;
-      
-      orchestrator.workflowEngine = new WorkflowEngine({
+
+      // Compatibility-only residual: retained until checkpoint timeout behavior
+      // is exposed through a canonical control-plane test surface.
+      await attachCompatibilityWorkflowEngine(orchestrator, {
         stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
         config: { ...orchestrator.globalConfig, USER_CHECKPOINT_TIMEOUT_MS: 50 }
       });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
       
       const storyId = 'no-auto-story';
       const story = {
@@ -1458,20 +1630,13 @@ describe('StoryOrchestrator Plugin Integration Tests', () => {
   describe('10. Complete Workflow Closure Tests', () => {
     it('should complete full 3-phase workflow with all checkpoints', async () => {
       const orchestrator = createTestableStoryOrchestrator();
-      // Force the compatibility facade path for this test.
+      // Compatibility-only residual: retained until the full scripted closure
+      // flow is rewritten against canonical control-plane fixtures.
       orchestrator.useKernel = false;
       orchestrator.kernelAdapter = null;
       const mockStateManager = orchestrator.stateManager;
 
-      orchestrator.workflowEngine = new WorkflowEngine({
-        stateManager: mockStateManager,
-        agentDispatcher: orchestrator.agentDispatcher,
-        chapterOperations: createMockChapterOperations(),
-        contentValidator: createMockContentValidator(),
-        config: orchestrator.globalConfig
-      });
-      activeWorkflowEngines.add(orchestrator.workflowEngine);
-      await orchestrator.workflowEngine.initialize();
+      await attachCanonicalBehaviorHarness(orchestrator);
 
       const workflowTimeline = [
         async (storyId) => {

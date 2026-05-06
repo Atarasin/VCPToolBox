@@ -122,6 +122,26 @@ describe('WorkflowEngine', () => {
       assert.ok(!report.find((item) => item.id === 'phase1-world-building'));
       assert.strictEqual(WorkflowEngine.compatibilitySurface.state, 'retain-as-shell');
     });
+
+    it('binds an explicitly provided kernel adapter instead of constructing one implicitly', async () => {
+      const adapter = {
+        initialize: mock.fn(async () => {}),
+        getStatus: mock.fn(async () => null)
+      };
+
+      engine.bindKernelAdapter(adapter);
+      await engine.initialize();
+
+      assert.strictEqual(engine.kernelAdapter, adapter);
+      assert.strictEqual(adapter.initialize.mock.calls.length, 1);
+    });
+
+    it('does not construct a hidden control plane when initialized without a bound adapter', async () => {
+      await engine.initialize();
+
+      assert.strictEqual(engine.initialized, true);
+      assert.strictEqual(engine.kernelAdapter, null);
+    });
   });
 
   describe('start(storyId)', () => {
@@ -302,6 +322,13 @@ describe('WorkflowEngine', () => {
       });
       assert.strictEqual(result.currentPhase, 'phase2');
       assert.deepStrictEqual(result.recoveryCursor, { phaseId: 'phase2' });
+    });
+
+    it('returns an explicit compatibility error when recover is called without a control plane', async () => {
+      const result = await engine.recover('story-123', { recoveryAction: 'continue' });
+
+      assert.strictEqual(result.status, 'error');
+      assert.match(result.error, /requires WorkflowKernel control plane/i);
     });
   });
 
