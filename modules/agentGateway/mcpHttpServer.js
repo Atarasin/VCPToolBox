@@ -37,6 +37,12 @@ const DEFAULT_RUNTIME = 'mcp-http';
 const DEFAULT_SSE_SOURCE = 'agent-gateway-mcp-http-sse';
 const DEFAULT_SSE_RUNTIME = 'mcp-http-sse';
 const JSON_RPC_SERVER_ERROR_CODE = -32000;
+const SELF_HEAL_DISCOVERY_METHODS = new Set([
+    'tools/list',
+    'prompts/list',
+    'prompts/get',
+    'resources/list'
+]);
 
 function hasOwn(object, key) {
     return Object.prototype.hasOwnProperty.call(object, key);
@@ -142,6 +148,10 @@ function createSseFrame(eventType, payload) {
 
 function createHeartbeatFrame() {
     return `: heartbeat ${Date.now()}\n\n`;
+}
+
+function isSelfHealingDiscoveryMethod(methodName) {
+    return SELF_HEAL_DISCOVERY_METHODS.has(sanitizeRequestContextValue(methodName, 128));
 }
 
 function parseRawJsonRequest(rawBody) {
@@ -806,6 +816,7 @@ function createMcpHttpServer(options = {}) {
         }
 
         const isInitialize = request.method === 'initialize';
+        const isDiscoveryRequest = isSelfHealingDiscoveryMethod(request.method);
         const providedSessionId = sanitizeRequestContextValue(req.get(MCP_SESSION_HEADER), 256);
 
         if (isInitialize) {
@@ -828,15 +839,43 @@ function createMcpHttpServer(options = {}) {
         }
 
         if (!providedSessionId) {
+            if (isDiscoveryRequest) {
+                if (sessions.size >= maxSessions) {
+                    writeJsonRpcResponse(res, 503, createSessionLimitErrorResponse(requestId, maxSessions));
+                    return;
+                }
+
+                const session = createSession(authResult.auth, {
+                    source: DEFAULT_SOURCE,
+                    runtime: DEFAULT_RUNTIME
+                });
+                await dispatchRequest(req, res, request, session, {
+                    attachSessionHeader: true,
+                    isInitialize: false
+                });
+                return;
+            }
             writeJsonRpcResponse(res, 400, createSessionErrorResponse(requestId, 'missing_session_header'));
             return;
         }
 
-        const session = findSession(providedSessionId);
+        let session = findSession(providedSessionId);
         const ownershipError = ensureSessionOwnership(session, authResult.auth, requestId);
         if (ownershipError) {
-            writeJsonRpcResponse(res, session ? 403 : 404, ownershipError);
-            return;
+            if (!session && isDiscoveryRequest) {
+                if (sessions.size >= maxSessions) {
+                    writeJsonRpcResponse(res, 503, createSessionLimitErrorResponse(requestId, maxSessions));
+                    return;
+                }
+
+                session = createSession(authResult.auth, {
+                    source: DEFAULT_SOURCE,
+                    runtime: DEFAULT_RUNTIME
+                });
+            } else {
+                writeJsonRpcResponse(res, session ? 403 : 404, ownershipError);
+                return;
+            }
         }
 
         await dispatchRequest(req, res, request, session, {

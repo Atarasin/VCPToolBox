@@ -582,6 +582,83 @@ test('streamable HTTP DELETE /mcp terminates the session and invalidates follow-
     }
 }, INTEGRATION_TEST_TIMEOUT_MS);
 
+test('streamable HTTP self-heals discovery requests that omit the session header', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const response = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/list'
+        }, {
+            headers: createGatewayAuthHeaders()
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal(typeof response.headers['mcp-session-id'], 'string');
+        assert.equal(response.body.result.method, 'tools/list');
+        assert.equal(fixture.httpManager.getSessionCount(), 1);
+        assert.equal(fixture.requests.length, 1);
+        assert.equal(fixture.requests[0].params.sessionId, response.headers['mcp-session-id']);
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP self-heals discovery requests that present an unknown session header', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const response = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'prompts/list'
+        }, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'MCP-Session-Id': 'mcphttp_missing-session'
+            }
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal(typeof response.headers['mcp-session-id'], 'string');
+        assert.notEqual(response.headers['mcp-session-id'], 'mcphttp_missing-session');
+        assert.equal(response.body.result.method, 'prompts/list');
+        assert.equal(fixture.httpManager.getSessionCount(), 1);
+        assert.equal(fixture.requests.length, 1);
+        assert.equal(fixture.requests[0].params.sessionId, response.headers['mcp-session-id']);
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP keeps non-discovery requests strict when the session header is missing', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const response = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+                name: 'gateway_memory_search',
+                arguments: {
+                    query: 'test'
+                }
+            }
+        }, {
+            headers: createGatewayAuthHeaders()
+        });
+
+        assert.equal(response.status, 400);
+        assert.equal(response.body.error.data.reason, 'missing_session_header');
+        assert.equal(fixture.httpManager.getSessionCount(), 0);
+        assert.equal(fixture.requests.length, 0);
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
 test('streamable HTTP enforces per-session rate limits', async () => {
     const fixture = await createFixture({
         rateLimitMessages: 1,
