@@ -429,13 +429,6 @@ function applyAgentDiaryPolicyToGatewayArgs(name, args, input = {}) {
     );
     const policy = resolveConfiguredAgentMemoryPolicy({ agentId });
 
-    if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
-        return {
-            args,
-            rejection: null
-        };
-    }
-
     const requestId = normalizeMcpString(input?.requestContext?.requestId, 128);
     const { diary, diaries } = normalizeDiarySelectionArgs(args);
     const requestedDiaries = diaries;

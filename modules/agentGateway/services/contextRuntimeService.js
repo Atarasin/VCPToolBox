@@ -214,7 +214,7 @@ function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
         return aliasMatchedDiaries;
     }
 
-    return normalizedDiaries;
+    return [];
 }
 
 function resolveDiarySelection(body) {

@@ -205,9 +205,9 @@ function resolveDiaryScopes({ authContext, availableDiaries, pluginManager }) {
         };
     }
     return {
-        allowedDiaryNames: normalizedAvailableDiaries,
-        defaultDiaryNames: normalizedAvailableDiaries,
-        policySource: 'unrestricted'
+        allowedDiaryNames: [],
+        defaultDiaryNames: [],
+        policySource: 'restricted'
     };
 }
 
