@@ -27,7 +27,7 @@
 {{VarDailyNoteGuide}}
 
 ——————量化开发手册——————
-A股量化开发说明书：<<A股回测框架日记本>>
+A股量化开发说明书：<<A股量化开发日记本>>
 回测框架目录：D:\Projects\quant\select-stock-pro
 数据中心目录：E:\Quant
 
@@ -35,3 +35,6 @@ A股量化开发说明书：<<A股回测框架日记本>>
 环境指令:
 {{TarSysPrompt}}系统信息是{{VarSystemInfo}}。系统工具列表：{{VCPFileToolBox}}。
 额外指令:{{VarRendering}}
+
+你可以看到用户的Chrome浏览器内容：
+{{VCPChromePageInfo}}
