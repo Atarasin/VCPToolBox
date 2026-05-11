@@ -16,6 +16,7 @@ const {
 } = require('./mcpDescriptorRegistry');
 const {
     areDiaryNamesEquivalent,
+    normalizeDiaryCanonicalName,
     resolveConfiguredAgentMemoryPolicy
 } = require('../policy/mcpAgentMemoryPolicy');
 
@@ -448,9 +449,9 @@ function ensureJobIdentity(input, operation, fallbackAgentId = '', fallbackSessi
 }
 
 function normalizeDiarySelectionArgs(args) {
-    const diary = normalizeMcpString(args?.diary, 256);
+    const diary = normalizeDiaryCanonicalName(normalizeMcpString(args?.diary, 256));
     const diaries = Array.isArray(args?.diaries)
-        ? args.diaries.map((value) => normalizeMcpString(value, 256)).filter(Boolean)
+        ? args.diaries.map((value) => normalizeDiaryCanonicalName(normalizeMcpString(value, 256))).filter(Boolean)
         : [];
     return {
         diary,
@@ -756,7 +757,17 @@ function createBackendProxyMcpAdapter({
                 }
                 response = await backendClient.assembleContext(scopedBody.body, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
-                response = await backendClient.writeMemory(buildBody(input, args, { defaultAgentId }), requestOptions);
+                const writeBody = buildBody(input, args, { defaultAgentId });
+                const resolvedDiary = normalizeDiaryCanonicalName(
+                    normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
+                );
+                if (resolvedDiary) {
+                    writeBody.diary = resolvedDiary;
+                    if (writeBody.target && typeof writeBody.target === 'object') {
+                        writeBody.target.diary = resolvedDiary;
+                    }
+                }
+                response = await backendClient.writeMemory(writeBody, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
                 response = await backendClient.renderAgent(
                     ensureAgentId(input, `tools/call:${name}`, defaultAgentId),

@@ -19,6 +19,7 @@ const {
 } = require('./mcpGatewayOperability');
 const {
     areDiaryNamesEquivalent,
+    normalizeDiaryCanonicalName,
     resolveConfiguredAgentMemoryPolicy
 } = require('../policy/mcpAgentMemoryPolicy');
 const {
@@ -375,10 +376,10 @@ function buildManagedToolContextInput(input, args) {
 }
 
 function normalizeDiarySelectionArgs(args) {
-    const diary = normalizeMcpString(args?.diary, 256);
+    const diary = normalizeDiaryCanonicalName(normalizeMcpString(args?.diary, 256));
     const diaries = Array.isArray(args?.diaries)
         ? args.diaries
-            .map((value) => normalizeMcpString(value, 256))
+            .map((value) => normalizeDiaryCanonicalName(normalizeMcpString(value, 256)))
             .filter(Boolean)
         : [];
     return {
@@ -975,9 +976,19 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             input,
             source,
             async execute({ body }) {
+                const resolvedDiary = normalizeDiaryCanonicalName(
+                    normalizeMcpString(body.diary || body.target?.diary, 256)
+                );
                 return bundle.memoryRuntimeService.writeMemory({
                     body: {
                         ...body,
+                        ...(resolvedDiary ? { diary: resolvedDiary } : {}),
+                        ...(body.target ? {
+                            target: {
+                                ...body.target,
+                                ...(resolvedDiary ? { diary: resolvedDiary } : {})
+                            }
+                        } : {}),
                         idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey,
                         options: {
                             ...body.options,
