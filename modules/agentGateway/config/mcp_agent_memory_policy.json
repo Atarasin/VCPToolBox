@@ -1,31 +1,49 @@
 {
-  "agents": {
-    "Nexus": {
-      "maid": "Nexus",
-      "allowedDiaries": [
-        "Nexus日记本",
-        "Nexus架构设计日记本",
-        "Nexus工程方法论日记本",
-        "Nexus避坑指南日记本"
-      ],
-      "defaultDiaries": [
-        "Nexus日记本",
-        "Nexus架构设计日记本",
-        "Nexus工程方法论日记本",
-        "Nexus避坑指南日记本"
-      ]
-    },
-    "MCPMidas": {
-      "maid": "迈达斯",
-      "allowedDiaries": [
-        "迈达斯日记本",
-        "迈达斯因子与策略库日记本",
-        "迈达斯量化工程日记本",
-        "迈达斯市场复盘日记本"
-      ],
-      "defaultDiaries": [
-        "迈达斯日记本"
-      ]
+    "agents": {
+        "Nexus": {
+            "maid": "Nexus",
+            "allowedDiaries": [
+                "Nexus日记本",
+                "Nexus架构设计日记本",
+                "Nexus工程方法论日记本",
+                "Nexus避坑指南日记本"
+            ],
+            "defaultDiaries": [
+                "Nexus日记本",
+                "Nexus架构设计日记本",
+                "Nexus工程方法论日记本",
+                "Nexus避坑指南日记本"
+            ]
+        },
+        "MCPMidas": {
+            "maid": "迈达斯",
+            "allowedDiaries": [
+                "迈达斯日记本",
+                "迈达斯因子与策略库日记本",
+                "迈达斯量化工程日记本",
+                "迈达斯市场复盘日记本"
+            ],
+            "defaultDiaries": [
+                "迈达斯日记本"
+            ]
+        },
+        "Yui": {
+            "maid": "Yui",
+            "allowedDiaries": [
+                "Yui"
+            ],
+            "defaultDiaries": [
+                "Yui"
+            ]
+        },
+        "main": {
+            "maid": "Yui",
+            "allowedDiaries": [
+                "Yui"
+            ],
+            "defaultDiaries": [
+                "Yui"
+            ]
+        }
     }
-  }
 }

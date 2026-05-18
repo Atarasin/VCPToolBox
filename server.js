@@ -313,7 +313,12 @@ const mcpHttpServer = createMcpHttpServer({
     authTimeoutMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_AUTH_TIMEOUT_MS', 5000),
     rateLimitMessages: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_RATE_LIMIT_MESSAGES', 60),
     rateLimitWindowMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_RATE_LIMIT_WINDOW_MS', 1000),
-    sessionIdleMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_SESSION_IDLE_MS', 10 * 60 * 1000)
+    // sessionIdleMs: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_SESSION_IDLE_MS', 10 * 60 * 1000)
+    sessionIdleMs: (() => {
+        const val = resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_SESSION_IDLE_MS', 10 * 60 * 1000);
+        console.log(`[MCP] sessionIdleMs loaded: ${val}ms (env: ${process.env.VCP_MCP_HTTP_SESSION_IDLE_MS || 'not set'})`);
+        return val;
+    })()
 });
 mcpHttpServer.attach(app);
 
