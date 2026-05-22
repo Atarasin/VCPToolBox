@@ -250,11 +250,12 @@ function applyBase64Memo(items, modifierValue) {
 
 function applyS02Modifiers(items, modifiers) {
     if (!modifiers || typeof modifiers !== 'object' || Array.isArray(modifiers)) {
-        return { items, attachments: [] };
+        return { items, attachments: [], modifierDetails: [] };
     }
 
     let currentItems = items;
     let accumulatedAttachments = [];
+    const modifierDetails = [];
 
     // Apply modifiers in pipeline order (only S02 post-processing modifiers)
     for (const modifierKey of MODIFIER_PIPELINE_ORDER) {
@@ -268,6 +269,9 @@ function applyS02Modifiers(items, modifiers) {
             continue;
         }
 
+        const modifierStartedAt = Date.now();
+        const inputCount = currentItems.length;
+
         if (modifierKey === 'timeDecay') {
             currentItems = applyTimeDecay(currentItems, modifierValue);
         } else if (modifierKey === 'roleValve') {
@@ -277,9 +281,16 @@ function applyS02Modifiers(items, modifiers) {
             currentItems = result.items;
             accumulatedAttachments = accumulatedAttachments.concat(result.attachments);
         }
+
+        modifierDetails.push({
+            modifier: modifierKey,
+            durationMs: Date.now() - modifierStartedAt,
+            inputCount,
+            outputCount: currentItems.length
+        });
     }
 
-    return { items: currentItems, attachments: accumulatedAttachments };
+    return { items: currentItems, attachments: accumulatedAttachments, modifierDetails };
 }
 
 // --- Result processing ---
@@ -328,7 +339,7 @@ function buildRecallResult({ success, agentId, profileName, items, diagnostics, 
         agentId: agentId || null,
         profileName: profileName || null,
         items: Array.isArray(items) ? items : [],
-        diagnostics: diagnostics || { totalDurationMs: 0, rules: [] },
+        diagnostics: diagnostics || { totalDurationMs: 0, rules: [], pipelineStages: [], profileMeta: null },
         error: error || null,
         code: code || null,
         status: status || (success !== false ? 200 : 500)
@@ -355,6 +366,7 @@ function createRecallRuntimeService(deps = {}) {
 
     async function executeRecall({ agentId, query, profileName, requestContext }) {
         const startedAt = Date.now();
+        const pipelineStages = [];
         const normalizedAgentId = normalizeString(agentId);
         const normalizedQuery = normalizeString(query);
 
@@ -376,6 +388,7 @@ function createRecallRuntimeService(deps = {}) {
             });
         }
 
+        const resolveStartedAt = Date.now();
         const resolved = profileResolver.resolveForAgent(normalizedAgentId, profileName);
         if (!resolved.resolved) {
             return buildRecallResult({
@@ -388,8 +401,15 @@ function createRecallRuntimeService(deps = {}) {
                 diagnostics: { totalDurationMs: Date.now() - startedAt, rules: [] }
             });
         }
+        pipelineStages.push({
+            name: 'resolveProfile',
+            durationMs: Date.now() - resolveStartedAt,
+            status: 'ok',
+            detail: { profileName: resolved.profileName, ruleCount: resolved.rules.length }
+        });
 
         // Pre-compute query vector once for all gated evaluations
+        const vectorStartedAt = Date.now();
         let queryVector = null;
         let vectorFetchError = null;
         try {
@@ -404,6 +424,12 @@ function createRecallRuntimeService(deps = {}) {
         } catch (error) {
             vectorFetchError = error;
         }
+        pipelineStages.push({
+            name: 'precomputeVector',
+            durationMs: Date.now() - vectorStartedAt,
+            status: vectorFetchError ? 'error' : 'ok',
+            detail: { vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0 }
+        });
 
         const ruleDiagnostics = [];
         const allItems = [];
@@ -445,6 +471,13 @@ function createRecallRuntimeService(deps = {}) {
                         ruleDiagnostic.status = 'gated';
                         ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
                         ruleDiagnostics.push(ruleDiagnostic);
+                        pipelineStages.push({
+                            name: 'ruleExecution',
+                            ruleIndex,
+                            type: rule.type,
+                            durationMs: ruleDiagnostic.durationMs,
+                            status: ruleDiagnostic.status
+                        });
                         continue;
                     }
                 }
@@ -476,6 +509,13 @@ function createRecallRuntimeService(deps = {}) {
                     ruleDiagnostic.errorMessage = collectResult.error;
                     ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
                     ruleDiagnostics.push(ruleDiagnostic);
+                    pipelineStages.push({
+                        name: 'ruleExecution',
+                        ruleIndex,
+                        type: rule.type,
+                        durationMs: ruleDiagnostic.durationMs,
+                        status: ruleDiagnostic.status
+                    });
                     continue;
                 }
 
@@ -484,6 +524,7 @@ function createRecallRuntimeService(deps = {}) {
                 // --- Apply S02 post-processing modifiers ---
                 const s02Result = applyS02Modifiers(ruleItems, rule.modifiers);
                 ruleItems = s02Result.items;
+                ruleDiagnostic.modifierDetails = s02Result.modifierDetails;
                 if (s02Result.attachments.length > 0) {
                     allAttachments.push(...s02Result.attachments);
                     ruleDiagnostic.attachmentCount = s02Result.attachments.length;
@@ -495,16 +536,31 @@ function createRecallRuntimeService(deps = {}) {
                 ruleDiagnostic.itemCount = ruleItems.length;
                 ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
                 ruleDiagnostics.push(ruleDiagnostic);
+                pipelineStages.push({
+                    name: 'ruleExecution',
+                    ruleIndex,
+                    type: rule.type,
+                    durationMs: ruleDiagnostic.durationMs,
+                    status: ruleDiagnostic.status
+                });
             } catch (error) {
                 ruleDiagnostic.status = 'error';
                 ruleDiagnostic.errorCode = AGW_ERROR_CODES.RECALL_EXECUTION_ERROR;
                 ruleDiagnostic.errorMessage = error.message;
                 ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
                 ruleDiagnostics.push(ruleDiagnostic);
+                pipelineStages.push({
+                    name: 'ruleExecution',
+                    ruleIndex,
+                    type: rule.type,
+                    durationMs: ruleDiagnostic.durationMs,
+                    status: ruleDiagnostic.status
+                });
             }
         }
 
         // --- Merge results: deduplicate → sort → truncate ---
+        const mergeStartedAt = Date.now();
         let mergedItems = deduplicateItems(allItems);
         mergedItems = sortItemsByScore(mergedItems);
 
@@ -515,6 +571,12 @@ function createRecallRuntimeService(deps = {}) {
             : null;
         mergedItems = applyTruncate(mergedItems, globalTruncate);
         mergedItems = mergedItems.map((item) => createRecallBlock(item));
+        pipelineStages.push({
+            name: 'mergeResults',
+            durationMs: Date.now() - mergeStartedAt,
+            status: 'ok',
+            detail: { inputItemCount: allItems.length, outputItemCount: mergedItems.length }
+        });
 
         const totalDurationMs = Date.now() - startedAt;
 
@@ -526,6 +588,12 @@ function createRecallRuntimeService(deps = {}) {
             diagnostics: {
                 totalDurationMs,
                 rules: ruleDiagnostics,
+                pipelineStages,
+                profileMeta: {
+                    profileName: resolved.profileName,
+                    ruleCount: resolved.rules.length,
+                    modifierKeys: [...new Set(resolved.rules.flatMap((r) => Object.keys(r.modifiers || {})))]
+                },
                 attachments: allAttachments.length > 0 ? allAttachments : undefined,
                 vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0,
                 vectorPrecomputeError: vectorFetchError ? vectorFetchError.message : null

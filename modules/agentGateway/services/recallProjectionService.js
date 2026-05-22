@@ -108,12 +108,62 @@ function projectFullTextSections(recallResult) {
     return sections;
 }
 
+function estimateTokenCount(text) {
+    const normalizedText = typeof text === 'string' ? text.trim() : '';
+    if (!normalizedText) {
+        return 0;
+    }
+    const cjkCount = (normalizedText.match(/[\u3400-\u9fff]/g) || []).length;
+    const nonCjkCount = normalizedText.length - cjkCount;
+    return Math.max(1, cjkCount + Math.ceil(nonCjkCount / 4));
+}
+
+function projectSearchItems(items) {
+    if (!Array.isArray(items)) {
+        return [];
+    }
+    return items.map((item) => ({
+        text: normalizeString(item?.text),
+        score: typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+        sourceDiary: normalizeString(item?.sourceDiary),
+        sourceFile: normalizeString(item?.sourceFile),
+        timestamp: item?.timestamp || null,
+        tags: normalizeStringArray(item?.tags)
+    }));
+}
+
+function projectContextBlocks(items) {
+    if (!Array.isArray(items)) {
+        return [];
+    }
+    return items.map((item) => {
+        const text = normalizeString(item?.text);
+        const sourceDiary = normalizeString(item?.sourceDiary);
+        const sourceFile = normalizeString(item?.sourceFile);
+        const tags = normalizeStringArray(item?.tags);
+        const estimatedTokens = estimateTokenCount(text);
+        return {
+            text,
+            metadata: {
+                score: typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+                sourceDiary,
+                sourceFile,
+                timestamp: item?.timestamp || null,
+                tags,
+                estimatedTokens
+            }
+        };
+    });
+}
+
 function createRecallProjectionService() {
     return {
         projectItems,
         projectRecallBlocks,
         projectFullResult,
-        projectFullTextSections
+        projectFullTextSections,
+        projectSearchItems,
+        projectContextBlocks
     };
 }
 
@@ -122,5 +172,7 @@ module.exports = {
     projectItems,
     projectRecallBlocks,
     projectFullResult,
-    projectFullTextSections
+    projectFullTextSections,
+    projectSearchItems,
+    projectContextBlocks
 };

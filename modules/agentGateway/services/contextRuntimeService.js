@@ -12,6 +12,10 @@ const {
 const {
     createAuditLogger
 } = require('../infra/auditLogger');
+const {
+    projectSearchItems,
+    projectContextBlocks
+} = require('./recallProjectionService');
 
 const DEFAULT_RAG_K = 5;
 const MAX_RAG_K = 20;
@@ -542,40 +546,20 @@ function truncateTextByTokens(text, maxTokens) {
     return candidate;
 }
 
-function createRecallBlock(item) {
-    const text = normalizeContextString(item?.text);
-    const sourceDiary = normalizeContextString(item?.sourceDiary);
-    const sourceFile = normalizeContextString(item?.sourceFile);
-    const tags = normalizeContextStringArray(item?.tags);
-    const estimatedTokens = estimateTokenCount(text);
-
-    return {
-        text,
-        metadata: {
-            score: typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
-            sourceDiary,
-            sourceFile,
-            timestamp: item?.timestamp || null,
-            tags,
-            estimatedTokens
-        }
-    };
-}
-
-function deduplicateRecallBlocks(blocks) {
-    const deduplicatedBlocks = new Map();
-    for (const block of blocks) {
+function deduplicateContextItems(items) {
+    const deduplicatedItems = new Map();
+    for (const item of items) {
         const key = [
-            normalizeContextString(block?.metadata?.sourceDiary),
-            normalizeContextString(block?.metadata?.sourceFile),
-            normalizeContextString(block?.text)
+            normalizeContextString(item?.sourceDiary),
+            normalizeContextString(item?.sourceFile),
+            normalizeContextString(item?.text)
         ].join('::');
-        const existingBlock = deduplicatedBlocks.get(key);
-        if (!existingBlock || (block?.metadata?.score || 0) > (existingBlock?.metadata?.score || 0)) {
-            deduplicatedBlocks.set(key, block);
+        const existingItem = deduplicatedItems.get(key);
+        if (!existingItem || (item?.score || 0) > (existingItem?.score || 0)) {
+            deduplicatedItems.set(key, item);
         }
     }
-    return Array.from(deduplicatedBlocks.values());
+    return Array.from(deduplicatedItems.values());
 }
 
 function summarizeScoreStats(values) {
@@ -941,7 +925,7 @@ function createContextRuntimeService(deps = {}) {
                     success: true,
                     requestId,
                     data: {
-                        items: result.items,
+                        items: projectSearchItems(result.items),
                         diagnostics: {
                             mode: ragOptions.mode,
                             targetDiaries: result.targetDiaries,
@@ -1072,45 +1056,46 @@ function createContextRuntimeService(deps = {}) {
                 }
 
                 const maxInjectedTokens = Math.max(1, Math.floor(tokenBudget * maxTokenRatio));
-                const recallBlocks = [];
                 let consumedTokens = 0;
                 const scoredItems = result.items
                     .filter((item) => typeof item.score === 'number' && Number.isFinite(item.score));
                 const eligibleItems = scoredItems.filter((item) => item.score >= minScore);
-                const deduplicatedBlocks = deduplicateRecallBlocks(
-                    eligibleItems.map((item) => createRecallBlock(item))
-                );
+                const deduplicatedItems = deduplicateContextItems(eligibleItems);
 
-                for (const block of deduplicatedBlocks) {
-                    if (recallBlocks.length >= maxBlocks) {
+                const selectedItems = [];
+                for (const item of deduplicatedItems) {
+                    if (selectedItems.length >= maxBlocks) {
                         break;
                     }
-                    const blockTokens = block.metadata.estimatedTokens || estimateTokenCount(block.text);
-                    if (consumedTokens > 0 && consumedTokens + blockTokens > maxInjectedTokens) {
+                    const itemTokens = estimateTokenCount(item.text);
+                    if (consumedTokens > 0 && consumedTokens + itemTokens > maxInjectedTokens) {
                         continue;
                     }
-                    if (blockTokens > maxInjectedTokens) {
+                    if (itemTokens > maxInjectedTokens) {
                         const truncatedText = truncateTextByTokens(
-                            block.text,
+                            item.text,
                             Math.max(1, maxInjectedTokens - consumedTokens)
                         );
                         if (!truncatedText) {
                             continue;
                         }
-                        const truncatedTokens = estimateTokenCount(truncatedText);
-                        recallBlocks.push({
+                        selectedItems.push({
+                            ...item,
                             text: truncatedText,
-                            metadata: {
-                                ...block.metadata,
-                                estimatedTokens: truncatedTokens,
-                                truncated: true
-                            }
+                            __truncated: true
                         });
-                        consumedTokens += truncatedTokens;
+                        consumedTokens += estimateTokenCount(truncatedText);
                         break;
                     }
-                    recallBlocks.push(block);
-                    consumedTokens += blockTokens;
+                    selectedItems.push(item);
+                    consumedTokens += itemTokens;
+                }
+
+                const recallBlocks = projectContextBlocks(selectedItems);
+                for (let i = 0; i < recallBlocks.length; i += 1) {
+                    if (selectedItems[i].__truncated) {
+                        recallBlocks[i].metadata.truncated = true;
+                    }
                 }
 
                 auditLogger.logContext('completed', {
