@@ -379,7 +379,9 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         memoryRuntimeService,
         contextRuntimeService,
         toolRuntimeService,
-        operabilityService
+        operabilityService,
+        recallRuntimeService,
+        recallProjectionService
     } = getGatewayServiceBundle(pluginManager, {
         gatewayVersion: NATIVE_GATEWAY_VERSION
     });
@@ -1048,6 +1050,102 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
 
                 return sendNativeServiceResult(res, {
                     result,
+                    startedAt,
+                    authContext,
+                    operationControl
+                });
+            }
+        });
+    });
+
+    router.post('/recall/run', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-recall');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            providedAuthContext: req.body?.authContext,
+            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            maid: req.body?.maid
+        });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'recall.run',
+            requestContext,
+            authContext,
+            payload: req.body
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
+
+        const agentId = normalizeNativeString(req.body?.agentId || requestContext.agentId);
+        const query = normalizeNativeString(req.body?.query);
+        const profile = normalizeNativeString(req.body?.profile);
+
+        if (!agentId) {
+            return sendNativeErrorWithOperation(res, {
+                status: 400,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: AGW_ERROR_CODES.INVALID_REQUEST,
+                error: 'agentId is required',
+                details: { field: 'agentId' },
+                authContext,
+                operationControl
+            });
+        }
+
+        if (!query) {
+            return sendNativeErrorWithOperation(res, {
+                status: 400,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: AGW_ERROR_CODES.INVALID_REQUEST,
+                error: 'query is required',
+                details: { field: 'query' },
+                authContext,
+                operationControl
+            });
+        }
+
+        return executeNativeOperationSafely({
+            res,
+            startedAt,
+            requestContext,
+            authContext,
+            operationControl,
+            errorCode: AGW_ERROR_CODES.INTERNAL_ERROR,
+            errorMessage: 'Failed to execute gateway recall',
+            handler: async () => {
+                const recallResult = await recallRuntimeService.executeRecall({
+                    agentId,
+                    query,
+                    profileName: profile || undefined,
+                    requestContext
+                });
+
+                const projected = recallProjectionService.projectFullResult(
+                    recallResult,
+                    requestContext.requestId
+                );
+
+                return sendNativeServiceResult(res, {
+                    result: {
+                        success: projected.success,
+                        requestId: requestContext.requestId,
+                        startedAt,
+                        data: projected,
+                        status: projected.status || 200,
+                        code: projected.code,
+                        error: projected.error,
+                        details: projected.error ? { message: projected.error } : undefined
+                    },
                     startedAt,
                     authContext,
                     operationControl

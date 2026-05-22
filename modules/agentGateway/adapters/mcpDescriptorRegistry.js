@@ -13,7 +13,8 @@ const MCP_GATEWAY_TOOL_NAMES = Object.freeze({
     JOB_CANCEL: 'gateway_job_cancel',
     MEMORY_SEARCH: 'gateway_memory_search',
     CONTEXT_ASSEMBLE: 'gateway_context_assemble',
-    MEMORY_WRITE: 'gateway_memory_write'
+    MEMORY_WRITE: 'gateway_memory_write',
+    RECALL_RUN: 'gateway_recall_run'
 });
 
 const MCP_GATEWAY_PROMPT_NAMES = Object.freeze({
@@ -434,6 +435,30 @@ function createGatewayManagedToolDescriptors({
                         type: 'object',
                         additionalProperties: true,
                         description: 'Optional write controls such as deduplication and bridge tool settings.'
+                    }
+                }
+            }
+        }),
+        createGatewayToolDescriptor({
+            name: MCP_GATEWAY_TOOL_NAMES.RECALL_RUN,
+            title: 'Gateway Recall Run',
+            description: 'Execute a preconfigured recall profile for an agent. Supports rag and gated_rag base modes with Time, Group, Rerank, TagMemo, and Truncate modifiers.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['agentId', 'query'],
+                properties: {
+                    agentId: {
+                        type: 'string',
+                        description: 'Target agent identifier used to resolve diary access and recall profile.'
+                    },
+                    query: {
+                        type: 'string',
+                        description: 'Recall query string passed to the retrieval pipeline.'
+                    },
+                    profile: {
+                        type: 'string',
+                        description: 'Optional recall profile name. Defaults to the agent\'s configured default profile or system fallback.'
                     }
                 }
             }
