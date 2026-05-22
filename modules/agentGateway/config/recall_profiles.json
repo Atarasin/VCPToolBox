@@ -38,6 +38,35 @@
               }
             }
           ]
+        },
+        "aemeath-fulltext": {
+          "rules": [
+            {
+              "type": "full_text",
+              "diaries": ["Aemeath日记本"],
+              "modifiers": {
+                "timeDecay": true,
+                "roleValve": true,
+                "base64Memo": true,
+                "truncate": true
+              }
+            }
+          ]
+        },
+        "aemeath-gated-fulltext": {
+          "rules": [
+            {
+              "type": "gated_full_text",
+              "diaries": ["Aemeath日记本"],
+              "gateThreshold": 0.35,
+              "modifiers": {
+                "timeDecay": true,
+                "roleValve": true,
+                "base64Memo": true,
+                "truncate": true
+              }
+            }
+          ]
         }
       }
     }
