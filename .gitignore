@@ -247,6 +247,7 @@ image/urlfetch/f24103af-23bb-486c-85ec-a272ca0aaacd.png
 .gsd/runtime
 
 # ── GSD baseline (auto-generated) ──
+.gsd/
 .gsd-id
 .mcp.json
 .bg-shell/
