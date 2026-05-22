@@ -803,7 +803,8 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
         [MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL]: 'mcp-job-cancel',
         [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
         [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write'
+        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write',
+        [MCP_GATEWAY_TOOL_NAMES.RECALL_RUN]: 'mcp-recall-run'
     }[name] || 'mcp';
 
     // Render remains the high-level MCP entry point and reuses the shared registry contract.
@@ -1003,6 +1004,59 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
         });
     }
 
+    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
+        return executeGatewayManagedOperation({
+            bundle,
+            name,
+            operationName: 'recall.run',
+            args,
+            input,
+            source,
+            async execute({ body, requestContext }) {
+                const agentId = normalizeMcpString(body.agentId || body.requestContext?.agentId || args.agentId);
+                const query = normalizeMcpString(body.query || args.query);
+                const profile = normalizeMcpString(body.profile || args.profile);
+
+                if (!agentId) {
+                    return {
+                        success: false,
+                        requestId: requestContext.requestId,
+                        status: 400,
+                        code: AGW_ERROR_CODES.VALIDATION_ERROR,
+                        error: 'agentId is required'
+                    };
+                }
+                if (!query) {
+                    return {
+                        success: false,
+                        requestId: requestContext.requestId,
+                        status: 400,
+                        code: AGW_ERROR_CODES.VALIDATION_ERROR,
+                        error: 'query is required'
+                    };
+                }
+
+                const result = await bundle.recallRuntimeService.executeRecall({
+                    agentId,
+                    query,
+                    profileName: profile,
+                    requestContext
+                });
+                const projected = bundle.recallProjectionService.projectFullResult(result, requestContext.requestId);
+
+                return {
+                    success: true,
+                    requestId: requestContext.requestId,
+                    data: projected,
+                    audit: {
+                        runtime: requestContext.runtime,
+                        source: requestContext.source
+                    }
+                };
+            }
+        });
+    }
+
     throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
         field: 'name',
         name
@@ -1021,7 +1075,9 @@ function createMcpAdapter(pluginManager, options = {}) {
         contextRuntimeService,
         memoryRuntimeService,
         toolRuntimeService,
-        jobRuntimeService
+        jobRuntimeService,
+        recallRuntimeService,
+        recallProjectionService
     } = bundle;
     const gatewayManagedTools = createGatewayManagedToolDescriptors();
     const gatewayManagedPrompts = createGatewayManagedPromptDescriptors();
@@ -1114,7 +1170,9 @@ function createMcpAdapter(pluginManager, options = {}) {
                     agentRegistryService,
                     contextRuntimeService,
                     memoryRuntimeService,
-                    jobRuntimeService
+                    jobRuntimeService,
+                    recallRuntimeService,
+                    recallProjectionService
                 }, name, args, input);
             }
 

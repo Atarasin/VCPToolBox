@@ -198,6 +198,13 @@ class GatewayBackendClient {
         });
     }
 
+    runRecall(body, requestOptions) {
+        return this.requestJson('POST', '/agent_gateway/recall/run', {
+            body,
+            ...(requestOptions || {})
+        });
+    }
+
     getJob(jobId, query, requestOptions) {
         return this.requestJson('GET', `/agent_gateway/jobs/${encodeURIComponent(jobId)}`, {
             query,

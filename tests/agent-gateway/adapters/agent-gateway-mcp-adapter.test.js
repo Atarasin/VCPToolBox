@@ -273,6 +273,7 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
             'gateway_job_get',
             'gateway_memory_search',
             'gateway_memory_write',
+            'gateway_recall_run',
             'SciCalculator'
         ]
     );
