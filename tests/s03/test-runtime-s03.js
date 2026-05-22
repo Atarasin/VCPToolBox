@@ -395,4 +395,197 @@ describe('RecallRuntimeService S03 diagnostics', () => {
             assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 0);
         });
     });
+
+    // --- T03: AIMemo modifier tests ---
+
+    describe('MODIFIER_PIPELINE_ORDER includes aiMemo', () => {
+        it('has aiMemo after truncate', () => {
+            const truncateIdx = MODIFIER_PIPELINE_ORDER.indexOf('truncate');
+            const aiMemoIdx = MODIFIER_PIPELINE_ORDER.indexOf('aiMemo');
+            assert.ok(truncateIdx >= 0, 'truncate should be in pipeline order');
+            assert.ok(aiMemoIdx >= 0, 'aiMemo should be in pipeline order');
+            assert.ok(aiMemoIdx > truncateIdx, 'aiMemo must come after truncate');
+            assert.strictEqual(aiMemoIdx, MODIFIER_PIPELINE_ORDER.length - 1, 'aiMemo should be last');
+        });
+    });
+
+    describe('applyAIMemo', () => {
+        const { applyAIMemo } = require('../../modules/agentGateway/services/recallRuntimeService');
+
+        it('skips when config is null', async () => {
+            const items = [{ text: 'Test item', sourceDiary: 'TestDiary', score: 0.9 }];
+            const result = await applyAIMemo(items, null);
+            assert.deepStrictEqual(result.items, items);
+            assert.strictEqual(result.summary, null);
+            assert.strictEqual(result.modifierDetail.skipped, true);
+            assert.strictEqual(result.modifierDetail.modifier, 'aiMemo');
+            assert.strictEqual(result.modifierDetail.inputCount, 1);
+        });
+
+        it('skips when config is empty object', async () => {
+            const items = [{ text: 'Test item', sourceDiary: 'TestDiary', score: 0.9 }];
+            const result = await applyAIMemo(items, {});
+            assert.strictEqual(result.modifierDetail.skipped, true);
+            assert.strictEqual(result.summary, null);
+        });
+
+        it('skips when config missing url', async () => {
+            const items = [{ text: 'Test', score: 0.5 }];
+            const result = await applyAIMemo(items, { apiKey: 'k', model: 'm' });
+            assert.strictEqual(result.modifierDetail.skipped, true);
+        });
+
+        it('skips when config missing apiKey', async () => {
+            const items = [{ text: 'Test', score: 0.5 }];
+            const result = await applyAIMemo(items, { url: 'http://x', model: 'm' });
+            assert.strictEqual(result.modifierDetail.skipped, true);
+        });
+
+        it('skips when config missing model', async () => {
+            const items = [{ text: 'Test', score: 0.5 }];
+            const result = await applyAIMemo(items, { url: 'http://x', apiKey: 'k' });
+            assert.strictEqual(result.modifierDetail.skipped, true);
+        });
+
+        it('skips when items array is empty', async () => {
+            const result = await applyAIMemo([], { url: 'http://x', apiKey: 'k', model: 'm' });
+            assert.strictEqual(result.modifierDetail.skipped, true);
+            assert.strictEqual(result.modifierDetail.inputCount, 0);
+        });
+
+        it('returns modifierDetail with correct structure on skip', async () => {
+            const items = [{ text: 'A', score: 0.9 }];
+            const result = await applyAIMemo(items, null);
+            const detail = result.modifierDetail;
+            assert.strictEqual(detail.modifier, 'aiMemo');
+            assert.strictEqual(typeof detail.durationMs, 'number');
+            assert.ok(detail.durationMs >= 0);
+            assert.strictEqual(detail.inputCount, 1);
+            assert.strictEqual(detail.skipped, true);
+            assert.strictEqual(detail.summaryLength, null);
+            assert.strictEqual(detail.error, null);
+        });
+
+        it('records error in modifierDetail on API failure', async () => {
+            // Provide a config that would trigger an API call to a non-existent URL
+            const items = [{ text: 'Test item for error', sourceDiary: 'Test', score: 0.9 }];
+            const result = await applyAIMemo(items, {
+                url: 'http://127.0.0.1:1/',
+                apiKey: 'test-key',
+                model: 'test-model'
+            });
+            // Should not throw — error is captured in modifierDetail
+            assert.strictEqual(result.summary, null);
+            assert.ok(result.modifierDetail.error, 'should have error message');
+            assert.ok(result.modifierDetail.error.length > 0);
+            assert.strictEqual(typeof result.modifierDetail.durationMs, 'number');
+            assert.ok(result.modifierDetail.durationMs >= 0);
+        });
+    });
+
+    describe('executeRecall AIMemo pipeline stage', () => {
+        const mockPluginManager = createMockPluginManager();
+        const mockContextService = createMockContextRuntimeService();
+
+        it('includes aiMemo pipeline stage when aiMemo modifier is enabled', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', modifiers: { aiMemo: true } }
+            ]);
+            // aiMemoConfigLoader returns null (env vars not set), so stage will be 'skipped'
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService,
+                aiMemoConfigLoader: () => null
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            const aiMemoStage = result.diagnostics.pipelineStages.find((s) => s.name === 'aiMemo');
+            assert.ok(aiMemoStage, 'aiMemo pipeline stage should exist');
+            assert.strictEqual(aiMemoStage.status, 'skipped');
+            assert.ok(aiMemoStage.detail.skipped, 'should indicate skipped');
+        });
+
+        it('does not include aiMemo pipeline stage when aiMemo modifier is not enabled', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', modifiers: { rerank: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            const aiMemoStage = result.diagnostics.pipelineStages.find((s) => s.name === 'aiMemo');
+            assert.strictEqual(aiMemoStage, undefined, 'aiMemo stage should not exist');
+        });
+
+        it('aiMemo stage is added after mergeResults in pipeline order', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', modifiers: { aiMemo: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService,
+                aiMemoConfigLoader: () => null
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            const stageNames = result.diagnostics.pipelineStages.map((s) => s.name);
+            const mergeIdx = stageNames.indexOf('mergeResults');
+            const aiMemoIdx = stageNames.indexOf('aiMemo');
+            assert.ok(mergeIdx >= 0, 'mergeResults should exist');
+            assert.ok(aiMemoIdx >= 0, 'aiMemo should exist');
+            assert.ok(aiMemoIdx > mergeIdx, 'aiMemo should be after mergeResults');
+        });
+
+        it('aiMemo modifierDetail is attached to last rule diagnostic', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', modifiers: { aiMemo: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService,
+                aiMemoConfigLoader: () => null
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            const lastRuleDiag = result.diagnostics.rules[result.diagnostics.rules.length - 1];
+            assert.ok(Array.isArray(lastRuleDiag.modifierDetails));
+            const aiMemoDetail = lastRuleDiag.modifierDetails.find((d) => d.modifier === 'aiMemo');
+            assert.ok(aiMemoDetail, 'aiMemo detail should be in last rule modifierDetails');
+            assert.strictEqual(aiMemoDetail.skipped, true);
+            assert.strictEqual(typeof aiMemoDetail.durationMs, 'number');
+        });
+
+        it('does not include summary in diagnostics when aiMemo is not enabled', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([{ type: 'rag' }]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.diagnostics.summary, undefined, 'summary should be undefined when aiMemo not enabled');
+        });
+    });
 });

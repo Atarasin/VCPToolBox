@@ -17,7 +17,8 @@ const ALLOWED_MODIFIERS = Object.freeze(new Set([
     ...ALLOWED_MODIFIERS_S01,
     'timeDecay',
     'roleValve',
-    'base64Memo'
+    'base64Memo',
+    'aiMemo'
 ]));
 
 const ALLOWED_RULE_TYPES = Object.freeze(new Set([

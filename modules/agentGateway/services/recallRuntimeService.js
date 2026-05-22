@@ -1,3 +1,4 @@
+const axios = require('axios');
 const { AGW_ERROR_CODES } = require('../contracts/errorCodes');
 const { collectRagItems } = require('./contextRuntimeService');
 
@@ -16,7 +17,8 @@ const MODIFIER_PIPELINE_ORDER = Object.freeze([
     'timeDecay',
     'roleValve',
     'base64Memo',
-    'truncate'
+    'truncate',
+    'aiMemo'
 ]);
 
 const GATED_RULE_TYPES = new Set(['gated_rag', 'gated_full_text']);
@@ -248,6 +250,92 @@ function applyBase64Memo(items, modifierValue) {
     return { items: processedItems, attachments };
 }
 
+// --- AIMemo Post-Recall Summarization ---
+
+function defaultAiMemoConfigLoader() {
+    const url = (process.env.AIMemoUrl || '').trim();
+    const apiKey = (process.env.AIMemoApi || '').trim();
+    const model = (process.env.AIMemoModel || '').trim();
+    if (url && apiKey && model) {
+        return { url, apiKey, model };
+    }
+    return null;
+}
+
+const AIMEMO_PROMPT = [
+    '你是一个知识摘要助手。以下是检索系统为用户查询召回的相关记忆条目。',
+    '请阅读所有条目，生成一段结构化的中文摘要，突出关键信息、重要事实和有价值的关联。',
+    '如果条目数量较多，请按主题或时间线组织摘要。',
+    '',
+    '召回条目：',
+    '{{knowledge_base}}',
+    '',
+    '请生成摘要：'
+].join('\n');
+
+async function applyAIMemo(items, config) {
+    const startedAt = Date.now();
+    const modifierDetail = {
+        modifier: 'aiMemo',
+        durationMs: 0,
+        inputCount: Array.isArray(items) ? items.length : 0,
+        skipped: false,
+        summaryLength: null,
+        error: null
+    };
+
+    // Silently skip if config is missing or items are empty
+    if (!config || !config.url || !config.apiKey || !config.model) {
+        modifierDetail.skipped = true;
+        modifierDetail.durationMs = Date.now() - startedAt;
+        return { items, summary: null, modifierDetail };
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+        modifierDetail.skipped = true;
+        modifierDetail.durationMs = Date.now() - startedAt;
+        return { items, summary: null, modifierDetail };
+    }
+
+    try {
+        const knowledgeBase = items.map((item, idx) => {
+            const text = normalizeString(item?.text);
+            const sourceDiary = normalizeString(item?.sourceDiary);
+            const sourceFile = normalizeString(item?.sourceFile);
+            const sourceLabel = sourceDiary || sourceFile || '';
+            return `[${idx + 1}]${sourceLabel ? ` (${sourceLabel})` : ''}\n${text}`;
+        }).join('\n\n---\n\n');
+
+        const prompt = AIMEMO_PROMPT.replace('{{knowledge_base}}', knowledgeBase);
+
+        const response = await axios.post(
+            `${config.url}v1/chat/completions`,
+            {
+                model: config.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.3,
+                max_tokens: 2000
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${config.apiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 60000
+            }
+        );
+
+        const summary = response.data?.choices?.[0]?.message?.content || null;
+        modifierDetail.summaryLength = summary ? summary.length : null;
+        modifierDetail.durationMs = Date.now() - startedAt;
+        return { items, summary, modifierDetail };
+    } catch (error) {
+        modifierDetail.durationMs = Date.now() - startedAt;
+        modifierDetail.error = error.message;
+        return { items, summary: null, modifierDetail };
+    }
+}
+
 function applyS02Modifiers(items, modifiers) {
     if (!modifiers || typeof modifiers !== 'object' || Array.isArray(modifiers)) {
         return { items, attachments: [], modifierDetails: [] };
@@ -260,7 +348,7 @@ function applyS02Modifiers(items, modifiers) {
     // Apply modifiers in pipeline order (only S02 post-processing modifiers)
     for (const modifierKey of MODIFIER_PIPELINE_ORDER) {
         if (modifierKey === 'time' || modifierKey === 'group' || modifierKey === 'tagMemo' ||
-            modifierKey === 'rerank' || modifierKey === 'truncate') {
+            modifierKey === 'rerank' || modifierKey === 'truncate' || modifierKey === 'aiMemo') {
             continue;
         }
 
@@ -359,6 +447,7 @@ function createRecallRuntimeService(deps = {}) {
     const pluginManager = deps.pluginManager;
     const profileResolver = deps.recallProfileResolver;
     const embeddingUtilsLoader = deps.embeddingUtilsLoader || (() => require('../../../EmbeddingUtils'));
+    const aiMemoConfigLoader = deps.aiMemoConfigLoader || defaultAiMemoConfigLoader;
 
     if (!profileResolver) {
         throw new Error('[RecallRuntimeService] recallProfileResolver is required');
@@ -578,6 +667,40 @@ function createRecallRuntimeService(deps = {}) {
             detail: { inputItemCount: allItems.length, outputItemCount: mergedItems.length }
         });
 
+        // --- AIMemo post-recall summarization ---
+        let aiMemoSummary = null;
+        const globalAiMemo = resolved.rules[0]?.modifiers?.aiMemo
+            ? parseModifierValue('aiMemo', resolved.rules[0].modifiers.aiMemo)
+            : false;
+
+        if (globalAiMemo) {
+            const aiMemoConfig = aiMemoConfigLoader();
+            const aiMemoResult = await applyAIMemo(mergedItems, aiMemoConfig);
+            if (aiMemoResult.modifierDetail) {
+                // Attach modifier detail to the last rule diagnostic for per-modifier reporting
+                const lastRuleDiag = ruleDiagnostics[ruleDiagnostics.length - 1];
+                if (lastRuleDiag) {
+                    if (!lastRuleDiag.modifierDetails) {
+                        lastRuleDiag.modifierDetails = [];
+                    }
+                    lastRuleDiag.modifierDetails.push(aiMemoResult.modifierDetail);
+                }
+                pipelineStages.push({
+                    name: 'aiMemo',
+                    durationMs: aiMemoResult.modifierDetail.durationMs,
+                    status: aiMemoResult.summary ? 'ok'
+                        : (aiMemoResult.modifierDetail.error ? 'error' : 'skipped'),
+                    detail: {
+                        inputCount: aiMemoResult.modifierDetail.inputCount,
+                        skipped: aiMemoResult.modifierDetail.skipped,
+                        summaryLength: aiMemoResult.modifierDetail.summaryLength,
+                        error: aiMemoResult.modifierDetail.error || undefined
+                    }
+                });
+            }
+            aiMemoSummary = aiMemoResult.summary;
+        }
+
         const totalDurationMs = Date.now() - startedAt;
 
         return buildRecallResult({
@@ -596,7 +719,8 @@ function createRecallRuntimeService(deps = {}) {
                 },
                 attachments: allAttachments.length > 0 ? allAttachments : undefined,
                 vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0,
-                vectorPrecomputeError: vectorFetchError ? vectorFetchError.message : null
+                vectorPrecomputeError: vectorFetchError ? vectorFetchError.message : null,
+                summary: aiMemoSummary || undefined
             }
         });
     }
@@ -619,7 +743,10 @@ module.exports = {
     applyTimeDecay,
     applyRoleValve,
     applyBase64Memo,
+    applyAIMemo,
     applyS02Modifiers,
+    defaultAiMemoConfigLoader,
+    AIMEMO_PROMPT,
     MODIFIER_PIPELINE_ORDER,
     MODIFIER_TO_RAG_OPTION,
     GATED_RULE_TYPES,
