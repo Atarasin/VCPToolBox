@@ -1177,5 +1177,6 @@ function createContextRuntimeService(deps = {}) {
 }
 
 module.exports = {
-    createContextRuntimeService
+    createContextRuntimeService,
+    collectRagItems
 };

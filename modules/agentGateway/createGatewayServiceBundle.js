@@ -45,6 +45,15 @@ const {
 const {
     createOperabilityService
 } = require('./services/operabilityService');
+const {
+    RecallProfileResolver
+} = require('./policy/recallProfileResolver');
+const {
+    createRecallRuntimeService
+} = require('./services/recallRuntimeService');
+const {
+    createRecallProjectionService
+} = require('./services/recallProjectionService');
 const DEFAULT_GATEWAY_VERSION = 'v1';
 const DEFAULT_AUDIT_PREFIX = '[AgentGatewayAudit]';
 const DEFAULT_MEMORY_BRIDGE_TOOL_NAME = 'vcp_memory_write';
@@ -118,6 +127,13 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         agentPolicyResolver,
         capabilityService
     });
+    const recallProfileResolver = new RecallProfileResolver();
+    const recallRuntimeService = createRecallRuntimeService({
+        pluginManager,
+        contextRuntimeService,
+        recallProfileResolver
+    });
+    const recallProjectionService = createRecallProjectionService();
 
     pluginManager.__agentGatewayServiceBundle = {
         schemaRegistry,
@@ -133,6 +149,9 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         contextRuntimeService,
         toolRuntimeService,
         operabilityService,
+        recallProfileResolver,
+        recallRuntimeService,
+        recallProjectionService,
         jobStatus: JOB_STATUS,
         gatewayVersion: options.gatewayVersion || DEFAULT_GATEWAY_VERSION,
         memoryBridgeToolName: options.memoryBridgeToolName || DEFAULT_MEMORY_BRIDGE_TOOL_NAME

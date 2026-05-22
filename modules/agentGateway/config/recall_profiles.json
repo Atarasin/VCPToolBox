@@ -1,0 +1,45 @@
+{
+  "agents": {
+    "Nexus": {
+      "defaultProfile": "nexus-default",
+      "profiles": {
+        "nexus-default": {
+          "rules": [
+            {
+              "type": "rag",
+              "diaries": ["Nexus日记本"],
+              "modifiers": {
+                "time": true,
+                "group": true,
+                "rerank": true,
+                "tagMemo": true,
+                "truncate": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Aemeath": {
+      "defaultProfile": "aemeath-gated",
+      "profiles": {
+        "aemeath-gated": {
+          "rules": [
+            {
+              "type": "gated_rag",
+              "diaries": ["Aemeath日记本"],
+              "gateThreshold": 0.35,
+              "modifiers": {
+                "time": false,
+                "group": true,
+                "rerank": false,
+                "tagMemo": true,
+                "truncate": true
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

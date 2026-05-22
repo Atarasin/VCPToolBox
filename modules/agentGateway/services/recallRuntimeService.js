@@ -1,0 +1,404 @@
+const { AGW_ERROR_CODES } = require('../contracts/errorCodes');
+const { collectRagItems } = require('./contextRuntimeService');
+
+const MODIFIER_TO_RAG_OPTION = Object.freeze({
+    time: 'timeAware',
+    group: 'groupAware',
+    rerank: 'rerank',
+    tagMemo: 'tagMemo'
+});
+
+const MODIFIER_PIPELINE_ORDER = Object.freeze([
+    'time',
+    'group',
+    'tagMemo',
+    'rerank',
+    'truncate'
+]);
+
+function normalizeString(value) {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeStringArray(value) {
+    if (Array.isArray(value)) {
+        return value.map((item) => normalizeString(item)).filter(Boolean);
+    }
+    if (typeof value === 'string') {
+        return value.split(',').map((item) => item.trim()).filter(Boolean);
+    }
+    return [];
+}
+
+function parseModifierValue(key, value) {
+    if (key === 'truncate') {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        return normalized === 'true' || normalized === '1';
+    }
+    return Boolean(value);
+}
+
+function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
+    const normalizedModifiers = modifiers && typeof modifiers === 'object' && !Array.isArray(modifiers)
+        ? modifiers
+        : {};
+
+    const options = {
+        mode: 'rag',
+        k: baseK,
+        timeAware: false,
+        groupAware: false,
+        rerank: false,
+        tagMemo: false
+    };
+
+    for (const modifierKey of MODIFIER_PIPELINE_ORDER) {
+        if (modifierKey === 'truncate') {
+            continue;
+        }
+        const ragOptionKey = MODIFIER_TO_RAG_OPTION[modifierKey];
+        if (ragOptionKey && normalizedModifiers[modifierKey] !== undefined) {
+            options[ragOptionKey] = parseModifierValue(modifierKey, normalizedModifiers[modifierKey]);
+        }
+    }
+
+    const truncateValue = parseModifierValue('truncate', normalizedModifiers.truncate);
+
+    return { options, truncate: truncateValue };
+}
+
+function computeCosineSimilarity(vectorA, vectorB) {
+    if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length || vectorA.length === 0) {
+        return 0;
+    }
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let index = 0; index < vectorA.length; index += 1) {
+        dotProduct += vectorA[index] * vectorB[index];
+        normA += vectorA[index] * vectorA[index];
+        normB += vectorB[index] * vectorB[index];
+    }
+    if (normA === 0 || normB === 0) {
+        return 0;
+    }
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function getQueryVector(query, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
+    if (ragPlugin?.getSingleEmbeddingCached) {
+        return await ragPlugin.getSingleEmbeddingCached(query);
+    }
+    const { getEmbeddingsBatch } = embeddingUtilsLoader();
+    const [vector] = await getEmbeddingsBatch([query], {
+        apiKey: knowledgeBaseManager?.config?.apiKey,
+        apiUrl: knowledgeBaseManager?.config?.apiUrl,
+        model: knowledgeBaseManager?.config?.model
+    });
+    return vector || null;
+}
+
+function getDiaryConceptVectors(ragPlugin, diaries) {
+    const vectors = [];
+    const cache = ragPlugin?.enhancedVectorCache;
+    if (!cache || typeof cache !== 'object') {
+        return vectors;
+    }
+    for (const diary of normalizeStringArray(diaries)) {
+        const vec = cache[diary];
+        if (Array.isArray(vec) && vec.length > 0) {
+            vectors.push({ diary, vector: vec });
+        }
+    }
+    return vectors;
+}
+
+async function evaluateGate(rule, queryVector, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
+    if (rule.type !== 'gated_rag') {
+        return { passed: true, similarity: null };
+    }
+    if (typeof rule.gateThreshold !== 'number' || !Number.isFinite(rule.gateThreshold)) {
+        return { passed: true, similarity: null };
+    }
+    if (!Array.isArray(queryVector) || queryVector.length === 0) {
+        return { passed: false, similarity: 0 };
+    }
+
+    const conceptVectors = getDiaryConceptVectors(ragPlugin, rule.diaries);
+    if (conceptVectors.length === 0) {
+        // No concept vectors available — gate cannot block, pass through
+        return { passed: true, similarity: null };
+    }
+
+    let maxSimilarity = 0;
+    for (const { vector } of conceptVectors) {
+        const similarity = computeCosineSimilarity(queryVector, vector);
+        if (similarity > maxSimilarity) {
+            maxSimilarity = similarity;
+        }
+    }
+
+    return {
+        passed: maxSimilarity >= rule.gateThreshold,
+        similarity: maxSimilarity
+    };
+}
+
+function deduplicateItems(items) {
+    const seen = new Map();
+    for (const item of items) {
+        const key = [
+            normalizeString(item?.sourceDiary),
+            normalizeString(item?.sourceFile || item?.source_file),
+            normalizeString(item?.text)
+        ].join('::');
+        const existing = seen.get(key);
+        if (!existing || (item?.score || 0) > (existing?.score || 0)) {
+            seen.set(key, item);
+        }
+    }
+    return Array.from(seen.values());
+}
+
+function sortItemsByScore(items) {
+    return [...items].sort((left, right) => (right?.score || 0) - (left?.score || 0));
+}
+
+function applyTruncate(items, truncateLimit) {
+    if (typeof truncateLimit !== 'number' || !Number.isFinite(truncateLimit) || truncateLimit <= 0) {
+        return items;
+    }
+    return items.slice(0, truncateLimit);
+}
+
+function createRecallBlock(item) {
+    return {
+        text: normalizeString(item?.text),
+        score: typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+        sourceDiary: normalizeString(item?.sourceDiary),
+        sourceFile: normalizeString(item?.sourceFile || item?.source_file),
+        timestamp: item?.timestamp || null,
+        tags: normalizeStringArray(item?.tags || item?.matchedTags)
+    };
+}
+
+function buildRecallResult({ success, agentId, profileName, items, diagnostics, error, code, status }) {
+    return {
+        success: success !== false,
+        agentId: agentId || null,
+        profileName: profileName || null,
+        items: Array.isArray(items) ? items : [],
+        diagnostics: diagnostics || { totalDurationMs: 0, rules: [] },
+        error: error || null,
+        code: code || null,
+        status: status || (success !== false ? 200 : 500)
+    };
+}
+
+/**
+ * Recall Runtime Service — 编译并执行预置召回配置。
+ *
+ * 工厂函数接收依赖注入：
+ *   - pluginManager          插件总线（用于 collectRagItems 定位 RAGDiaryPlugin / KnowledgeBaseManager）
+ *   - contextRuntimeService   上下文运行时服务（提供 collectRagItems）
+ *   - recallProfileResolver   配置文件解析器（resolveForAgent）
+ *   - embeddingUtilsLoader    Embedding 工具加载器（可选，用于 gated_rag 向量计算）
+ */
+function createRecallRuntimeService(deps = {}) {
+    const pluginManager = deps.pluginManager;
+    const profileResolver = deps.recallProfileResolver;
+    const embeddingUtilsLoader = deps.embeddingUtilsLoader || (() => require('../../../EmbeddingUtils'));
+
+    if (!profileResolver) {
+        throw new Error('[RecallRuntimeService] recallProfileResolver is required');
+    }
+
+    async function executeRecall({ agentId, query, profileName, requestContext }) {
+        const startedAt = Date.now();
+        const normalizedAgentId = normalizeString(agentId);
+        const normalizedQuery = normalizeString(query);
+
+        if (!normalizedAgentId) {
+            return buildRecallResult({
+                success: false,
+                code: AGW_ERROR_CODES.RECALL_INVALID_QUERY,
+                error: 'agentId is required',
+                status: 400
+            });
+        }
+        if (!normalizedQuery) {
+            return buildRecallResult({
+                success: false,
+                agentId: normalizedAgentId,
+                code: AGW_ERROR_CODES.RECALL_INVALID_QUERY,
+                error: 'query is required',
+                status: 400
+            });
+        }
+
+        const resolved = profileResolver.resolveForAgent(normalizedAgentId, profileName);
+        if (!resolved.resolved) {
+            return buildRecallResult({
+                success: false,
+                agentId: normalizedAgentId,
+                profileName: resolved.profileName || profileName || null,
+                code: resolved.code || AGW_ERROR_CODES.RECALL_NO_PROFILE,
+                error: `No recall profile resolved for agent "${normalizedAgentId}"`,
+                status: 404,
+                diagnostics: { totalDurationMs: Date.now() - startedAt, rules: [] }
+            });
+        }
+
+        // Pre-compute query vector once for all gated_rag evaluations
+        let queryVector = null;
+        let vectorFetchError = null;
+        try {
+            const ctxService = deps.contextRuntimeService;
+            const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
+                ? ctxService.getKnowledgeBaseManager(pluginManager)
+                : null;
+            const ragPlugin = ctxService?.getRagPlugin
+                ? ctxService.getRagPlugin(pluginManager)
+                : null;
+            queryVector = await getQueryVector(normalizedQuery, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader);
+        } catch (error) {
+            vectorFetchError = error;
+        }
+
+        const ruleDiagnostics = [];
+        const allItems = [];
+
+        for (let ruleIndex = 0; ruleIndex < resolved.rules.length; ruleIndex += 1) {
+            const rule = resolved.rules[ruleIndex];
+            const ruleStartedAt = Date.now();
+            const ruleDiagnostic = {
+                ruleIndex,
+                type: rule.type,
+                status: 'pending',
+                durationMs: 0,
+                itemCount: 0
+            };
+
+            try {
+                // --- Gate evaluation for gated_rag ---
+                if (rule.type === 'gated_rag') {
+                    const ctxService = deps.contextRuntimeService;
+                    const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
+                        ? ctxService.getKnowledgeBaseManager(pluginManager)
+                        : null;
+                    const ragPlugin = ctxService?.getRagPlugin
+                        ? ctxService.getRagPlugin(pluginManager)
+                        : null;
+
+                    const gateResult = await evaluateGate(
+                        rule,
+                        queryVector,
+                        ragPlugin,
+                        knowledgeBaseManager,
+                        embeddingUtilsLoader
+                    );
+                    ruleDiagnostic.gatePassed = gateResult.passed;
+                    ruleDiagnostic.gateSimilarity = gateResult.similarity;
+
+                    if (!gateResult.passed) {
+                        ruleDiagnostic.status = 'gated';
+                        ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
+                        ruleDiagnostics.push(ruleDiagnostic);
+                        continue;
+                    }
+                }
+
+                // --- Build ragOptions from modifiers ---
+                const { options: ragOptions, truncate } = buildRagOptionsFromModifiers(rule.modifiers);
+
+                // --- Execute RAG via collectRagItems ---
+                const collectResult = await collectRagItems({
+                    pluginManager,
+                    query: normalizedQuery,
+                    requestedDiaries: rule.diaries,
+                    adapterAppliedDefaultDiaryPolicy: false,
+                    agentId: normalizedAgentId,
+                    authContext: requestContext,
+                    ragOptions,
+                    embeddingUtilsLoader,
+                    agentPolicyResolver: null
+                });
+
+                if (!collectResult.success) {
+                    ruleDiagnostic.status = 'error';
+                    ruleDiagnostic.errorCode = collectResult.code;
+                    ruleDiagnostic.errorMessage = collectResult.error;
+                    ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
+                    ruleDiagnostics.push(ruleDiagnostic);
+                    continue;
+                }
+
+                const ruleItems = Array.isArray(collectResult.items) ? collectResult.items : [];
+                allItems.push(...ruleItems);
+
+                ruleDiagnostic.status = 'ok';
+                ruleDiagnostic.itemCount = ruleItems.length;
+                ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
+                ruleDiagnostics.push(ruleDiagnostic);
+            } catch (error) {
+                ruleDiagnostic.status = 'error';
+                ruleDiagnostic.errorCode = AGW_ERROR_CODES.RECALL_EXECUTION_ERROR;
+                ruleDiagnostic.errorMessage = error.message;
+                ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
+                ruleDiagnostics.push(ruleDiagnostic);
+            }
+        }
+
+        // --- Merge results: deduplicate → sort → truncate ---
+        let mergedItems = deduplicateItems(allItems);
+        mergedItems = sortItemsByScore(mergedItems);
+
+        // Apply global truncate from profile-level modifiers if any,
+        // otherwise use the first rule's truncate as a sensible default.
+        const globalTruncate = resolved.rules[0]?.modifiers?.truncate
+            ? parseModifierValue('truncate', resolved.rules[0].modifiers.truncate)
+            : null;
+        mergedItems = applyTruncate(mergedItems, globalTruncate);
+        mergedItems = mergedItems.map((item) => createRecallBlock(item));
+
+        const totalDurationMs = Date.now() - startedAt;
+
+        return buildRecallResult({
+            success: true,
+            agentId: normalizedAgentId,
+            profileName: resolved.profileName,
+            items: mergedItems,
+            diagnostics: {
+                totalDurationMs,
+                rules: ruleDiagnostics,
+                vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0,
+                vectorPrecomputeError: vectorFetchError ? vectorFetchError.message : null
+            }
+        });
+    }
+
+    return {
+        executeRecall
+    };
+}
+
+module.exports = {
+    createRecallRuntimeService,
+    buildRagOptionsFromModifiers,
+    computeCosineSimilarity,
+    evaluateGate,
+    deduplicateItems,
+    sortItemsByScore,
+    applyTruncate,
+    createRecallBlock,
+    buildRecallResult,
+    MODIFIER_PIPELINE_ORDER,
+    MODIFIER_TO_RAG_OPTION
+};
