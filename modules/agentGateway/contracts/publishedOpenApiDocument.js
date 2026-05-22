@@ -303,6 +303,7 @@ function createPublishedOpenApiDocument() {
             { name: 'Agents' },
             { name: 'Operations' },
             { name: 'Memory' },
+            { name: 'Recall' },
             { name: 'Context' },
             { name: 'Tools' },
             { name: 'Jobs' },
@@ -512,6 +513,27 @@ function createPublishedOpenApiDocument() {
                         400: { $ref: '#/components/responses/ValidationError' },
                         403: { $ref: '#/components/responses/Forbidden' },
                         404: { $ref: '#/components/responses/NotFound' },
+                        500: { $ref: '#/components/responses/InternalError' }
+                    }
+                }
+            },
+            '/agent_gateway/recall/run': {
+                post: {
+                    tags: ['Recall'],
+                    summary: '执行 gateway recall 并返回完整结果',
+                    operationId: 'runAgentGatewayRecall',
+                    requestBody: {
+                        required: true,
+                        content: {
+                            'application/json': {
+                                schema: { $ref: '#/components/schemas/RecallRunRequest' }
+                            }
+                        }
+                    },
+                    responses: {
+                        200: { $ref: '#/components/responses/RecallRunSuccess' },
+                        400: { $ref: '#/components/responses/ValidationError' },
+                        429: { $ref: '#/components/responses/TooManyRequests' },
                         500: { $ref: '#/components/responses/InternalError' }
                     }
                 }
@@ -867,6 +889,19 @@ function createPublishedOpenApiDocument() {
                     content: {
                         'application/json': {
                             schema: { $ref: '#/components/schemas/ContextEnvelope' }
+                        }
+                    }
+                },
+                RecallRunSuccess: {
+                    description: '成功',
+                    headers: {
+                        'x-request-id': { $ref: '#/components/headers/XRequestId' },
+                        'x-agent-gateway-version': { $ref: '#/components/headers/XGatewayVersion' },
+                        'x-agent-gateway-trace-id': { $ref: '#/components/headers/XTraceId' }
+                    },
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/RecallRunEnvelope' }
                         }
                     }
                 },
@@ -1561,6 +1596,69 @@ function createPublishedOpenApiDocument() {
                 },
                 ContextEnvelope: createSuccessEnvelopeSchema({
                     $ref: '#/components/schemas/ContextData'
+                }),
+                RecallRunRequest: {
+                    type: 'object',
+                    required: ['agentId', 'query'],
+                    properties: {
+                        agentId: { type: 'string' },
+                        query: { type: 'string' },
+                        profile: { type: 'string' },
+                        requestContext: { $ref: '#/components/schemas/RequestContext' },
+                        authContext: { $ref: '#/components/schemas/AuthContext' }
+                    }
+                },
+                RecallRunItem: {
+                    type: 'object',
+                    properties: {
+                        content: { type: 'string' },
+                        score: { type: 'number', format: 'float' },
+                        sourceDiary: { type: 'string' },
+                        sourceFile: { type: 'string' },
+                        timestamp: { type: 'string', format: 'date-time', nullable: true },
+                        tags: { type: 'array', items: { type: 'string' } }
+                    }
+                },
+                RecallRunBlock: {
+                    type: 'object',
+                    properties: {
+                        blockId: { type: 'string' },
+                        content: { type: 'string' },
+                        score: { type: 'number', format: 'float' },
+                        sourceDiary: { type: 'string' }
+                    }
+                },
+                RecallRunData: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        agentId: { type: 'string', nullable: true },
+                        profileName: { type: 'string', nullable: true },
+                        requestId: { type: 'string' },
+                        projectedAt: { type: 'integer' },
+                        items: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/RecallRunItem' }
+                        },
+                        recallBlocks: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/RecallRunBlock' }
+                        },
+                        attachments: {
+                            type: 'array',
+                            items: { type: 'object', additionalProperties: true }
+                        },
+                        diagnostics: {
+                            type: 'object',
+                            additionalProperties: true
+                        },
+                        error: { type: 'string', nullable: true },
+                        code: { type: 'string', nullable: true },
+                        status: { type: 'integer' }
+                    }
+                },
+                RecallRunEnvelope: createSuccessEnvelopeSchema({
+                    $ref: '#/components/schemas/RecallRunData'
                 }),
                 ToolInvokeRequest: {
                     type: 'object',

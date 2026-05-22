@@ -25,6 +25,7 @@ tags:
   - name: Agents
   - name: Operations
   - name: Memory
+  - name: Recall
   - name: Context
   - name: Tools
   - name: Jobs
@@ -62,7 +63,6 @@ paths:
       operationId: getAgentGatewayCapabilities
       parameters:
         - $ref: "#/components/parameters/AgentIdQuery"
-        - $ref: "#/components/parameters/MaidQuery"
         - name: includeMemoryTargets
           in: query
           schema:
@@ -157,7 +157,6 @@ paths:
       operationId: listAgentGatewayMemoryTargets
       parameters:
         - $ref: "#/components/parameters/AgentIdQuery"
-        - $ref: "#/components/parameters/MaidQuery"
         - $ref: "#/components/parameters/RequestIdQuery"
         - $ref: "#/components/parameters/SourceQuery"
         - $ref: "#/components/parameters/RuntimeQuery"
@@ -241,6 +240,27 @@ paths:
           $ref: "#/components/responses/NotFound"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /agent_gateway/recall/run:
+    post:
+      tags:
+        - Recall
+      summary: 执行 gateway recall 并返回完整结果
+      operationId: runAgentGatewayRecall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecallRunRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RecallRunSuccess"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -433,12 +453,6 @@ components:
         type: string
     JobIdQuery:
       name: jobId
-      in: query
-      required: false
-      schema:
-        type: string
-    MaidQuery:
-      name: maid
       in: query
       required: false
       schema:
@@ -643,6 +657,19 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ContextEnvelope"
+    RecallRunSuccess:
+      description: 成功
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/XRequestId"
+        x-agent-gateway-version:
+          $ref: "#/components/headers/XGatewayVersion"
+        x-agent-gateway-trace-id:
+          $ref: "#/components/headers/XTraceId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RecallRunEnvelope"
     ToolInvokeSuccess:
       description: 工具已同步完成
       headers:
@@ -865,8 +892,6 @@ components:
         sessionId:
           type: string
         agentId:
-          type: string
-        maid:
           type: string
         source:
           type: string
@@ -1444,8 +1469,6 @@ components:
           type: array
           items:
             type: string
-        maid:
-          type: string
         mode:
           type: string
           enum:
@@ -1526,8 +1549,6 @@ components:
             - diary
           properties:
             diary:
-              type: string
-            maid:
               type: string
         memory:
           type: object
@@ -1614,8 +1635,6 @@ components:
           type: array
           items:
             type: string
-        maid:
-          type: string
         mode:
           type: string
           enum:
@@ -1679,6 +1698,108 @@ components:
           $ref: "#/components/schemas/ContextData"
         meta:
           $ref: "#/components/schemas/GatewayMeta"
+    RecallRunRequest:
+      type: object
+      required:
+        - agentId
+        - query
+      properties:
+        agentId:
+          type: string
+        query:
+          type: string
+        profile:
+          type: string
+        requestContext:
+          $ref: "#/components/schemas/RequestContext"
+        authContext:
+          $ref: "#/components/schemas/AuthContext"
+    RecallRunItem:
+      type: object
+      properties:
+        content:
+          type: string
+        score:
+          type: number
+          format: float
+        sourceDiary:
+          type: string
+        sourceFile:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+    RecallRunBlock:
+      type: object
+      properties:
+        blockId:
+          type: string
+        content:
+          type: string
+        score:
+          type: number
+          format: float
+        sourceDiary:
+          type: string
+    RecallRunData:
+      type: object
+      properties:
+        success:
+          type: boolean
+        agentId:
+          type: string
+          nullable: true
+        profileName:
+          type: string
+          nullable: true
+        requestId:
+          type: string
+        projectedAt:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecallRunItem"
+        recallBlocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecallRunBlock"
+        attachments:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        diagnostics:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+          nullable: true
+        code:
+          type: string
+          nullable: true
+        status:
+          type: integer
+    RecallRunEnvelope:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/RecallRunData"
+        meta:
+          $ref: "#/components/schemas/GatewayMeta"
     ToolInvokeRequest:
       type: object
       required:
@@ -1688,8 +1809,6 @@ components:
         args:
           type: object
           additionalProperties: true
-        maid:
-          type: string
         options:
           type: object
           properties:
@@ -1826,8 +1945,6 @@ components:
     JobCancelRequest:
       type: object
       properties:
-        maid:
-          type: string
         requestContext:
           $ref: "#/components/schemas/RequestContext"
         authContext:
