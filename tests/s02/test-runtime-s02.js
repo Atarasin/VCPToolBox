@@ -1,0 +1,681 @@
+const { describe, it, before } = require('node:test');
+const assert = require('node:assert');
+
+// Mock collectRagItems before requiring the service under test
+const mockCollectRagItemsCalls = [];
+let mockCollectRagItemsResult = { success: true, items: [] };
+let mockCollectRagItemsImpl = async (args) => {
+    mockCollectRagItemsCalls.push(args);
+    return { ...mockCollectRagItemsResult };
+};
+
+require.cache[require.resolve('../../modules/agentGateway/services/contextRuntimeService')] = {
+    id: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
+    filename: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
+    loaded: true,
+    exports: {
+        collectRagItems: async (args) => mockCollectRagItemsImpl(args),
+        createContextRuntimeService: () => ({})
+    }
+};
+
+const {
+    createRecallRuntimeService,
+    buildRagOptionsFromModifiers,
+    computeCosineSimilarity,
+    evaluateGate,
+    deduplicateItems,
+    sortItemsByScore,
+    applyTruncate,
+    createRecallBlock,
+    buildRecallResult,
+    applyTimeDecay,
+    applyRoleValve,
+    applyBase64Memo,
+    applyS02Modifiers,
+    MODIFIER_PIPELINE_ORDER,
+    MODIFIER_TO_RAG_OPTION,
+    GATED_RULE_TYPES,
+    FULL_TEXT_RULE_TYPES
+} = require('../../modules/agentGateway/services/recallRuntimeService');
+
+function createMockResolver(rules, profileName = 'default') {
+    return {
+        resolveForAgent: (agentId, requestedProfile) => ({
+            resolved: true,
+            agentId,
+            profileName: requestedProfile || profileName,
+            rules: rules.map((rule, index) => ({
+                type: rule.type || 'rag',
+                diaries: rule.diaries || ['TestDiary'],
+                modifiers: rule.modifiers || {},
+                gateThreshold: rule.gateThreshold ?? null,
+                ...rule
+            }))
+        })
+    };
+}
+
+function createMockResolverNoProfile() {
+    return {
+        resolveForAgent: () => ({
+            resolved: false,
+            code: 'RECALL_NO_PROFILE',
+            agentId: 'Unknown',
+            profileName: null,
+            rules: []
+        })
+    };
+}
+
+function createMockPluginManager() {
+    return {
+        messagePreprocessors: new Map()
+    };
+}
+
+function createMockContextRuntimeService() {
+    return {
+        getKnowledgeBaseManager: () => ({
+            config: { apiKey: 'test', apiUrl: 'http://test', model: 'test-model' }
+        }),
+        getRagPlugin: () => ({
+            enhancedVectorCache: {
+                TestDiary: [1, 0, 0, 0],
+                AnotherDiary: [0, 1, 0, 0]
+            },
+            getSingleEmbeddingCached: async (text) => {
+                if (text.includes('query')) return [0.95, 0.05, 0, 0];
+                if (text.includes('unrelated')) return [0.1, 0.9, 0, 0];
+                return [0.5, 0.5, 0, 0];
+            }
+        })
+    };
+}
+
+function resetMocks(mockItems) {
+    mockCollectRagItemsCalls.length = 0;
+    mockCollectRagItemsResult = {
+        success: true,
+        items: mockItems || []
+    };
+}
+
+describe('S02 — RecallRuntimeService extensions', () => {
+    describe('GATED_RULE_TYPES', () => {
+        it('includes gated_rag and gated_full_text', () => {
+            assert.ok(GATED_RULE_TYPES.has('gated_rag'));
+            assert.ok(GATED_RULE_TYPES.has('gated_full_text'));
+            assert.strictEqual(GATED_RULE_TYPES.size, 2);
+        });
+
+        it('does not include non-gated types', () => {
+            assert.ok(!GATED_RULE_TYPES.has('rag'));
+            assert.ok(!GATED_RULE_TYPES.has('full_text'));
+        });
+    });
+
+    describe('FULL_TEXT_RULE_TYPES', () => {
+        it('includes full_text and gated_full_text', () => {
+            assert.ok(FULL_TEXT_RULE_TYPES.has('full_text'));
+            assert.ok(FULL_TEXT_RULE_TYPES.has('gated_full_text'));
+            assert.strictEqual(FULL_TEXT_RULE_TYPES.size, 2);
+        });
+    });
+
+    describe('MODIFIER_PIPELINE_ORDER — S02 extended', () => {
+        it('includes all 8 modifiers in correct order', () => {
+            assert.deepStrictEqual(MODIFIER_PIPELINE_ORDER, [
+                'time',
+                'group',
+                'tagMemo',
+                'rerank',
+                'timeDecay',
+                'roleValve',
+                'base64Memo',
+                'truncate'
+            ]);
+        });
+    });
+
+    describe('applyTimeDecay', () => {
+        it('returns items unchanged when no config provided', () => {
+            const items = [{ text: 'a', score: 0.9 }];
+            const result = applyTimeDecay(items, null);
+            assert.deepStrictEqual(result, items);
+        });
+
+        it('returns items unchanged when halfLifeDays is missing', () => {
+            const items = [{ text: 'a', score: 0.9 }];
+            const result = applyTimeDecay(items, {});
+            assert.deepStrictEqual(result, items);
+        });
+
+        it('applies exponential decay based on item age', () => {
+            const now = Date.now();
+            const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString();
+            const items = [
+                { text: 'old', score: 1.0, timestamp: tenDaysAgo },
+                { text: 'new', score: 1.0, timestamp: new Date(now).toISOString() }
+            ];
+
+            // halfLifeDays = 7 → λ = ln(2)/7 ≈ 0.099
+            // After 10 days: decayFactor = e^(-0.099*10) ≈ e^(-0.99) ≈ 0.3716
+            // After 0 days: decayFactor ≈ 1.0
+            const result = applyTimeDecay(items, { halfLifeDays: 7 });
+            assert.strictEqual(result.length, 2);
+            assert.ok(result[0].score < 0.95, `old item should decay: ${result[0].score}`);
+            assert.ok(result[0].score > 0.2, `old item should not decay too much: ${result[0].score}`);
+            assert.strictEqual(result[1].score, 1.0);
+        });
+
+        it('passes items without timestamp through unchanged', () => {
+            const items = [
+                { text: 'noTs', score: 0.8 }
+            ];
+            const result = applyTimeDecay(items, { halfLifeDays: 7 });
+            assert.strictEqual(result[0].score, 0.8);
+        });
+
+        it('rejects invalid halfLifeDays values', () => {
+            const items = [{ text: 'a', score: 0.9, timestamp: new Date().toISOString() }];
+
+            assert.deepStrictEqual(applyTimeDecay(items, { halfLifeDays: 0 }), items);
+            assert.deepStrictEqual(applyTimeDecay(items, { halfLifeDays: -1 }), items);
+            assert.deepStrictEqual(applyTimeDecay(items, { halfLifeDays: 'bad' }), items);
+        });
+
+        it('scales linearly with halfLifeDays — longer half-life preserves more score', () => {
+            const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+            const items = [{ text: 'old', score: 1.0, timestamp: tenDaysAgo }];
+
+            const shortHalfLife = applyTimeDecay([...items], { halfLifeDays: 1 });
+            const longHalfLife = applyTimeDecay([...items], { halfLifeDays: 30 });
+
+            // Shorter half-life should result in more decay (lower score)
+            assert.ok(shortHalfLife[0].score < longHalfLife[0].score,
+                `short=${shortHalfLife[0].score} should be < long=${longHalfLife[0].score}`);
+        });
+    });
+
+    describe('applyRoleValve', () => {
+        it('returns all items when no roles specified', () => {
+            const items = [{ text: 'a', role: 'user' }, { text: 'b', role: 'assistant' }];
+            const result = applyRoleValve(items, []);
+            assert.strictEqual(result.length, 2);
+        });
+
+        it('returns all items when allowedRoles is not an array', () => {
+            const items = [{ text: 'a', role: 'user' }];
+            assert.strictEqual(applyRoleValve(items, null).length, 1);
+            assert.strictEqual(applyRoleValve(items, '').length, 1);
+        });
+
+        it('filters items to only allowed roles', () => {
+            const items = [
+                { text: 'a', role: 'user' },
+                { text: 'b', role: 'assistant' },
+                { text: 'c', role: 'system' }
+            ];
+            const result = applyRoleValve(items, ['user', 'assistant']);
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(result[0].text, 'a');
+            assert.strictEqual(result[1].text, 'b');
+        });
+
+        it('passes items without a role through', () => {
+            const items = [
+                { text: 'noRole' },
+                { text: 'hasRole', role: 'system' }
+            ];
+            const result = applyRoleValve(items, ['user', 'assistant']);
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result[0].text, 'noRole');
+        });
+
+        it('accepts string-serialized role list', () => {
+            const items = [
+                { text: 'a', role: 'user' },
+                { text: 'b', role: 'tool' }
+            ];
+            const result = applyRoleValve(items, 'user,assistant');
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result[0].text, 'a');
+        });
+    });
+
+    describe('applyBase64Memo', () => {
+        it('returns items unchanged when disabled', () => {
+            const items = [{ text: 'normal text' }];
+            const result = applyBase64Memo(items, false);
+            assert.deepStrictEqual(result.items, items);
+            assert.deepStrictEqual(result.attachments, []);
+        });
+
+        it('returns items unchanged when modifier value is falsy', () => {
+            const items = [{ text: 'text' }];
+            assert.deepStrictEqual(applyBase64Memo(items, null).items, items);
+            assert.deepStrictEqual(applyBase64Memo(items, 0).items, items);
+        });
+
+        it('extracts base64 data URIs and strips them from text', () => {
+            const items = [
+                { text: 'before data:image/png;base64,iVBORw0KGgo= after', sourceDiary: 'TestDiary' }
+            ];
+            const result = applyBase64Memo(items, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.items[0].text, 'before [base64-attachment] after');
+            assert.strictEqual(result.attachments.length, 1);
+            assert.strictEqual(result.attachments[0].content, 'data:image/png;base64,iVBORw0KGgo=');
+            assert.strictEqual(result.attachments[0].sourceDiary, 'TestDiary');
+        });
+
+        it('handles multiple base64 attachments in one item', () => {
+            const items = [
+                { text: 'img1: data:image/png;base64,abc= img2: data:image/jpeg;base64,xyz=' }
+            ];
+            const result = applyBase64Memo(items, true);
+            assert.strictEqual(result.attachments.length, 2);
+            assert.strictEqual(result.attachments[0].content, 'data:image/png;base64,abc=');
+            assert.strictEqual(result.attachments[1].content, 'data:image/jpeg;base64,xyz=');
+        });
+
+        it('passes items without base64 content through unchanged', () => {
+            const items = [{ text: 'plain text only' }];
+            const result = applyBase64Memo(items, true);
+            assert.deepStrictEqual(result.items, items);
+            assert.deepStrictEqual(result.attachments, []);
+        });
+
+        it('accepts string "true" for enabled', () => {
+            const items = [{ text: 'data:image/png;base64,aa=' }];
+            const result = applyBase64Memo(items, 'true');
+            assert.strictEqual(result.attachments.length, 1);
+        });
+    });
+
+    describe('applyS02Modifiers — integrated pipeline', () => {
+        it('applies timeDecay then roleValve then base64Memo in order', () => {
+            const now = Date.now();
+            const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+            const items = [
+                { text: 'user item data:image/png;base64,abc=', score: 1.0, role: 'user', timestamp: threeDaysAgo },
+                { text: 'system item', score: 1.0, role: 'system', timestamp: new Date(now).toISOString() },
+                { text: 'user item 2', score: 1.0, role: 'user', timestamp: new Date(now).toISOString() }
+            ];
+
+            const result = applyS02Modifiers(items, {
+                timeDecay: { halfLifeDays: 7 },
+                roleValve: ['user'],
+                base64Memo: true
+            });
+
+            // After timeDecay: user scores decay, system no change
+            // After roleValve: system removed, only user items remain
+            // After base64Memo: base64 stripped from first item
+            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.items[0].role, 'user');
+            assert.strictEqual(result.items[1].role, 'user');
+            assert.strictEqual(result.items[0].text, 'user item [base64-attachment]');
+            // After timeDecay (halfLifeDays=7, age=3 days), score should be decayed from 1.0
+            const decayedScore = result.items[0].score;
+            assert.ok(decayedScore > 0.7 && decayedScore < 1.0,
+                `score should be decayed, got ${decayedScore}`);
+            assert.strictEqual(result.attachments.length, 1);
+        });
+
+        it('respects pipeline order defined in MODIFIER_PIPELINE_ORDER', () => {
+            const timeDecayIdx = MODIFIER_PIPELINE_ORDER.indexOf('timeDecay');
+            const roleValveIdx = MODIFIER_PIPELINE_ORDER.indexOf('roleValve');
+            const base64MemoIdx = MODIFIER_PIPELINE_ORDER.indexOf('base64Memo');
+
+            assert.ok(timeDecayIdx < roleValveIdx, 'timeDecay should come before roleValve');
+            assert.ok(roleValveIdx < base64MemoIdx, 'roleValve should come before base64Memo');
+        });
+
+        it('returns items unchanged when modifiers are empty', () => {
+            const items = [{ text: 'a', score: 0.9 }];
+            const result = applyS02Modifiers(items, {});
+            assert.deepStrictEqual(result.items, items);
+            assert.deepStrictEqual(result.attachments, []);
+        });
+
+        it('handles null modifiers gracefully', () => {
+            const items = [{ text: 'a' }];
+            const result = applyS02Modifiers(items, null);
+            assert.deepStrictEqual(result.items, items);
+            assert.deepStrictEqual(result.attachments, []);
+        });
+    });
+
+    describe('full_text rule execution via executeRecall', () => {
+        it('executes full_text rule and uses larger baseK', async () => {
+            resetMocks([
+                { text: 'full content 1', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'full_text',
+                    diaries: ['TestDiary'],
+                    modifiers: { timeDecay: { halfLifeDays: 7 } }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentFT', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.diagnostics.rules[0].type, 'full_text');
+            assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
+
+            // Verify baseK = 20 for full_text
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            const call = mockCollectRagItemsCalls[0];
+            assert.strictEqual(call.ragOptions.k, 20);
+            assert.strictEqual(call.ragOptions.mode, 'rag');
+        });
+
+        it('executes full_text rule with timeDecay modifier', async () => {
+            const now = Date.now();
+            const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+            resetMocks([
+                { text: 'old item', score: 1.0, sourceDiary: 'TestDiary', sourceFile: 'old.md', timestamp: threeDaysAgo },
+                { text: 'new item', score: 1.0, sourceDiary: 'TestDiary', sourceFile: 'new.md', timestamp: new Date(now).toISOString() }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'full_text',
+                    diaries: ['TestDiary'],
+                    modifiers: { timeDecay: { halfLifeDays: 7 } }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentFT2', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 2);
+            // After timeDecay + sort, higher-scored items come first (new > old)
+            assert.ok(result.items[0].score > result.items[1].score,
+                `new item score ${result.items[0].score} should be > old item score ${result.items[1].score}`);
+        });
+
+        it('executes full_text rule with base64Memo modifier', async () => {
+            resetMocks([
+                { text: 'text with data:image/png;base64,abc=', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'img.md' },
+                { text: 'plain text', score: 0.8, sourceDiary: 'TestDiary', sourceFile: 'plain.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'full_text',
+                    diaries: ['TestDiary'],
+                    modifiers: { base64Memo: true }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentFT3', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 2);
+            // First item should have base64 stripped
+            assert.strictEqual(result.items[0].text, 'text with [base64-attachment]');
+            assert.ok(result.diagnostics.attachments, 'should have attachments');
+            assert.strictEqual(result.diagnostics.attachments.length, 1);
+            assert.strictEqual(result.diagnostics.rules[0].attachmentCount, 1);
+        });
+    });
+
+    describe('gated_full_text rule execution via executeRecall', () => {
+        it('passes gate and executes full_text retrieval', async () => {
+            resetMocks([
+                { text: 'gated full result', score: 0.85, sourceDiary: 'TestDiary', sourceFile: 'x.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'gated_full_text',
+                    diaries: ['TestDiary'],
+                    gateThreshold: 0.3,
+                    modifiers: {}
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentGFT', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.diagnostics.rules[0].type, 'gated_full_text');
+            assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
+            assert.strictEqual(result.diagnostics.rules[0].gatePassed, true);
+
+            // Verify baseK = 20 for gated_full_text
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 20);
+        });
+
+        it('blocks gate when similarity is below threshold', async () => {
+            resetMocks();
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'gated_full_text',
+                    diaries: ['AnotherDiary'],
+                    gateThreshold: 0.99,
+                    modifiers: {}
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentGFT2', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 0);
+            assert.strictEqual(result.diagnostics.rules[0].status, 'gated');
+            assert.strictEqual(result.diagnostics.rules[0].gatePassed, false);
+            // collectRagItems should NOT have been called
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+        });
+
+        it('passes gate when no concept vectors are available', async () => {
+            resetMocks([
+                { text: 'fallback', score: 0.7, sourceDiary: 'UnknownDiary', sourceFile: 'z.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'gated_full_text',
+                    diaries: ['UnknownDiary'],
+                    gateThreshold: 0.5,
+                    modifiers: {}
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentGFT3', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
+            assert.strictEqual(result.diagnostics.rules[0].gatePassed, true);
+            assert.strictEqual(result.diagnostics.rules[0].gateSimilarity, null);
+        });
+    });
+
+    describe('S02 modifier integration in executeRecall', () => {
+        it('roleValve filters items within rule execution', async () => {
+            resetMocks([
+                { text: 'a', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md', role: 'user' },
+                { text: 'b', score: 0.8, sourceDiary: 'TestDiary', sourceFile: 'b.md', role: 'system' },
+                { text: 'c', score: 0.7, sourceDiary: 'TestDiary', sourceFile: 'c.md', role: 'user' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: { roleValve: ['user'] }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentRV', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 2);
+            const texts = result.items.map((i) => i.text);
+            assert.deepStrictEqual(texts, ['a', 'c']);
+        });
+
+        it('mixed S01 and S02 modifiers work together', async () => {
+            const now = Date.now();
+            const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+            resetMocks([
+                { text: 'old user', score: 1.0, sourceDiary: 'TestDiary', sourceFile: 'old.md', timestamp: tenDaysAgo, role: 'user' },
+                { text: 'new user', score: 1.0, sourceDiary: 'TestDiary', sourceFile: 'new.md', timestamp: new Date(now).toISOString(), role: 'user' },
+                { text: 'new system', score: 1.0, sourceDiary: 'TestDiary', sourceFile: 'sys.md', timestamp: new Date(now).toISOString(), role: 'system' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: {
+                        time: true,
+                        rerank: true,
+                        timeDecay: { halfLifeDays: 7 },
+                        roleValve: ['user'],
+                        truncate: 5
+                    }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentMixed', query: 'query' });
+            assert.strictEqual(result.success, true);
+            // roleValve should filter out 'new system'
+            // timeDecay should reduce 'old user' score
+            assert.strictEqual(result.items.length, 2);
+            // Higher score (new) comes first
+            assert.strictEqual(result.items[0].text, 'new user');
+            assert.strictEqual(result.items[1].text, 'old user');
+            assert.ok(result.items[0].score > result.items[1].score);
+        });
+    });
+
+    describe('backward compatibility — S01 rules still work', () => {
+        it('rag rule with S01 modifiers works unchanged', async () => {
+            resetMocks([
+                { text: 'rag result', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: { time: true, group: false, rerank: true, tagMemo: true, truncate: 3 }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentBC', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.items[0].text, 'rag result');
+            assert.strictEqual(result.diagnostics.rules[0].type, 'rag');
+            assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
+            assert.strictEqual(result.diagnostics.rules[0].gatePassed, undefined); // non-gated
+
+            // Verify S01 ragOptions still work
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.timeAware, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.rerank, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemo, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5); // rag baseK
+        });
+
+        it('gated_rag gate behavior unchanged', async () => {
+            resetMocks([
+                { text: 'gated', score: 0.85, sourceDiary: 'TestDiary', sourceFile: 'x.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'gated_rag',
+                    diaries: ['TestDiary'],
+                    gateThreshold: 0.3,
+                    modifiers: {}
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentBC2', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.diagnostics.rules[0].gatePassed, true);
+        });
+    });
+
+    describe('diagnostics enrichment for S02', () => {
+        it('rule diagnostic includes attachmentCount for base64Memo', async () => {
+            resetMocks([
+                { text: 'data:image/png;base64,zz=', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'img.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: { base64Memo: true }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentDiag', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.diagnostics.rules[0].attachmentCount, 1);
+            assert.ok(result.diagnostics.attachments, 'root diagnostics should have attachments');
+            assert.strictEqual(result.diagnostics.attachments.length, 1);
+        });
+
+        it('diagnostics omits attachments when none found', async () => {
+            resetMocks([
+                { text: 'plain text', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'plain.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: { base64Memo: true }
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentDiag2', query: 'query' });
+            assert.strictEqual(result.diagnostics.attachments, undefined);
+            assert.strictEqual(result.diagnostics.rules[0].attachmentCount, undefined);
+        });
+    });
+});

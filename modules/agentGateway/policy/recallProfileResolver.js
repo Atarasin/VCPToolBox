@@ -13,9 +13,18 @@ const ALLOWED_MODIFIERS_S01 = Object.freeze(new Set([
     'truncate'
 ]));
 
+const ALLOWED_MODIFIERS = Object.freeze(new Set([
+    ...ALLOWED_MODIFIERS_S01,
+    'timeDecay',
+    'roleValve',
+    'base64Memo'
+]));
+
 const ALLOWED_RULE_TYPES = Object.freeze(new Set([
     'rag',
-    'gated_rag'
+    'gated_rag',
+    'full_text',
+    'gated_full_text'
 ]));
 
 let cachedConfigPath = '';
@@ -72,7 +81,9 @@ function loadRecallProfiles(configPath) {
 
 function normalizeModifierEntry(value) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
-        return value;
+        // Return a shallow clone preserving all keys;
+        // filtering of unknown keys happens in normalizeRule if needed.
+        return { ...value };
     }
     return {};
 }
@@ -86,7 +97,14 @@ function normalizeRule(rule) {
         return null;
     }
     const diaries = normalizeStringArray(rule.diaries);
-    const modifiers = normalizeModifierEntry(rule.modifiers);
+    const rawModifiers = normalizeModifierEntry(rule.modifiers);
+    // Filter modifiers to only allowed keys for runtime safety
+    const modifiers = {};
+    for (const key of Object.keys(rawModifiers)) {
+        if (ALLOWED_MODIFIERS.has(key)) {
+            modifiers[key] = rawModifiers[key];
+        }
+    }
     const gateThreshold = typeof rule.gateThreshold === 'number' && Number.isFinite(rule.gateThreshold)
         ? rule.gateThreshold
         : null;
@@ -176,9 +194,11 @@ class RecallProfileResolver {
     }
 
     validateModifiers(modifiers) {
-        const normalized = normalizeModifierEntry(modifiers);
-        const invalid = Object.keys(normalized).filter(
-            (key) => !ALLOWED_MODIFIERS_S01.has(key)
+        const raw = modifiers && typeof modifiers === 'object' && !Array.isArray(modifiers)
+            ? modifiers
+            : {};
+        const invalid = Object.keys(raw).filter(
+            (key) => !ALLOWED_MODIFIERS.has(key)
         );
         return {
             valid: invalid.length === 0,
@@ -223,6 +243,7 @@ class RecallProfileResolver {
 
 module.exports = {
     ALLOWED_MODIFIERS_S01,
+    ALLOWED_MODIFIERS,
     ALLOWED_RULE_TYPES,
     DEFAULT_CONFIG_PATH,
     RecallProfileResolver

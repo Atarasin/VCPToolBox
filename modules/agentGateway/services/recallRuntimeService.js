@@ -13,8 +13,15 @@ const MODIFIER_PIPELINE_ORDER = Object.freeze([
     'group',
     'tagMemo',
     'rerank',
+    'timeDecay',
+    'roleValve',
+    'base64Memo',
     'truncate'
 ]);
+
+const GATED_RULE_TYPES = new Set(['gated_rag', 'gated_full_text']);
+
+const FULL_TEXT_RULE_TYPES = new Set(['full_text', 'gated_full_text']);
 
 function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -43,6 +50,16 @@ function parseModifierValue(key, value) {
         return normalized === 'true' || normalized === '1';
     }
     return Boolean(value);
+}
+
+function parseTimeDecayConfig(value) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const halfLifeDays = value.halfLifeDays;
+        if (typeof halfLifeDays === 'number' && Number.isFinite(halfLifeDays) && halfLifeDays > 0) {
+            return { halfLifeDays };
+        }
+    }
+    return null;
 }
 
 function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
@@ -120,8 +137,8 @@ function getDiaryConceptVectors(ragPlugin, diaries) {
     return vectors;
 }
 
-async function evaluateGate(rule, queryVector, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
-    if (rule.type !== 'gated_rag') {
+function evaluateGate(rule, queryVector, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
+    if (!GATED_RULE_TYPES.has(rule.type)) {
         return { passed: true, similarity: null };
     }
     if (typeof rule.gateThreshold !== 'number' || !Number.isFinite(rule.gateThreshold)) {
@@ -150,6 +167,122 @@ async function evaluateGate(rule, queryVector, ragPlugin, knowledgeBaseManager, 
         similarity: maxSimilarity
     };
 }
+
+// --- S02 Post-Processing Modifiers ---
+
+function applyTimeDecay(items, modifierValue) {
+    const config = parseTimeDecayConfig(modifierValue);
+    if (!config) {
+        return items;
+    }
+
+    const lambda = Math.log(2) / config.halfLifeDays;
+    const now = Date.now();
+
+    return items.map((item) => {
+        const ts = item?.timestamp;
+        if (!ts) {
+            return item;
+        }
+        const ageMs = now - new Date(ts).getTime();
+        if (ageMs <= 0) {
+            return item;
+        }
+        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+        const decayFactor = Math.exp(-lambda * ageDays);
+        return {
+            ...item,
+            score: (item.score || 0) * decayFactor
+        };
+    });
+}
+
+function applyRoleValve(items, modifierValue) {
+    const allowedRoles = normalizeStringArray(modifierValue);
+    if (allowedRoles.length === 0) {
+        return items;
+    }
+    return items.filter((item) => {
+        const role = normalizeString(item?.role);
+        if (!role) {
+            // Items without a role pass through (full_text may not have role metadata)
+            return true;
+        }
+        return allowedRoles.includes(role);
+    });
+}
+
+function applyBase64Memo(items, modifierValue) {
+    const isEnabled = parseModifierValue('base64Memo', modifierValue);
+    if (!isEnabled) {
+        return { items, attachments: [] };
+    }
+
+    const BASE64_PATTERN = /(?:data:(?:image|application|video|audio|text)\/[^;]+;base64,[A-Za-z0-9+/=]+)/g;
+
+    const attachments = [];
+    const processedItems = [];
+
+    for (const item of items) {
+        const text = normalizeString(item?.text);
+        const matches = text.match(BASE64_PATTERN);
+        if (matches && matches.length > 0) {
+            for (const match of matches) {
+                attachments.push({
+                    sourceDiary: normalizeString(item?.sourceDiary),
+                    sourceFile: normalizeString(item?.sourceFile || item?.source_file),
+                    content: match
+                });
+            }
+            // Strip base64 content from item text to keep output compact
+            const strippedText = text.replace(BASE64_PATTERN, '[base64-attachment]');
+            processedItems.push({
+                ...item,
+                text: strippedText
+            });
+        } else {
+            processedItems.push(item);
+        }
+    }
+
+    return { items: processedItems, attachments };
+}
+
+function applyS02Modifiers(items, modifiers) {
+    if (!modifiers || typeof modifiers !== 'object' || Array.isArray(modifiers)) {
+        return { items, attachments: [] };
+    }
+
+    let currentItems = items;
+    let accumulatedAttachments = [];
+
+    // Apply modifiers in pipeline order (only S02 post-processing modifiers)
+    for (const modifierKey of MODIFIER_PIPELINE_ORDER) {
+        if (modifierKey === 'time' || modifierKey === 'group' || modifierKey === 'tagMemo' ||
+            modifierKey === 'rerank' || modifierKey === 'truncate') {
+            continue;
+        }
+
+        const modifierValue = modifiers[modifierKey];
+        if (modifierValue === undefined) {
+            continue;
+        }
+
+        if (modifierKey === 'timeDecay') {
+            currentItems = applyTimeDecay(currentItems, modifierValue);
+        } else if (modifierKey === 'roleValve') {
+            currentItems = applyRoleValve(currentItems, modifierValue);
+        } else if (modifierKey === 'base64Memo') {
+            const result = applyBase64Memo(currentItems, modifierValue);
+            currentItems = result.items;
+            accumulatedAttachments = accumulatedAttachments.concat(result.attachments);
+        }
+    }
+
+    return { items: currentItems, attachments: accumulatedAttachments };
+}
+
+// --- Result processing ---
 
 function deduplicateItems(items) {
     const seen = new Map();
@@ -256,7 +389,7 @@ function createRecallRuntimeService(deps = {}) {
             });
         }
 
-        // Pre-compute query vector once for all gated_rag evaluations
+        // Pre-compute query vector once for all gated evaluations
         let queryVector = null;
         let vectorFetchError = null;
         try {
@@ -274,6 +407,7 @@ function createRecallRuntimeService(deps = {}) {
 
         const ruleDiagnostics = [];
         const allItems = [];
+        const allAttachments = [];
 
         for (let ruleIndex = 0; ruleIndex < resolved.rules.length; ruleIndex += 1) {
             const rule = resolved.rules[ruleIndex];
@@ -287,8 +421,8 @@ function createRecallRuntimeService(deps = {}) {
             };
 
             try {
-                // --- Gate evaluation for gated_rag ---
-                if (rule.type === 'gated_rag') {
+                // --- Gate evaluation for gated_rag / gated_full_text ---
+                if (GATED_RULE_TYPES.has(rule.type)) {
                     const ctxService = deps.contextRuntimeService;
                     const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
                         ? ctxService.getKnowledgeBaseManager(pluginManager)
@@ -297,7 +431,7 @@ function createRecallRuntimeService(deps = {}) {
                         ? ctxService.getRagPlugin(pluginManager)
                         : null;
 
-                    const gateResult = await evaluateGate(
+                    const gateResult = evaluateGate(
                         rule,
                         queryVector,
                         ragPlugin,
@@ -315,8 +449,13 @@ function createRecallRuntimeService(deps = {}) {
                     }
                 }
 
+                // --- Determine baseK based on rule type ---
+                // full_text variants use a larger k to retrieve more comprehensive content
+                const isFullText = FULL_TEXT_RULE_TYPES.has(rule.type);
+                const baseK = isFullText ? 20 : 5;
+
                 // --- Build ragOptions from modifiers ---
-                const { options: ragOptions, truncate } = buildRagOptionsFromModifiers(rule.modifiers);
+                const { options: ragOptions } = buildRagOptionsFromModifiers(rule.modifiers, baseK);
 
                 // --- Execute RAG via collectRagItems ---
                 const collectResult = await collectRagItems({
@@ -340,7 +479,16 @@ function createRecallRuntimeService(deps = {}) {
                     continue;
                 }
 
-                const ruleItems = Array.isArray(collectResult.items) ? collectResult.items : [];
+                let ruleItems = Array.isArray(collectResult.items) ? collectResult.items : [];
+
+                // --- Apply S02 post-processing modifiers ---
+                const s02Result = applyS02Modifiers(ruleItems, rule.modifiers);
+                ruleItems = s02Result.items;
+                if (s02Result.attachments.length > 0) {
+                    allAttachments.push(...s02Result.attachments);
+                    ruleDiagnostic.attachmentCount = s02Result.attachments.length;
+                }
+
                 allItems.push(...ruleItems);
 
                 ruleDiagnostic.status = 'ok';
@@ -378,6 +526,7 @@ function createRecallRuntimeService(deps = {}) {
             diagnostics: {
                 totalDurationMs,
                 rules: ruleDiagnostics,
+                attachments: allAttachments.length > 0 ? allAttachments : undefined,
                 vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0,
                 vectorPrecomputeError: vectorFetchError ? vectorFetchError.message : null
             }
@@ -399,6 +548,12 @@ module.exports = {
     applyTruncate,
     createRecallBlock,
     buildRecallResult,
+    applyTimeDecay,
+    applyRoleValve,
+    applyBase64Memo,
+    applyS02Modifiers,
     MODIFIER_PIPELINE_ORDER,
-    MODIFIER_TO_RAG_OPTION
+    MODIFIER_TO_RAG_OPTION,
+    GATED_RULE_TYPES,
+    FULL_TEXT_RULE_TYPES
 };

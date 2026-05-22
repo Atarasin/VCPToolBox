@@ -571,12 +571,15 @@ describe('RecallRuntimeService', () => {
     });
 
     describe('modifier pipeline order constant', () => {
-        it('exports expected order', () => {
+        it('exports expected order including S02 modifiers', () => {
             assert.deepStrictEqual(MODIFIER_PIPELINE_ORDER, [
                 'time',
                 'group',
                 'tagMemo',
                 'rerank',
+                'timeDecay',
+                'roleValve',
+                'base64Memo',
                 'truncate'
             ]);
         });
