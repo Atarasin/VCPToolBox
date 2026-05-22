@@ -17,6 +17,7 @@ const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
     '/agent_gateway/memory/search',
     '/agent_gateway/memory/write',
     '/agent_gateway/context/assemble',
+    '/agent_gateway/recall/run',
     '/agent_gateway/tools/{toolName}/invoke',
     '/agent_gateway/jobs/{jobId}',
     '/agent_gateway/jobs/{jobId}/cancel',

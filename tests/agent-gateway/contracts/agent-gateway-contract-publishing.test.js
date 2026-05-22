@@ -89,4 +89,17 @@ test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas 
         document.components.responses.PayloadTooLarge.content['application/json'].examples.payloadRejected.value.code,
         'AGW_PAYLOAD_TOO_LARGE'
     );
+    assert.ok(document.paths['/agent_gateway/recall/run']);
+    assert.ok(document.components.schemas.RecallRunRequest);
+    assert.ok(document.components.schemas.RecallRunData);
+    assert.ok(document.components.schemas.RecallRunEnvelope);
+    assert.ok(document.components.schemas.RecallRunItem);
+    assert.equal(
+        document.paths['/agent_gateway/recall/run'].post.requestBody.content['application/json'].schema.$ref,
+        '#/components/schemas/RecallRunRequest'
+    );
+    assert.equal(
+        document.paths['/agent_gateway/recall/run'].post.responses['200'].$ref,
+        '#/components/responses/RecallRunSuccess'
+    );
 });
