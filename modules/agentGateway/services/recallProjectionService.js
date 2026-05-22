@@ -57,6 +57,7 @@ function projectFullResult(recallResult, requestId) {
         projectedAt: Date.now(),
         items: projectedItems,
         recallBlocks: projectedBlocks,
+        attachments: base.diagnostics?.attachments || [],
         diagnostics: base.diagnostics || { totalDurationMs: 0, rules: [] },
         error: base.error || null,
         code: base.code || null,
@@ -64,11 +65,55 @@ function projectFullResult(recallResult, requestId) {
     };
 }
 
+function projectFullTextSections(recallResult) {
+    if (!recallResult || !Array.isArray(recallResult.items)) {
+        return [];
+    }
+
+    const grouped = new Map();
+    for (const item of recallResult.items) {
+        const diary = normalizeString(item?.sourceDiary) || 'unknown';
+        if (!grouped.has(diary)) {
+            grouped.set(diary, []);
+        }
+        grouped.get(diary).push({
+            content: normalizeString(item?.text),
+            score: typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+            sourceFile: normalizeString(item?.sourceFile),
+            timestamp: item?.timestamp || null,
+            tags: normalizeStringArray(item?.tags)
+        });
+    }
+
+    const sections = [];
+    let sectionIndex = 0;
+    for (const [diary, entries] of grouped) {
+        entries.sort((a, b) => b.score - a.score);
+        const combinedScore = entries.reduce((sum, entry) => sum + entry.score, 0);
+        sections.push({
+            sectionId: `fts-${sectionIndex}`,
+            diaryName: diary,
+            entries,
+            entryCount: entries.length,
+            combinedScore
+        });
+        sectionIndex += 1;
+    }
+
+    sections.sort((a, b) => b.combinedScore - a.combinedScore);
+    sections.forEach((section, index) => {
+        section.sectionId = `fts-${index}`;
+    });
+
+    return sections;
+}
+
 function createRecallProjectionService() {
     return {
         projectItems,
         projectRecallBlocks,
-        projectFullResult
+        projectFullResult,
+        projectFullTextSections
     };
 }
 
@@ -76,5 +121,6 @@ module.exports = {
     createRecallProjectionService,
     projectItems,
     projectRecallBlocks,
-    projectFullResult
+    projectFullResult,
+    projectFullTextSections
 };
