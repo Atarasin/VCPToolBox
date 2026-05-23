@@ -8,7 +8,7 @@
     "MCPMidas": {
       "defaultProfile": "Midas-default",
       "allowedProfiles": ["Midas-default"],
-      "targets": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记"]
+      "targets": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记日记本"]
     },
     "Yui": {
       "defaultProfile": "Yui-default",
@@ -18,6 +18,7 @@
   },
   "profiles": {
     "nexus-default": {
+      "minScore": 0.4,
       "rules": [
         {
           "baseMode": "rag",
@@ -36,11 +37,12 @@
       ]
     },
     "Midas-default": {
+      "minScore": 0.4,
       "rules": [
         {
           "baseMode": "rag",
           "targets": {
-            "diaries": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记"],
+            "diaries": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记日记本"],
             "aggregate": true,
             "kMultiplier": 1.0
           },
@@ -54,6 +56,7 @@
       ]
     },
     "Yui-default": {
+      "minScore": 0.4,
       "rules": [
         {
           "baseMode": "rag",

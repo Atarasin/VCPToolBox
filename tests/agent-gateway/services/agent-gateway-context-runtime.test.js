@@ -515,6 +515,105 @@ test('ContextRuntimeService search post-truncates profile results with explicit 
     assert.equal(result.data.diagnostics.resultCount, 2);
 });
 
+test('ContextRuntimeService search resolves diary policy with requestContext agentId when authContext omits it', async () => {
+    let resolvedPolicyAuthContext = null;
+    const service = createContextServiceWithRecall(
+        {
+            vectorDBManager: createKnowledgeBaseManager({
+                diaries: ['迈达斯日记本'],
+                searchResults: {
+                    迈达斯日记本: [
+                        {
+                            text: 'WorkflowKernel 相关设计记录。',
+                            score: 0.96,
+                            sourceFile: '2026-05-23.md',
+                            fullPath: '迈达斯日记本/2026-05-23.md'
+                        }
+                    ]
+                },
+                metadataByPath: {
+                    '迈达斯日记本/2026-05-23.md': {
+                        sourceDiary: '迈达斯日记本',
+                        sourcePath: '迈达斯日记本/2026-05-23.md',
+                        updatedAt: Date.parse('2026-05-23T09:00:00.000Z'),
+                        tags: ['WorkflowKernel', 'Midas']
+                    }
+                }
+            }),
+            ragPlugin: createRagPlugin({
+                parseTime() {
+                    return [];
+                }
+            })
+        },
+        {
+            authContextResolver({ authContext }) {
+                return authContext || {};
+            },
+            agentPolicyResolver: {
+                async resolvePolicy({ authContext }) {
+                    resolvedPolicyAuthContext = authContext;
+                    if (authContext?.agentId === 'MCPMidas') {
+                        return {
+                            allowedDiaryNames: ['迈达斯'],
+                            defaultDiaryNames: ['迈达斯']
+                        };
+                    }
+                    return {
+                        allowedDiaryNames: [],
+                        defaultDiaryNames: []
+                    };
+                }
+            }
+        },
+        {
+            recallProfileResolver: {
+                resolveForAgent(agentId, requestedProfile) {
+                    if (agentId === 'MCPMidas' && requestedProfile === 'Midas-default') {
+                        return {
+                            resolved: true,
+                            agentId,
+                            profileName: requestedProfile,
+                            rules: [{
+                                type: 'rag',
+                                diaries: ['迈达斯日记本'],
+                                modifiers: { truncate: 20 }
+                            }]
+                        };
+                    }
+                    return { resolved: false };
+                }
+            }
+        }
+    );
+
+    const result = await service.search({
+        body: {
+            profile: 'Midas-default',
+            query: 'WorkflowKernel',
+            authContext: {
+                authenticated: true,
+                roles: ['gateway_client'],
+                gatewayId: 'remote-mcp'
+            },
+            requestContext: {
+                source: 'mcp',
+                runtime: 'mcp',
+                agentId: 'MCPMidas',
+                sessionId: 'sess-midas-recall-fallback',
+                requestId: 'req-midas-recall-fallback'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'mcp'
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(resolvedPolicyAuthContext.agentId, 'MCPMidas');
+    assert.deepEqual(result.data.diagnostics.targetDiaries, ['迈达斯']);
+    assert.deepEqual(result.data.items, []);
+});
+
 test('ContextRuntimeService buildRecallContext enters profile resolution chain when profile is provided', async () => {
     const service = createContextServiceWithRecall(
         createProfileTestOverrides({

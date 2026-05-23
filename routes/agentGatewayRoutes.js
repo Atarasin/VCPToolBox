@@ -380,6 +380,7 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
         contextRuntimeService,
         toolRuntimeService,
         operabilityService,
+        agentPolicyResolver,
         recallRuntimeService,
         recallProjectionService
     } = getGatewayServiceBundle(pluginManager, {
@@ -1129,6 +1130,7 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                     profileName: profile || undefined,
                     requestContext,
                     authContext,
+                    agentPolicyResolver,
                     messages: Array.isArray(req.body?.messages) ? req.body.messages : undefined
                 });
 

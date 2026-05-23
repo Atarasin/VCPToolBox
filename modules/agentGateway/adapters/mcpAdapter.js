@@ -1055,6 +1055,7 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
                     profileName: profile,
                     requestContext,
                     authContext,
+                    agentPolicyResolver: bundle.agentPolicyResolver,
                     messages: Array.isArray(body.messages) ? body.messages : undefined
                 });
                 const projected = bundle.recallProjectionService.projectFullResult(result, requestContext.requestId);

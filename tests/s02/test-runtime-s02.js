@@ -965,6 +965,31 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(mockCollectRagItemsCalls[0].agentPolicyResolver, null);
         });
 
+        it('falls back to the service-level agentPolicyResolver when executeRecall does not override it', async () => {
+            resetMocks([
+                { text: 'default policy result', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const defaultPolicyResolver = { resolvePolicy: async () => ({ allowedDiaryNames: ['TestDiary'] }) };
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({}),
+                agentPolicyResolver: defaultPolicyResolver
+            });
+
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} },
+                authContext: { agentId: 'AgentInline' }
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].agentPolicyResolver, defaultPolicyResolver);
+        });
+
         it('enriches rule diagnostics with collectRagItems fields', async () => {
             const activatedGroups = new Map([['g1', { score: 0.9 }]]);
             resetMocks(

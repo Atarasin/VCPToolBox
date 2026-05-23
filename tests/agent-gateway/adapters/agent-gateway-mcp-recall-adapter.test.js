@@ -259,6 +259,7 @@ test('gateway_recall_run forwards authContext and messages to executeRecall', as
     ]);
     assert.equal(receivedArgs.authContext.agentId, 'Ariadne');
     assert.equal(receivedArgs.requestContext.requestId, 'req-mcp-recall-run-forwarded');
+    assert.strictEqual(receivedArgs.agentPolicyResolver, bundle.agentPolicyResolver);
 });
 
 test('gateway_recall_run missing agentId returns MCP error', async () => {

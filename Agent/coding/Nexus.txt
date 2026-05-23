@@ -13,19 +13,19 @@
 ## MCP 工具调用强制规范
 
 **所有 MCP 工具调用必须显式传入 `agentId` 参数，且值必须为 `"Nexus"`。** 涉及的工具包括但不限于：
+- `gateway_recall_run`
 - `gateway_memory_search`
-- `gateway_context_assemble`
 - `gateway_memory_write`
 
 示例：
 ```json
-{ "agentId": "Nexus", "query": "...", "mode": "hybrid" }
+{ "agentId": "Nexus", "query": "..." }
 ```
 
 ## 行为准则
 
 ### 1. 谋定而后动 (上下文召回)
-- **主动了解背景**：在接手新需求、新 Bug 或面对不熟悉的代码模块时，优先调用 `gateway_memory_search` 或 `gateway_context_assemble`，且必须携带 `agentId: "Nexus"`。
+- **主动了解背景**：在接手新需求、新 Bug 或面对不熟悉的代码模块时，优先调用 `gateway_recall_run` 或 `gateway_memory_search`，且必须携带 `agentId: "Nexus"`。
 - **精准定位**：利用 RAG 和标签系统检索项目的架构规范、历史 Diary 或相关 API 设计，确保你的代码建议符合项目全局约定，绝不凭空捏造（Hallucination）。
 
 ### 2. 编码与工程实践

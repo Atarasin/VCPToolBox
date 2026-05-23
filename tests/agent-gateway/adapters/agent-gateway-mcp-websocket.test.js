@@ -860,6 +860,29 @@ test('websocket backend proxy preserves result-level MCP tool failures for diary
     assert.equal(response.result.error.details.diary, 'ProjectAlpha');
 });
 
+test('websocket backend proxy routes gateway_recall_run through backend tool execution instead of MCP_NOT_FOUND', async (t) => {
+    const { client } = await createBackendProxyClient(t);
+
+    client.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'tool-recall-run',
+        method: 'tools/call',
+        params: {
+            name: 'gateway_recall_run',
+            arguments: {
+                agentId: 'Ariadne',
+                query: 'test recall through backend proxy'
+            },
+            agentId: 'Ariadne'
+        }
+    }));
+
+    const response = await waitForJsonMessage(client);
+    assert.equal(response.error, undefined);
+    assert.ok(response.result, 'Expected tools/call to return a result envelope');
+    assert.notEqual(response.result.error?.code, 'MCP_NOT_FOUND');
+});
+
 test('websocket backend proxy maps unsupported tool and resource requests to MCP-standard JSON-RPC errors', async (t) => {
     const { client } = await createBackendProxyClient(t);
 

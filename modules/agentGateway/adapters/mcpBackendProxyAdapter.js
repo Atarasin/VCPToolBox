@@ -768,6 +768,14 @@ function createBackendProxyMcpAdapter({
                     }
                 }
                 response = await backendClient.writeMemory(writeBody, requestOptions);
+            } else if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
+                response = await backendClient.runRecall(
+                    buildBody(input, args, {
+                        requireSession: false,
+                        defaultAgentId
+                    }),
+                    requestOptions
+                );
             } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
                 response = await backendClient.renderAgent(
                     ensureAgentId(input, `tools/call:${name}`, defaultAgentId),

@@ -84,6 +84,32 @@ function normalizeContextRequestContext(input, defaultSource) {
     });
 }
 
+function resolvePolicyAuthContext(authContext, fallbackContext, fallbackAgentId = '') {
+    const baseAuthContext = authContext && typeof authContext === 'object' && !Array.isArray(authContext)
+        ? authContext
+        : {};
+    const baseFallbackContext = fallbackContext && typeof fallbackContext === 'object' && !Array.isArray(fallbackContext)
+        ? fallbackContext
+        : {};
+    const resolvedAgentId = normalizeContextString(
+        baseAuthContext.agentId || baseFallbackContext.agentId || fallbackAgentId
+    );
+
+    if (!resolvedAgentId) {
+        return Object.keys(baseAuthContext).length > 0 ? baseAuthContext : baseFallbackContext;
+    }
+
+    if (resolvedAgentId === normalizeContextString(baseAuthContext.agentId)) {
+        return baseAuthContext;
+    }
+
+    return {
+        ...baseFallbackContext,
+        ...baseAuthContext,
+        agentId: resolvedAgentId
+    };
+}
+
 function parseContextBoolean(value, defaultValue = false) {
     if (value === undefined) {
         return defaultValue;
@@ -581,9 +607,10 @@ async function collectRagItems({
     const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
     const ragPlugin = getRagPlugin(pluginManager);
     const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
+    const policyAuthContext = resolvePolicyAuthContext(authContext, null, agentId);
     const resolvedPolicy = agentPolicyResolver
         ? await agentPolicyResolver.resolvePolicy({
-            authContext,
+            authContext: policyAuthContext,
             availableDiaries
         })
         : null;

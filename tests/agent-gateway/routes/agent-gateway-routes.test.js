@@ -1260,6 +1260,7 @@ test('POST /agent_gateway/recall/run forwards authContext and messages to execut
             Ariadne: 'Ariadne.md'
         })
     });
+    const bundle = getGatewayServiceBundle(pluginManager, { gatewayVersion: 'v1' });
     const server = await createServerWithRecallMocks(pluginManager, {
         recallRuntime: {
             executeRecall: async (args) => {
@@ -1310,6 +1311,7 @@ test('POST /agent_gateway/recall/run forwards authContext and messages to execut
         ]);
         assert.equal(receivedArgs.authContext.agentId, 'Ariadne');
         assert.equal(receivedArgs.requestContext.requestId, 'req-native-recall-run-forwarded');
+    assert.strictEqual(receivedArgs.agentPolicyResolver, bundle.agentPolicyResolver);
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });

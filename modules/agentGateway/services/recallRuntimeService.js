@@ -44,6 +44,20 @@ function normalizeStringArray(value) {
     return [];
 }
 
+function resolvePolicyAuthContext(authContext, fallbackAgentId = '') {
+    const baseAuthContext = authContext && typeof authContext === 'object' && !Array.isArray(authContext)
+        ? authContext
+        : {};
+    const resolvedAgentId = normalizeString(baseAuthContext.agentId || fallbackAgentId);
+    if (!resolvedAgentId || resolvedAgentId === normalizeString(baseAuthContext.agentId)) {
+        return baseAuthContext;
+    }
+    return {
+        ...baseAuthContext,
+        agentId: resolvedAgentId
+    };
+}
+
 function resolveRuleType(rule) {
     return normalizeString(rule?.baseMode || rule?.type);
 }
@@ -288,9 +302,10 @@ async function defaultFullTextRetriever({
     const knowledgeBaseManager = getKnowledgeBaseManager(deps, pluginManager);
     const ragPlugin = getRagPlugin(deps, pluginManager);
     const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
+    const policyAuthContext = resolvePolicyAuthContext(authContext, agentId);
     const resolvedPolicy = agentPolicyResolver
         ? await agentPolicyResolver.resolvePolicy({
-            authContext,
+            authContext: policyAuthContext,
             availableDiaries
         })
         : null;
@@ -1169,6 +1184,7 @@ function mapResolvedRecallFailure(resolved, normalizedAgentId, requestedProfileN
 function createRecallRuntimeService(deps = {}) {
     const pluginManager = deps.pluginManager;
     const profileResolver = deps.recallProfileResolver;
+    const defaultAgentPolicyResolver = deps.agentPolicyResolver || null;
     const embeddingUtilsLoader = deps.embeddingUtilsLoader || (() => require('../../../EmbeddingUtils'));
     const aiMemoConfigLoader = deps.aiMemoConfigLoader || defaultAiMemoConfigLoader;
     const fullTextRetriever = typeof deps.fullTextRetriever === 'function'
@@ -1194,6 +1210,9 @@ function createRecallRuntimeService(deps = {}) {
         const pipelineStages = [];
         const normalizedAgentId = normalizeString(agentId);
         const normalizedQuery = normalizeString(query);
+        // Prefer the per-request override, but fall back to the shared bundle resolver
+        // so direct recall entry points do not silently bypass MCP diary policy.
+        const effectiveAgentPolicyResolver = agentPolicyResolver || defaultAgentPolicyResolver;
 
         if (!normalizedAgentId) {
             return buildRecallResult({
@@ -1395,7 +1414,7 @@ function createRecallRuntimeService(deps = {}) {
                         requestedDiaries: ruleDiaries,
                         agentId: normalizedAgentId,
                         authContext: authContext || requestContext,
-                        agentPolicyResolver: agentPolicyResolver || null,
+                        agentPolicyResolver: effectiveAgentPolicyResolver,
                         adapterAppliedDefaultDiaryPolicy: adapterAppliedDefaultDiaryPolicy || false,
                         rule
                     });
@@ -1444,7 +1463,7 @@ function createRecallRuntimeService(deps = {}) {
                         authContext: authContext || requestContext,
                         ragOptions,
                         embeddingUtilsLoader,
-                        agentPolicyResolver: agentPolicyResolver || null
+                        agentPolicyResolver: effectiveAgentPolicyResolver
                     });
                 }
 
