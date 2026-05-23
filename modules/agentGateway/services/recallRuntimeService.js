@@ -597,9 +597,10 @@ function createRecallRuntimeService(deps = {}) {
                 // full_text variants use a larger k to retrieve more comprehensive content
                 const isFullText = FULL_TEXT_RULE_TYPES.has(rule.type);
                 const baseK = isFullText ? 20 : 5;
+                const effectiveK = (typeof rule.kMultiplier === 'number' && Number.isFinite(rule.kMultiplier) && rule.kMultiplier > 0) ? Math.max(1, Math.round(baseK * rule.kMultiplier)) : baseK;
 
                 // --- Build ragOptions from modifiers ---
-                const { options: ragOptions } = buildRagOptionsFromModifiers(rule.modifiers, baseK);
+                const { options: ragOptions } = buildRagOptionsFromModifiers(rule.modifiers, effectiveK);
 
                 // --- Execute RAG via collectRagItems ---
                 const collectResult = await collectRagItems({
