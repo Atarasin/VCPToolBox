@@ -697,8 +697,9 @@ async function collectRagItems({
 
     let scoringVector = finalQueryVector;
     let coreTags = [];
+    const effectiveTagBoost = ragOptions.tagMemoWeight || TAG_BOOST;
     if (ragOptions.tagMemo && typeof knowledgeBaseManager?.applyTagBoost === 'function') {
-        const boostResult = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), TAG_BOOST);
+        const boostResult = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), effectiveTagBoost);
         if (boostResult?.vector) {
             scoringVector = Array.from(boostResult.vector);
         }
@@ -708,6 +709,9 @@ async function collectRagItems({
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
         : Math.max(ragOptions.k, DEFAULT_RAG_K);
+    const semanticSearchOptions = ragOptions.tagMemoGeodesic
+        ? { geodesicRerank: true }
+        : null;
     const semanticResults = await Promise.all(
         targetDiaries.map(async (targetDiary) => {
             const results = await Promise.resolve(
@@ -715,8 +719,10 @@ async function collectRagItems({
                     targetDiary,
                     finalQueryVector,
                     semanticSearchK,
-                    ragOptions.tagMemo ? TAG_BOOST : 0,
-                    coreTags
+                    ragOptions.tagMemo ? effectiveTagBoost : 0,
+                    coreTags,
+                    1.33,
+                    semanticSearchOptions
                 )
             );
             return Array.isArray(results)
@@ -774,7 +780,10 @@ async function collectRagItems({
 
     let rerankApplied = false;
     if (ragOptions.rerank && candidates.length > 0 && ragPlugin?._rerankDocuments) {
-        candidates = await Promise.resolve(ragPlugin._rerankDocuments(query, candidates, ragOptions.k));
+        const rrfOptions = typeof ragOptions.rerankWeight === 'number' && Number.isFinite(ragOptions.rerankWeight)
+            ? { weight: ragOptions.rerankWeight }
+            : null;
+        candidates = await Promise.resolve(ragPlugin._rerankDocuments(query, candidates, ragOptions.k, rrfOptions));
         rerankApplied = true;
     } else {
         candidates.sort((left, right) => (right.score || 0) - (left.score || 0));

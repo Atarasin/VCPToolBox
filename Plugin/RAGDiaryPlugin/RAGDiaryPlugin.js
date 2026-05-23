@@ -3107,8 +3107,9 @@ class RAGDiaryPlugin {
             // 核心思想：综合 TagMemo/向量检索的排位和 Reranker 精排的排位
             // 公式：RRF(d) = α * 1/(K + rerank_rank) + (1-α) * 1/(K + retrieval_rank)
             // K=60 是业界标准平滑常数，防止排位靠前的文档获得过大的分数优势
+            // Support weight as an alias for alpha (structured modifier passthrough)
             const RRF_K = 60;
-            const alpha = rrfOptions.alpha ?? 0.5;
+            const alpha = rrfOptions.alpha ?? rrfOptions.weight ?? 0.5;
 
             // Step 1: 按 rerank_score 降序排列，赋予 rerank_rank (1-based)
             allRerankedDocs.sort((a, b) => (b.rerank_score ?? -1) - (a.rerank_score ?? -1));

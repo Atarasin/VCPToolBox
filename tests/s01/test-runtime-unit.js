@@ -395,6 +395,35 @@ describe('RecallRuntimeService', () => {
             assert.strictEqual(options.timeAware, true);
             assert.strictEqual(options.unknownModifier, undefined);
         });
+
+        it('parses structured tagMemo with weight and geodesic', () => {
+            const { options } = buildRagOptionsFromModifiers({
+                tagMemo: { weight: 0.25, geodesic: true }
+            });
+            assert.strictEqual(options.tagMemo, true);
+            assert.strictEqual(options.tagMemoWeight, 0.25);
+            assert.strictEqual(options.tagMemoGeodesic, true);
+        });
+
+        it('parses structured rerank with weight', () => {
+            const { options } = buildRagOptionsFromModifiers({
+                rerank: { weight: 0.7 }
+            });
+            assert.strictEqual(options.rerank, true);
+            assert.strictEqual(options.rerankWeight, 0.7);
+        });
+
+        it('falls back to boolean parsing for non-object tagMemo/rerank', () => {
+            const { options } = buildRagOptionsFromModifiers({
+                tagMemo: 'true',
+                rerank: false
+            });
+            assert.strictEqual(options.tagMemo, true);
+            assert.strictEqual(options.tagMemoWeight, undefined);
+            assert.strictEqual(options.tagMemoGeodesic, undefined);
+            assert.strictEqual(options.rerank, false);
+            assert.strictEqual(options.rerankWeight, undefined);
+        });
     });
 
     describe('result merging', () => {

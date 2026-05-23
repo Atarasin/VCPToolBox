@@ -84,7 +84,24 @@ function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
         }
         const ragOptionKey = MODIFIER_TO_RAG_OPTION[modifierKey];
         if (ragOptionKey && normalizedModifiers[modifierKey] !== undefined) {
-            options[ragOptionKey] = parseModifierValue(modifierKey, normalizedModifiers[modifierKey]);
+            const modifierValue = normalizedModifiers[modifierKey];
+            // Structured object modifiers: extract nested fields while preserving boolean compatibility
+            if (modifierKey === 'tagMemo' && modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
+                options.tagMemo = true;
+                if (typeof modifierValue.weight === 'number' && Number.isFinite(modifierValue.weight)) {
+                    options.tagMemoWeight = modifierValue.weight;
+                }
+                if (modifierValue.geodesic === true) {
+                    options.tagMemoGeodesic = true;
+                }
+            } else if (modifierKey === 'rerank' && modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
+                options.rerank = true;
+                if (typeof modifierValue.weight === 'number' && Number.isFinite(modifierValue.weight)) {
+                    options.rerankWeight = modifierValue.weight;
+                }
+            } else {
+                options[ragOptionKey] = parseModifierValue(modifierKey, modifierValue);
+            }
         }
     }
 
