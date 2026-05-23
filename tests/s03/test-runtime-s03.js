@@ -396,6 +396,145 @@ describe('RecallRuntimeService S03 diagnostics', () => {
         });
     });
 
+    // --- T04: kMultiplier runtime tests ---
+
+    describe('executeRecall kMultiplier', () => {
+        const mockPluginManager = createMockPluginManager();
+        const mockContextService = createMockContextRuntimeService();
+
+        it('kMultiplier=2.0 on rag rule doubles baseK to 10', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', kMultiplier: 2.0 }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 10);
+        });
+
+        it('kMultiplier=2.0 on full_text rule doubles baseK to 40', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'full_text', kMultiplier: 2.0 }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 40);
+        });
+
+        it('kMultiplier=0.5 clamps to at least 1 (rag baseK 5 → 3)', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', kMultiplier: 0.5 }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 3);
+        });
+
+        it('kMultiplier=-1 is invalid and falls back to baseK=5', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', kMultiplier: -1 }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5);
+        });
+
+        it('kMultiplier="invalid" string falls back to baseK', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', kMultiplier: 'invalid' }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5);
+        });
+
+        it('kMultiplier omitted falls back to baseK', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag' }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5);
+        });
+
+        it('kMultiplier on inlineRule is applied (shared rule loop)', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            // No resolver needed for inlineRule path
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], kMultiplier: 3.0 }
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 15);
+        });
+    });
+
     // --- T03: AIMemo modifier tests ---
 
     describe('MODIFIER_PIPELINE_ORDER includes aiMemo', () => {

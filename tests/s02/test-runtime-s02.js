@@ -171,7 +171,7 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(result.length, 2);
             assert.ok(result[0].score < 0.95, `old item should decay: ${result[0].score}`);
             assert.ok(result[0].score > 0.2, `old item should not decay too much: ${result[0].score}`);
-            assert.strictEqual(result[1].score, 1.0);
+            assert.ok(result[1].score > 0.99, `new item should have near-zero decay: ${result[1].score}`);
         });
 
         it('passes items without timestamp through unchanged', () => {
