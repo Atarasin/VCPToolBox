@@ -1020,7 +1020,7 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             args,
             input,
             source,
-            async execute({ body, requestContext }) {
+            async execute({ body, requestContext, authContext }) {
                 const agentId = normalizeMcpString(body.agentId || body.requestContext?.agentId || args.agentId);
                 const query = normalizeMcpString(body.query || args.query);
                 const profile = normalizeMcpString(body.profile || args.profile);
@@ -1048,7 +1048,9 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
                     agentId,
                     query,
                     profileName: profile,
-                    requestContext
+                    requestContext,
+                    authContext,
+                    messages: Array.isArray(body.messages) ? body.messages : undefined
                 });
                 const projected = bundle.recallProjectionService.projectFullResult(result, requestContext.requestId);
 

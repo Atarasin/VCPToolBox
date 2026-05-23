@@ -30,7 +30,7 @@ const ALLOWED_RULE_TYPES = Object.freeze(new Set([
 
 let cachedConfigPath = '';
 let cachedConfigMtimeMs = -1;
-let cachedConfigPayload = Object.freeze({ agents: {} });
+let cachedConfigPayload = Object.freeze({ agents: {}, profiles: {} });
 
 function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -46,6 +46,32 @@ function normalizeStringArray(value) {
     return [];
 }
 
+function normalizeBoolean(value) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true' || normalized === '1') {
+            return true;
+        }
+        if (normalized === 'false' || normalized === '0') {
+            return false;
+        }
+    }
+    return undefined;
+}
+
+function normalizeProjection(value) {
+    if (typeof value === 'string') {
+        return normalizeString(value) || undefined;
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return normalizeString(value.emit) || undefined;
+    }
+    return undefined;
+}
+
 function loadRecallProfiles(configPath) {
     let stat;
     try {
@@ -53,7 +79,7 @@ function loadRecallProfiles(configPath) {
     } catch (error) {
         cachedConfigPath = configPath;
         cachedConfigMtimeMs = -1;
-        cachedConfigPayload = Object.freeze({ agents: {} });
+        cachedConfigPayload = Object.freeze({ agents: {}, profiles: {} });
         return cachedConfigPayload;
     }
 
@@ -67,15 +93,18 @@ function loadRecallProfiles(configPath) {
         const agents = parsed?.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents)
             ? parsed.agents
             : {};
+        const profiles = parsed?.profiles && typeof parsed.profiles === 'object' && !Array.isArray(parsed.profiles)
+            ? parsed.profiles
+            : {};
 
         cachedConfigPath = configPath;
         cachedConfigMtimeMs = stat.mtimeMs;
-        cachedConfigPayload = Object.freeze({ agents });
+        cachedConfigPayload = Object.freeze({ agents, profiles });
         return cachedConfigPayload;
     } catch (error) {
         cachedConfigPath = configPath;
         cachedConfigMtimeMs = stat.mtimeMs;
-        cachedConfigPayload = Object.freeze({ agents: {} });
+        cachedConfigPayload = Object.freeze({ agents: {}, profiles: {} });
         return cachedConfigPayload;
     }
 }
@@ -93,11 +122,16 @@ function normalizeRule(rule) {
     if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
         return null;
     }
-    const type = normalizeString(rule.type);
+    const type = normalizeString(rule.baseMode || rule.type);
     if (!ALLOWED_RULE_TYPES.has(type)) {
         return null;
     }
-    const diaries = normalizeStringArray(rule.diaries);
+    const rawTargets = rule.targets && typeof rule.targets === 'object' && !Array.isArray(rule.targets)
+        ? rule.targets
+        : null;
+    const diaries = normalizeStringArray(rawTargets?.diaries !== undefined ? rawTargets.diaries : rule.diaries);
+    const aggregate = normalizeBoolean(rawTargets?.aggregate);
+    const projection = normalizeProjection(rule.projection);
     const rawModifiers = normalizeModifierEntry(rule.modifiers);
     // Filter modifiers to only allowed keys for runtime safety
     const modifiers = {};
@@ -109,20 +143,36 @@ function normalizeRule(rule) {
     const gateThreshold = typeof rule.gateThreshold === 'number' && Number.isFinite(rule.gateThreshold)
         ? rule.gateThreshold
         : null;
-    const kMultiplier = typeof rule.kMultiplier === 'number' && Number.isFinite(rule.kMultiplier) && rule.kMultiplier > 0
-        ? rule.kMultiplier
+    const rawKMultiplier = rawTargets?.kMultiplier !== undefined
+        ? rawTargets.kMultiplier
+        : rule.kMultiplier;
+    const kMultiplier = typeof rawKMultiplier === 'number' && Number.isFinite(rawKMultiplier) && rawKMultiplier > 0
+        ? rawKMultiplier
         : 1.0;
     const meta = rule.meta && typeof rule.meta === 'object' && !Array.isArray(rule.meta)
         ? { ...rule.meta }
         : undefined;
+    const id = normalizeString(rule.id) || undefined;
 
     const result = {
         type,
+        baseMode: type,
         diaries,
+        targets: {
+            diaries,
+            ...(aggregate !== undefined ? { aggregate } : {}),
+            kMultiplier
+        },
         modifiers,
         gateThreshold,
         kMultiplier
     };
+    if (id !== undefined) {
+        result.id = id;
+    }
+    if (projection !== undefined) {
+        result.projection = projection;
+    }
     if (meta !== undefined) {
         result.meta = meta;
     }
@@ -140,7 +190,7 @@ function normalizeProfile(profile) {
     }
     const merge = typeof profile.merge === 'string' ? profile.merge : undefined;
     const aggregate = typeof profile.aggregate === 'string' ? profile.aggregate : undefined;
-    const projection = typeof profile.projection === 'string' ? profile.projection : undefined;
+    const projection = normalizeProjection(profile.projection);
     const truncateTo = typeof profile.truncateTo === 'number' && Number.isFinite(profile.truncateTo) && profile.truncateTo > 0
         ? Math.floor(profile.truncateTo)
         : undefined;
@@ -167,24 +217,26 @@ function normalizeProfile(profile) {
     return result;
 }
 
-function normalizeAgentEntry(entry) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-        return null;
-    }
-    const defaultProfile = normalizeString(entry.defaultProfile);
-    const rawProfiles = entry.profiles && typeof entry.profiles === 'object' && !Array.isArray(entry.profiles)
-        ? entry.profiles
+function normalizeProfilesMap(rawProfiles) {
+    const source = rawProfiles && typeof rawProfiles === 'object' && !Array.isArray(rawProfiles)
+        ? rawProfiles
         : {};
     const profiles = {};
-    for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
+    for (const [profileName, rawProfile] of Object.entries(source)) {
         const normalizedProfile = normalizeProfile(rawProfile);
         if (normalizedProfile) {
             profiles[profileName] = normalizedProfile;
         }
     }
-    if (Object.keys(profiles).length === 0) {
+    return profiles;
+}
+
+function normalizeAgentEntry(entry) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
         return null;
     }
+    const defaultProfile = normalizeString(entry.defaultProfile);
+    const profiles = normalizeProfilesMap(entry.profiles);
     const allowedProfiles = Array.isArray(entry.allowedProfiles)
         ? entry.allowedProfiles.map((item) => normalizeString(item)).filter(Boolean)
         : undefined;
@@ -193,14 +245,19 @@ function normalizeAgentEntry(entry) {
         : undefined;
 
     const result = {
-        defaultProfile: defaultProfile || Object.keys(profiles)[0],
-        profiles
+        defaultProfile: defaultProfile || undefined
     };
+    if (Object.keys(profiles).length > 0) {
+        result.profiles = profiles;
+    }
     if (allowedProfiles !== undefined && allowedProfiles.length > 0) {
         result.allowedProfiles = allowedProfiles;
     }
     if (targets !== undefined && targets.length > 0) {
         result.targets = targets;
+    }
+    if (!result.defaultProfile && !result.allowedProfiles && !result.targets && !result.profiles) {
+        return null;
     }
     return result;
 }
@@ -269,15 +326,37 @@ class RecallProfileResolver {
             };
         }
 
-        const targetProfileName = normalizeString(profileName) || agentEntry.defaultProfile;
-        const profile = agentEntry.profiles[targetProfileName];
+        const profiles = {
+            ...normalizeProfilesMap(config.profiles),
+            ...(agentEntry.profiles || {})
+        };
+        const configuredProfileNames = Object.keys(profiles);
+        const availableProfiles = agentEntry.allowedProfiles?.length > 0
+            ? [...agentEntry.allowedProfiles]
+            : configuredProfileNames;
+        const targetProfileName = normalizeString(profileName) ||
+            agentEntry.defaultProfile ||
+            availableProfiles[0] ||
+            configuredProfileNames[0] ||
+            '';
+        if (agentEntry.allowedProfiles?.length > 0 && !agentEntry.allowedProfiles.includes(targetProfileName)) {
+            return {
+                resolved: false,
+                code: 'RECALL_FORBIDDEN',
+                agentId,
+                profileName: targetProfileName,
+                availableProfiles: [...agentEntry.allowedProfiles],
+                rules: []
+            };
+        }
+        const profile = profiles[targetProfileName];
         if (!profile) {
             return {
                 resolved: false,
                 code: 'RECALL_NO_PROFILE',
                 agentId,
                 profileName: targetProfileName,
-                availableProfiles: Object.keys(agentEntry.profiles),
+                availableProfiles,
                 rules: []
             };
         }

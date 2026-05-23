@@ -118,7 +118,7 @@ describe('AgentGatewayRoutes /recall/run', () => {
 
         assert.strictEqual(response.status, 404);
         assert.strictEqual(response.body.success, false);
-        assert.strictEqual(response.body.code, 'RECALL_NO_PROFILE');
+        assert.strictEqual(response.body.code, 'AGW_RECALL_NO_PROFILE');
     });
 
     it('returns structured result with diagnostics when profile resolves', async () => {

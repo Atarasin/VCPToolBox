@@ -8,6 +8,12 @@ let mockCollectRagItemsImpl = async (args) => {
     mockCollectRagItemsCalls.push(args);
     return { ...mockCollectRagItemsResult };
 };
+const mockFullTextCalls = [];
+let mockFullTextResult = { success: true, items: [], targetDiaries: [] };
+let mockFullTextImpl = async (args) => {
+    mockFullTextCalls.push(args);
+    return { ...mockFullTextResult };
+};
 
 require.cache[require.resolve('../../modules/agentGateway/services/contextRuntimeService')] = {
     id: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
@@ -95,6 +101,7 @@ function createMockContextRuntimeService() {
 
 function resetMocks(mockItems, enrichedFields = {}) {
     mockCollectRagItemsCalls.length = 0;
+    mockFullTextCalls.length = 0;
     mockCollectRagItemsResult = {
         success: true,
         items: mockItems || [],
@@ -103,6 +110,21 @@ function resetMocks(mockItems, enrichedFields = {}) {
         rerankApplied: enrichedFields.rerankApplied || false,
         coreTags: enrichedFields.coreTags || []
     };
+    mockFullTextResult = {
+        success: true,
+        items: mockItems || [],
+        targetDiaries: enrichedFields.targetDiaries || ['TestDiary']
+    };
+}
+
+function createTestService(overrides = {}) {
+    return createRecallRuntimeService({
+        pluginManager: createMockPluginManager(),
+        contextRuntimeService: createMockContextRuntimeService(),
+        embeddingUtilsLoader: () => ({}),
+        fullTextRetriever: async (args) => mockFullTextImpl(args),
+        ...overrides
+    });
 }
 
 describe('S02 — RecallRuntimeService extensions', () => {
@@ -357,20 +379,17 @@ describe('S02 — RecallRuntimeService extensions', () => {
     });
 
     describe('full_text rule execution via executeRecall', () => {
-        it('executes full_text rule and uses larger baseK', async () => {
+        it('executes full_text rule via independent fullTextRetriever', async () => {
             resetMocks([
                 { text: 'full content 1', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
             ]);
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([{
                     type: 'full_text',
                     diaries: ['TestDiary'],
                     modifiers: { timeDecay: { halfLifeDays: 7 } }
-                }]),
-                contextRuntimeService: createMockContextRuntimeService(),
-                embeddingUtilsLoader: () => ({})
+                }])
             });
 
             const result = await service.executeRecall({ agentId: 'AgentFT', query: 'query' });
@@ -378,12 +397,10 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(result.items.length, 1);
             assert.strictEqual(result.diagnostics.rules[0].type, 'full_text');
             assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
-
-            // Verify baseK = 20 for full_text
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            const call = mockCollectRagItemsCalls[0];
-            assert.strictEqual(call.ragOptions.k, 20);
-            assert.strictEqual(call.ragOptions.mode, 'rag');
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
+            assert.deepStrictEqual(mockFullTextCalls[0].requestedDiaries, ['TestDiary']);
+            assert.deepStrictEqual(result.diagnostics.rules[0].targetDiaries, ['TestDiary']);
         });
 
         it('executes full_text rule with timeDecay modifier', async () => {
@@ -394,15 +411,12 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'new item', score: 1.0, sourceDiary: 'TestDiary', sourceFile: 'new.md', timestamp: new Date(now).toISOString() }
             ]);
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([{
                     type: 'full_text',
                     diaries: ['TestDiary'],
                     modifiers: { timeDecay: { halfLifeDays: 7 } }
-                }]),
-                contextRuntimeService: createMockContextRuntimeService(),
-                embeddingUtilsLoader: () => ({})
+                }])
             });
 
             const result = await service.executeRecall({ agentId: 'AgentFT2', query: 'query' });
@@ -419,15 +433,12 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'plain text', score: 0.8, sourceDiary: 'TestDiary', sourceFile: 'plain.md' }
             ]);
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([{
                     type: 'full_text',
                     diaries: ['TestDiary'],
                     modifiers: { base64Memo: true }
-                }]),
-                contextRuntimeService: createMockContextRuntimeService(),
-                embeddingUtilsLoader: () => ({})
+                }])
             });
 
             const result = await service.executeRecall({ agentId: 'AgentFT3', query: 'query' });
@@ -447,16 +458,13 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'gated full result', score: 0.85, sourceDiary: 'TestDiary', sourceFile: 'x.md' }
             ]);
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([{
                     type: 'gated_full_text',
                     diaries: ['TestDiary'],
                     gateThreshold: 0.3,
                     modifiers: {}
-                }]),
-                contextRuntimeService: createMockContextRuntimeService(),
-                embeddingUtilsLoader: () => ({})
+                }])
             });
 
             const result = await service.executeRecall({ agentId: 'AgentGFT', query: 'query' });
@@ -466,23 +474,20 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
             assert.strictEqual(result.diagnostics.rules[0].gatePassed, true);
 
-            // Verify baseK = 20 for gated_full_text
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 20);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
         });
 
         it('blocks gate when similarity is below threshold', async () => {
             resetMocks();
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([{
                     type: 'gated_full_text',
                     diaries: ['AnotherDiary'],
                     gateThreshold: 0.99,
                     modifiers: {}
-                }]),
-                contextRuntimeService: createMockContextRuntimeService(),
-                embeddingUtilsLoader: () => ({})
+                }])
             });
 
             const result = await service.executeRecall({ agentId: 'AgentGFT2', query: 'query' });
@@ -490,8 +495,8 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(result.items.length, 0);
             assert.strictEqual(result.diagnostics.rules[0].status, 'gated');
             assert.strictEqual(result.diagnostics.rules[0].gatePassed, false);
-            // collectRagItems should NOT have been called
             assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 0);
         });
 
         it('passes gate when no concept vectors are available', async () => {
@@ -499,16 +504,13 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'fallback', score: 0.7, sourceDiary: 'UnknownDiary', sourceFile: 'z.md' }
             ]);
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([{
                     type: 'gated_full_text',
                     diaries: ['UnknownDiary'],
                     gateThreshold: 0.5,
                     modifiers: {}
-                }]),
-                contextRuntimeService: createMockContextRuntimeService(),
-                embeddingUtilsLoader: () => ({})
+                }])
             });
 
             const result = await service.executeRecall({ agentId: 'AgentGFT3', query: 'query' });
@@ -517,6 +519,8 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(result.diagnostics.rules[0].status, 'ok');
             assert.strictEqual(result.diagnostics.rules[0].gatePassed, true);
             assert.strictEqual(result.diagnostics.rules[0].gateSimilarity, null);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
         });
     });
 

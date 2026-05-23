@@ -1605,7 +1605,11 @@ function createPublishedOpenApiDocument() {
                         query: { type: 'string' },
                         profile: { type: 'string' },
                         requestContext: { $ref: '#/components/schemas/RequestContext' },
-                        authContext: { $ref: '#/components/schemas/AuthContext' }
+                        authContext: { $ref: '#/components/schemas/AuthContext' },
+                        messages: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/Message' }
+                        }
                     }
                 },
                 RecallRunItem: {
@@ -1628,6 +1632,29 @@ function createPublishedOpenApiDocument() {
                         sourceDiary: { type: 'string' }
                     }
                 },
+                RecallRunFullTextEntry: {
+                    type: 'object',
+                    properties: {
+                        content: { type: 'string' },
+                        score: { type: 'number', format: 'float' },
+                        sourceFile: { type: 'string' },
+                        timestamp: { type: 'string', format: 'date-time', nullable: true },
+                        tags: { type: 'array', items: { type: 'string' } }
+                    }
+                },
+                RecallRunFullTextSection: {
+                    type: 'object',
+                    properties: {
+                        sectionId: { type: 'string' },
+                        diaryName: { type: 'string' },
+                        entries: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/RecallRunFullTextEntry' }
+                        },
+                        entryCount: { type: 'integer' },
+                        combinedScore: { type: 'number', format: 'float' }
+                    }
+                },
                 RecallRunData: {
                     type: 'object',
                     properties: {
@@ -1636,6 +1663,10 @@ function createPublishedOpenApiDocument() {
                         profileName: { type: 'string', nullable: true },
                         requestId: { type: 'string' },
                         projectedAt: { type: 'integer' },
+                        activeProjection: {
+                            type: 'string',
+                            enum: ['items', 'recallBlocks', 'fullTextSections', 'attachments', 'hybrid']
+                        },
                         items: {
                             type: 'array',
                             items: { $ref: '#/components/schemas/RecallRunItem' }
@@ -1643,6 +1674,10 @@ function createPublishedOpenApiDocument() {
                         recallBlocks: {
                             type: 'array',
                             items: { $ref: '#/components/schemas/RecallRunBlock' }
+                        },
+                        fullTextSections: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/RecallRunFullTextSection' }
                         },
                         attachments: {
                             type: 'array',

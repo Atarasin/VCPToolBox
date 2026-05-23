@@ -7,6 +7,7 @@ const express = require('express');
 
 const createAgentGatewayRoutes = require('../../../routes/agentGatewayRoutes');
 const { getGatewayServiceBundle } = require('../../../modules/agentGateway/createGatewayServiceBundle');
+const { createRecallProjectionService } = require('../../../modules/agentGateway/services/recallProjectionService');
 
 function cosineSimilarity(vectorA, vectorB) {
     if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length) {
@@ -301,9 +302,10 @@ function createProtectedToolPluginManager(overrides = {}) {
 
 function createMockRecallRuntimeService(overrides = {}) {
     return {
-        async executeRecall({ agentId, query, profileName }) {
+        async executeRecall(args) {
+            const { agentId, profileName } = args;
             if (overrides.executeRecall) {
-                return overrides.executeRecall({ agentId, query, profileName });
+                return overrides.executeRecall(args);
             }
 
             return {
@@ -350,38 +352,13 @@ function createMockRecallRuntimeService(overrides = {}) {
 }
 
 function createMockRecallProjectionService(overrides = {}) {
+    const projectionService = createRecallProjectionService();
     return {
         projectFullResult(result, requestId) {
             if (overrides.projectFullResult) {
                 return overrides.projectFullResult(result, requestId);
             }
-
-            return {
-                success: result.success !== false,
-                agentId: result.agentId || null,
-                profileName: result.profileName || null,
-                requestId: requestId || `req-${Date.now()}`,
-                projectedAt: Date.now(),
-                items: result.items?.map((item) => ({
-                    content: item.text || '',
-                    score: item.score || 0,
-                    sourceDiary: item.sourceDiary || '',
-                    sourceFile: item.sourceFile || '',
-                    timestamp: item.timestamp || null,
-                    tags: item.tags || []
-                })) || [],
-                recallBlocks: result.items?.map((item, index) => ({
-                    blockId: `rb-${index}`,
-                    content: item.text || '',
-                    score: item.score || 0,
-                    sourceDiary: item.sourceDiary || ''
-                })) || [],
-                attachments: result.diagnostics?.attachments || [],
-                diagnostics: result.diagnostics || { totalDurationMs: 0, rules: [] },
-                error: result.error || null,
-                code: result.code || null,
-                status: result.status || (result.success !== false ? 200 : 500)
-            };
+            return projectionService.projectFullResult(result, requestId);
         }
     };
 }
@@ -1181,10 +1158,158 @@ test('POST /agent_gateway/recall/run returns success with items[], recallBlocks[
         assert.equal(typeof payload.data.items[0].score, 'number');
         assert.equal(Array.isArray(payload.data.recallBlocks), true);
         assert.equal(payload.data.recallBlocks.length > 0, true);
+        assert.equal(payload.data.activeProjection, 'items');
+        assert.equal(Array.isArray(payload.data.fullTextSections), true);
         assert.equal(typeof payload.data.recallBlocks[0].blockId, 'string');
         assert.equal(typeof payload.data.diagnostics, 'object');
         assert.equal(typeof payload.data.diagnostics.totalDurationMs, 'number');
         assert.equal(Array.isArray(payload.data.diagnostics.rules), true);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run projects full_text profiles to fullTextSections', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager, {
+        recallRuntime: {
+            executeRecall: async ({ agentId, profileName }) => ({
+                success: true,
+                agentId: agentId || null,
+                profileName: profileName || 'fulltext-profile',
+                items: [
+                    {
+                        text: 'Full text result for test query',
+                        score: 0.95,
+                        sourceDiary: 'Nova',
+                        sourceFile: '2026-03-20.md',
+                        timestamp: '2026-03-20T10:20:00.000Z',
+                        tags: ['test', 'fulltext']
+                    }
+                ],
+                diagnostics: {
+                    totalDurationMs: 42,
+                    rules: [
+                        {
+                            ruleIndex: 0,
+                            type: 'full_text',
+                            status: 'ok',
+                            durationMs: 30,
+                            itemCount: 1
+                        }
+                    ],
+                    profileMeta: {
+                        profileName: profileName || 'fulltext-profile',
+                        ruleCount: 1,
+                        modifierKeys: [],
+                        projection: 'full'
+                    }
+                },
+                error: null,
+                code: null,
+                status: 200
+            })
+        }
+    });
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                query: 'test recall query',
+                profile: 'fulltext-profile',
+                requestContext: {
+                    requestId: 'req-native-recall-run-fulltext',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-run-fulltext'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.data.activeProjection, 'fullTextSections');
+        assert.equal(payload.data.fullTextSections.length, 1);
+        assert.equal(payload.data.fullTextSections[0].diaryName, 'Nova');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run forwards authContext and messages to executeRecall', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    let receivedArgs = null;
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager, {
+        recallRuntime: {
+            executeRecall: async (args) => {
+                receivedArgs = args;
+                return {
+                    success: true,
+                    agentId: args.agentId,
+                    profileName: 'default',
+                    items: [],
+                    diagnostics: { totalDurationMs: 1, rules: [], pipelineStages: [], profileMeta: { profileName: 'default', ruleCount: 0, modifierKeys: [] } },
+                    status: 200
+                };
+            }
+        }
+    });
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                query: 'test recall query',
+                messages: [
+                    { role: 'user', content: 'U1' },
+                    { role: 'assistant', content: 'A1' }
+                ],
+                authContext: {
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-run-forwarded',
+                    requestId: 'req-native-recall-run-forwarded-auth'
+                },
+                requestContext: {
+                    requestId: 'req-native-recall-run-forwarded',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-run-forwarded'
+                }
+            })
+        });
+
+        assert.equal(response.status, 200);
+        assert.ok(receivedArgs);
+        assert.deepStrictEqual(receivedArgs.messages, [
+            { role: 'user', content: 'U1' },
+            { role: 'assistant', content: 'A1' }
+        ]);
+        assert.equal(receivedArgs.authContext.agentId, 'Ariadne');
+        assert.equal(receivedArgs.requestContext.requestId, 'req-native-recall-run-forwarded');
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
@@ -1277,7 +1402,7 @@ test('POST /agent_gateway/recall/run non-existent profile returns 404 AGW_RECALL
     });
     const server = await createServerWithRecallMocks(pluginManager, {
         recallRuntime: {
-            executeRecall: async ({ agentId, query, profileName }) => ({
+            executeRecall: async ({ agentId, profileName }) => ({
                 success: false,
                 agentId: agentId || null,
                 profileName: profileName || null,

@@ -534,6 +534,46 @@ describe('S03 — RecallProfileResolver new config fields', () => {
             fs.unlinkSync(p);
         });
 
+        it('top-level profiles preserve S03 fields', () => {
+            const p = writeTmp('tmp-top-level-fields.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        allowedProfiles: ['p1'],
+                        targets: ['t1']
+                    }
+                },
+                profiles: {
+                    p1: {
+                        merge: 'deduplicate',
+                        aggregate: 'concat',
+                        projection: 'recallBlock',
+                        metadata: { author: 'test' },
+                        rules: [
+                            {
+                                type: 'rag',
+                                diaries: ['D1'],
+                                kMultiplier: 3.0,
+                                meta: { warnings: ['warn'] }
+                            }
+                        ]
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+            assert.ok(result.resolved);
+            assert.strictEqual(result.merge, 'deduplicate');
+            assert.strictEqual(result.aggregate, 'concat');
+            assert.strictEqual(result.projection, 'recallBlock');
+            assert.deepStrictEqual(result.metadata, { author: 'test' });
+            assert.deepStrictEqual(result.allowedProfiles, ['p1']);
+            assert.deepStrictEqual(result.targets, ['t1']);
+            assert.strictEqual(result.rules[0].kMultiplier, 3.0);
+            assert.deepStrictEqual(result.rules[0].meta, { warnings: ['warn'] });
+            fs.unlinkSync(p);
+        });
+
         it('missing fields do not appear in result', () => {
             const p = writeTmp('tmp-missing.json', {
                 agents: {
@@ -555,7 +595,8 @@ describe('S03 — RecallProfileResolver new config fields', () => {
             const keys = Object.keys(result);
             assert.deepStrictEqual(keys.sort(), ['agentId', 'profileName', 'resolved', 'rules']);
             const ruleKeys = Object.keys(result.rules[0]);
-            assert.deepStrictEqual(ruleKeys.sort(), ['diaries', 'gateThreshold', 'kMultiplier', 'modifiers', 'type']);
+            assert.deepStrictEqual(ruleKeys.sort(), ['baseMode', 'diaries', 'gateThreshold', 'kMultiplier', 'modifiers', 'targets', 'type']);
+            assert.deepStrictEqual(result.rules[0].targets, { diaries: ['D1'], kMultiplier: 1.0 });
             fs.unlinkSync(p);
         });
 

@@ -1127,7 +1127,9 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                     agentId,
                     query,
                     profileName: profile || undefined,
-                    requestContext
+                    requestContext,
+                    authContext,
+                    messages: Array.isArray(req.body?.messages) ? req.body.messages : undefined
                 });
 
                 const projected = recallProjectionService.projectFullResult(

@@ -41,9 +41,6 @@ describe('S02 — RecallProfileResolver extensions', () => {
 
     describe('normalizeRule — full_text / gated_full_text', () => {
         it('accepts full_text rule', () => {
-            const resolver = new RecallProfileResolver();
-            const rule = resolver._loadConfig(); // not used directly; we test via normalization by constructing a profile
-            // Use resolveForAgent with a temp config
             const tmpPath = path.join(__dirname, 'tmp-profiles-fulltext.json');
             fs.writeFileSync(tmpPath, JSON.stringify({
                 agents: {
@@ -113,6 +110,40 @@ describe('S02 — RecallProfileResolver extensions', () => {
             const r = new RecallProfileResolver({ configPath: tmpPath });
             const result = r.resolveForAgent('TestAgent', 'p1');
             assert.ok(!result.resolved); // no valid rules => profile invalid
+            fs.unlinkSync(tmpPath);
+        });
+
+        it('accepts top-level full_text and gated_full_text profiles', () => {
+            const tmpPath = path.join(__dirname, 'tmp-profiles-top-level.json');
+            fs.writeFileSync(tmpPath, JSON.stringify({
+                agents: {
+                    TestAgent: {
+                        defaultProfile: 'p1',
+                        allowedProfiles: ['p1', 'p2']
+                    }
+                },
+                profiles: {
+                    p1: {
+                        rules: [
+                            { type: 'full_text', diaries: ['DiaryTop'], modifiers: { timeDecay: true } }
+                        ]
+                    },
+                    p2: {
+                        rules: [
+                            { type: 'gated_full_text', diaries: ['DiaryGate'], gateThreshold: 0.4, modifiers: { roleValve: { expression: '@User>=1' } } }
+                        ]
+                    }
+                }
+            }));
+            const r = new RecallProfileResolver({ configPath: tmpPath });
+            const fullTextResult = r.resolveForAgent('TestAgent', 'p1');
+            const gatedResult = r.resolveForAgent('TestAgent', 'p2');
+            assert.ok(fullTextResult.resolved);
+            assert.strictEqual(fullTextResult.rules[0].type, 'full_text');
+            assert.deepStrictEqual(fullTextResult.rules[0].diaries, ['DiaryTop']);
+            assert.ok(gatedResult.resolved);
+            assert.strictEqual(gatedResult.rules[0].type, 'gated_full_text');
+            assert.strictEqual(gatedResult.rules[0].gateThreshold, 0.4);
             fs.unlinkSync(tmpPath);
         });
     });

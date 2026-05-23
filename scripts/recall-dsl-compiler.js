@@ -42,6 +42,13 @@ const CLOSING_TO_OPENING = {
 /** Maps rule type → whether gated */
 const GATED_TYPES = new Set(['gated_full_text', 'gated_rag']);
 
+function defaultProjectionEmitForBaseMode(baseMode) {
+  if (baseMode === 'full_text' || baseMode === 'gated_full_text') {
+    return 'full_text_sections';
+  }
+  return 'recall_blocks';
+}
+
 /** Module-level parse result with convenience constructor */
 class ParseResult {
   /**
@@ -355,7 +362,7 @@ const MODIFIER_PARSERS = [
  *
  * @param {string} dslString - raw DSL expression, e.g. "[[角色日记本::Time::Group::Rerank]]"
  * @returns {{ rule: object|null, error: string|null }}
- *   On success: { rule: { type, diaries, kMultiplier, gateThreshold?, modifiers, meta } }
+ *   On success: { rule: { baseMode, targets, projection, gateThreshold?, modifiers, meta } }
  *   On failure: { rule: null, error: "descriptive message" }
  */
 function parseDslExpression(dslString) {
@@ -401,9 +408,15 @@ function parseDslExpression(dslString) {
   }
 
   const rule = {
-    type,
-    diaries,
-    kMultiplier,
+    baseMode: type,
+    targets: {
+      diaries,
+      ...(diaries.length > 1 ? { aggregate: true } : {}),
+      kMultiplier,
+    },
+    projection: {
+      emit: defaultProjectionEmitForBaseMode(type),
+    },
     modifiers,
     meta: {
       warnings,
@@ -437,7 +450,7 @@ function toKebabCase(str) {
  *
  * @param {string[]} expressions - array of DSL expression strings
  * @param {string} agentName - agent name (e.g. "Nexus")
- * @returns {{ [agentName]: object, warnings: object[] }}
+ * @returns {{ agents: object, profiles: object, warnings: object[] }}
  */
 function dslToProfile(expressions, agentName) {
   if (!Array.isArray(expressions)) {
@@ -459,11 +472,14 @@ function dslToProfile(expressions, agentName) {
   }
 
   return {
-    [agentName]: {
-      defaultProfile: profileName,
-      profiles: {
-        [profileName]: { rules },
+    agents: {
+      [agentName]: {
+        defaultProfile: profileName,
+        allowedProfiles: [profileName],
       },
+    },
+    profiles: {
+      [profileName]: { rules },
     },
     warnings,
   };
@@ -474,10 +490,11 @@ function dslToProfile(expressions, agentName) {
  *
  * @param {string[]} expressions - array of DSL expression strings
  * @param {string} agentName - agent name
- * @returns {object} agent config object
+ * @returns {object} top-level recall profile config
  */
 function dslExpressionsToConfig(expressions, agentName) {
-  return dslToProfile(expressions, agentName)[agentName];
+  const { warnings: _warnings, ...config } = dslToProfile(expressions, agentName);
+  return config;
 }
 
 /**
@@ -485,7 +502,7 @@ function dslExpressionsToConfig(expressions, agentName) {
  *
  * @param {string} dslString - single DSL expression string
  * @param {string} agentName - agent name
- * @returns {{ [agentName]: object, rules: object[] }|{ error: string }}
+ * @returns {{ agents: object, profiles: object, rules: object[] }|{ error: string }}
  */
 function dslSyntaxToProfile(dslString, agentName) {
   const result = parseDslExpression(dslString);
@@ -497,11 +514,14 @@ function dslSyntaxToProfile(dslString, agentName) {
   const profileName = `${kebabName}-default`;
 
   return {
-    [agentName]: {
-      defaultProfile: profileName,
-      profiles: {
-        [profileName]: { rules: [result.rule] },
+    agents: {
+      [agentName]: {
+        defaultProfile: profileName,
+        allowedProfiles: [profileName],
       },
+    },
+    profiles: {
+      [profileName]: { rules: [result.rule] },
     },
     rules: [result.rule],
   };

@@ -61,6 +61,18 @@ function createMockResolverNoProfile() {
     };
 }
 
+function createMockResolverForbiddenProfile() {
+    return {
+        resolveForAgent: () => ({
+            resolved: false,
+            code: 'RECALL_FORBIDDEN',
+            agentId: 'Restricted',
+            profileName: 'admin',
+            rules: []
+        })
+    };
+}
+
 function createMockPluginManager() {
     return {
         messagePreprocessors: new Map()
@@ -144,9 +156,21 @@ describe('RecallRuntimeService', () => {
             const result = await service.executeRecall({ agentId: 'Ghost', query: 'hello' });
             assert.strictEqual(result.success, false);
             assert.strictEqual(result.status, 404);
-            assert.strictEqual(result.code, 'RECALL_NO_PROFILE');
+            assert.strictEqual(result.code, 'AGW_RECALL_NO_PROFILE');
             assert.strictEqual(result.diagnostics.rules.length, 0);
             assert.ok(result.diagnostics.totalDurationMs >= 0);
+        });
+
+        it('returns 403 when resolved profile is forbidden for the agent', async () => {
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolverForbiddenProfile()
+            });
+            const result = await service.executeRecall({ agentId: 'Ghost', query: 'hello', profileName: 'admin' });
+            assert.strictEqual(result.success, false);
+            assert.strictEqual(result.status, 403);
+            assert.strictEqual(result.code, 'AGW_RECALL_FORBIDDEN');
+            assert.match(result.error, /admin/);
         });
     });
 

@@ -11,14 +11,18 @@ const {
     AGW_ERROR_CODES
 } = require('../../../modules/agentGateway/contracts/errorCodes');
 const {
+    createRecallProjectionService
+} = require('../../../modules/agentGateway/services/recallProjectionService');
+const {
     createPluginManager
 } = require('../helpers/agent-gateway-test-helpers');
 
 function createMockRecallRuntimeService(overrides = {}) {
     return {
-        async executeRecall({ agentId, query, profileName }) {
+        async executeRecall(args) {
+            const { agentId, profileName } = args;
             if (overrides.executeRecall) {
-                return overrides.executeRecall({ agentId, query, profileName });
+                return overrides.executeRecall(args);
             }
 
             return {
@@ -65,38 +69,13 @@ function createMockRecallRuntimeService(overrides = {}) {
 }
 
 function createMockRecallProjectionService(overrides = {}) {
+    const projectionService = createRecallProjectionService();
     return {
         projectFullResult(result, requestId) {
             if (overrides.projectFullResult) {
                 return overrides.projectFullResult(result, requestId);
             }
-
-            return {
-                success: result.success !== false,
-                agentId: result.agentId || null,
-                profileName: result.profileName || null,
-                requestId: requestId || `req-${Date.now()}`,
-                projectedAt: Date.now(),
-                items: result.items?.map((item) => ({
-                    content: item.text || '',
-                    score: item.score || 0,
-                    sourceDiary: item.sourceDiary || '',
-                    sourceFile: item.sourceFile || '',
-                    timestamp: item.timestamp || null,
-                    tags: item.tags || []
-                })) || [],
-                recallBlocks: result.items?.map((item, index) => ({
-                    blockId: `rb-${index}`,
-                    content: item.text || '',
-                    score: item.score || 0,
-                    sourceDiary: item.sourceDiary || ''
-                })) || [],
-                attachments: result.diagnostics?.attachments || [],
-                diagnostics: result.diagnostics || { totalDurationMs: 0, rules: [] },
-                error: result.error || null,
-                code: result.code || null,
-                status: result.status || (result.success !== false ? 200 : 500)
-            };
+            return projectionService.projectFullResult(result, requestId);
         }
     };
 }
@@ -137,11 +116,13 @@ test('gateway_recall_run tools/call returns success with items[], recallBlocks[]
     assert.equal(result.structuredContent.requestId, 'req-mcp-recall-run-001');
     assert.equal(Array.isArray(result.structuredContent.result.items), true);
     assert.equal(result.structuredContent.result.items.length > 0, true);
+    assert.equal(result.structuredContent.result.activeProjection, 'items');
     assert.equal(typeof result.structuredContent.result.items[0].content, 'string');
     assert.equal(typeof result.structuredContent.result.items[0].score, 'number');
     assert.equal(typeof result.structuredContent.result.items[0].sourceDiary, 'string');
     assert.equal(Array.isArray(result.structuredContent.result.recallBlocks), true);
     assert.equal(result.structuredContent.result.recallBlocks.length > 0, true);
+    assert.equal(Array.isArray(result.structuredContent.result.fullTextSections), true);
     assert.equal(typeof result.structuredContent.result.recallBlocks[0].blockId, 'string');
     assert.equal(typeof result.structuredContent.result.recallBlocks[0].content, 'string');
     assert.equal(typeof result.structuredContent.result.recallBlocks[0].score, 'number');
@@ -150,6 +131,134 @@ test('gateway_recall_run tools/call returns success with items[], recallBlocks[]
     assert.equal(Array.isArray(result.structuredContent.result.diagnostics.rules), true);
     assert.match(result.structuredContent.operability.traceId, /^agwop_/);
     assert.equal(result.structuredContent.operability.operationName, 'recall.run');
+});
+
+test('gateway_recall_run surfaces fullTextSections for full_text projection', async () => {
+    const pluginManager = createRecallPluginManager({
+        recallRuntime: {
+            executeRecall: async ({ agentId, query, profileName }) => ({
+                success: true,
+                agentId: agentId || null,
+                profileName: profileName || 'fulltext-profile',
+                items: [
+                    {
+                        text: 'Full text result for test query',
+                        score: 0.95,
+                        sourceDiary: 'Nova',
+                        sourceFile: '2026-03-20.md',
+                        timestamp: '2026-03-20T10:20:00.000Z',
+                        tags: ['test', 'fulltext']
+                    }
+                ],
+                diagnostics: {
+                    totalDurationMs: 42,
+                    rules: [
+                        {
+                            ruleIndex: 0,
+                            type: 'full_text',
+                            status: 'ok',
+                            durationMs: 30,
+                            itemCount: 1
+                        }
+                    ],
+                    profileMeta: {
+                        profileName: profileName || 'fulltext-profile',
+                        ruleCount: 1,
+                        modifierKeys: [],
+                        projection: 'full'
+                    }
+                },
+                error: null,
+                code: null,
+                status: 200
+            })
+        }
+    });
+    const bundle = getGatewayServiceBundle(pluginManager);
+    const adapter = createMcpAdapter(pluginManager, {
+        gatewayServiceBundle: bundle
+    });
+
+    const result = await adapter.callTool({
+        name: 'gateway_recall_run',
+        arguments: {
+            agentId: 'Ariadne',
+            query: 'test recall query',
+            profile: 'fulltext-profile'
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-recall-run-fulltext',
+        requestContext: {
+            requestId: 'req-mcp-recall-run-fulltext'
+        }
+    });
+
+    assert.equal(result.isError, false);
+    assert.equal(result.structuredContent.result.activeProjection, 'fullTextSections');
+    assert.equal(result.structuredContent.result.fullTextSections.length, 1);
+    assert.equal(result.structuredContent.result.fullTextSections[0].diaryName, 'Nova');
+});
+
+test('gateway_recall_run forwards authContext and messages to executeRecall', async () => {
+    let receivedArgs = null;
+    const pluginManager = createRecallPluginManager({
+        recallRuntime: {
+            executeRecall: async (args) => {
+                receivedArgs = args;
+                return {
+                    success: true,
+                    agentId: args.agentId || null,
+                    profileName: 'default',
+                    items: [],
+                    diagnostics: {
+                        totalDurationMs: 1,
+                        rules: [],
+                        pipelineStages: [],
+                        profileMeta: {
+                            profileName: 'default',
+                            ruleCount: 0,
+                            modifierKeys: []
+                        }
+                    },
+                    status: 200
+                };
+            }
+        }
+    });
+    const bundle = getGatewayServiceBundle(pluginManager);
+    const adapter = createMcpAdapter(pluginManager, {
+        gatewayServiceBundle: bundle
+    });
+
+    const result = await adapter.callTool({
+        name: 'gateway_recall_run',
+        arguments: {
+            agentId: 'Ariadne',
+            query: 'test recall query',
+            messages: [
+                { role: 'user', content: 'U1' },
+                { role: 'assistant', content: 'A1' }
+            ],
+            authContext: {
+                agentId: 'Ariadne',
+                sessionId: 'sess-mcp-recall-run-forwarded-auth'
+            }
+        },
+        agentId: 'Ariadne',
+        sessionId: 'sess-mcp-recall-run-forwarded',
+        requestContext: {
+            requestId: 'req-mcp-recall-run-forwarded'
+        }
+    });
+
+    assert.equal(result.isError, false);
+    assert.ok(receivedArgs);
+    assert.deepStrictEqual(receivedArgs.messages, [
+        { role: 'user', content: 'U1' },
+        { role: 'assistant', content: 'A1' }
+    ]);
+    assert.equal(receivedArgs.authContext.agentId, 'Ariadne');
+    assert.equal(receivedArgs.requestContext.requestId, 'req-mcp-recall-run-forwarded');
 });
 
 test('gateway_recall_run missing agentId returns MCP error', async () => {

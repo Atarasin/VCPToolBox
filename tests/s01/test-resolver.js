@@ -79,6 +79,91 @@ describe('RecallProfileResolver', () => {
         }
     });
 
+    it('rejects profile outside allowedProfiles with RECALL_FORBIDDEN', () => {
+        const tmpFile = createTempConfig({
+            agents: {
+                TestAgent: {
+                    defaultProfile: 'default',
+                    allowedProfiles: ['default'],
+                    profiles: {
+                        default: {
+                            rules: [{ type: 'rag', diaries: ['Test'], modifiers: {} }]
+                        },
+                        admin: {
+                            rules: [{ type: 'rag', diaries: ['Secret'], modifiers: {} }]
+                        }
+                    }
+                }
+            }
+        });
+        try {
+            const resolver = new RecallProfileResolver({ configPath: tmpFile });
+            const result = resolver.resolveForAgent('TestAgent', 'admin');
+            assert.strictEqual(result.resolved, false);
+            assert.strictEqual(result.code, 'RECALL_FORBIDDEN');
+            assert.deepStrictEqual(result.availableProfiles, ['default']);
+        } finally {
+            cleanupTempConfig(tmpFile);
+        }
+    });
+
+    it('resolves profiles from top-level config map', () => {
+        const tmpFile = createTempConfig({
+            agents: {
+                TestAgent: {
+                    defaultProfile: 'default',
+                    allowedProfiles: ['default'],
+                    targets: ['SharedDiary']
+                }
+            },
+            profiles: {
+                default: {
+                    merge: 'concat',
+                    rules: [{ type: 'rag', diaries: ['SharedDiary'], modifiers: { time: true } }]
+                }
+            }
+        });
+        try {
+            const resolver = new RecallProfileResolver({ configPath: tmpFile });
+            const result = resolver.resolveForAgent('TestAgent');
+            assert.strictEqual(result.resolved, true);
+            assert.strictEqual(result.profileName, 'default');
+            assert.strictEqual(result.merge, 'concat');
+            assert.deepStrictEqual(result.targets, ['SharedDiary']);
+            assert.deepStrictEqual(result.rules[0].diaries, ['SharedDiary']);
+        } finally {
+            cleanupTempConfig(tmpFile);
+        }
+    });
+
+    it('prefers agent-local profiles over top-level profiles with the same name', () => {
+        const tmpFile = createTempConfig({
+            agents: {
+                TestAgent: {
+                    defaultProfile: 'shared',
+                    profiles: {
+                        shared: {
+                            rules: [{ type: 'rag', diaries: ['AgentDiary'], modifiers: {} }]
+                        }
+                    }
+                }
+            },
+            profiles: {
+                shared: {
+                    rules: [{ type: 'rag', diaries: ['GlobalDiary'], modifiers: {} }]
+                }
+            }
+        });
+        try {
+            const resolver = new RecallProfileResolver({ configPath: tmpFile });
+            const result = resolver.resolveForAgent('TestAgent');
+            assert.strictEqual(result.resolved, true);
+            assert.deepStrictEqual(result.rules[0].diaries, ['AgentDiary']);
+        } finally {
+            cleanupTempConfig(tmpFile);
+        }
+    });
+
     it('rejects unknown agent with RECALL_NO_PROFILE', () => {
         const tmpFile = createTempConfig({ agents: {} });
         try {

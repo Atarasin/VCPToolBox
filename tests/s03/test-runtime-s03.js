@@ -8,6 +8,12 @@ let mockCollectRagItemsImpl = async (args) => {
     mockCollectRagItemsCalls.push(args);
     return { ...mockCollectRagItemsResult };
 };
+const mockFullTextCalls = [];
+let mockFullTextResult = { success: true, items: [], targetDiaries: [] };
+let mockFullTextImpl = async (args) => {
+    mockFullTextCalls.push(args);
+    return { ...mockFullTextResult };
+};
 
 require.cache[require.resolve('../../modules/agentGateway/services/contextRuntimeService')] = {
     id: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
@@ -70,14 +76,29 @@ function createMockContextRuntimeService() {
 
 function resetMocks(mockItems) {
     mockCollectRagItemsCalls.length = 0;
+    mockFullTextCalls.length = 0;
     mockCollectRagItemsResult = {
         success: true,
         items: mockItems || []
+    };
+    mockFullTextResult = {
+        success: true,
+        items: mockItems || [],
+        targetDiaries: ['TestDiary']
     };
     mockCollectRagItemsImpl = async (args) => {
         mockCollectRagItemsCalls.push(args);
         return { ...mockCollectRagItemsResult };
     };
+}
+
+function createTestService(overrides = {}) {
+    return createRecallRuntimeService({
+        pluginManager: createMockPluginManager(),
+        contextRuntimeService: createMockContextRuntimeService(),
+        fullTextRetriever: async (args) => mockFullTextImpl(args),
+        ...overrides
+    });
 }
 
 describe('RecallRuntimeService S03 diagnostics', () => {
@@ -175,9 +196,9 @@ describe('RecallRuntimeService S03 diagnostics', () => {
         it('includes resolveProfile stage in successful execution', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([{ type: 'rag' }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({
@@ -200,9 +221,9 @@ describe('RecallRuntimeService S03 diagnostics', () => {
         it('includes precomputeVector stage', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([{ type: 'rag' }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({
@@ -223,9 +244,9 @@ describe('RecallRuntimeService S03 diagnostics', () => {
                 { type: 'rag', diaries: ['DiaryA'] },
                 { type: 'full_text', diaries: ['DiaryB'] }
             ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({
@@ -442,14 +463,14 @@ describe('RecallRuntimeService S03 diagnostics', () => {
             assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 10);
         });
 
-        it('kMultiplier=2.0 on full_text rule doubles baseK to 40', async () => {
+        it('kMultiplier=2.0 on full_text rule keeps independent full_text retrieval', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([
                 { type: 'full_text', kMultiplier: 2.0 }
             ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({
@@ -457,8 +478,9 @@ describe('RecallRuntimeService S03 diagnostics', () => {
                 query: 'test query'
             });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 40);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
+            assert.strictEqual(mockFullTextCalls[0].rule.kMultiplier, 2.0);
         });
 
         it('kMultiplier=0.5 clamps to at least 1 (rag baseK 5 → 3)', async () => {

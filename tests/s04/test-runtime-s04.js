@@ -8,6 +8,12 @@ let mockCollectRagItemsImpl = async (args) => {
     mockCollectRagItemsCalls.push(args);
     return { ...mockCollectRagItemsResult };
 };
+const mockFullTextCalls = [];
+let mockFullTextResult = { success: true, items: [], targetDiaries: [] };
+let mockFullTextImpl = async (args) => {
+    mockFullTextCalls.push(args);
+    return { ...mockFullTextResult };
+};
 
 require.cache[require.resolve('../../modules/agentGateway/services/contextRuntimeService')] = {
     id: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
@@ -27,6 +33,7 @@ const {
     sortItemsByScore,
     applyRoleValve,
     parseRoleValveConfig,
+    evaluateRoleValveExpression,
     applyAIMemo,
     AIMEMO_PRESETS
 } = require('../../modules/agentGateway/services/recallRuntimeService');
@@ -37,13 +44,31 @@ function createMockResolver(rules, extraProfileFields = {}, profileName = 'defau
             resolved: true,
             agentId,
             profileName: requestedProfile || profileName,
-            rules: rules.map((rule, index) => ({
-                type: rule.type || 'rag',
-                diaries: rule.diaries || ['TestDiary'],
-                modifiers: rule.modifiers || {},
-                gateThreshold: rule.gateThreshold ?? null,
-                ...rule
-            })),
+            rules: rules.map((rule) => {
+                const baseMode = rule.baseMode || rule.type || 'rag';
+                const hasStructuredTargets = Boolean(rule.targets && typeof rule.targets === 'object' && !Array.isArray(rule.targets));
+                const shouldNormalizeStructured = hasStructuredTargets || Boolean(rule.baseMode);
+                const diaries = Array.isArray(rule.targets?.diaries)
+                    ? rule.targets.diaries
+                    : (rule.diaries || ['TestDiary']);
+                const normalizedTargets = shouldNormalizeStructured
+                    ? {
+                        ...(hasStructuredTargets ? rule.targets : {}),
+                        diaries,
+                        ...((hasStructuredTargets && rule.targets.kMultiplier !== undefined)
+                            ? {}
+                            : { kMultiplier: rule.kMultiplier ?? 1.0 })
+                    }
+                    : null;
+
+                return {
+                    baseMode,
+                    modifiers: rule.modifiers || {},
+                    gateThreshold: rule.gateThreshold ?? null,
+                    ...(normalizedTargets ? { targets: normalizedTargets } : {}),
+                    ...rule
+                };
+            }),
             ...extraProfileFields
         })
     };
@@ -76,6 +101,7 @@ function createMockContextRuntimeService() {
 
 function resetMocks(mockItems, enrichedFields = {}) {
     mockCollectRagItemsCalls.length = 0;
+    mockFullTextCalls.length = 0;
     mockCollectRagItemsResult = {
         success: true,
         items: mockItems || [],
@@ -88,6 +114,20 @@ function resetMocks(mockItems, enrichedFields = {}) {
         mockCollectRagItemsCalls.push(args);
         return { ...mockCollectRagItemsResult };
     };
+    mockFullTextResult = {
+        success: true,
+        items: mockItems || [],
+        targetDiaries: enrichedFields.targetDiaries || ['TestDiary']
+    };
+}
+
+function createTestService(overrides = {}) {
+    return createRecallRuntimeService({
+        pluginManager: createMockPluginManager(),
+        contextRuntimeService: createMockContextRuntimeService(),
+        fullTextRetriever: async (args) => mockFullTextImpl(args),
+        ...overrides
+    });
 }
 
 describe('RecallRuntimeService S04 — merge policy', () => {
@@ -146,13 +186,13 @@ describe('RecallRuntimeService S04 — merge policy', () => {
             assert.deepStrictEqual(result.map((i) => i.text), ['a1', 'b1', 'a2', 'b2']);
         });
 
-        it('stops when shortest rule is exhausted', () => {
+        it('continues until every rule is exhausted', () => {
             const ruleItems = [
                 [{ text: 'a1' }, { text: 'a2' }, { text: 'a3' }],
                 [{ text: 'b1' }]
             ];
             const result = interleaveItems(ruleItems);
-            assert.deepStrictEqual(result.map((i) => i.text), ['a1', 'b1']);
+            assert.deepStrictEqual(result.map((i) => i.text), ['a1', 'b1', 'a2', 'a3']);
         });
 
         it('handles empty rule arrays', () => {
@@ -161,7 +201,7 @@ describe('RecallRuntimeService S04 — merge policy', () => {
                 []
             ];
             const result = interleaveItems(ruleItems);
-            assert.deepStrictEqual(result.map((i) => i.text), []);
+            assert.deepStrictEqual(result.map((i) => i.text), ['a1']);
         });
 
         it('handles single rule', () => {
@@ -207,25 +247,35 @@ describe('RecallRuntimeService S04 — merge policy', () => {
 
     describe('executeRecall — interleave merge', () => {
         it('interleaves items from two rules', async () => {
-            let callIndex = 0;
+            resetMocks();
             mockCollectRagItemsImpl = async (args) => {
                 mockCollectRagItemsCalls.push(args);
-                callIndex += 1;
                 return {
                     success: true,
                     items: [
-                        { text: `rule${callIndex}-a`, score: 0.9 / callIndex, sourceDiary: args.requestedDiaries[0], sourceFile: 'a.md' },
-                        { text: `rule${callIndex}-b`, score: 0.8 / callIndex, sourceDiary: args.requestedDiaries[0], sourceFile: 'b.md' }
+                        { text: 'rule1-a', score: 0.9, sourceDiary: args.requestedDiaries[0], sourceFile: 'a.md' },
+                        { text: 'rule1-b', score: 0.8, sourceDiary: args.requestedDiaries[0], sourceFile: 'b.md' }
+                    ]
+                };
+            };
+            mockFullTextImpl = async (args) => {
+                mockFullTextCalls.push(args);
+                return {
+                    success: true,
+                    targetDiaries: args.requestedDiaries,
+                    items: [
+                        { text: 'rule2-a', score: 0.45, sourceDiary: args.requestedDiaries[0], sourceFile: 'a.md' },
+                        { text: 'rule2-b', score: 0.4, sourceDiary: args.requestedDiaries[0], sourceFile: 'b.md' }
                     ]
                 };
             };
 
-            const service = createRecallRuntimeService({
-                pluginManager: createMockPluginManager(),
+            const service = createTestService({
                 recallProfileResolver: createMockResolver([
                     { type: 'rag', diaries: ['DiaryA'] },
                     { type: 'full_text', diaries: ['DiaryB'] }
                 ], { merge: 'interleave' }),
+                pluginManager: createMockPluginManager(),
                 contextRuntimeService: createMockContextRuntimeService(),
                 embeddingUtilsLoader: () => ({})
             });
@@ -243,11 +293,17 @@ describe('RecallRuntimeService S04 — merge policy', () => {
             assert.ok(mergeStage);
             assert.strictEqual(mergeStage.detail.strategy, 'interleave');
             assert.strictEqual(mergeStage.detail.interleavedRuleCount, 2);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockFullTextCalls.length, 1);
 
             // Restore
             mockCollectRagItemsImpl = async (args) => {
                 mockCollectRagItemsCalls.push(args);
                 return { ...mockCollectRagItemsResult };
+            };
+            mockFullTextImpl = async (args) => {
+                mockFullTextCalls.push(args);
+                return { ...mockFullTextResult };
             };
         });
 
@@ -275,21 +331,8 @@ describe('RecallRuntimeService S04 — merge policy', () => {
 
             const result = await service.executeRecall({ agentId: 'AgentIntDedup', query: 'query' });
             assert.strictEqual(result.success, true);
-            // shared appears once (deduped), only-a appears once
-            // interleave: shared (from rule1), shared (from rule2) → deduped to one, assigned to rule1
-            // only-a from rule1
-            // So itemsByRule[0] = [shared, only-a], itemsByRule[1] = []
-            // After interleave with minLen=0? No, itemsByRule[1] is empty because shared was already seen.
-            // Wait, both rules return the same items. So after dedup:
-            // rule1 items: [shared, only-a] (both survive)
-            // rule2 items: [shared, only-a] but shared is already seen, only-a is already seen
-            // So itemsByRule[1] = []
-            // Interleave with lengths [2, 0] → minLen = 0 → empty result!
-
-            // Hmm, this is a problem. If both rules return identical items, interleave produces nothing.
-            // But that's actually correct per the "stop when shortest exhausted" semantics.
-            // Let me verify this is what happens.
-            assert.strictEqual(result.items.length, 0);
+            // shared 与 only-a 去重后都应保留，且不能因为第二条 rule 为空而丢失全部结果。
+            assert.deepStrictEqual(result.items.map((item) => item.text), ['shared', 'only-a']);
 
             // Restore
             mockCollectRagItemsImpl = async (args) => {
@@ -336,10 +379,11 @@ describe('RecallRuntimeService S04 — merge policy', () => {
             // Deduped: shared (score 0.9 from rule1), only-a (0.8), only-b (0.75)
             // itemsByRule[0] = [shared(0.9), only-a(0.8)]
             // itemsByRule[1] = [only-b(0.75)] (shared already seen)
-            // Interleave minLen=1: [shared, only-b]
-            assert.strictEqual(result.items.length, 2);
+            // 新 interleave 语义会继续输出剩余多样结果：[shared, only-b, only-a]
+            assert.strictEqual(result.items.length, 3);
             assert.strictEqual(result.items[0].text, 'shared');
             assert.strictEqual(result.items[1].text, 'only-b');
+            assert.strictEqual(result.items[2].text, 'only-a');
             assert.strictEqual(result.items[0].score, 0.9);
 
             // Restore
@@ -347,6 +391,120 @@ describe('RecallRuntimeService S04 — merge policy', () => {
                 mockCollectRagItemsCalls.push(args);
                 return { ...mockCollectRagItemsResult };
             };
+        });
+    });
+
+    describe('executeRecall — structured rule compatibility', () => {
+        it('uses baseMode and targets.diaries for retrieval and exposes rule projection', async () => {
+            resetMocks([
+                { text: 'structured', score: 0.9, sourceDiary: 'DiaryA', sourceFile: 'a.md' }
+            ]);
+
+            const service = createTestService({
+                recallProfileResolver: createMockResolver([
+                    {
+                        id: 'structured-rule',
+                        baseMode: 'rag',
+                        targets: {
+                            diaries: ['DiaryA', 'DiaryB'],
+                            aggregate: true,
+                            kMultiplier: 1.5
+                        },
+                        projection: 'recall_blocks',
+                        modifiers: { time: true }
+                    }
+                ]),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentStructured', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.deepStrictEqual(mockCollectRagItemsCalls[0].requestedDiaries, ['DiaryA', 'DiaryB']);
+            assert.strictEqual(result.diagnostics.rules[0].type, 'rag');
+            assert.strictEqual(result.diagnostics.rules[0].baseMode, 'rag');
+            assert.strictEqual(result.diagnostics.rules[0].projection, 'recall_blocks');
+            assert.strictEqual(result.diagnostics.rules[0].targetAggregate, true);
+        });
+
+        it('uses targets.kMultiplier for structured rag rules', async () => {
+            resetMocks([
+                { text: 'structured-k', score: 0.9, sourceDiary: 'DiaryA', sourceFile: 'a.md' }
+            ]);
+
+            const service = createTestService({
+                recallProfileResolver: createMockResolver([
+                    {
+                        baseMode: 'rag',
+                        targets: {
+                            diaries: ['DiaryA'],
+                            kMultiplier: 2.0
+                        },
+                        modifiers: {}
+                    }
+                ]),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentStructuredK', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 10);
+            assert.strictEqual(result.diagnostics.rules[0].targetMode, 'single');
+        });
+
+        it('rejects explicit multi-diary structured rules when targets.aggregate=false', async () => {
+            resetMocks([
+                { text: 'should-not-run', score: 0.9, sourceDiary: 'DiaryA', sourceFile: 'a.md' }
+            ]);
+
+            const service = createTestService({
+                recallProfileResolver: createMockResolver([
+                    {
+                        baseMode: 'rag',
+                        targets: {
+                            diaries: ['DiaryA', 'DiaryB'],
+                            aggregate: false,
+                            kMultiplier: 1.0
+                        },
+                        modifiers: {}
+                    }
+                ]),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentStructuredInvalid', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 0);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(result.diagnostics.rules[0].status, 'error');
+            assert.strictEqual(result.diagnostics.rules[0].targetMode, 'parallel');
+            assert.strictEqual(result.diagnostics.rules[0].errorMessage, 'Structured multi-diary rules must set targets.aggregate=true');
+        });
+
+        it('infers aggregate mode for legacy multi-diary rules', async () => {
+            resetMocks([
+                { text: 'legacy-aggregate', score: 0.9, sourceDiary: 'DiaryA', sourceFile: 'a.md' }
+            ]);
+
+            const service = createTestService({
+                recallProfileResolver: createMockResolver([
+                    {
+                        type: 'rag',
+                        diaries: ['DiaryA', 'DiaryB'],
+                        modifiers: {}
+                    }
+                ]),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentLegacyAggregate', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.deepStrictEqual(mockCollectRagItemsCalls[0].requestedDiaries, ['DiaryA', 'DiaryB']);
+            assert.strictEqual(result.diagnostics.rules[0].targetMode, 'aggregate');
+            assert.strictEqual(result.diagnostics.rules[0].targetAggregate, true);
+            assert.strictEqual(result.diagnostics.rules[0].targetAggregateInferred, true);
         });
     });
 
@@ -559,50 +717,53 @@ describe('RecallRuntimeService S04 — runtime semantics', () => {
     const mockPluginManager = createMockPluginManager();
     const mockContextService = createMockContextRuntimeService();
 
-    describe('full_text baseK=20', () => {
-        it('full_text rule uses baseK=20', async () => {
+    describe('full_text independent retrieval', () => {
+        it('full_text rule uses fullTextRetriever instead of collectRagItems', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([{ type: 'full_text', diaries: ['TestDiary'] }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({ agentId: 'AgentFT', query: 'test query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 20);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
+            assert.deepStrictEqual(result.diagnostics.rules[0].targetDiaries, ['TestDiary']);
         });
 
-        it('full_text with kMultiplier=1.5 uses k=30', async () => {
+        it('full_text with kMultiplier still stays on fullTextRetriever path', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([{ type: 'full_text', diaries: ['TestDiary'], kMultiplier: 1.5 }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({ agentId: 'AgentFT', query: 'test query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 30);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
+            assert.strictEqual(mockFullTextCalls[0].rule.kMultiplier, 1.5);
         });
     });
 
-    describe('gated_full_text gate evaluation + baseK', () => {
-        it('gated_full_text passes gate and uses baseK=20', async () => {
+    describe('gated_full_text gate evaluation', () => {
+        it('gated_full_text passes gate and uses fullTextRetriever', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([
                 { type: 'gated_full_text', diaries: ['TestDiary'], gateThreshold: 0.5 }
             ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({ agentId: 'AgentGFT', query: 'test query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 20);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 1);
             const ruleStage = result.diagnostics.pipelineStages.find((s) => s.name === 'ruleExecution');
             assert.strictEqual(ruleStage.status, 'ok');
         });
@@ -612,14 +773,15 @@ describe('RecallRuntimeService S04 — runtime semantics', () => {
             const resolver = createMockResolver([
                 { type: 'gated_full_text', diaries: ['AnotherDiary'], gateThreshold: 0.99 }
             ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
+            const service = createTestService({
                 recallProfileResolver: resolver,
+                pluginManager: mockPluginManager,
                 contextRuntimeService: mockContextService
             });
             const result = await service.executeRecall({ agentId: 'AgentGFT', query: 'test query' });
             assert.strictEqual(result.success, true);
             assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            assert.strictEqual(mockFullTextCalls.length, 0);
             const ruleStage = result.diagnostics.pipelineStages.find((s) => s.name === 'ruleExecution');
             assert.strictEqual(ruleStage.status, 'gated');
         });
@@ -730,31 +892,107 @@ describe('RecallRuntimeService S04 — runtime semantics', () => {
     });
 
     describe('roleValve expression AND/OR/object', () => {
-        it('parses object syntax with expression', () => {
-            const config = parseRoleValveConfig({ roles: ['user', 'assistant'], expression: 'AND' });
-            assert.deepStrictEqual(config.roles, ['user', 'assistant']);
-            assert.strictEqual(config.expression, 'AND');
+        it('parses expression syntax as pre-gate mode', () => {
+            const config = parseRoleValveConfig({ enabled: true, expression: '@User>=2&@Assistant<5' });
+            assert.strictEqual(config.mode, 'expression');
+            assert.strictEqual(config.enabled, true);
+            assert.strictEqual(config.expression, '@User>=2&@Assistant<5');
         });
 
-        it('parses object syntax defaulting to OR', () => {
+        it('parses legacy role filter syntax defaulting to OR', () => {
             const config = parseRoleValveConfig({ roles: ['user'] });
+            assert.strictEqual(config.mode, 'roles');
             assert.deepStrictEqual(config.roles, ['user']);
             assert.strictEqual(config.expression, 'OR');
         });
 
-        it('applyRoleValve returns expression and matchedCount', () => {
-            const items = [
-                { text: 'A', role: 'user' },
-                { text: 'B', role: 'assistant' },
-                { text: 'C', role: 'system' }
-            ];
-            const result = applyRoleValve(items, { roles: ['user', 'assistant'], expression: 'AND' });
-            assert.strictEqual(result.items.length, 2);
-            assert.strictEqual(result.expression, 'AND');
-            assert.strictEqual(result.matchedCount, 2);
+        it('evaluates expression against conversation role counts', () => {
+            const result = evaluateRoleValveExpression('@User>=2&@Assistant<2|@System>=1', [
+                { role: 'user', content: 'U1' },
+                { role: 'assistant', content: 'A1' },
+                { role: 'user', content: 'U2' }
+            ]);
+            assert.strictEqual(result.passed, true);
+            assert.deepStrictEqual(result.roleCounts, { User: 2, Assistant: 1, System: 0 });
         });
 
-        it('roleValve modifierDetail includes expression and matchedCount', async () => {
+        it('applyRoleValve gates result set when expression is not satisfied', () => {
+            const items = [
+                { text: 'A', role: 'user' },
+                { text: 'B', role: 'assistant' }
+            ];
+            const result = applyRoleValve(items, { enabled: true, expression: '@User>=2&@Assistant<1' }, {
+                messages: [
+                    { role: 'user', content: 'U1' },
+                    { role: 'assistant', content: 'A1' }
+                ]
+            });
+            assert.strictEqual(result.items.length, 0);
+            assert.strictEqual(result.expression, '@User>=2&@Assistant<1');
+            assert.strictEqual(result.passed, false);
+            assert.strictEqual(result.matchedCount, 0);
+        });
+
+        it('roleValve expression blocks retrieval before base mode when condition fails', async () => {
+            resetMocks([
+                { text: 'A', score: 0.9, sourceDiary: 'TestDiary', role: 'user' }
+            ]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { roleValve: { enabled: true, expression: '@User>=2' } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'AgentRVExprBlock',
+                query: 'test query',
+                messages: [{ role: 'user', content: 'only one user message' }]
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 0);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            const ruleDiag = result.diagnostics.rules[0];
+            const rvDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'roleValve');
+            assert.ok(rvDetail);
+            assert.strictEqual(ruleDiag.status, 'gated');
+            assert.strictEqual(ruleDiag.roleValvePassed, false);
+            assert.strictEqual(rvDetail.expression, '@User>=2');
+            assert.strictEqual(rvDetail.passed, false);
+            assert.deepStrictEqual(rvDetail.roleCounts, { User: 1, Assistant: 0, System: 0 });
+        });
+
+        it('roleValve expression allows retrieval when request messages satisfy condition', async () => {
+            resetMocks([
+                { text: 'A', score: 0.9, sourceDiary: 'TestDiary', role: 'user' }
+            ]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { roleValve: { enabled: true, expression: '@User>=2&@Assistant<2' } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'AgentRVExprPass',
+                query: 'test query',
+                messages: [
+                    { role: 'user', content: 'U1' },
+                    { role: 'assistant', content: 'A1' },
+                    { role: 'user', content: 'U2' }
+                ]
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            const rvDetail = result.diagnostics.rules[0].modifierDetails.find((d) => d.modifier === 'roleValve');
+            assert.strictEqual(rvDetail.passed, true);
+            assert.strictEqual(rvDetail.stage, 'pre');
+        });
+
+        it('roleValve legacy filter detail still includes expression and matchedCount', async () => {
             resetMocks([
                 { text: 'A', score: 0.9, sourceDiary: 'TestDiary', role: 'user' },
                 { text: 'B', score: 0.8, sourceDiary: 'TestDiary', role: 'assistant' },

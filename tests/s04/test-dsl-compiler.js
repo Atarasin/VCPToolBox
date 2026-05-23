@@ -29,8 +29,8 @@ const {
 function assertSuccess(result, expectedType, expectedDiaries) {
   assert.strictEqual(result.error, null, `Expected success but got error: ${result.error}`);
   assert.ok(result.rule, 'Expected rule to be non-null');
-  assert.strictEqual(result.rule.type, expectedType);
-  assert.deepStrictEqual(result.rule.diaries, expectedDiaries);
+  assert.strictEqual(result.rule.baseMode, expectedType);
+  assert.deepStrictEqual(result.rule.targets.diaries, expectedDiaries);
   return result.rule;
 }
 
@@ -51,7 +51,7 @@ describe('Bracket modes', () => {
   it('{{...}} → full_text', () => {
     const result = parseDslExpression('{{角色日记本}}');
     assertSuccess(result, 'full_text', ['角色日记本']);
-    assert.strictEqual(result.rule.kMultiplier, 1.0);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.0);
     assert.deepStrictEqual(result.rule.modifiers, {});
     assert.strictEqual(result.rule.gateThreshold, undefined);
   });
@@ -59,7 +59,7 @@ describe('Bracket modes', () => {
   it('[[...]] → rag', () => {
     const result = parseDslExpression('[[角色日记本]]');
     assertSuccess(result, 'rag', ['角色日记本']);
-    assert.strictEqual(result.rule.kMultiplier, 1.0);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.0);
     assert.strictEqual(result.rule.gateThreshold, undefined);
   });
 
@@ -83,6 +83,17 @@ describe('Bracket modes', () => {
   it('rag does not have gateThreshold', () => {
     const result = parseDslExpression('[[日记本]]');
     assert.strictEqual(result.rule.gateThreshold, undefined);
+  });
+
+  it('emits structured baseMode, targets and projection fields', () => {
+    const result = parseDslExpression('[[日记本A|日记本B:1.5::Time]]');
+    assert.strictEqual(result.rule.baseMode, 'rag');
+    assert.deepStrictEqual(result.rule.targets, {
+      diaries: ['日记本A', '日记本B'],
+      aggregate: true,
+      kMultiplier: 1.5,
+    });
+    assert.deepStrictEqual(result.rule.projection, { emit: 'recall_blocks' });
   });
 });
 
@@ -422,25 +433,26 @@ describe('K multiplier', () => {
   it('[[Diary:1.5]] → kMultiplier: 1.5', () => {
     const result = parseDslExpression('[[Diary:1.5]]');
     assertSuccess(result, 'rag', ['Diary']);
-    assert.strictEqual(result.rule.kMultiplier, 1.5);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.5);
   });
 
   it('[[Diary:0.5]] → kMultiplier: 0.5', () => {
     const result = parseDslExpression('[[Diary:0.5]]');
     assertSuccess(result, 'rag', ['Diary']);
-    assert.strictEqual(result.rule.kMultiplier, 0.5);
+    assert.strictEqual(result.rule.targets.kMultiplier, 0.5);
   });
 
   it('default kMultiplier is 1.0', () => {
     const result = parseDslExpression('[[Diary]]');
     assertSuccess(result, 'rag', ['Diary']);
-    assert.strictEqual(result.rule.kMultiplier, 1.0);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.0);
   });
 
   it('[[Diary|D2:1.2]] multi-diary with K multiplier', () => {
     const result = parseDslExpression('[[Diary|D2:1.2]]');
     assertSuccess(result, 'rag', ['Diary', 'D2']);
-    assert.strictEqual(result.rule.kMultiplier, 1.2);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.2);
+    assert.strictEqual(result.rule.targets.aggregate, true);
   });
 });
 
@@ -561,7 +573,7 @@ describe('Regression: exact task plan examples', () => {
   it('{{角色日记本}} → { type: full_text, diaries: [角色日记本], modifiers: {} }', () => {
     const result = parseDslExpression('{{角色日记本}}');
     assertSuccess(result, 'full_text', ['角色日记本']);
-    assert.strictEqual(result.rule.kMultiplier, 1.0);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.0);
     assert.deepStrictEqual(result.rule.modifiers, {});
     assert.strictEqual(result.rule.gateThreshold, undefined);
   });
@@ -582,7 +594,7 @@ describe('Regression: exact task plan examples', () => {
       '[[小克日记本:1.2::Time::Group::TagMemo+0.3::Rerank+0.7::Truncate0.4]]'
     );
     assertSuccess(result, 'rag', ['小克日记本']);
-    assert.strictEqual(result.rule.kMultiplier, 1.2);
+    assert.strictEqual(result.rule.targets.kMultiplier, 1.2);
     assert.strictEqual(result.rule.modifiers.time, true);
     assert.strictEqual(result.rule.modifiers.group, true);
     assert.deepStrictEqual(result.rule.modifiers.tagMemo, {
@@ -694,20 +706,32 @@ describe('Meta structure', () => {
 describe('dslToProfile', () => {
   it('single expression → profile with one rule', () => {
     const result = dslToProfile(['[[Diary::Time]]'], 'Nexus');
-    assert.ok(result.Nexus);
-    assert.strictEqual(result.Nexus.defaultProfile, 'nexus-default');
-    assert.ok(result.Nexus.profiles['nexus-default']);
-    assert.strictEqual(result.Nexus.profiles['nexus-default'].rules.length, 1);
-    assert.strictEqual(result.Nexus.profiles['nexus-default'].rules[0].type, 'rag');
+    const rule = result.profiles['nexus-default'].rules[0];
+    assert.ok(result.agents.Nexus);
+    assert.strictEqual(result.agents.Nexus.defaultProfile, 'nexus-default');
+    assert.deepStrictEqual(result.agents.Nexus.allowedProfiles, ['nexus-default']);
+    assert.ok(result.profiles['nexus-default']);
+    assert.strictEqual(result.profiles['nexus-default'].rules.length, 1);
+    assert.strictEqual(rule.baseMode, 'rag');
+    assert.deepStrictEqual(rule.targets, {
+      diaries: ['Diary'],
+      kMultiplier: 1.0,
+    });
+    assert.deepStrictEqual(rule.projection, { emit: 'recall_blocks' });
     assert.deepStrictEqual(result.warnings, []);
   });
 
   it('single expression with modifiers → correct rule structure', () => {
     const result = dslToProfile(['{{RoleDiary::Group::Rerank+0.7}}'], 'Nova');
-    const rule = result.Nova.profiles['nova-default'].rules[0];
-    assert.strictEqual(rule.type, 'full_text');
+    const rule = result.profiles['nova-default'].rules[0];
+    assert.strictEqual(rule.baseMode, 'full_text');
     assert.strictEqual(rule.modifiers.group, true);
     assert.deepStrictEqual(rule.modifiers.rerank, { enabled: true, weight: 0.7 });
+    assert.deepStrictEqual(rule.targets, {
+      diaries: ['RoleDiary'],
+      kMultiplier: 1.0,
+    });
+    assert.deepStrictEqual(rule.projection, { emit: 'full_text_sections' });
     assert.deepStrictEqual(result.warnings, []);
   });
 
@@ -718,10 +742,10 @@ describe('dslToProfile', () => {
       '<<Diary3>>',
     ];
     const result = dslToProfile(expressions, 'Midas');
-    assert.strictEqual(result.Midas.profiles['midas-default'].rules.length, 3);
-    assert.strictEqual(result.Midas.profiles['midas-default'].rules[0].type, 'rag');
-    assert.strictEqual(result.Midas.profiles['midas-default'].rules[1].type, 'full_text');
-    assert.strictEqual(result.Midas.profiles['midas-default'].rules[2].type, 'gated_full_text');
+    assert.strictEqual(result.profiles['midas-default'].rules.length, 3);
+    assert.strictEqual(result.profiles['midas-default'].rules[0].baseMode, 'rag');
+    assert.strictEqual(result.profiles['midas-default'].rules[1].baseMode, 'full_text');
+    assert.strictEqual(result.profiles['midas-default'].rules[2].baseMode, 'gated_full_text');
     assert.deepStrictEqual(result.warnings, []);
   });
 
@@ -731,8 +755,8 @@ describe('dslToProfile', () => {
       '《《Memo::TagMemo+0.3》》',
     ];
     const result = dslToProfile(expressions, 'Agent');
-    const rules = result.Agent.profiles['agent-default'].rules;
-    assert.strictEqual(rules[0].kMultiplier, 1.5);
+    const rules = result.profiles['agent-default'].rules;
+    assert.strictEqual(rules[0].targets.kMultiplier, 1.5);
     assert.ok(rules[0].modifiers.timeDecay);
     assert.strictEqual(rules[1].modifiers.tagMemo.geodesic, true);
   });
@@ -745,7 +769,7 @@ describe('dslToProfile', () => {
       '',
     ];
     const result = dslToProfile(expressions, 'Test');
-    assert.strictEqual(result.Test.profiles['test-default'].rules.length, 2);
+    assert.strictEqual(result.profiles['test-default'].rules.length, 2);
     assert.strictEqual(result.warnings.length, 2);
     assert.strictEqual(result.warnings[0].index, 1);
     assert.strictEqual(result.warnings[0].expression, 'not brackets');
@@ -757,7 +781,7 @@ describe('dslToProfile', () => {
   it('all invalid expressions → empty rules, all warnings', () => {
     const expressions = ['plain text', '[[unclosed'];
     const result = dslToProfile(expressions, 'X');
-    assert.strictEqual(result.X.profiles['x-default'].rules.length, 0);
+    assert.strictEqual(result.profiles['x-default'].rules.length, 0);
     assert.strictEqual(result.warnings.length, 2);
     assert.strictEqual(result.warnings[0].index, 0);
     assert.strictEqual(result.warnings[1].index, 1);
@@ -765,7 +789,7 @@ describe('dslToProfile', () => {
 
   it('empty array → empty rules, no warnings', () => {
     const result = dslToProfile([], 'Empty');
-    assert.strictEqual(result.Empty.profiles['empty-default'].rules.length, 0);
+    assert.strictEqual(result.profiles['empty-default'].rules.length, 0);
     assert.deepStrictEqual(result.warnings, []);
   });
 });
@@ -773,15 +797,16 @@ describe('dslToProfile', () => {
 describe('dslExpressionsToConfig', () => {
   it('returns correct agent config structure', () => {
     const config = dslExpressionsToConfig(['[[Diary::Time]]'], 'Nexus');
-    assert.strictEqual(config.defaultProfile, 'nexus-default');
+    assert.strictEqual(config.agents.Nexus.defaultProfile, 'nexus-default');
+    assert.deepStrictEqual(config.agents.Nexus.allowedProfiles, ['nexus-default']);
     assert.ok(config.profiles['nexus-default']);
     assert.strictEqual(config.profiles['nexus-default'].rules.length, 1);
-    assert.strictEqual(config.profiles['nexus-default'].rules[0].type, 'rag');
+    assert.strictEqual(config.profiles['nexus-default'].rules[0].baseMode, 'rag');
   });
 
   it('returns empty rules for empty expressions', () => {
     const config = dslExpressionsToConfig([], 'Nova');
-    assert.strictEqual(config.defaultProfile, 'nova-default');
+    assert.strictEqual(config.agents.Nova.defaultProfile, 'nova-default');
     assert.strictEqual(config.profiles['nova-default'].rules.length, 0);
   });
 });
@@ -789,16 +814,16 @@ describe('dslExpressionsToConfig', () => {
 describe('dslSyntaxToProfile', () => {
   it('converts valid single DSL to profile with rules', () => {
     const result = dslSyntaxToProfile('[[Diary::Time::Group]]', 'Nexus');
-    assert.ok(result.Nexus);
-    assert.strictEqual(result.Nexus.defaultProfile, 'nexus-default');
+    assert.ok(result.agents.Nexus);
+    assert.strictEqual(result.agents.Nexus.defaultProfile, 'nexus-default');
     assert.strictEqual(result.rules.length, 1);
-    assert.strictEqual(result.rules[0].type, 'rag');
+    assert.strictEqual(result.rules[0].baseMode, 'rag');
     assert.strictEqual(result.rules[0].modifiers.time, true);
   });
 
   it('converts gated expression with gateThreshold', () => {
     const result = dslSyntaxToProfile('<<GatedDiary::Rerank+0.9>>', 'Nova');
-    assert.strictEqual(result.rules[0].type, 'gated_full_text');
+    assert.strictEqual(result.rules[0].baseMode, 'gated_full_text');
     assert.strictEqual(result.rules[0].gateThreshold, 0.35);
     assert.deepStrictEqual(result.rules[0].modifiers.rerank, { enabled: true, weight: 0.9 });
   });
@@ -814,12 +839,12 @@ describe('dslSyntaxToProfile', () => {
 describe('Profile name kebab-case conversion', () => {
   it('lowercases agent name', () => {
     const result = dslToProfile(['[[D]]'], 'NEXUS');
-    assert.strictEqual(result.NEXUS.defaultProfile, 'nexus-default');
+    assert.strictEqual(result.agents.NEXUS.defaultProfile, 'nexus-default');
   });
 
   it('replaces spaces and special chars with hyphens', () => {
     const result = dslToProfile(['[[D]]'], 'My Cool Agent!');
-    assert.strictEqual(result['My Cool Agent!'].defaultProfile, 'my-cool-agent-default');
+    assert.strictEqual(result.agents['My Cool Agent!'].defaultProfile, 'my-cool-agent-default');
   });
 });
 

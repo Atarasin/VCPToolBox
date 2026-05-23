@@ -1,6 +1,10 @@
 const axios = require('axios');
 const { AGW_ERROR_CODES } = require('../contracts/errorCodes');
 const { collectRagItems } = require('./contextRuntimeService');
+const {
+    normalizeDiaryCanonicalName,
+    resolveDiaryAliasesToAvailable
+} = require('../policy/mcpAgentMemoryPolicy');
 
 const MODIFIER_TO_RAG_OPTION = Object.freeze({
     time: 'timeAware',
@@ -39,6 +43,338 @@ function normalizeStringArray(value) {
     return [];
 }
 
+function resolveRuleType(rule) {
+    return normalizeString(rule?.baseMode || rule?.type);
+}
+
+function resolveRuleDiaries(rule) {
+    return normalizeStringArray(rule?.targets?.diaries !== undefined ? rule.targets.diaries : rule?.diaries);
+}
+
+function resolveRuleProjection(rule) {
+    if (typeof rule?.projection === 'string') {
+        return normalizeString(rule.projection);
+    }
+    if (rule?.projection && typeof rule.projection === 'object' && !Array.isArray(rule.projection)) {
+        return normalizeString(rule.projection.emit);
+    }
+    return '';
+}
+
+function resolveRuleAggregate(rule) {
+    return parseBoolean(rule?.targets?.aggregate, false);
+}
+
+function resolveRuleKMultiplier(rule) {
+    const rawValue = rule?.targets?.kMultiplier !== undefined
+        ? rule.targets.kMultiplier
+        : rule?.kMultiplier;
+    return typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0
+        ? rawValue
+        : 1.0;
+}
+
+function resolveRuleTargetMode(rule) {
+    const diaries = resolveRuleDiaries(rule);
+    const hasStructuredTargets = Boolean(rule?.targets && typeof rule.targets === 'object' && !Array.isArray(rule.targets));
+    const aggregate = resolveRuleAggregate(rule);
+    if (diaries.length <= 1) {
+        return {
+            diaries,
+            aggregate,
+            mode: 'single',
+            supported: true
+        };
+    }
+    if (aggregate) {
+        return {
+            diaries,
+            aggregate: true,
+            mode: 'aggregate',
+            supported: true
+        };
+    }
+    if (hasStructuredTargets) {
+        return {
+            diaries,
+            aggregate: false,
+            mode: 'parallel',
+            supported: false,
+            error: 'Structured multi-diary rules must set targets.aggregate=true'
+        };
+    }
+    return {
+        diaries,
+        aggregate: true,
+        mode: 'aggregate',
+        supported: true,
+        inferredFromLegacy: true
+    };
+}
+
+function parseBoolean(value, fallback = false) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true' || normalized === '1') {
+            return true;
+        }
+        if (normalized === 'false' || normalized === '0') {
+            return false;
+        }
+    }
+    return fallback;
+}
+
+function parseJsonObject(value, fallback = {}) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+        try {
+            const parsed = JSON.parse(value);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed;
+            }
+        } catch (_error) {
+            return fallback;
+        }
+    }
+    return fallback;
+}
+
+function getBridgeConfig(pluginManager) {
+    return pluginManager?.openClawBridgeConfig ||
+        pluginManager?.openClawBridge?.config ||
+        pluginManager?.openClawBridge ||
+        {};
+}
+
+function getRagConfig(pluginManager) {
+    const bridgeConfig = getBridgeConfig(pluginManager);
+    const ragConfig = parseJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
+    const configuredAgentDiaryMap = parseJsonObject(ragConfig.agentDiaryMap, {});
+    const envAgentDiaryMap = parseJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
+    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
+        ? ragConfig.allowCrossRoleAccess
+        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
+    const defaultDiaries = normalizeStringArray(
+        ragConfig.defaultDiaries !== undefined
+            ? ragConfig.defaultDiaries
+            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
+    );
+    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
+        ? configuredAgentDiaryMap
+        : envAgentDiaryMap;
+
+    return {
+        agentDiaryMap,
+        defaultDiaries,
+        allowCrossRoleAccess: parseBoolean(rawAllowCrossRoleAccess, false),
+        hasExplicitPolicy: (
+            Object.keys(agentDiaryMap).length > 0 ||
+            defaultDiaries.length > 0 ||
+            rawAllowCrossRoleAccess !== undefined
+        )
+    };
+}
+
+function buildAgentAliases(agentId) {
+    const aliases = new Set();
+    const normalizedAgentId = normalizeString(agentId);
+    if (!normalizedAgentId) {
+        return aliases;
+    }
+    aliases.add(normalizedAgentId);
+    normalizedAgentId
+        .split(/[./:\\]/)
+        .map((segment) => segment.trim())
+        .filter(Boolean)
+        .forEach((segment) => aliases.add(segment));
+    return aliases;
+}
+
+function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
+    const normalizedDiaries = normalizeStringArray(availableDiaries);
+    if (normalizedDiaries.length === 0) {
+        return [];
+    }
+    if (ragConfig.allowCrossRoleAccess) {
+        return normalizedDiaries;
+    }
+
+    const agentAliases = buildAgentAliases(agentId);
+    const configuredDiaries = new Set();
+    for (const alias of agentAliases) {
+        normalizeStringArray(ragConfig.agentDiaryMap?.[alias])
+            .forEach((diaryName) => configuredDiaries.add(diaryName));
+    }
+    normalizeStringArray(ragConfig.agentDiaryMap?.['*'])
+        .forEach((diaryName) => configuredDiaries.add(diaryName));
+    normalizeStringArray(ragConfig.defaultDiaries)
+        .forEach((diaryName) => configuredDiaries.add(diaryName));
+
+    if (configuredDiaries.size > 0) {
+        return normalizedDiaries.filter((diaryName) => configuredDiaries.has(diaryName));
+    }
+
+    const aliasMatchedDiaries = normalizedDiaries.filter((diaryName) => agentAliases.has(diaryName));
+    if (ragConfig.hasExplicitPolicy) {
+        return aliasMatchedDiaries;
+    }
+
+    return [];
+}
+
+function getKnowledgeBaseManager(deps, pluginManager) {
+    const ctxService = deps.contextRuntimeService;
+    if (ctxService?.getKnowledgeBaseManager) {
+        return ctxService.getKnowledgeBaseManager(pluginManager);
+    }
+    return pluginManager?.vectorDBManager ||
+        pluginManager?.knowledgeBaseManager ||
+        pluginManager?.openClawBridge?.knowledgeBaseManager ||
+        null;
+}
+
+function getRagPlugin(deps, pluginManager) {
+    const ctxService = deps.contextRuntimeService;
+    if (ctxService?.getRagPlugin) {
+        return ctxService.getRagPlugin(pluginManager);
+    }
+    return pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin') ||
+        pluginManager?.openClawBridge?.ragPlugin ||
+        null;
+}
+
+async function listDiaryTargets(knowledgeBaseManager) {
+    if (typeof knowledgeBaseManager?.listDiaryNames === 'function') {
+        return normalizeStringArray(await Promise.resolve(knowledgeBaseManager.listDiaryNames()));
+    }
+    if (!knowledgeBaseManager?.db?.prepare) {
+        return [];
+    }
+    const rows = knowledgeBaseManager.db
+        .prepare('SELECT DISTINCT diary_name FROM files ORDER BY diary_name COLLATE NOCASE')
+        .all();
+    return rows
+        .map((row) => normalizeString(row.diary_name))
+        .filter(Boolean);
+}
+
+function buildFullTextItem({ diaryName, content, rank }) {
+    return {
+        text: normalizeString(content),
+        score: typeof rank === 'number' && Number.isFinite(rank) ? rank : 1,
+        sourceDiary: normalizeString(diaryName),
+        sourceFile: '',
+        timestamp: null,
+        tags: []
+    };
+}
+
+async function defaultFullTextRetriever({
+    deps,
+    pluginManager,
+    requestedDiaries,
+    agentId,
+    authContext,
+    agentPolicyResolver,
+    adapterAppliedDefaultDiaryPolicy
+}) {
+    const knowledgeBaseManager = getKnowledgeBaseManager(deps, pluginManager);
+    const ragPlugin = getRagPlugin(deps, pluginManager);
+    const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
+    const resolvedPolicy = agentPolicyResolver
+        ? await agentPolicyResolver.resolvePolicy({
+            authContext,
+            availableDiaries
+        })
+        : null;
+    const allowedDiaries = resolvedPolicy
+        ? normalizeStringArray(resolvedPolicy.allowedDiaryNames)
+        : resolveAllowedDiaries({
+            agentId,
+            availableDiaries,
+            ragConfig: getRagConfig(pluginManager)
+        });
+    const defaultDiaries = resolvedPolicy?.defaultDiaryNames?.length > 0
+        ? normalizeStringArray(resolvedPolicy.defaultDiaryNames)
+        : allowedDiaries;
+    const normalizedRequestedDiaries = resolveDiaryAliasesToAvailable(requestedDiaries, availableDiaries)
+        .map((requestedDiary) => normalizeDiaryCanonicalName(requestedDiary))
+        .filter(Boolean);
+    const forbiddenDiaries = normalizedRequestedDiaries.filter((requestedDiary) => !allowedDiaries.includes(requestedDiary));
+    if (forbiddenDiaries.length > 0) {
+        if (adapterAppliedDefaultDiaryPolicy) {
+            const filteredDefaultDiaries = normalizedRequestedDiaries.filter((requestedDiary) => allowedDiaries.includes(requestedDiary));
+            if (filteredDefaultDiaries.length > 0) {
+                requestedDiaries = filteredDefaultDiaries;
+            } else {
+                return {
+                    success: false,
+                    status: 403,
+                    code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
+                    error: 'No default diary targets are configured for this agent'
+                };
+            }
+        } else {
+            return {
+                success: false,
+                status: 403,
+                code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
+                error: 'Requested diary target is not allowed for this agent'
+            };
+        }
+    } else {
+        requestedDiaries = normalizedRequestedDiaries;
+    }
+
+    const targetDiaries = requestedDiaries.length > 0
+        ? requestedDiaries
+        : resolveDiaryAliasesToAvailable(defaultDiaries, availableDiaries)
+            .map((defaultDiary) => normalizeDiaryCanonicalName(defaultDiary))
+            .filter(Boolean);
+    if (targetDiaries.length === 0) {
+        return {
+            success: false,
+            status: 403,
+            code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
+            error: 'No default diary targets are configured for this agent'
+        };
+    }
+    if (typeof ragPlugin?.getDiaryContent !== 'function') {
+        return {
+            success: false,
+            status: 500,
+            code: AGW_ERROR_CODES.RECALL_EXECUTION_ERROR,
+            error: 'Full text retrieval is not available'
+        };
+    }
+
+    const items = [];
+    for (let index = 0; index < targetDiaries.length; index += 1) {
+        const diaryName = targetDiaries[index];
+        const content = await ragPlugin.getDiaryContent(diaryName);
+        if (!normalizeString(content)) {
+            continue;
+        }
+        items.push(buildFullTextItem({
+            diaryName,
+            content,
+            rank: Math.max(0.1, 1 - (index * 0.01))
+        }));
+    }
+
+    return {
+        success: true,
+        targetDiaries,
+        items
+    };
+}
+
 function parseModifierValue(key, value) {
     if (key === 'truncate') {
         const parsed = Number.parseInt(value, 10);
@@ -62,6 +398,107 @@ function parseTimeDecayConfig(value) {
         }
     }
     return null;
+}
+
+function normalizeConversationMessages(messages) {
+    if (!Array.isArray(messages)) {
+        return [];
+    }
+    return messages
+        .filter((message) => message && typeof message === 'object')
+        .map((message) => {
+            const role = normalizeString(message.role).toLowerCase();
+            if (!role) {
+                return null;
+            }
+            return {
+                role,
+                content: typeof message.content === 'string' ? message.content : ''
+            };
+        })
+        .filter(Boolean);
+}
+
+function resolveRoleValveMessages({ messages, requestContext, authContext }) {
+    const candidates = [
+        messages,
+        requestContext?.messages,
+        authContext?.messages
+    ];
+    for (const candidate of candidates) {
+        const normalized = normalizeConversationMessages(candidate);
+        if (normalized.length > 0) {
+            return normalized;
+        }
+    }
+    return [];
+}
+
+function countRoleMessages(messages) {
+    return normalizeConversationMessages(messages).reduce((counts, message) => {
+        const role = message.role === 'assistant'
+            ? 'Assistant'
+            : message.role === 'system'
+                ? 'System'
+                : 'User';
+        counts[role] += 1;
+        return counts;
+    }, { User: 0, Assistant: 0, System: 0 });
+}
+
+function evaluateRoleValveCondition(condition, roleCounts) {
+    const match = normalizeString(condition).match(/^@?(User|Assistant|System)(?:([<>]=?|=)(\d+))?$/i);
+    if (!match) {
+        return true;
+    }
+
+    const [, rawRoleName, operator, rawValue] = match;
+    const roleName = rawRoleName.charAt(0).toUpperCase() + rawRoleName.slice(1).toLowerCase();
+    const currentCount = roleCounts[roleName] || 0;
+
+    if (!operator) {
+        return currentCount > 0;
+    }
+
+    const targetValue = Number.parseInt(rawValue, 10);
+    switch (operator) {
+        case '<':
+            return currentCount < targetValue;
+        case '>':
+            return currentCount > targetValue;
+        case '<=':
+            return currentCount <= targetValue;
+        case '>=':
+            return currentCount >= targetValue;
+        case '=':
+            return currentCount === targetValue;
+        default:
+            return true;
+    }
+}
+
+function evaluateRoleValveExpression(expression, messages) {
+    const normalizedExpression = normalizeString(expression);
+    if (!normalizedExpression) {
+        return {
+            passed: true,
+            roleCounts: countRoleMessages(messages),
+            expression: normalizedExpression
+        };
+    }
+
+    const roleCounts = countRoleMessages(messages);
+    const passed = normalizedExpression
+        .split('|')
+        .some((orGroup) => orGroup
+            .split('&')
+            .every((condition) => evaluateRoleValveCondition(condition, roleCounts)));
+
+    return {
+        passed,
+        roleCounts,
+        expression: normalizedExpression
+    };
 }
 
 function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
@@ -156,8 +593,9 @@ function getDiaryConceptVectors(ragPlugin, diaries) {
     return vectors;
 }
 
-function evaluateGate(rule, queryVector, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
-    if (!GATED_RULE_TYPES.has(rule.type)) {
+function evaluateGate(rule, queryVector, ragPlugin) {
+    const ruleType = resolveRuleType(rule);
+    if (!GATED_RULE_TYPES.has(ruleType)) {
         return { passed: true, similarity: null };
     }
     if (typeof rule.gateThreshold !== 'number' || !Number.isFinite(rule.gateThreshold)) {
@@ -167,7 +605,7 @@ function evaluateGate(rule, queryVector, ragPlugin, knowledgeBaseManager, embedd
         return { passed: false, similarity: 0 };
     }
 
-    const conceptVectors = getDiaryConceptVectors(ragPlugin, rule.diaries);
+    const conceptVectors = getDiaryConceptVectors(ragPlugin, resolveRuleDiaries(rule));
     if (conceptVectors.length === 0) {
         // No concept vectors available — gate cannot block, pass through
         return { passed: true, similarity: null };
@@ -217,24 +655,47 @@ function applyTimeDecay(items, modifierValue) {
 }
 
 function parseRoleValveConfig(modifierValue) {
-    // Object syntax: { roles: string[], expression?: 'AND' | 'OR' }
     if (modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
+        const enabled = modifierValue.enabled !== false;
         const roles = normalizeStringArray(modifierValue.roles);
-        const expression = normalizeString(modifierValue.expression).toUpperCase();
+        const rawExpression = normalizeString(modifierValue.expression);
+        const expression = rawExpression.toUpperCase();
+        const isExpressionMode = /[@<>=|&]/.test(rawExpression);
         return {
+            enabled,
+            mode: isExpressionMode ? 'expression' : 'roles',
             roles,
-            expression: expression === 'AND' ? 'AND' : 'OR'
+            expression: isExpressionMode
+                ? rawExpression
+                : (expression === 'AND' ? 'AND' : 'OR')
         };
     }
-    // Legacy string/array syntax — treat as OR (any match passes)
     const roles = normalizeStringArray(modifierValue);
-    return { roles, expression: 'OR' };
+    return {
+        enabled: true,
+        mode: 'roles',
+        roles,
+        expression: 'OR'
+    };
 }
 
-function applyRoleValve(items, modifierValue) {
+function applyRoleValve(items, modifierValue, options = {}) {
     const config = parseRoleValveConfig(modifierValue);
+    if (config.enabled === false) {
+        return { items, expression: config.expression, matchedCount: items.length, passed: true };
+    }
+    if (config.mode === 'expression') {
+        const expressionResult = evaluateRoleValveExpression(config.expression, options.messages);
+        return {
+            items: expressionResult.passed ? items : [],
+            expression: config.expression,
+            matchedCount: expressionResult.passed ? items.length : 0,
+            passed: expressionResult.passed,
+            roleCounts: expressionResult.roleCounts
+        };
+    }
     if (config.roles.length === 0) {
-        return { items, expression: config.expression, matchedCount: items.length };
+        return { items, expression: config.expression, matchedCount: items.length, passed: true };
     }
     const filtered = items.filter((item) => {
         const role = normalizeString(item?.role);
@@ -248,7 +709,7 @@ function applyRoleValve(items, modifierValue) {
         // OR (default): any matching role passes
         return config.roles.includes(role);
     });
-    return { items: filtered, expression: config.expression, matchedCount: filtered.length };
+    return { items: filtered, expression: config.expression, matchedCount: filtered.length, passed: true };
 }
 
 function applyBase64Memo(items, modifierValue) {
@@ -413,7 +874,7 @@ async function applyAIMemo(items, config) {
     }
 }
 
-function applyS02Modifiers(items, modifiers) {
+function applyS02Modifiers(items, modifiers, options = {}) {
     if (!modifiers || typeof modifiers !== 'object' || Array.isArray(modifiers)) {
         return { items, attachments: [], modifierDetails: [] };
     }
@@ -440,7 +901,11 @@ function applyS02Modifiers(items, modifiers) {
         if (modifierKey === 'timeDecay') {
             currentItems = applyTimeDecay(currentItems, modifierValue);
         } else if (modifierKey === 'roleValve') {
-            const rvResult = applyRoleValve(currentItems, modifierValue);
+            const roleValveConfig = parseRoleValveConfig(modifierValue);
+            if (roleValveConfig.mode === 'expression') {
+                continue;
+            }
+            const rvResult = applyRoleValve(currentItems, modifierValue, options);
             currentItems = rvResult.items;
             modifierDetails.push({
                 modifier: modifierKey,
@@ -546,11 +1011,19 @@ function aggregateDeduplicateItems(items, aggregateStrategy = 'max') {
 }
 
 function interleaveItems(ruleItemsArrays) {
+    const normalizedArrays = Array.isArray(ruleItemsArrays)
+        ? ruleItemsArrays.filter(Array.isArray)
+        : [];
+    if (normalizedArrays.length === 0) {
+        return [];
+    }
     const result = [];
-    const minLen = Math.min(...ruleItemsArrays.map((arr) => arr.length));
-    for (let i = 0; i < minLen; i += 1) {
-        for (const ruleItems of ruleItemsArrays) {
-            result.push(ruleItems[i]);
+    const maxLen = Math.max(...normalizedArrays.map((arr) => arr.length));
+    for (let i = 0; i < maxLen; i += 1) {
+        for (const ruleItems of normalizedArrays) {
+            if (i < ruleItems.length) {
+                result.push(ruleItems[i]);
+            }
         }
     }
     return result;
@@ -569,6 +1042,25 @@ function buildRecallResult({ success, agentId, profileName, items, diagnostics, 
     };
 }
 
+function mapResolvedRecallFailure(resolved, normalizedAgentId, requestedProfileName) {
+    const rawCode = normalizeString(resolved?.code);
+    if (rawCode === 'RECALL_FORBIDDEN' || rawCode === AGW_ERROR_CODES.RECALL_FORBIDDEN) {
+        const forbiddenProfileName = resolved?.profileName || requestedProfileName || null;
+        return {
+            code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
+            error: forbiddenProfileName
+                ? `Recall profile "${forbiddenProfileName}" is not allowed for agent "${normalizedAgentId}"`
+                : `Recall access denied for agent "${normalizedAgentId}"`,
+            status: 403
+        };
+    }
+    return {
+        code: AGW_ERROR_CODES.RECALL_NO_PROFILE,
+        error: `No recall profile resolved for agent "${normalizedAgentId}"`,
+        status: 404
+    };
+}
+
 /**
  * Recall Runtime Service — 编译并执行预置召回配置。
  *
@@ -583,6 +1075,9 @@ function createRecallRuntimeService(deps = {}) {
     const profileResolver = deps.recallProfileResolver;
     const embeddingUtilsLoader = deps.embeddingUtilsLoader || (() => require('../../../EmbeddingUtils'));
     const aiMemoConfigLoader = deps.aiMemoConfigLoader || defaultAiMemoConfigLoader;
+    const fullTextRetriever = typeof deps.fullTextRetriever === 'function'
+        ? deps.fullTextRetriever
+        : (params) => defaultFullTextRetriever({ ...params, deps });
 
     if (!profileResolver) {
         throw new Error('[RecallRuntimeService] recallProfileResolver is required');
@@ -596,7 +1091,8 @@ function createRecallRuntimeService(deps = {}) {
         inlineRule,
         authContext,
         agentPolicyResolver,
-        adapterAppliedDefaultDiaryPolicy
+        adapterAppliedDefaultDiaryPolicy,
+        messages
     }) {
         const startedAt = Date.now();
         const pipelineStages = [];
@@ -633,13 +1129,14 @@ function createRecallRuntimeService(deps = {}) {
             resolved = profileResolver.resolveForAgent(normalizedAgentId, profileName);
         }
         if (!resolved.resolved) {
+            const failure = mapResolvedRecallFailure(resolved, normalizedAgentId, profileName);
             return buildRecallResult({
                 success: false,
                 agentId: normalizedAgentId,
                 profileName: resolved.profileName || profileName || null,
-                code: resolved.code || AGW_ERROR_CODES.RECALL_NO_PROFILE,
-                error: `No recall profile resolved for agent "${normalizedAgentId}"`,
-                status: 404,
+                code: failure.code,
+                error: failure.error,
+                status: failure.status,
                 diagnostics: { totalDurationMs: Date.now() - startedAt, rules: [] }
             });
         }
@@ -676,6 +1173,11 @@ function createRecallRuntimeService(deps = {}) {
             detail: { vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0, skipped: Boolean(inlineRule) }
         });
 
+        const roleValveMessages = resolveRoleValveMessages({
+            messages,
+            requestContext,
+            authContext
+        });
         const ruleDiagnostics = [];
         const ruleItemsArrays = [];
         const allAttachments = [];
@@ -683,22 +1185,87 @@ function createRecallRuntimeService(deps = {}) {
         for (let ruleIndex = 0; ruleIndex < resolved.rules.length; ruleIndex += 1) {
             const rule = resolved.rules[ruleIndex];
             const ruleStartedAt = Date.now();
+            const ruleType = resolveRuleType(rule);
+            const targetSemantics = resolveRuleTargetMode(rule);
+            const ruleDiaries = targetSemantics.diaries;
+            const ruleProjection = resolveRuleProjection(rule);
+            const ruleAggregate = targetSemantics.aggregate;
             const ruleDiagnostic = {
                 ruleIndex,
-                type: rule.type,
+                type: ruleType,
+                baseMode: ruleType,
                 status: 'pending',
                 durationMs: 0,
                 itemCount: 0
             };
+            if (ruleProjection) {
+                ruleDiagnostic.projection = ruleProjection;
+            }
+            if (ruleAggregate) {
+                ruleDiagnostic.targetAggregate = true;
+            }
+            ruleDiagnostic.targetMode = targetSemantics.mode;
+            if (targetSemantics.inferredFromLegacy) {
+                ruleDiagnostic.targetAggregateInferred = true;
+            }
 
             try {
+                if (!targetSemantics.supported) {
+                    ruleDiagnostic.status = 'error';
+                    ruleDiagnostic.errorCode = AGW_ERROR_CODES.RECALL_EXECUTION_ERROR;
+                    ruleDiagnostic.errorMessage = targetSemantics.error;
+                    ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
+                    ruleDiagnostics.push(ruleDiagnostic);
+                    pipelineStages.push({
+                        name: 'ruleExecution',
+                        ruleIndex,
+                        type: ruleType,
+                        durationMs: ruleDiagnostic.durationMs,
+                        status: ruleDiagnostic.status
+                    });
+                    continue;
+                }
+
+                const preModifierDetails = [];
+                const roleValveModifier = rule.modifiers?.roleValve;
+                const roleValveConfig = parseRoleValveConfig(roleValveModifier);
+                if (roleValveModifier !== undefined && roleValveConfig.mode === 'expression' && roleValveConfig.enabled !== false) {
+                    const roleValveStartedAt = Date.now();
+                    const roleValveResult = evaluateRoleValveExpression(roleValveConfig.expression, roleValveMessages);
+                    const roleValveDetail = {
+                        modifier: 'roleValve',
+                        durationMs: Date.now() - roleValveStartedAt,
+                        inputCount: roleValveMessages.length,
+                        outputCount: roleValveResult.passed ? roleValveMessages.length : 0,
+                        expression: roleValveResult.expression,
+                        passed: roleValveResult.passed,
+                        roleCounts: roleValveResult.roleCounts,
+                        stage: 'pre'
+                    };
+                    preModifierDetails.push(roleValveDetail);
+                    ruleDiagnostic.roleValvePassed = roleValveResult.passed;
+                    ruleDiagnostic.roleCounts = roleValveResult.roleCounts;
+
+                    if (!roleValveResult.passed) {
+                        ruleDiagnostic.status = 'gated';
+                        ruleDiagnostic.modifierDetails = preModifierDetails;
+                        ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
+                        ruleDiagnostics.push(ruleDiagnostic);
+                        pipelineStages.push({
+                            name: 'ruleExecution',
+                            ruleIndex,
+                            type: ruleType,
+                            durationMs: ruleDiagnostic.durationMs,
+                            status: ruleDiagnostic.status
+                        });
+                        continue;
+                    }
+                }
+
                 // --- Gate evaluation for gated_rag / gated_full_text ---
                 // Skip gate evaluation for inlineRule path (no precomputed vector)
-                if (!inlineRule && GATED_RULE_TYPES.has(rule.type)) {
+                if (!inlineRule && GATED_RULE_TYPES.has(ruleType)) {
                     const ctxService = deps.contextRuntimeService;
-                    const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
-                        ? ctxService.getKnowledgeBaseManager(pluginManager)
-                        : null;
                     const ragPlugin = ctxService?.getRagPlugin
                         ? ctxService.getRagPlugin(pluginManager)
                         : null;
@@ -706,9 +1273,7 @@ function createRecallRuntimeService(deps = {}) {
                     const gateResult = evaluateGate(
                         rule,
                         queryVector,
-                        ragPlugin,
-                        knowledgeBaseManager,
-                        embeddingUtilsLoader
+                        ragPlugin
                     );
                     ruleDiagnostic.gatePassed = gateResult.passed;
                     ruleDiagnostic.gateSimilarity = gateResult.similarity;
@@ -720,7 +1285,7 @@ function createRecallRuntimeService(deps = {}) {
                         pipelineStages.push({
                             name: 'ruleExecution',
                             ruleIndex,
-                            type: rule.type,
+                            type: ruleType,
                             durationMs: ruleDiagnostic.durationMs,
                             status: ruleDiagnostic.status
                         });
@@ -728,92 +1293,103 @@ function createRecallRuntimeService(deps = {}) {
                     }
                 }
 
-                // --- Determine baseK based on rule type ---
-                // full_text variants use a larger k to retrieve more comprehensive content
-                const isFullText = FULL_TEXT_RULE_TYPES.has(rule.type);
-                const baseK = isFullText ? 20 : 5;
-                const effectiveK = (typeof rule.kMultiplier === 'number' && Number.isFinite(rule.kMultiplier) && rule.kMultiplier > 0) ? Math.max(1, Math.round(baseK * rule.kMultiplier)) : baseK;
+                const isFullText = FULL_TEXT_RULE_TYPES.has(ruleType);
+                let retrievalResult;
+                let ragModifierDetails = [];
 
-                // --- Build ragOptions from modifiers ---
-                const { options: ragOptions } = buildRagOptionsFromModifiers(rule.modifiers, effectiveK);
+                if (isFullText) {
+                    retrievalResult = await fullTextRetriever({
+                        pluginManager,
+                        query: normalizedQuery,
+                        requestedDiaries: ruleDiaries,
+                        agentId: normalizedAgentId,
+                        authContext: authContext || requestContext,
+                        agentPolicyResolver: agentPolicyResolver || null,
+                        adapterAppliedDefaultDiaryPolicy: adapterAppliedDefaultDiaryPolicy || false,
+                        rule
+                    });
+                } else {
+                    const effectiveK = Math.max(1, Math.round(5 * resolveRuleKMultiplier(rule)));
+                    const { options: ragOptions } = buildRagOptionsFromModifiers(rule.modifiers, effectiveK);
 
-                // Build RAG-phase modifier details for diagnostics
-                const ragModifierDetails = [];
-                if (rule.modifiers && typeof rule.modifiers === 'object' && !Array.isArray(rule.modifiers)) {
-                    if (rule.modifiers.tagMemo !== undefined) {
-                        const tagMemoDetail = {
-                            modifier: 'tagMemo',
-                            durationMs: 0,
-                            inputCount: 0,
-                            outputCount: 0,
-                            applied: Boolean(ragOptions.tagMemo)
-                        };
-                        if (typeof ragOptions.tagMemoWeight === 'number') {
-                            tagMemoDetail.weight = ragOptions.tagMemoWeight;
+                    if (rule.modifiers && typeof rule.modifiers === 'object' && !Array.isArray(rule.modifiers)) {
+                        if (rule.modifiers.tagMemo !== undefined) {
+                            const tagMemoDetail = {
+                                modifier: 'tagMemo',
+                                durationMs: 0,
+                                inputCount: 0,
+                                outputCount: 0,
+                                applied: Boolean(ragOptions.tagMemo)
+                            };
+                            if (typeof ragOptions.tagMemoWeight === 'number') {
+                                tagMemoDetail.weight = ragOptions.tagMemoWeight;
+                            }
+                            if (ragOptions.tagMemoGeodesic === true) {
+                                tagMemoDetail.geodesic = true;
+                            }
+                            ragModifierDetails.push(tagMemoDetail);
                         }
-                        if (ragOptions.tagMemoGeodesic === true) {
-                            tagMemoDetail.geodesic = true;
+                        if (rule.modifiers.rerank !== undefined) {
+                            const rerankDetail = {
+                                modifier: 'rerank',
+                                durationMs: 0,
+                                inputCount: 0,
+                                outputCount: 0,
+                                applied: Boolean(ragOptions.rerank)
+                            };
+                            if (typeof ragOptions.rerankWeight === 'number') {
+                                rerankDetail.weight = ragOptions.rerankWeight;
+                            }
+                            ragModifierDetails.push(rerankDetail);
                         }
-                        ragModifierDetails.push(tagMemoDetail);
                     }
-                    if (rule.modifiers.rerank !== undefined) {
-                        const rerankDetail = {
-                            modifier: 'rerank',
-                            durationMs: 0,
-                            inputCount: 0,
-                            outputCount: 0,
-                            applied: Boolean(ragOptions.rerank)
-                        };
-                        if (typeof ragOptions.rerankWeight === 'number') {
-                            rerankDetail.weight = ragOptions.rerankWeight;
-                        }
-                        ragModifierDetails.push(rerankDetail);
-                    }
+
+                    retrievalResult = await collectRagItems({
+                        pluginManager,
+                        query: normalizedQuery,
+                        requestedDiaries: ruleDiaries,
+                        adapterAppliedDefaultDiaryPolicy: adapterAppliedDefaultDiaryPolicy || false,
+                        agentId: normalizedAgentId,
+                        authContext: authContext || requestContext,
+                        ragOptions,
+                        embeddingUtilsLoader,
+                        agentPolicyResolver: agentPolicyResolver || null
+                    });
                 }
 
-                // --- Execute RAG via collectRagItems ---
-                const collectResult = await collectRagItems({
-                    pluginManager,
-                    query: normalizedQuery,
-                    requestedDiaries: rule.diaries,
-                    adapterAppliedDefaultDiaryPolicy: adapterAppliedDefaultDiaryPolicy || false,
-                    agentId: normalizedAgentId,
-                    authContext: authContext || requestContext,
-                    ragOptions,
-                    embeddingUtilsLoader,
-                    agentPolicyResolver: agentPolicyResolver || null
-                });
-
-                if (!collectResult.success) {
+                if (!retrievalResult.success) {
                     ruleDiagnostic.status = 'error';
-                    ruleDiagnostic.errorCode = collectResult.code;
-                    ruleDiagnostic.errorMessage = collectResult.error;
+                    ruleDiagnostic.errorCode = retrievalResult.code;
+                    ruleDiagnostic.errorMessage = retrievalResult.error;
                     ruleDiagnostic.durationMs = Date.now() - ruleStartedAt;
                     ruleDiagnostics.push(ruleDiagnostic);
                     pipelineStages.push({
                         name: 'ruleExecution',
                         ruleIndex,
-                        type: rule.type,
+                        type: ruleType,
                         durationMs: ruleDiagnostic.durationMs,
                         status: ruleDiagnostic.status
                     });
                     continue;
                 }
 
-                let ruleItems = Array.isArray(collectResult.items) ? collectResult.items : [];
+                let ruleItems = Array.isArray(retrievalResult.items) ? retrievalResult.items : [];
 
-                // --- Enrich rule diagnostics from collectRagItems result ---
-                ruleDiagnostic.targetDiaries = collectResult.targetDiaries || [];
-                ruleDiagnostic.timeRangesCount = collectResult.timeRanges?.length || 0;
-                ruleDiagnostic.activatedGroupCount = collectResult.activatedGroups?.size || 0;
-                ruleDiagnostic.rerankApplied = collectResult.rerankApplied || false;
-                ruleDiagnostic.tagMemoCount = collectResult.coreTags?.length || 0;
-                ruleDiagnostic.coreTags = collectResult.coreTags || [];
+                // Enrich diagnostics from the selected base mode without coupling the shape
+                // of full-text retrieval to the RAG candidate pipeline.
+                ruleDiagnostic.targetDiaries = retrievalResult.targetDiaries || [];
+                ruleDiagnostic.timeRangesCount = retrievalResult.timeRanges?.length || 0;
+                ruleDiagnostic.activatedGroupCount = retrievalResult.activatedGroups?.size || 0;
+                ruleDiagnostic.rerankApplied = retrievalResult.rerankApplied || false;
+                ruleDiagnostic.tagMemoCount = retrievalResult.coreTags?.length || 0;
+                ruleDiagnostic.coreTags = retrievalResult.coreTags || [];
 
                 // --- Apply S02 post-processing modifiers ---
-                const s02Result = applyS02Modifiers(ruleItems, rule.modifiers);
+                const s02Result = applyS02Modifiers(ruleItems, rule.modifiers, {
+                    messages: roleValveMessages
+                });
                 ruleItems = s02Result.items;
-                ruleDiagnostic.modifierDetails = [...ragModifierDetails, ...s02Result.modifierDetails];
+                ruleDiagnostic.modifierDetails = [...preModifierDetails, ...ragModifierDetails, ...s02Result.modifierDetails];
                 if (s02Result.attachments.length > 0) {
                     allAttachments.push(...s02Result.attachments);
                     ruleDiagnostic.attachmentCount = s02Result.attachments.length;
@@ -828,7 +1404,7 @@ function createRecallRuntimeService(deps = {}) {
                 pipelineStages.push({
                     name: 'ruleExecution',
                     ruleIndex,
-                    type: rule.type,
+                    type: ruleType,
                     durationMs: ruleDiagnostic.durationMs,
                     status: ruleDiagnostic.status
                 });
@@ -841,7 +1417,7 @@ function createRecallRuntimeService(deps = {}) {
                 pipelineStages.push({
                     name: 'ruleExecution',
                     ruleIndex,
-                    type: rule.type,
+                    type: ruleType,
                     durationMs: ruleDiagnostic.durationMs,
                     status: ruleDiagnostic.status
                 });
@@ -859,7 +1435,8 @@ function createRecallRuntimeService(deps = {}) {
             strategy: mergeStrategy || 'default',
             aggregate: aggregateStrategy || 'max',
             inputRuleCount: ruleItemsArrays.length,
-            inputItemCount: ruleItemsArrays.flat().length
+            inputItemCount: ruleItemsArrays.flat().length,
+            outputItemCount: 0
         };
 
         if (mergeStrategy === 'interleave') {
@@ -1028,6 +1605,7 @@ module.exports = {
     applyTimeDecay,
     applyRoleValve,
     parseRoleValveConfig,
+    evaluateRoleValveExpression,
     applyBase64Memo,
     applyAIMemo,
     applyS02Modifiers,

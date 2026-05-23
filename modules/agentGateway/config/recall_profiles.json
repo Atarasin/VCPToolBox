@@ -3,96 +3,94 @@
     "Nexus": {
       "defaultProfile": "nexus-default",
       "allowedProfiles": ["nexus-default"],
-      "targets": ["Nexus日记本"],
-      "profiles": {
-        "nexus-default": {
-          "merge": "concat",
-          "aggregate": "max",
-          "projection": "semantic",
-          "metadata": { "priority": "high", "tier": "core" },
-          "rules": [
-            {
-              "type": "rag",
-              "diaries": ["Nexus日记本"],
-              "kMultiplier": 1.5,
-              "meta": { "source": "nexus-core" },
-              "modifiers": {
-                "time": true,
-                "group": true,
-                "rerank": true,
-                "tagMemo": true,
-                "truncate": true
-              }
-            }
-          ]
-        }
-      }
+      "targets": ["Nexus日记本"]
     },
     "Aemeath": {
       "defaultProfile": "aemeath-gated",
       "allowedProfiles": ["aemeath-gated", "aemeath-fulltext", "aemeath-gated-fulltext"],
-      "targets": ["Aemeath日记本"],
-      "profiles": {
-        "aemeath-gated": {
-          "merge": "interleave",
-          "aggregate": "mean",
-          "projection": "keyword",
-          "metadata": { "priority": "normal", "tier": "standard" },
-          "rules": [
-            {
-              "type": "gated_rag",
-              "diaries": ["Aemeath日记本"],
-              "gateThreshold": 0.35,
-              "kMultiplier": 2.0,
-              "meta": { "source": "aemeath-gated" },
-              "modifiers": {
-                "time": false,
-                "group": true,
-                "rerank": false,
-                "tagMemo": true,
-                "truncate": true
-              }
-            }
-          ]
-        },
-        "aemeath-fulltext": {
-          "merge": "concat",
-          "aggregate": "sum",
-          "projection": "full",
-          "rules": [
-            {
-              "type": "full_text",
-              "diaries": ["Aemeath日记本"],
-              "modifiers": {
-                "timeDecay": true,
-                "roleValve": true,
-                "base64Memo": true,
-                "truncate": true
-              }
-            }
-          ]
-        },
-        "aemeath-gated-fulltext": {
-          "merge": "interleave",
-          "aggregate": "max",
-          "projection": "hybrid",
-          "metadata": { "priority": "high" },
-          "rules": [
-            {
-              "type": "gated_full_text",
-              "diaries": ["Aemeath日记本"],
-              "gateThreshold": 0.35,
-              "kMultiplier": 1.2,
-              "modifiers": {
-                "timeDecay": true,
-                "roleValve": true,
-                "base64Memo": true,
-                "truncate": true
-              }
-            }
-          ]
+      "targets": ["Aemeath日记本"]
+    }
+  },
+  "profiles": {
+    "nexus-default": {
+      "merge": "concat",
+      "aggregate": "max",
+      "projection": "semantic",
+      "metadata": { "priority": "high", "tier": "core" },
+      "rules": [
+        {
+          "type": "rag",
+          "diaries": ["Nexus日记本"],
+          "kMultiplier": 1.5,
+          "meta": { "source": "nexus-core" },
+          "modifiers": {
+            "time": true,
+            "group": true,
+            "rerank": true,
+            "tagMemo": true,
+            "truncate": true
+          }
         }
-      }
+      ]
+    },
+    "aemeath-gated": {
+      "merge": "interleave",
+      "aggregate": "mean",
+      "projection": "keyword",
+      "metadata": { "priority": "normal", "tier": "standard" },
+      "rules": [
+        {
+          "type": "gated_rag",
+          "diaries": ["Aemeath日记本"],
+          "gateThreshold": 0.35,
+          "kMultiplier": 2.0,
+          "meta": { "source": "aemeath-gated" },
+          "modifiers": {
+            "time": false,
+            "group": true,
+            "rerank": false,
+            "tagMemo": true,
+            "truncate": true
+          }
+        }
+      ]
+    },
+    "aemeath-fulltext": {
+      "merge": "concat",
+      "aggregate": "sum",
+      "projection": "full",
+      "rules": [
+        {
+          "type": "full_text",
+          "diaries": ["Aemeath日记本"],
+          "modifiers": {
+            "timeDecay": true,
+            "roleValve": true,
+            "base64Memo": true,
+            "truncate": true
+          }
+        }
+      ]
+    },
+    "aemeath-gated-fulltext": {
+      "merge": "interleave",
+      "aggregate": "max",
+      "projection": "hybrid",
+      "metadata": { "priority": "high" },
+      "rules": [
+        {
+          "type": "gated_full_text",
+          "diaries": ["Aemeath日记本"],
+          "gateThreshold": 0.35,
+          "kMultiplier": 1.2,
+          "modifiers": {
+            "timeDecay": true,
+            "roleValve": true,
+            "base64Memo": true,
+            "truncate": true
+          }
+        }
+      ]
     }
   }
 }

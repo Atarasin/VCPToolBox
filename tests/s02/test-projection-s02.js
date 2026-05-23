@@ -16,6 +16,7 @@ describe('RecallProjectionService S02 extensions', () => {
             };
             const result = projectFullResult(recallResult, 'r1');
             assert.deepStrictEqual(result.attachments, []);
+            assert.deepStrictEqual(result.fullTextSections.map((section) => section.diaryName), ['D']);
         });
 
         it('surfaces attachments from diagnostics.attachments', () => {
@@ -45,6 +46,47 @@ describe('RecallProjectionService S02 extensions', () => {
         it('defaults attachments to empty array for undefined input', () => {
             const result = projectFullResult(undefined, 'r4');
             assert.deepStrictEqual(result.attachments, []);
+        });
+
+        it('exposes activeProjection when profile metadata requests full output', () => {
+            const recallResult = {
+                items: [{ text: 'x', score: 0.5, sourceDiary: 'D' }],
+                diagnostics: {
+                    totalDurationMs: 100,
+                    rules: [{ type: 'rag', status: 'ok', itemCount: 1 }],
+                    profileMeta: { projection: 'full' }
+                }
+            };
+            const result = projectFullResult(recallResult, 'r5');
+            assert.strictEqual(result.activeProjection, 'fullTextSections');
+            assert.strictEqual(result.fullTextSections.length, 1);
+        });
+
+        it('uses rule-level projection when profile-level projection is absent', () => {
+            const recallResult = {
+                items: [{ text: 'x', score: 0.5, sourceDiary: 'D' }],
+                diagnostics: {
+                    totalDurationMs: 100,
+                    rules: [{ type: 'rag', status: 'ok', itemCount: 1, projection: 'recall_blocks' }]
+                }
+            };
+            const result = projectFullResult(recallResult, 'r6');
+            assert.strictEqual(result.activeProjection, 'recallBlocks');
+        });
+
+        it('uses hybrid projection when rules request multiple projections', () => {
+            const recallResult = {
+                items: [{ text: 'x', score: 0.5, sourceDiary: 'D' }],
+                diagnostics: {
+                    totalDurationMs: 100,
+                    rules: [
+                        { type: 'rag', status: 'ok', itemCount: 1, projection: 'recall_blocks' },
+                        { type: 'full_text', status: 'ok', itemCount: 1, projection: 'full_text_sections' }
+                    ]
+                }
+            };
+            const result = projectFullResult(recallResult, 'r7');
+            assert.strictEqual(result.activeProjection, 'hybrid');
         });
     });
 

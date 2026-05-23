@@ -857,9 +857,14 @@ function createContextRuntimeService(deps = {}) {
     }
 
     function buildInlineRule(requestedDiaries, ragOptions) {
+        const normalizedDiaries = Array.isArray(requestedDiaries) ? requestedDiaries : [];
         return {
-            type: 'rag',
-            diaries: requestedDiaries,
+            baseMode: 'rag',
+            targets: {
+                diaries: normalizedDiaries,
+                ...(normalizedDiaries.length > 1 ? { aggregate: true } : {}),
+                kMultiplier: 1.0
+            },
             modifiers: {
                 time: ragOptions.timeAware,
                 group: ragOptions.groupAware,

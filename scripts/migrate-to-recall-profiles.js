@@ -55,8 +55,15 @@ function generateProfileForAgent(agentName, agentConfig) {
 
   const rules = [
     {
-      type: 'rag',
-      diaries: defaultDiaries,
+      baseMode: 'rag',
+      targets: {
+        diaries: defaultDiaries,
+        ...(defaultDiaries.length > 1 ? { aggregate: true } : {}),
+        kMultiplier: 1.0,
+      },
+      projection: {
+        emit: 'recall_blocks',
+      },
       modifiers: makeDefaultModifiers(),
       _meta: {
         source: 'migrated from mcp_agent_memory_policy.json defaultDiaries',
@@ -71,9 +78,8 @@ function generateProfileForAgent(agentName, agentConfig) {
 
   return {
     defaultProfile: profileName,
-    profiles: {
-      [profileName]: { rules },
-    },
+    profileName,
+    profile: { rules },
   };
 }
 
@@ -141,7 +147,7 @@ function buildMigrationReport(agentName, profile, agentConfig) {
   const defaultDiaries = agentConfig.defaultDiaries || [];
   const allowedDiaries = agentConfig.allowedDiaries || [];
   const profileName = profile.defaultProfile;
-  const rules = profile.profiles[profileName].rules;
+  const rules = profile.profile.rules;
 
   const lines = [
     `┌────────────────────────────────────────────────────────────`,
@@ -157,8 +163,9 @@ function buildMigrationReport(agentName, profile, agentConfig) {
   ];
 
   for (const rule of rules) {
-    lines.push(`│   - type: ${rule.type}`);
-    lines.push(`│     diaries: [${rule.diaries.map(d => `"${d}"`).join(', ')}]`);
+    lines.push(`│   - baseMode: ${rule.baseMode}`);
+    lines.push(`│     diaries: [${rule.targets.diaries.map(d => `"${d}"`).join(', ')}]`);
+    lines.push(`│     aggregate: ${rule.targets.aggregate === true ? 'true' : 'false'}`);
     const enabledMods = Object.entries(rule.modifiers)
       .filter(([, v]) => v)
       .map(([k]) => k);
@@ -176,7 +183,7 @@ function migrate(inputPath, options = {}) {
   const { agents: filterAgents } = options;
   const source = readSourceConfig(inputPath);
 
-  const result = { agents: {} };
+  const result = { agents: {}, profiles: {} };
   const reports = [];
   const warnings = [];
 
@@ -193,7 +200,16 @@ function migrate(inputPath, options = {}) {
     }
 
     const profile = generateProfileForAgent(agentName, agentConfig);
-    result.agents[agentName] = profile;
+    const defaultDiaries = Array.isArray(agentConfig.defaultDiaries) ? agentConfig.defaultDiaries : [];
+    const allowedDiaries = Array.isArray(agentConfig.allowedDiaries) ? agentConfig.allowedDiaries : [];
+    const targets = allowedDiaries.length > 0 ? allowedDiaries : defaultDiaries;
+
+    result.agents[agentName] = {
+      defaultProfile: profile.defaultProfile,
+      allowedProfiles: [profile.defaultProfile],
+      ...(targets.length > 0 ? { targets } : {}),
+    };
+    result.profiles[profile.profileName] = profile.profile;
     reports.push(buildMigrationReport(agentName, profile, agentConfig));
   }
 

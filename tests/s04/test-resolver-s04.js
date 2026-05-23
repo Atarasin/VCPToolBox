@@ -17,6 +17,53 @@ function writeTmp(name, payload) {
 }
 
 describe('S04 — RecallProfileResolver merge policy fields', () => {
+    describe('normalizeRule — structured targets/baseMode/projection', () => {
+        it('accepts structured rule shape and compiles compatibility fields', () => {
+            const p = writeTmp('structured-rule.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1'
+                    }
+                },
+                profiles: {
+                    p1: {
+                        rules: [
+                            {
+                                id: 'daily-aggregate',
+                                baseMode: 'rag',
+                                targets: {
+                                    diaries: ['D1', 'D2'],
+                                    aggregate: true,
+                                    kMultiplier: 1.5
+                                },
+                                modifiers: {
+                                    time: true
+                                },
+                                projection: {
+                                    emit: 'recall_blocks'
+                                }
+                            }
+                        ]
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+            assert.ok(result.resolved);
+            assert.strictEqual(result.rules[0].id, 'daily-aggregate');
+            assert.strictEqual(result.rules[0].type, 'rag');
+            assert.strictEqual(result.rules[0].baseMode, 'rag');
+            assert.deepStrictEqual(result.rules[0].diaries, ['D1', 'D2']);
+            assert.deepStrictEqual(result.rules[0].targets, {
+                diaries: ['D1', 'D2'],
+                aggregate: true,
+                kMultiplier: 1.5
+            });
+            assert.strictEqual(result.rules[0].projection, 'recall_blocks');
+            fs.unlinkSync(p);
+        });
+    });
+
     describe('normalizeProfile — truncateTo', () => {
         it('truncateTo=15 is preserved as integer', () => {
             const p = writeTmp('tt-15.json', {
@@ -174,6 +221,38 @@ describe('S04 — RecallProfileResolver merge policy fields', () => {
                                 ]
                             }
                         }
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+            assert.ok(result.resolved);
+            assert.strictEqual(result.merge, 'interleave');
+            assert.strictEqual(result.aggregate, 'mean');
+            assert.strictEqual(result.projection, 'recallBlock');
+            assert.strictEqual(result.truncateTo, 20);
+            assert.strictEqual(result.rules.length, 2);
+            fs.unlinkSync(p);
+        });
+
+        it('top-level profiles preserve truncateTo and merge policy fields', () => {
+            const p = writeTmp('all-policy-top-level.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        allowedProfiles: ['p1']
+                    }
+                },
+                profiles: {
+                    p1: {
+                        merge: 'interleave',
+                        aggregate: 'mean',
+                        projection: 'recallBlock',
+                        truncateTo: 20,
+                        rules: [
+                            { type: 'rag', diaries: ['D1'] },
+                            { type: 'full_text', diaries: ['D2'] }
+                        ]
                     }
                 }
             });

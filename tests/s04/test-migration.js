@@ -7,7 +7,6 @@ const os = require('os');
 const {
   migrate,
   generateProfileForAgent,
-  readSourceConfig,
   parseArgs,
   toKebabCase,
   ALL_MODIFIERS,
@@ -88,7 +87,8 @@ describe('migrate()', () => {
       const written = JSON.parse(fs.readFileSync(suggestedPath, 'utf-8'));
       assert.deepStrictEqual(written, result);
       assert.strictEqual(written.agents.main.defaultProfile, 'main-default');
-      assert.strictEqual(written.agents.main.profiles['main-default'].rules[0].type, 'rag');
+      assert.deepStrictEqual(written.agents.main.allowedProfiles, ['main-default']);
+      assert.strictEqual(written.profiles['main-default'].rules[0].baseMode, 'rag');
     });
   });
 
@@ -164,8 +164,8 @@ describe('migrate()', () => {
       });
 
       const { result } = migrate(configPath, { agents: [] });
-      const rule = result.agents.TestAgent.profiles['test-agent-default'].rules[0];
-      assert.deepStrictEqual(rule.diaries, []);
+      const rule = result.profiles['test-agent-default'].rules[0];
+      assert.deepStrictEqual(rule.targets.diaries, []);
     });
   });
 
@@ -177,8 +177,8 @@ describe('migrate()', () => {
       });
 
       const { result } = migrate(configPath, { agents: [] });
-      const rule = result.agents.TestAgent.profiles['test-agent-default'].rules[0];
-      assert.deepStrictEqual(rule.diaries, []);
+      const rule = result.profiles['test-agent-default'].rules[0];
+      assert.deepStrictEqual(rule.targets.diaries, []);
     });
   });
 
@@ -192,16 +192,17 @@ describe('migrate()', () => {
       const { result } = migrate(configPath, { agents: [] });
       assert.ok(result.agents.Alpha);
       assert.strictEqual(result.agents.Alpha.defaultProfile, 'alpha-default');
-      assert.ok(result.agents.Alpha.profiles['alpha-default']);
-      assert.ok(Array.isArray(result.agents.Alpha.profiles['alpha-default'].rules));
-      assert.strictEqual(result.agents.Alpha.profiles['alpha-default'].rules.length, 1);
+      assert.deepStrictEqual(result.agents.Alpha.allowedProfiles, ['alpha-default']);
+      assert.ok(result.profiles['alpha-default']);
+      assert.ok(Array.isArray(result.profiles['alpha-default'].rules));
+      assert.strictEqual(result.profiles['alpha-default'].rules.length, 1);
     });
   });
 
   // ─── 12. Modifiers all disabled ────────────────────────────────────
   it('disables all modifiers by default', () => {
     const profile = generateProfileForAgent('Any', { defaultDiaries: ['D'] });
-    const rule = profile.profiles['any-default'].rules[0];
+    const rule = profile.profile.rules[0];
     for (const mod of ALL_MODIFIERS) {
       assert.strictEqual(rule.modifiers[mod], false, `modifier ${mod} should be false`);
     }
@@ -291,7 +292,7 @@ describe('migrate()', () => {
   // ─── 18. RECOMMENDED_MODIFIERS present in _meta ────────────────────
   it('includes recommended modifiers in _meta', () => {
     const profile = generateProfileForAgent('Any', { defaultDiaries: ['D'] });
-    const meta = profile.profiles['any-default'].rules[0]._meta;
+    const meta = profile.profile.rules[0]._meta;
     assert.ok(Array.isArray(meta.recommendedModifiers));
     assert.deepStrictEqual(meta.recommendedModifiers, RECOMMENDED_MODIFIERS);
   });

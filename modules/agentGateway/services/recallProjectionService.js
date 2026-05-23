@@ -4,8 +4,31 @@
  * 工厂函数 createRecallProjectionService() 提供三种投影：
  *   - projectItems(recallResult)      → 扁平 items[]（含 content、score、sourceDiary 等）
  *   - projectRecallBlocks(recallResult) → recallBlocks[]（含 blockId、content、score、sourceDiary）
- *   - projectFullResult(recallResult, requestId) → 透传完整结果并附加 requestId / projectedAt
+ *   - projectFullResult(recallResult, requestId) → 生成对外完整 RecallResult
  */
+
+const PROJECTION_ALIAS_MAP = Object.freeze({
+    items: 'items',
+    item: 'items',
+    semantic: 'items',
+    keyword: 'items',
+    recall_blocks: 'recallBlocks',
+    recall_block: 'recallBlocks',
+    recallblock: 'recallBlocks',
+    recallblocks: 'recallBlocks',
+    block: 'recallBlocks',
+    blocks: 'recallBlocks',
+    context: 'recallBlocks',
+    full_text_sections: 'fullTextSections',
+    full_text_section: 'fullTextSections',
+    fulltextsections: 'fullTextSections',
+    fulltextsection: 'fullTextSections',
+    full_text: 'fullTextSections',
+    full: 'fullTextSections',
+    attachments: 'attachments',
+    attachment: 'attachments',
+    hybrid: 'hybrid'
+});
 
 function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -16,6 +39,42 @@ function normalizeStringArray(value) {
         return value.map((item) => normalizeString(item)).filter(Boolean);
     }
     return [];
+}
+
+function normalizeProjectionName(value) {
+    const normalized = normalizeString(value)
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_');
+    return PROJECTION_ALIAS_MAP[normalized] || '';
+}
+
+function resolveActiveProjection(recallResult) {
+    const explicitProjection = normalizeProjectionName(recallResult?.diagnostics?.profileMeta?.projection);
+    if (explicitProjection) {
+        return explicitProjection;
+    }
+
+    const ruleProjections = Array.isArray(recallResult?.diagnostics?.rules)
+        ? [...new Set(
+            recallResult.diagnostics.rules
+                .map((rule) => normalizeProjectionName(rule?.projection))
+                .filter(Boolean)
+        )]
+        : [];
+    if (ruleProjections.length === 1) {
+        return ruleProjections[0];
+    }
+    if (ruleProjections.length > 1) {
+        return 'hybrid';
+    }
+
+    const ruleTypes = Array.isArray(recallResult?.diagnostics?.rules)
+        ? recallResult.diagnostics.rules.map((rule) => normalizeString(rule?.type))
+        : [];
+    if (ruleTypes.some((type) => type === 'full_text' || type === 'gated_full_text')) {
+        return 'fullTextSections';
+    }
+    return 'items';
 }
 
 function projectItems(recallResult) {
@@ -48,6 +107,8 @@ function projectFullResult(recallResult, requestId) {
     const base = recallResult && typeof recallResult === 'object' ? recallResult : {};
     const projectedItems = projectItems(base);
     const projectedBlocks = projectRecallBlocks(base);
+    const projectedFullTextSections = projectFullTextSections(base);
+    const activeProjection = resolveActiveProjection(base);
 
     return {
         success: base.success !== false,
@@ -55,8 +116,10 @@ function projectFullResult(recallResult, requestId) {
         profileName: base.profileName || null,
         requestId: normalizeString(requestId) || `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         projectedAt: Date.now(),
+        activeProjection,
         items: projectedItems,
         recallBlocks: projectedBlocks,
+        fullTextSections: projectedFullTextSections,
         attachments: base.diagnostics?.attachments || [],
         diagnostics: base.diagnostics || { totalDurationMs: 0, rules: [] },
         error: base.error || null,
@@ -174,5 +237,6 @@ module.exports = {
     projectFullResult,
     projectFullTextSections,
     projectSearchItems,
-    projectContextBlocks
+    projectContextBlocks,
+    resolveActiveProjection
 };

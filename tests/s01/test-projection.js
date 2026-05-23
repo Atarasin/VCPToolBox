@@ -199,8 +199,10 @@ describe('RecallProjectionService', () => {
             assert.strictEqual(result.success, true);
             assert.strictEqual(result.agentId, null);
             assert.strictEqual(result.profileName, null);
+            assert.strictEqual(result.activeProjection, 'items');
             assert.strictEqual(result.items.length, 0);
             assert.strictEqual(result.recallBlocks.length, 0);
+            assert.strictEqual(result.fullTextSections.length, 0);
             assert.deepStrictEqual(result.diagnostics, { totalDurationMs: 0, rules: [] });
             assert.strictEqual(result.error, null);
             assert.strictEqual(result.code, null);
@@ -271,7 +273,7 @@ describe('RecallProjectionService', () => {
             assert.ok(result.projectedAt >= before && result.projectedAt <= after);
         });
 
-        it('includes both items and recallBlocks arrays', () => {
+        it('returns complete recall arrays and marks the active projection', () => {
             const recallResult = {
                 items: [
                     { text: 'First', score: 0.9, sourceDiary: 'D1', sourceFile: 'f1.txt', timestamp: '2024-01-01T00:00:00Z', tags: ['t1'] },
@@ -279,12 +281,52 @@ describe('RecallProjectionService', () => {
                 ]
             };
             const result = projectFullResult(recallResult, 'r2');
+            assert.strictEqual(result.activeProjection, 'items');
             assert.strictEqual(result.items.length, 2);
             assert.strictEqual(result.recallBlocks.length, 2);
+            assert.strictEqual(result.fullTextSections.length, 2);
             assert.strictEqual(result.items[0].content, 'First');
             assert.strictEqual(result.recallBlocks[0].content, 'First');
             assert.strictEqual(result.recallBlocks[0].blockId, 'rb-0');
             assert.strictEqual(result.recallBlocks[1].blockId, 'rb-1');
+        });
+
+        it('defaults full_text rules to fullTextSections projection', () => {
+            const recallResult = {
+                items: [
+                    { text: 'Section A', score: 0.9, sourceDiary: 'DiaryA', sourceFile: 'a.md' }
+                ],
+                diagnostics: {
+                    totalDurationMs: 10,
+                    rules: [
+                        { type: 'full_text', status: 'ok', itemCount: 1 }
+                    ]
+                }
+            };
+            const result = projectFullResult(recallResult, 'r-full');
+            assert.strictEqual(result.activeProjection, 'fullTextSections');
+            assert.strictEqual(result.fullTextSections.length, 1);
+            assert.strictEqual(result.fullTextSections[0].diaryName, 'DiaryA');
+        });
+
+        it('honors explicit profile projection aliases', () => {
+            const recallResult = {
+                items: [
+                    { text: 'Block me', score: 0.9, sourceDiary: 'DiaryA', sourceFile: 'a.md' }
+                ],
+                diagnostics: {
+                    totalDurationMs: 10,
+                    rules: [
+                        { type: 'rag', status: 'ok', itemCount: 1 }
+                    ],
+                    profileMeta: {
+                        projection: 'recall_blocks'
+                    }
+                }
+            };
+            const result = projectFullResult(recallResult, 'r-block');
+            assert.strictEqual(result.activeProjection, 'recallBlocks');
+            assert.strictEqual(result.recallBlocks.length, 1);
         });
 
         it('handles empty items gracefully', () => {
