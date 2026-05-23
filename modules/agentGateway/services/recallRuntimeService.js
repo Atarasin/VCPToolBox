@@ -633,6 +633,7 @@ function createRecallRuntimeService(deps = {}) {
                 let ruleItems = Array.isArray(collectResult.items) ? collectResult.items : [];
 
                 // --- Enrich rule diagnostics from collectRagItems result ---
+                ruleDiagnostic.targetDiaries = collectResult.targetDiaries || [];
                 ruleDiagnostic.timeRangesCount = collectResult.timeRanges?.length || 0;
                 ruleDiagnostic.activatedGroupCount = collectResult.activatedGroups?.size || 0;
                 ruleDiagnostic.rerankApplied = collectResult.rerankApplied || false;

@@ -16,6 +16,31 @@ function cosineSimilarity(vectorA, vectorB) {
     return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+const { createContextRuntimeService } = require('../../../modules/agentGateway/services/contextRuntimeService');
+const { createRecallRuntimeService } = require('../../../modules/agentGateway/services/recallRuntimeService');
+
+function createContextServiceWithRecall(overrides = {}, deps = {}) {
+    const pluginManager = createPluginManager(overrides);
+    const stubProfileResolver = {
+        resolveForAgent() {
+            return { resolved: false };
+        }
+    };
+    let recallRuntimeService;
+    const contextRuntimeService = createContextRuntimeService({
+        pluginManager,
+        getRecallRuntimeService: () => recallRuntimeService,
+        ...deps
+    });
+    recallRuntimeService = createRecallRuntimeService({
+        pluginManager,
+        contextRuntimeService,
+        recallProfileResolver: stubProfileResolver,
+        embeddingUtilsLoader: () => require('../../../EmbeddingUtils')
+    });
+    return contextRuntimeService;
+}
+
 function createKnowledgeBaseManager(overrides = {}) {
     const diaries = overrides.diaries || ['Nova', 'ProjectAlpha', 'SharedMemory'];
     const metadataByPath = overrides.metadataByPath || {
@@ -262,5 +287,6 @@ module.exports = {
     createKnowledgeBaseManager,
     createPluginManager,
     createRagPlugin,
+    createContextServiceWithRecall,
     cosineSimilarity
 };

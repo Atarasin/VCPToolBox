@@ -1,15 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createContextRuntimeService } = require('../../../modules/agentGateway/services/contextRuntimeService');
 const {
     createKnowledgeBaseManager,
     createPluginManager,
-    createRagPlugin
+    createRagPlugin,
+    createContextServiceWithRecall
 } = require('../helpers/agent-gateway-test-helpers');
 
 test('ContextRuntimeService search returns normalized items and diagnostics', async () => {
-    const pluginManager = createPluginManager({
+    const service = createContextServiceWithRecall({
         openClawBridgeConfig: {
             rag: {
                 agentDiaryMap: {
@@ -19,7 +19,6 @@ test('ContextRuntimeService search returns normalized items and diagnostics', as
             }
         }
     });
-    const service = createContextRuntimeService({ pluginManager });
 
     const result = await service.search({
         body: {
@@ -57,7 +56,7 @@ test('ContextRuntimeService search returns normalized items and diagnostics', as
 });
 
 test('ContextRuntimeService builds recall blocks from recent messages and token budget', async () => {
-    const pluginManager = createPluginManager({
+    const service = createContextServiceWithRecall({
         openClawBridgeConfig: {
             rag: {
                 agentDiaryMap: {
@@ -79,7 +78,6 @@ test('ContextRuntimeService builds recall blocks from recent messages and token 
             }
         })
     });
-    const service = createContextRuntimeService({ pluginManager });
 
     const result = await service.buildRecallContext({
         body: {
@@ -112,7 +110,7 @@ test('ContextRuntimeService builds recall blocks from recent messages and token 
 });
 
 test('ContextRuntimeService rejects forbidden diary access and invalid query', async () => {
-    const pluginManager = createPluginManager({
+    const service = createContextServiceWithRecall({
         openClawBridgeConfig: {
             rag: {
                 agentDiaryMap: {
@@ -123,7 +121,6 @@ test('ContextRuntimeService rejects forbidden diary access and invalid query', a
         },
         ragPlugin: createRagPlugin()
     });
-    const service = createContextRuntimeService({ pluginManager });
 
     const forbiddenResult = await service.search({
         body: {
@@ -161,7 +158,7 @@ test('ContextRuntimeService rejects forbidden diary access and invalid query', a
 });
 
 test('ContextRuntimeService normalizes default diary aliases from policy to canonical targets', async () => {
-    const pluginManager = createPluginManager({
+    const service = createContextServiceWithRecall({
         vectorDBManager: createKnowledgeBaseManager({
             diaries: ['Nexus', 'Nexus架构设计'],
             searchResults: {
@@ -188,9 +185,7 @@ test('ContextRuntimeService normalizes default diary aliases from policy to cano
                 return [];
             }
         })
-    });
-    const service = createContextRuntimeService({
-        pluginManager,
+    }, {
         agentPolicyResolver: {
             async resolvePolicy() {
                 return {
@@ -221,7 +216,7 @@ test('ContextRuntimeService normalizes default diary aliases from policy to cano
 });
 
 test('ContextRuntimeService accepts explicit diary aliases that map to allowed canonical targets', async () => {
-    const pluginManager = createPluginManager({
+    const service = createContextServiceWithRecall({
         vectorDBManager: createKnowledgeBaseManager({
             diaries: ['Nexus', 'Nexus架构设计'],
             searchResults: {
@@ -248,9 +243,7 @@ test('ContextRuntimeService accepts explicit diary aliases that map to allowed c
                 return [];
             }
         })
-    });
-    const service = createContextRuntimeService({
-        pluginManager,
+    }, {
         agentPolicyResolver: {
             async resolvePolicy() {
                 return {
@@ -282,7 +275,7 @@ test('ContextRuntimeService accepts explicit diary aliases that map to allowed c
 });
 
 test('ContextRuntimeService treats allowed but unmaterialized diary searches as empty results', async () => {
-    const pluginManager = createPluginManager({
+    const service = createContextServiceWithRecall({
         vectorDBManager: createKnowledgeBaseManager({
             diaries: []
         }),
@@ -291,9 +284,7 @@ test('ContextRuntimeService treats allowed but unmaterialized diary searches as 
                 return [];
             }
         })
-    });
-    const service = createContextRuntimeService({
-        pluginManager,
+    }, {
         agentPolicyResolver: {
             async resolvePolicy() {
                 return {
