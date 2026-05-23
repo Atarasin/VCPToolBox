@@ -376,7 +376,26 @@ describe('RecallRuntimeService S03 diagnostics', () => {
             assert.strictEqual(result.diagnostics.rules[0].modifierDetails[0].modifier, 'timeDecay');
         });
 
-        it('includes empty modifierDetails when no S02 modifiers are used', async () => {
+        it('includes empty modifierDetails when no modifiers are used', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', modifiers: {} }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'TestAgent',
+                query: 'test query'
+            });
+            assert.strictEqual(result.diagnostics.rules.length, 1);
+            assert.ok(Array.isArray(result.diagnostics.rules[0].modifierDetails));
+            assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 0);
+        });
+
+        it('includes RAG-phase modifierDetails for rerank modifier', async () => {
             resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
             const resolver = createMockResolver([
                 { type: 'rag', modifiers: { rerank: true } }
@@ -392,7 +411,9 @@ describe('RecallRuntimeService S03 diagnostics', () => {
             });
             assert.strictEqual(result.diagnostics.rules.length, 1);
             assert.ok(Array.isArray(result.diagnostics.rules[0].modifierDetails));
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 0);
+            assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 1);
+            assert.strictEqual(result.diagnostics.rules[0].modifierDetails[0].modifier, 'rerank');
+            assert.strictEqual(result.diagnostics.rules[0].modifierDetails[0].applied, true);
         });
     });
 

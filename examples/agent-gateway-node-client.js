@@ -129,6 +129,10 @@ class AgentGatewayClient {
         return this.requestJson('POST', '/agent_gateway/context/assemble', { body });
     }
 
+    runRecall(body) {
+        return this.requestJson('POST', '/agent_gateway/recall/run', { body });
+    }
+
     invokeTool(toolName, body) {
         return this.requestJson('POST', `/agent_gateway/tools/${encodeURIComponent(toolName)}/invoke`, {
             body

@@ -234,9 +234,9 @@ function parseRoleValveConfig(modifierValue) {
 function applyRoleValve(items, modifierValue) {
     const config = parseRoleValveConfig(modifierValue);
     if (config.roles.length === 0) {
-        return items;
+        return { items, expression: config.expression, matchedCount: items.length };
     }
-    return items.filter((item) => {
+    const filtered = items.filter((item) => {
         const role = normalizeString(item?.role);
         if (!role) {
             // Items without a role pass through (full_text may not have role metadata)
@@ -248,6 +248,7 @@ function applyRoleValve(items, modifierValue) {
         // OR (default): any matching role passes
         return config.roles.includes(role);
     });
+    return { items: filtered, expression: config.expression, matchedCount: filtered.length };
 }
 
 function applyBase64Memo(items, modifierValue) {
@@ -379,7 +380,9 @@ async function applyAIMemo(items, config) {
         }).join('\n\n---\n\n');
 
         const presetName = normalizeString(config.preset) || 'default';
+        const effectivePreset = AIMEMO_PRESETS[presetName] ? presetName : 'default';
         const presetPrompt = AIMEMO_PRESETS[presetName] || AIMEMO_PRESETS.default;
+        modifierDetail.preset = effectivePreset;
         const prompt = presetPrompt.replace('{{knowledge_base}}', knowledgeBase);
 
         const response = await axios.post(
@@ -437,7 +440,17 @@ function applyS02Modifiers(items, modifiers) {
         if (modifierKey === 'timeDecay') {
             currentItems = applyTimeDecay(currentItems, modifierValue);
         } else if (modifierKey === 'roleValve') {
-            currentItems = applyRoleValve(currentItems, modifierValue);
+            const rvResult = applyRoleValve(currentItems, modifierValue);
+            currentItems = rvResult.items;
+            modifierDetails.push({
+                modifier: modifierKey,
+                durationMs: Date.now() - modifierStartedAt,
+                inputCount,
+                outputCount: currentItems.length,
+                expression: rvResult.expression,
+                matchedCount: rvResult.matchedCount
+            });
+            continue;
         } else if (modifierKey === 'base64Memo') {
             const result = applyBase64Memo(currentItems, modifierValue);
             currentItems = result.items;
@@ -724,6 +737,40 @@ function createRecallRuntimeService(deps = {}) {
                 // --- Build ragOptions from modifiers ---
                 const { options: ragOptions } = buildRagOptionsFromModifiers(rule.modifiers, effectiveK);
 
+                // Build RAG-phase modifier details for diagnostics
+                const ragModifierDetails = [];
+                if (rule.modifiers && typeof rule.modifiers === 'object' && !Array.isArray(rule.modifiers)) {
+                    if (rule.modifiers.tagMemo !== undefined) {
+                        const tagMemoDetail = {
+                            modifier: 'tagMemo',
+                            durationMs: 0,
+                            inputCount: 0,
+                            outputCount: 0,
+                            applied: Boolean(ragOptions.tagMemo)
+                        };
+                        if (typeof ragOptions.tagMemoWeight === 'number') {
+                            tagMemoDetail.weight = ragOptions.tagMemoWeight;
+                        }
+                        if (ragOptions.tagMemoGeodesic === true) {
+                            tagMemoDetail.geodesic = true;
+                        }
+                        ragModifierDetails.push(tagMemoDetail);
+                    }
+                    if (rule.modifiers.rerank !== undefined) {
+                        const rerankDetail = {
+                            modifier: 'rerank',
+                            durationMs: 0,
+                            inputCount: 0,
+                            outputCount: 0,
+                            applied: Boolean(ragOptions.rerank)
+                        };
+                        if (typeof ragOptions.rerankWeight === 'number') {
+                            rerankDetail.weight = ragOptions.rerankWeight;
+                        }
+                        ragModifierDetails.push(rerankDetail);
+                    }
+                }
+
                 // --- Execute RAG via collectRagItems ---
                 const collectResult = await collectRagItems({
                     pluginManager,
@@ -766,7 +813,7 @@ function createRecallRuntimeService(deps = {}) {
                 // --- Apply S02 post-processing modifiers ---
                 const s02Result = applyS02Modifiers(ruleItems, rule.modifiers);
                 ruleItems = s02Result.items;
-                ruleDiagnostic.modifierDetails = s02Result.modifierDetails;
+                ruleDiagnostic.modifierDetails = [...ragModifierDetails, ...s02Result.modifierDetails];
                 if (s02Result.attachments.length > 0) {
                     allAttachments.push(...s02Result.attachments);
                     ruleDiagnostic.attachmentCount = s02Result.attachments.length;

@@ -24,7 +24,11 @@ const {
     aggregateDeduplicateItems,
     interleaveItems,
     deduplicateItems,
-    sortItemsByScore
+    sortItemsByScore,
+    applyRoleValve,
+    parseRoleValveConfig,
+    applyAIMemo,
+    AIMEMO_PRESETS
 } = require('../../modules/agentGateway/services/recallRuntimeService');
 
 function createMockResolver(rules, extraProfileFields = {}, profileName = 'default') {
@@ -543,6 +547,492 @@ describe('RecallRuntimeService S04 — merge policy', () => {
             assert.strictEqual(result.items.length, 1);
             const mergeStage = result.diagnostics.pipelineStages.find((s) => s.name === 'mergeResults');
             assert.strictEqual(mergeStage.detail.strategy, 'default');
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S04 Runtime Semantics Tests
+// ---------------------------------------------------------------------------
+
+describe('RecallRuntimeService S04 — runtime semantics', () => {
+    const mockPluginManager = createMockPluginManager();
+    const mockContextService = createMockContextRuntimeService();
+
+    describe('full_text baseK=20', () => {
+        it('full_text rule uses baseK=20', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([{ type: 'full_text', diaries: ['TestDiary'] }]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentFT', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 20);
+        });
+
+        it('full_text with kMultiplier=1.5 uses k=30', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([{ type: 'full_text', diaries: ['TestDiary'], kMultiplier: 1.5 }]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentFT', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 30);
+        });
+    });
+
+    describe('gated_full_text gate evaluation + baseK', () => {
+        it('gated_full_text passes gate and uses baseK=20', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'gated_full_text', diaries: ['TestDiary'], gateThreshold: 0.5 }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentGFT', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 20);
+            const ruleStage = result.diagnostics.pipelineStages.find((s) => s.name === 'ruleExecution');
+            assert.strictEqual(ruleStage.status, 'ok');
+        });
+
+        it('gated_full_text blocks when gate fails', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'gated_full_text', diaries: ['AnotherDiary'], gateThreshold: 0.99 }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentGFT', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
+            const ruleStage = result.diagnostics.pipelineStages.find((s) => s.name === 'ruleExecution');
+            assert.strictEqual(ruleStage.status, 'gated');
+        });
+    });
+
+    describe('tagMemo.weight dynamic control', () => {
+        it('forwards tagMemo.weight to ragOptions', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: { weight: 0.42 } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentTMW', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemoWeight, 0.42);
+        });
+
+        it('includes tagMemo weight in rule modifierDetails', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: { weight: 0.42 } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentTMW', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const tagMemoDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'tagMemo');
+            assert.ok(tagMemoDetail);
+            assert.strictEqual(tagMemoDetail.weight, 0.42);
+            assert.strictEqual(tagMemoDetail.applied, true);
+        });
+    });
+
+    describe('tagMemo.geodesic options passthrough', () => {
+        it('forwards tagMemo.geodesic to ragOptions', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: { geodesic: true } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentTMG', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemoGeodesic, true);
+        });
+
+        it('includes tagMemo geodesic in rule modifierDetails', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: { geodesic: true } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentTMG', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const tagMemoDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'tagMemo');
+            assert.ok(tagMemoDetail);
+            assert.strictEqual(tagMemoDetail.geodesic, true);
+        });
+    });
+
+    describe('rerank.weight forwarding', () => {
+        it('forwards rerank.weight to ragOptions', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { rerank: { weight: 0.7 } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentRW', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.rerankWeight, 0.7);
+        });
+
+        it('includes rerank weight in rule modifierDetails', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { rerank: { weight: 0.7 } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentRW', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const rerankDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'rerank');
+            assert.ok(rerankDetail);
+            assert.strictEqual(rerankDetail.weight, 0.7);
+            assert.strictEqual(rerankDetail.applied, true);
+        });
+    });
+
+    describe('roleValve expression AND/OR/object', () => {
+        it('parses object syntax with expression', () => {
+            const config = parseRoleValveConfig({ roles: ['user', 'assistant'], expression: 'AND' });
+            assert.deepStrictEqual(config.roles, ['user', 'assistant']);
+            assert.strictEqual(config.expression, 'AND');
+        });
+
+        it('parses object syntax defaulting to OR', () => {
+            const config = parseRoleValveConfig({ roles: ['user'] });
+            assert.deepStrictEqual(config.roles, ['user']);
+            assert.strictEqual(config.expression, 'OR');
+        });
+
+        it('applyRoleValve returns expression and matchedCount', () => {
+            const items = [
+                { text: 'A', role: 'user' },
+                { text: 'B', role: 'assistant' },
+                { text: 'C', role: 'system' }
+            ];
+            const result = applyRoleValve(items, { roles: ['user', 'assistant'], expression: 'AND' });
+            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.expression, 'AND');
+            assert.strictEqual(result.matchedCount, 2);
+        });
+
+        it('roleValve modifierDetail includes expression and matchedCount', async () => {
+            resetMocks([
+                { text: 'A', score: 0.9, sourceDiary: 'TestDiary', role: 'user' },
+                { text: 'B', score: 0.8, sourceDiary: 'TestDiary', role: 'assistant' },
+                { text: 'C', score: 0.7, sourceDiary: 'TestDiary', role: 'system' }
+            ]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { roleValve: { roles: ['user'], expression: 'OR' } } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentRV', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const rvDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'roleValve');
+            assert.ok(rvDetail);
+            assert.strictEqual(rvDetail.expression, 'OR');
+            assert.strictEqual(rvDetail.matchedCount, 1);
+            assert.strictEqual(rvDetail.inputCount, 3);
+            assert.strictEqual(rvDetail.outputCount, 1);
+        });
+
+        it('legacy array syntax still works and defaults to OR', async () => {
+            resetMocks([
+                { text: 'A', score: 0.9, sourceDiary: 'TestDiary', role: 'user' },
+                { text: 'B', score: 0.8, sourceDiary: 'TestDiary', role: 'assistant' }
+            ]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { roleValve: ['user'] } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentRVLegacy', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const rvDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'roleValve');
+            assert.ok(rvDetail);
+            assert.strictEqual(rvDetail.expression, 'OR');
+            assert.strictEqual(rvDetail.outputCount, 1);
+        });
+    });
+
+    describe('aiMemo.preset lookup', () => {
+        it('AIMEMO_PRESETS has default, concise, detailed, timeline', () => {
+            assert.ok(AIMEMO_PRESETS.default);
+            assert.ok(AIMEMO_PRESETS.concise);
+            assert.ok(AIMEMO_PRESETS.detailed);
+            assert.ok(AIMEMO_PRESETS.timeline);
+        });
+
+        it('applyAIMemo modifierDetail records preset name', async () => {
+            const items = [{ text: 'Test', sourceDiary: 'TestDiary', score: 0.9 }];
+            const result = await applyAIMemo(items, { url: 'http://127.0.0.1:1/', apiKey: 'k', model: 'm', preset: 'concise' });
+            assert.strictEqual(result.modifierDetail.preset, 'concise');
+        });
+
+        it('applyAIMeo falls back to default preset when unknown', async () => {
+            const items = [{ text: 'Test', sourceDiary: 'TestDiary', score: 0.9 }];
+            const result = await applyAIMemo(items, { url: 'http://127.0.0.1:1/', apiKey: 'k', model: 'm', preset: 'nonexistent' });
+            assert.strictEqual(result.modifierDetail.preset, 'default');
+        });
+    });
+
+    describe('backward compatibility — boolean modifiers', () => {
+        it('boolean tagMemo still works and sets tagMemo=true', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentBoolTM', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemo, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemoWeight, undefined);
+        });
+
+        it('boolean rerank still works and sets rerank=true', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { rerank: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentBoolRR', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.rerank, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.rerankWeight, undefined);
+        });
+
+        it('string "true" for tagMemo is parsed as boolean', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: 'true' } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentStrTM', query: 'test query' });
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemo, true);
+        });
+    });
+
+    describe('edge cases', () => {
+        it('empty rules array returns no profile', async () => {
+            const resolver = {
+                resolveForAgent: () => ({
+                    resolved: true,
+                    profileName: 'empty',
+                    rules: []
+                })
+            };
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentEmpty', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 0);
+            assert.strictEqual(result.diagnostics.rules.length, 0);
+        });
+
+        it('null modifiers does not throw', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: null }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentNull', query: 'test query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+        });
+
+        it('inlineRule path unaffected by profile merge and truncateTo', async () => {
+            resetMocks([
+                { text: 'a', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' },
+                { text: 'b', score: 0.8, sourceDiary: 'TestDiary', sourceFile: 'b.md' },
+                { text: 'c', score: 0.7, sourceDiary: 'TestDiary', sourceFile: 'c.md' }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'test query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} }
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 3);
+            const mergeStage = result.diagnostics.pipelineStages.find((s) => s.name === 'mergeResults');
+            assert.strictEqual(mergeStage.detail.strategy, 'default');
+        });
+    });
+
+    describe('modifierDetail enrichment — tagMemo + rerank + roleValve', () => {
+        it('rule diagnostic contains both RAG-phase and S02 modifierDetails', async () => {
+            resetMocks([
+                { text: 'A', score: 0.9, sourceDiary: 'TestDiary', role: 'user' }
+            ]);
+            const resolver = createMockResolver([
+                {
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: {
+                        tagMemo: { weight: 0.25, geodesic: true },
+                        rerank: { weight: 0.8 },
+                        roleValve: { roles: ['user'], expression: 'AND' }
+                    }
+                }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentCombo', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            assert.ok(Array.isArray(ruleDiag.modifierDetails));
+            assert.strictEqual(ruleDiag.modifierDetails.length, 3);
+
+            const tagMemoDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'tagMemo');
+            assert.ok(tagMemoDetail);
+            assert.strictEqual(tagMemoDetail.weight, 0.25);
+            assert.strictEqual(tagMemoDetail.geodesic, true);
+
+            const rerankDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'rerank');
+            assert.ok(rerankDetail);
+            assert.strictEqual(rerankDetail.weight, 0.8);
+
+            const rvDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'roleValve');
+            assert.ok(rvDetail);
+            assert.strictEqual(rvDetail.expression, 'AND');
+        });
+
+        it('tagMemo modifierDetail without weight omits weight field', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { tagMemo: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentTMBool', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const tagMemoDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'tagMemo');
+            assert.ok(tagMemoDetail);
+            assert.strictEqual(tagMemoDetail.weight, undefined);
+            assert.strictEqual(tagMemoDetail.geodesic, undefined);
+            assert.strictEqual(tagMemoDetail.applied, true);
+        });
+
+        it('rerank modifierDetail without weight omits weight field', async () => {
+            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver([
+                { type: 'rag', diaries: ['TestDiary'], modifiers: { rerank: true } }
+            ]);
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentRRBool', query: 'test query' });
+            const ruleDiag = result.diagnostics.rules[0];
+            const rerankDetail = ruleDiag.modifierDetails.find((d) => d.modifier === 'rerank');
+            assert.ok(rerankDetail);
+            assert.strictEqual(rerankDetail.weight, undefined);
+            assert.strictEqual(rerankDetail.applied, true);
+        });
+    });
+
+    describe('profileMeta enrichment', () => {
+        it('profileMeta includes truncateTo when set', async () => {
+            resetMocks([{ text: 'a', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver(
+                [{ type: 'rag', diaries: ['TestDiary'] }],
+                { truncateTo: 5 }
+            );
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentPM', query: 'query' });
+            assert.strictEqual(result.diagnostics.profileMeta.truncateTo, 5);
+        });
+
+        it('profileMeta does not include truncateTo when unset', async () => {
+            resetMocks([{ text: 'a', score: 0.9, sourceDiary: 'TestDiary' }]);
+            const resolver = createMockResolver(
+                [{ type: 'rag', diaries: ['TestDiary'] }]
+            );
+            const service = createRecallRuntimeService({
+                pluginManager: mockPluginManager,
+                recallProfileResolver: resolver,
+                contextRuntimeService: mockContextService
+            });
+            const result = await service.executeRecall({ agentId: 'AgentPM', query: 'query' });
+            assert.strictEqual(result.diagnostics.profileMeta.truncateTo, undefined);
         });
     });
 });

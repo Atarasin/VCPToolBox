@@ -207,13 +207,15 @@ describe('S02 — RecallRuntimeService extensions', () => {
         it('returns all items when no roles specified', () => {
             const items = [{ text: 'a', role: 'user' }, { text: 'b', role: 'assistant' }];
             const result = applyRoleValve(items, []);
-            assert.strictEqual(result.length, 2);
+            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.expression, 'OR');
+            assert.strictEqual(result.matchedCount, 2);
         });
 
         it('returns all items when allowedRoles is not an array', () => {
             const items = [{ text: 'a', role: 'user' }];
-            assert.strictEqual(applyRoleValve(items, null).length, 1);
-            assert.strictEqual(applyRoleValve(items, '').length, 1);
+            assert.strictEqual(applyRoleValve(items, null).items.length, 1);
+            assert.strictEqual(applyRoleValve(items, '').items.length, 1);
         });
 
         it('filters items to only allowed roles', () => {
@@ -223,9 +225,10 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'c', role: 'system' }
             ];
             const result = applyRoleValve(items, ['user', 'assistant']);
-            assert.strictEqual(result.length, 2);
-            assert.strictEqual(result[0].text, 'a');
-            assert.strictEqual(result[1].text, 'b');
+            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.items[0].text, 'a');
+            assert.strictEqual(result.items[1].text, 'b');
+            assert.strictEqual(result.matchedCount, 2);
         });
 
         it('passes items without a role through', () => {
@@ -234,8 +237,8 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'hasRole', role: 'system' }
             ];
             const result = applyRoleValve(items, ['user', 'assistant']);
-            assert.strictEqual(result.length, 1);
-            assert.strictEqual(result[0].text, 'noRole');
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.items[0].text, 'noRole');
         });
 
         it('accepts string-serialized role list', () => {
@@ -244,8 +247,8 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 { text: 'b', role: 'tool' }
             ];
             const result = applyRoleValve(items, 'user,assistant');
-            assert.strictEqual(result.length, 1);
-            assert.strictEqual(result[0].text, 'a');
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.items[0].text, 'a');
         });
     });
 
