@@ -104,6 +104,14 @@ function mapGatewayFailureToMcpErrorCode(code) {
         return MCP_ERROR_CODES.NOT_FOUND;
     case AGW_ERROR_CODES.TIMEOUT:
         return MCP_ERROR_CODES.TIMEOUT;
+    case AGW_ERROR_CODES.RECALL_NO_PROFILE:
+        return MCP_ERROR_CODES.NOT_FOUND;
+    case AGW_ERROR_CODES.RECALL_FORBIDDEN:
+        return MCP_ERROR_CODES.FORBIDDEN;
+    case AGW_ERROR_CODES.RECALL_INVALID_QUERY:
+        return MCP_ERROR_CODES.INVALID_ARGUMENTS;
+    case AGW_ERROR_CODES.RECALL_EXECUTION_ERROR:
+        return MCP_ERROR_CODES.RUNTIME_ERROR;
     default:
         return MCP_ERROR_CODES.RUNTIME_ERROR;
     }
@@ -1043,6 +1051,20 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
                     requestContext
                 });
                 const projected = bundle.recallProjectionService.projectFullResult(result, requestContext.requestId);
+
+                if (!projected.success) {
+                    return {
+                        success: false,
+                        requestId: requestContext.requestId,
+                        code: projected.code,
+                        error: projected.error,
+                        status: projected.status,
+                        audit: {
+                            runtime: requestContext.runtime,
+                            source: requestContext.source
+                        }
+                    };
+                }
 
                 return {
                     success: true,
