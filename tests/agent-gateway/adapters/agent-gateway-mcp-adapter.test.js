@@ -174,6 +174,128 @@ function createMemoryPluginManager(overrides = {}) {
     };
 }
 
+function createRecallPluginManager(overrides = {}) {
+    const pluginManager = createPluginManager(overrides);
+    const bundle = getGatewayServiceBundle(pluginManager);
+
+    const mockRecallRuntimeService = {
+        async executeRecall({ agentId, query, profileName }) {
+            if (agentId === 'NoProfileAgent') {
+                return {
+                    success: false,
+                    agentId,
+                    profileName: profileName || null,
+                    code: 'AGW_RECALL_NO_PROFILE',
+                    error: `No recall profile resolved for agent "${agentId}"`,
+                    status: 404,
+                    items: [],
+                    diagnostics: { totalDurationMs: 1, rules: [] }
+                };
+            }
+            return {
+                success: true,
+                agentId,
+                profileName: profileName || 'default',
+                items: [
+                    {
+                        text: `Parity test recall result for query: ${query}`,
+                        score: 0.95,
+                        sourceDiary: 'Nova',
+                        sourceFile: '2026-03-20.md',
+                        timestamp: '2026-03-20T10:20:00.000Z',
+                        tags: ['parity', 'recall']
+                    }
+                ],
+                diagnostics: {
+                    totalDurationMs: 42,
+                    rules: [
+                        {
+                            ruleIndex: 0,
+                            type: 'rag',
+                            status: 'ok',
+                            itemCount: 1,
+                            durationMs: 42
+                        }
+                    ],
+                    pipelineStages: [
+                        {
+                            name: 'resolveProfile',
+                            durationMs: 1,
+                            status: 'ok',
+                            detail: { profileName: profileName || 'default', ruleCount: 1 }
+                        },
+                        {
+                            name: 'precomputeVector',
+                            durationMs: 1,
+                            status: 'ok',
+                            detail: {}
+                        },
+                        {
+                            name: 'ruleExecution',
+                            durationMs: 20,
+                            status: 'ok'
+                        },
+                        {
+                            name: 'mergeResults',
+                            durationMs: 20,
+                            status: 'ok',
+                            detail: {}
+                        }
+                    ],
+                    profileMeta: {
+                        profileName: profileName || 'default',
+                        ruleCount: 1,
+                        modifierKeys: []
+                    }
+                }
+            };
+        }
+    };
+
+    const mockRecallProjectionService = {
+        projectFullResult(recallResult, requestId) {
+            const base = recallResult && typeof recallResult === 'object' ? recallResult : {};
+            const projectedItems = (base.items || []).map((item) => ({
+                content: item.text || '',
+                score: typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+                sourceDiary: item.sourceDiary || '',
+                sourceFile: item.sourceFile || '',
+                timestamp: item.timestamp || null,
+                tags: Array.isArray(item.tags) ? item.tags : []
+            }));
+            const projectedBlocks = (base.items || []).map((item, index) => ({
+                blockId: `rb-${index}`,
+                content: item.text || '',
+                score: typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+                sourceDiary: item.sourceDiary || ''
+            }));
+
+            return {
+                success: base.success !== false,
+                agentId: base.agentId || null,
+                profileName: base.profileName || null,
+                requestId: requestId || `req-${Date.now()}`,
+                projectedAt: Date.now(),
+                items: projectedItems,
+                recallBlocks: projectedBlocks,
+                attachments: [],
+                diagnostics: base.diagnostics || { totalDurationMs: 0, rules: [] },
+                error: base.error || null,
+                code: base.code || null,
+                status: base.status || (base.success !== false ? 200 : 500)
+            };
+        }
+    };
+
+    pluginManager.__agentGatewayServiceBundle = {
+        ...bundle,
+        recallRuntimeService: mockRecallRuntimeService,
+        recallProjectionService: mockRecallProjectionService
+    };
+
+    return pluginManager;
+}
+
 function createRenderPluginManager(agentDir, overrides = {}) {
     return createPluginManager({
         agentManager: createAgentManager(agentDir, {
@@ -2070,5 +2192,93 @@ test('MCP agent render adapter remains semantically aligned with representative 
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('MCP recall adapter remains semantically aligned with representative native recall flows', async () => {
+    const pluginManager = createRecallPluginManager();
+    const adapter = createMcpAdapter(pluginManager);
+    const server = await createNativeServer(pluginManager);
+
+    try {
+        const nativeSuccessResponse = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                query: '上周项目会议讨论了什么',
+                profile: 'default',
+                requestContext: {
+                    requestId: 'req-native-mcp-recall-run',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-mcp-recall-run'
+                }
+            })
+        });
+        const nativeSuccessPayload = await nativeSuccessResponse.json();
+        const mcpSuccess = await adapter.callTool({
+            name: 'gateway_recall_run',
+            arguments: {
+                agentId: 'Ariadne',
+                query: '上周项目会议讨论了什么',
+                profile: 'default'
+            },
+            agentId: 'Ariadne',
+            sessionId: 'sess-native-mcp-recall-run',
+            requestContext: {
+                requestId: 'req-mcp-recall-run-parity'
+            }
+        });
+
+        const nativeNoProfileResponse = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'NoProfileAgent',
+                query: 'test query',
+                requestContext: {
+                    requestId: 'req-native-mcp-recall-noprofile',
+                    agentId: 'NoProfileAgent',
+                    sessionId: 'sess-native-mcp-recall-noprofile'
+                }
+            })
+        });
+        const nativeNoProfilePayload = await nativeNoProfileResponse.json();
+        const mcpNoProfile = await adapter.callTool({
+            name: 'gateway_recall_run',
+            arguments: {
+                agentId: 'NoProfileAgent',
+                query: 'test query'
+            },
+            agentId: 'NoProfileAgent',
+            sessionId: 'sess-native-mcp-recall-noprofile',
+            requestContext: {
+                requestId: 'req-mcp-recall-noprofile'
+            }
+        });
+
+        assert.equal(nativeSuccessResponse.status, 200);
+        assert.equal(mcpSuccess.isError, false);
+        assert.equal(nativeSuccessPayload.data.items.length, mcpSuccess.structuredContent.result.items.length);
+        assert.equal(nativeSuccessPayload.data.items[0].content, mcpSuccess.structuredContent.result.items[0].content);
+        assert.equal(nativeSuccessPayload.data.items[0].sourceDiary, mcpSuccess.structuredContent.result.items[0].sourceDiary);
+        assert.ok(nativeSuccessPayload.data.diagnostics);
+        assert.ok(mcpSuccess.structuredContent.result.diagnostics);
+        assert.equal(nativeSuccessPayload.meta.requestId, 'req-native-mcp-recall-run');
+        assert.equal(mcpSuccess.structuredContent.requestId, 'req-mcp-recall-run-parity');
+        assert.ok(nativeSuccessPayload.meta.traceId);
+        assert.ok(mcpSuccess.structuredContent.operability.traceId);
+
+        assert.equal(nativeNoProfileResponse.status, 404);
+        assert.equal(nativeNoProfilePayload.code, 'AGW_RECALL_NO_PROFILE');
+        assert.equal(mcpNoProfile.isError, true);
+        assert.equal(mcpNoProfile.error.code, 'MCP_NOT_FOUND');
+        assert.equal(mcpNoProfile.error.details.canonicalCode, 'AGW_RECALL_NO_PROFILE');
+    } finally {
+        await server.close();
     }
 });
