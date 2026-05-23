@@ -216,9 +216,24 @@ function applyTimeDecay(items, modifierValue) {
     });
 }
 
+function parseRoleValveConfig(modifierValue) {
+    // Object syntax: { roles: string[], expression?: 'AND' | 'OR' }
+    if (modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
+        const roles = normalizeStringArray(modifierValue.roles);
+        const expression = normalizeString(modifierValue.expression).toUpperCase();
+        return {
+            roles,
+            expression: expression === 'AND' ? 'AND' : 'OR'
+        };
+    }
+    // Legacy string/array syntax — treat as OR (any match passes)
+    const roles = normalizeStringArray(modifierValue);
+    return { roles, expression: 'OR' };
+}
+
 function applyRoleValve(items, modifierValue) {
-    const allowedRoles = normalizeStringArray(modifierValue);
-    if (allowedRoles.length === 0) {
+    const config = parseRoleValveConfig(modifierValue);
+    if (config.roles.length === 0) {
         return items;
     }
     return items.filter((item) => {
@@ -227,7 +242,11 @@ function applyRoleValve(items, modifierValue) {
             // Items without a role pass through (full_text may not have role metadata)
             return true;
         }
-        return allowedRoles.includes(role);
+        if (config.expression === 'AND') {
+            return config.roles.includes(role);
+        }
+        // OR (default): any matching role passes
+        return config.roles.includes(role);
     });
 }
 
@@ -290,6 +309,41 @@ const AIMEMO_PROMPT = [
     '请生成摘要：'
 ].join('\n');
 
+const AIMEMO_PRESETS = Object.freeze({
+    default: AIMEMO_PROMPT,
+    concise: [
+        '你是一个知识摘要助手。以下是检索系统召回的相关记忆条目。',
+        '请用 2-3 句话概括核心信息，保持简洁。',
+        '',
+        '召回条目：',
+        '{{knowledge_base}}',
+        '',
+        '请生成简洁摘要：'
+    ].join('\n'),
+    detailed: [
+        '你是一个知识摘要助手。以下是检索系统为用户查询召回的相关记忆条目。',
+        '请阅读所有条目，生成一段详细的中文摘要，涵盖：',
+        '1. 每个条目的关键信息',
+        '2. 条目之间的重要关联',
+        '3. 有价值的事实和细节',
+        '4. 按主题或时间线组织的结构',
+        '',
+        '召回条目：',
+        '{{knowledge_base}}',
+        '',
+        '请生成详细摘要：'
+    ].join('\n'),
+    timeline: [
+        '你是一个知识摘要助手。以下是检索系统召回的相关记忆条目。',
+        '请按时间顺序组织摘要，突出事件的发展脉络和时序关系。',
+        '',
+        '召回条目：',
+        '{{knowledge_base}}',
+        '',
+        '请生成时间线摘要：'
+    ].join('\n')
+});
+
 async function applyAIMemo(items, config) {
     const startedAt = Date.now();
     const modifierDetail = {
@@ -298,6 +352,7 @@ async function applyAIMemo(items, config) {
         inputCount: Array.isArray(items) ? items.length : 0,
         skipped: false,
         summaryLength: null,
+        preset: normalizeString(config?.preset) || 'default',
         error: null
     };
 
@@ -323,7 +378,9 @@ async function applyAIMemo(items, config) {
             return `[${idx + 1}]${sourceLabel ? ` (${sourceLabel})` : ''}\n${text}`;
         }).join('\n\n---\n\n');
 
-        const prompt = AIMEMO_PROMPT.replace('{{knowledge_base}}', knowledgeBase);
+        const presetName = normalizeString(config.preset) || 'default';
+        const presetPrompt = AIMEMO_PRESETS[presetName] || AIMEMO_PRESETS.default;
+        const prompt = presetPrompt.replace('{{knowledge_base}}', knowledgeBase);
 
         const response = await axios.post(
             `${config.url}v1/chat/completions`,
@@ -718,13 +775,21 @@ function createRecallRuntimeService(deps = {}) {
         // --- AIMemo post-recall summarization ---
         // Skip AIMemo for inlineRule path (profile-level only)
         let aiMemoSummary = null;
-        const globalAiMemo = !inlineRule && resolved.rules[0]?.modifiers?.aiMemo
-            ? parseModifierValue('aiMemo', resolved.rules[0].modifiers.aiMemo)
+        const globalAiMemoModifier = !inlineRule ? resolved.rules[0]?.modifiers?.aiMemo : false;
+        const globalAiMemo = globalAiMemoModifier
+            ? parseModifierValue('aiMemo', globalAiMemoModifier)
             : false;
 
         if (globalAiMemo) {
             const aiMemoConfig = aiMemoConfigLoader();
-            const aiMemoResult = await applyAIMemo(mergedItems, aiMemoConfig);
+            // Extract preset from structured modifier object (e.g. { enabled: true, preset: 'concise' })
+            const preset = (globalAiMemoModifier && typeof globalAiMemoModifier === 'object' && !Array.isArray(globalAiMemoModifier))
+                ? normalizeString(globalAiMemoModifier.preset)
+                : '';
+            const aiMemoResult = await applyAIMemo(mergedItems, {
+                ...(aiMemoConfig || {}),
+                preset: preset || undefined
+            });
             if (aiMemoResult.modifierDetail) {
                 // Attach modifier detail to the last rule diagnostic for per-modifier reporting
                 const lastRuleDiag = ruleDiagnostics[ruleDiagnostics.length - 1];
@@ -791,11 +856,13 @@ module.exports = {
     buildRecallResult,
     applyTimeDecay,
     applyRoleValve,
+    parseRoleValveConfig,
     applyBase64Memo,
     applyAIMemo,
     applyS02Modifiers,
     defaultAiMemoConfigLoader,
     AIMEMO_PROMPT,
+    AIMEMO_PRESETS,
     MODIFIER_PIPELINE_ORDER,
     MODIFIER_TO_RAG_OPTION,
     GATED_RULE_TYPES,
