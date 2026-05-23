@@ -141,6 +141,9 @@ function normalizeProfile(profile) {
     const merge = typeof profile.merge === 'string' ? profile.merge : undefined;
     const aggregate = typeof profile.aggregate === 'string' ? profile.aggregate : undefined;
     const projection = typeof profile.projection === 'string' ? profile.projection : undefined;
+    const truncateTo = typeof profile.truncateTo === 'number' && Number.isFinite(profile.truncateTo) && profile.truncateTo > 0
+        ? Math.floor(profile.truncateTo)
+        : undefined;
     const metadata = profile.metadata && typeof profile.metadata === 'object' && !Array.isArray(profile.metadata)
         ? { ...profile.metadata }
         : undefined;
@@ -154,6 +157,9 @@ function normalizeProfile(profile) {
     }
     if (projection !== undefined) {
         result.projection = projection;
+    }
+    if (truncateTo !== undefined) {
+        result.truncateTo = truncateTo;
     }
     if (metadata !== undefined) {
         result.metadata = metadata;
@@ -290,6 +296,9 @@ class RecallProfileResolver {
         }
         if (profile.projection !== undefined) {
             result.projection = profile.projection;
+        }
+        if (profile.truncateTo !== undefined) {
+            result.truncateTo = profile.truncateTo;
         }
         if (profile.metadata !== undefined) {
             result.metadata = profile.metadata;

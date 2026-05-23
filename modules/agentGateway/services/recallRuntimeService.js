@@ -495,6 +495,54 @@ function createRecallBlock(item) {
     };
 }
 
+function aggregateDeduplicateItems(items, aggregateStrategy = 'max') {
+    const seen = new Map();
+    for (const item of items) {
+        const key = [
+            normalizeString(item?.sourceDiary),
+            normalizeString(item?.sourceFile || item?.source_file),
+            normalizeString(item?.text)
+        ].join('::');
+        const entry = seen.get(key);
+        const score = typeof item?.score === 'number' && Number.isFinite(item.score) ? item.score : 0;
+        if (!entry) {
+            seen.set(key, { item, scores: [score] });
+        } else {
+            entry.scores.push(score);
+        }
+    }
+    return Array.from(seen.values()).map(({ item, scores }) => {
+        let aggregatedScore;
+        switch (aggregateStrategy) {
+            case 'sum':
+                aggregatedScore = scores.reduce((a, b) => a + b, 0);
+                break;
+            case 'mean':
+                aggregatedScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+                break;
+            case 'max':
+            default:
+                aggregatedScore = Math.max(...scores);
+                break;
+        }
+        return {
+            ...item,
+            score: aggregatedScore
+        };
+    });
+}
+
+function interleaveItems(ruleItemsArrays) {
+    const result = [];
+    const minLen = Math.min(...ruleItemsArrays.map((arr) => arr.length));
+    for (let i = 0; i < minLen; i += 1) {
+        for (const ruleItems of ruleItemsArrays) {
+            result.push(ruleItems[i]);
+        }
+    }
+    return result;
+}
+
 function buildRecallResult({ success, agentId, profileName, items, diagnostics, error, code, status }) {
     return {
         success: success !== false,
@@ -616,7 +664,7 @@ function createRecallRuntimeService(deps = {}) {
         });
 
         const ruleDiagnostics = [];
-        const allItems = [];
+        const ruleItemsArrays = [];
         const allAttachments = [];
 
         for (let ruleIndex = 0; ruleIndex < resolved.rules.length; ruleIndex += 1) {
@@ -724,7 +772,7 @@ function createRecallRuntimeService(deps = {}) {
                     ruleDiagnostic.attachmentCount = s02Result.attachments.length;
                 }
 
-                allItems.push(...ruleItems);
+                ruleItemsArrays.push(ruleItems);
 
                 ruleDiagnostic.status = 'ok';
                 ruleDiagnostic.itemCount = ruleItems.length;
@@ -753,23 +801,84 @@ function createRecallRuntimeService(deps = {}) {
             }
         }
 
-        // --- Merge results: deduplicate → sort → truncate ---
+        // --- Merge results ---
         const mergeStartedAt = Date.now();
-        let mergedItems = deduplicateItems(allItems);
-        mergedItems = sortItemsByScore(mergedItems);
+        const mergeStrategy = resolved.merge;
+        const aggregateStrategy = resolved.aggregate;
+        const profileTruncateTo = resolved.truncateTo;
 
-        // Apply global truncate from profile-level modifiers if any,
-        // otherwise use the first rule's truncate as a sensible default.
-        const globalTruncate = resolved.rules[0]?.modifiers?.truncate
-            ? parseModifierValue('truncate', resolved.rules[0].modifiers.truncate)
-            : null;
-        mergedItems = applyTruncate(mergedItems, globalTruncate);
+        let mergedItems;
+        const mergeDetail = {
+            strategy: mergeStrategy || 'default',
+            aggregate: aggregateStrategy || 'max',
+            inputRuleCount: ruleItemsArrays.length,
+            inputItemCount: ruleItemsArrays.flat().length
+        };
+
+        if (mergeStrategy === 'interleave') {
+            // Deduplicate across all rules with aggregate strategy, then
+            // group surviving items back by originating rule for round-robin.
+            const flatItems = ruleItemsArrays.flat();
+            const deduped = aggregateDeduplicateItems(flatItems, aggregateStrategy);
+            const dedupedKeySet = new Set();
+            for (const item of deduped) {
+                const key = [
+                    normalizeString(item?.sourceDiary),
+                    normalizeString(item?.sourceFile || item?.source_file),
+                    normalizeString(item?.text)
+                ].join('::');
+                dedupedKeySet.add(key);
+            }
+
+            const seenKeys = new Set();
+            const itemsByRule = ruleItemsArrays.map(() => []);
+            for (let ri = 0; ri < ruleItemsArrays.length; ri += 1) {
+                for (const item of ruleItemsArrays[ri]) {
+                    const key = [
+                        normalizeString(item?.sourceDiary),
+                        normalizeString(item?.sourceFile || item?.source_file),
+                        normalizeString(item?.text)
+                    ].join('::');
+                    if (!seenKeys.has(key) && dedupedKeySet.has(key)) {
+                        seenKeys.add(key);
+                        const match = deduped.find((d) => [
+                            normalizeString(d?.sourceDiary),
+                            normalizeString(d?.sourceFile || d?.source_file),
+                            normalizeString(d?.text)
+                        ].join('::') === key);
+                        if (match) {
+                            itemsByRule[ri].push(match);
+                        }
+                    }
+                }
+            }
+            const sortedByRule = itemsByRule.map((arr) => sortItemsByScore(arr));
+            mergedItems = interleaveItems(sortedByRule);
+            mergeDetail.interleavedRuleCount = sortedByRule.filter((arr) => arr.length > 0).length;
+            mergeDetail.outputItemCount = mergedItems.length;
+        } else {
+            const flatItems = ruleItemsArrays.flat();
+            mergedItems = aggregateDeduplicateItems(flatItems, aggregateStrategy);
+            mergedItems = sortItemsByScore(mergedItems);
+            mergeDetail.deduplicatedCount = mergedItems.length;
+            mergeDetail.outputItemCount = mergedItems.length;
+        }
+
+        // Apply profile-level truncateTo if set, otherwise fall back to first rule's truncate modifier.
+        const truncateLimit = profileTruncateTo !== undefined
+            ? profileTruncateTo
+            : (resolved.rules[0]?.modifiers?.truncate
+                ? parseModifierValue('truncate', resolved.rules[0].modifiers.truncate)
+                : null);
+        mergedItems = applyTruncate(mergedItems, truncateLimit);
         mergedItems = mergedItems.map((item) => createRecallBlock(item));
+        mergeDetail.outputItemCount = mergedItems.length;
+
         pipelineStages.push({
             name: 'mergeResults',
             durationMs: Date.now() - mergeStartedAt,
             status: 'ok',
-            detail: { inputItemCount: allItems.length, outputItemCount: mergedItems.length }
+            detail: mergeDetail
         });
 
         // --- AIMemo post-recall summarization ---
@@ -826,11 +935,26 @@ function createRecallRuntimeService(deps = {}) {
                 totalDurationMs,
                 rules: ruleDiagnostics,
                 pipelineStages,
-                profileMeta: {
-                    profileName: resolved.profileName,
-                    ruleCount: resolved.rules.length,
-                    modifierKeys: [...new Set(resolved.rules.flatMap((r) => Object.keys(r.modifiers || {})))]
-                },
+                profileMeta: (() => {
+                    const meta = {
+                        profileName: resolved.profileName,
+                        ruleCount: resolved.rules.length,
+                        modifierKeys: [...new Set(resolved.rules.flatMap((r) => Object.keys(r.modifiers || {})))]
+                    };
+                    if (resolved.truncateTo !== undefined) {
+                        meta.truncateTo = resolved.truncateTo;
+                    }
+                    if (resolved.merge !== undefined) {
+                        meta.merge = resolved.merge;
+                    }
+                    if (resolved.aggregate !== undefined) {
+                        meta.aggregate = resolved.aggregate;
+                    }
+                    if (resolved.projection !== undefined) {
+                        meta.projection = resolved.projection;
+                    }
+                    return meta;
+                })(),
                 attachments: allAttachments.length > 0 ? allAttachments : undefined,
                 vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0,
                 vectorPrecomputeError: vectorFetchError ? vectorFetchError.message : null,
@@ -866,5 +990,7 @@ module.exports = {
     MODIFIER_PIPELINE_ORDER,
     MODIFIER_TO_RAG_OPTION,
     GATED_RULE_TYPES,
-    FULL_TEXT_RULE_TYPES
+    FULL_TEXT_RULE_TYPES,
+    aggregateDeduplicateItems,
+    interleaveItems
 };
