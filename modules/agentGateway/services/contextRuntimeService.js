@@ -816,6 +816,9 @@ function createContextRuntimeService(deps = {}) {
     if (!pluginManager) {
         throw new Error('[ContextRuntimeService] pluginManager is required');
     }
+    if (!deps.getRecallRuntimeService || typeof deps.getRecallRuntimeService !== 'function') {
+        throw new Error('[ContextRuntimeService] getRecallRuntimeService is required');
+    }
 
     const auditLogger = deps.auditLogger || createAuditLogger();
     const embeddingUtilsLoader = deps.getEmbeddingUtils || (() => require('../../../EmbeddingUtils'));
@@ -826,11 +829,12 @@ function createContextRuntimeService(deps = {}) {
         typeof deps.agentPolicyResolver.resolvePolicy === 'function'
         ? deps.agentPolicyResolver
         : null;
-    const getRecallRuntimeService = deps.getRecallRuntimeService || null;
+    const getRecallRuntimeService = deps.getRecallRuntimeService;
 
     function mapAgwToOcwError(agwCode, contextType = 'search') {
         switch (agwCode) {
             case AGW_ERROR_CODES.RECALL_NO_PROFILE:
+            case AGW_ERROR_CODES.RECALL_FORBIDDEN:
                 return OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN;
             case AGW_ERROR_CODES.RECALL_INVALID_QUERY:
                 return OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY;
@@ -851,8 +855,10 @@ function createContextRuntimeService(deps = {}) {
                 time: ragOptions.timeAware,
                 group: ragOptions.groupAware,
                 rerank: ragOptions.rerank,
-                tagMemo: ragOptions.tagMemo
-            }
+                tagMemo: ragOptions.tagMemo,
+                truncate: ragOptions.k
+            },
+            gateThreshold: null
         };
     }
 
@@ -934,67 +940,46 @@ function createContextRuntimeService(deps = {}) {
             });
 
             try {
-                let result;
-                const recallRuntimeService = getRecallRuntimeService ? getRecallRuntimeService() : null;
-                if (recallRuntimeService) {
-                    const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
-                    const recallResult = await recallRuntimeService.executeRecall({
-                        agentId,
-                        query,
-                        inlineRule,
-                        requestContext,
-                        authContext,
-                        agentPolicyResolver
-                    });
-                    if (!recallResult.success) {
-                        const mappedCode = mapAgwToOcwError(recallResult.code, 'search');
-                        const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                            : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                                : 500;
-                        return {
-                            success: false,
-                            requestId,
-                            status,
-                            code: mappedCode,
-                            error: recallResult.error || 'Recall execution failed',
-                            details: { agentId, query }
-                        };
-                    }
-                    const ruleDiag = recallResult.diagnostics?.rules?.[0] || {};
-                    if (ruleDiag.status === 'error') {
-                        const mappedCode = mapAgwToOcwError(ruleDiag.errorCode, 'search');
-                        const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                            : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                                : 500;
-                        return {
-                            success: false,
-                            requestId,
-                            status,
-                            code: mappedCode,
-                            error: ruleDiag.errorMessage || 'Recall execution failed',
-                            details: { agentId, query }
-                        };
-                    }
-                    result = adaptRecallResultToRagResult(recallResult, requestedDiaries);
-                } else {
-                    result = await collectRagItems({
-                        pluginManager,
-                        query,
-                        requestedDiaries,
-                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true,
-                        agentId,
-                        authContext,
-                        ragOptions,
-                        embeddingUtilsLoader,
-                        agentPolicyResolver
-                    });
-                }
-                if (!result.success) {
+                const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
+                const recallResult = await getRecallRuntimeService().executeRecall({
+                    agentId,
+                    query,
+                    inlineRule,
+                    requestContext,
+                    authContext,
+                    agentPolicyResolver,
+                    adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                });
+                if (!recallResult.success) {
+                    const mappedCode = mapAgwToOcwError(recallResult.code, 'search');
+                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
+                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
+                            : 500;
                     return {
-                        ...result,
-                        requestId
+                        success: false,
+                        requestId,
+                        status,
+                        code: mappedCode,
+                        error: recallResult.error || 'Recall execution failed',
+                        details: { agentId, query }
                     };
                 }
+                const ruleDiag = recallResult.diagnostics?.rules?.[0] || {};
+                if (ruleDiag.status === 'error') {
+                    const mappedCode = mapAgwToOcwError(ruleDiag.errorCode, 'search');
+                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
+                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
+                            : 500;
+                    return {
+                        success: false,
+                        requestId,
+                        status,
+                        code: mappedCode,
+                        error: ruleDiag.errorMessage || 'Recall execution failed',
+                        details: { agentId, query }
+                    };
+                }
+                const result = adaptRecallResultToRagResult(recallResult, requestedDiaries);
 
                 const scoredItems = result.items
                     .filter((item) => typeof item.score === 'number' && Number.isFinite(item.score));
@@ -1027,7 +1012,7 @@ function createContextRuntimeService(deps = {}) {
                             rerankApplied: result.rerankApplied,
                             tagMemoApplied: ragOptions.tagMemo && result.coreTags.length > 0,
                             coreTags: result.coreTags,
-                            durationMs: Math.max(0, Date.now() - startedAt)
+                            durationMs: recallResult.diagnostics?.totalDurationMs || 0
                         }
                     }
                 };
@@ -1129,71 +1114,50 @@ function createContextRuntimeService(deps = {}) {
             });
 
             try {
-                let result;
-                const recallRuntimeService = getRecallRuntimeService ? getRecallRuntimeService() : null;
-                if (recallRuntimeService) {
-                    const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
-                    const recallResult = await recallRuntimeService.executeRecall({
-                        agentId,
-                        query,
-                        inlineRule,
-                        requestContext,
-                        authContext,
-                        agentPolicyResolver
-                    });
-                    if (!recallResult.success) {
-                        const mappedCode = mapAgwToOcwError(recallResult.code, 'context');
-                        const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                            : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                                : 500;
-                        return {
-                            success: false,
-                            requestId,
-                            status,
-                            code: mappedCode,
-                            error: recallResult.error || 'Recall execution failed',
-                            details: { agentId, query }
-                        };
-                    }
-                    const ruleDiag = recallResult.diagnostics?.rules?.[0] || {};
-                    if (ruleDiag.status === 'error') {
-                        const mappedCode = mapAgwToOcwError(ruleDiag.errorCode, 'context');
-                        const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                            : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                                : 500;
-                        return {
-                            success: false,
-                            requestId,
-                            status,
-                            code: mappedCode,
-                            error: ruleDiag.errorMessage || 'Recall execution failed',
-                            details: { agentId, query }
-                        };
-                    }
-                    result = {
-                        success: true,
-                        targetDiaries: ruleDiag.targetDiaries || requestedDiaries,
-                        items: recallResult.items
-                    };
-                } else {
-                    result = await collectRagItems({
-                        pluginManager,
-                        query,
-                        requestedDiaries,
-                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true,
-                        agentId,
-                        authContext,
-                        ragOptions,
-                        embeddingUtilsLoader,
-                        agentPolicyResolver
-                    });
-                }
-                if (!result.success) {
+                const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
+                const recallResult = await getRecallRuntimeService().executeRecall({
+                    agentId,
+                    query,
+                    inlineRule,
+                    requestContext,
+                    authContext,
+                    agentPolicyResolver,
+                    adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                });
+                if (!recallResult.success) {
+                    const mappedCode = mapAgwToOcwError(recallResult.code, 'context');
+                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
+                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
+                            : 500;
                     return {
-                        ...result,
-                        requestId
+                        success: false,
+                        requestId,
+                        status,
+                        code: mappedCode,
+                        error: recallResult.error || 'Recall execution failed',
+                        details: { agentId, query }
                     };
                 }
+                const ruleDiag = recallResult.diagnostics?.rules?.[0] || {};
+                if (ruleDiag.status === 'error') {
+                    const mappedCode = mapAgwToOcwError(ruleDiag.errorCode, 'context');
+                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
+                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
+                            : 500;
+                    return {
+                        success: false,
+                        requestId,
+                        status,
+                        code: mappedCode,
+                        error: ruleDiag.errorMessage || 'Recall execution failed',
+                        details: { agentId, query }
+                    };
+                }
+                const result = {
+                    success: true,
+                    targetDiaries: ruleDiag.targetDiaries || requestedDiaries,
+                    items: recallResult.items
+                };
 
                 const maxInjectedTokens = Math.max(1, Math.floor(tokenBudget * maxTokenRatio));
                 let consumedTokens = 0;

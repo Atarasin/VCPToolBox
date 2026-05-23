@@ -580,7 +580,8 @@ describe('RecallRuntimeService', () => {
                 'timeDecay',
                 'roleValve',
                 'base64Memo',
-                'truncate'
+                'truncate',
+                'aiMemo'
             ]);
         });
     });
