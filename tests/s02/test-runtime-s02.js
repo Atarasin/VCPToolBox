@@ -93,11 +93,15 @@ function createMockContextRuntimeService() {
     };
 }
 
-function resetMocks(mockItems) {
+function resetMocks(mockItems, enrichedFields = {}) {
     mockCollectRagItemsCalls.length = 0;
     mockCollectRagItemsResult = {
         success: true,
-        items: mockItems || []
+        items: mockItems || [],
+        timeRanges: enrichedFields.timeRanges || [],
+        activatedGroups: enrichedFields.activatedGroups || new Map(),
+        rerankApplied: enrichedFields.rerankApplied || false,
+        coreTags: enrichedFields.coreTags || []
     };
 }
 
@@ -124,7 +128,7 @@ describe('S02 — RecallRuntimeService extensions', () => {
     });
 
     describe('MODIFIER_PIPELINE_ORDER — S02 extended', () => {
-        it('includes all 8 modifiers in correct order', () => {
+        it('includes all 9 modifiers in correct order', () => {
             assert.deepStrictEqual(MODIFIER_PIPELINE_ORDER, [
                 'time',
                 'group',
@@ -133,7 +137,8 @@ describe('S02 — RecallRuntimeService extensions', () => {
                 'timeDecay',
                 'roleValve',
                 'base64Memo',
-                'truncate'
+                'truncate',
+                'aiMemo'
             ]);
         });
     });
@@ -676,6 +681,204 @@ describe('S02 — RecallRuntimeService extensions', () => {
             const result = await service.executeRecall({ agentId: 'AgentDiag2', query: 'query' });
             assert.strictEqual(result.diagnostics.attachments, undefined);
             assert.strictEqual(result.diagnostics.rules[0].attachmentCount, undefined);
+        });
+    });
+
+    describe('inlineRule execution path', () => {
+        it('skips profileResolver and uses inline rule directly', async () => {
+            resetMocks([
+                { text: 'inline result', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            let resolverCalled = false;
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: {
+                    resolveForAgent: () => {
+                        resolverCalled = true;
+                        return { resolved: false, code: 'RECALL_NO_PROFILE', rules: [] };
+                    }
+                },
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: { time: true } }
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(resolverCalled, false, 'profileResolver should not be called for inlineRule');
+            assert.strictEqual(result.profileName, '_inline_');
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.items[0].text, 'inline result');
+        });
+
+        it('passes authContext and agentPolicyResolver to collectRagItems', async () => {
+            resetMocks([
+                { text: 'auth result', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const mockAuthContext = { agentId: 'AgentInline', role: 'admin' };
+            const mockPolicyResolver = { resolvePolicy: async () => ({ allowedDiaryNames: ['TestDiary'] }) };
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} },
+                authContext: mockAuthContext,
+                agentPolicyResolver: mockPolicyResolver,
+                adapterAppliedDefaultDiaryPolicy: true
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
+            const call = mockCollectRagItemsCalls[0];
+            assert.strictEqual(call.authContext, mockAuthContext);
+            assert.strictEqual(call.agentPolicyResolver, mockPolicyResolver);
+            assert.strictEqual(call.adapterAppliedDefaultDiaryPolicy, true);
+        });
+
+        it('falls back to requestContext when authContext is omitted', async () => {
+            resetMocks([
+                { text: 'fallback result', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const requestContext = { agentId: 'AgentInline', source: 'test' };
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} },
+                requestContext
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(mockCollectRagItemsCalls[0].authContext, requestContext);
+            assert.strictEqual(mockCollectRagItemsCalls[0].agentPolicyResolver, null);
+        });
+
+        it('enriches rule diagnostics with collectRagItems fields', async () => {
+            const activatedGroups = new Map([['g1', { score: 0.9 }]]);
+            resetMocks(
+                [{ text: 'enriched', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }],
+                {
+                    timeRanges: [{ start: '2024-01-01', end: '2024-01-02' }],
+                    activatedGroups,
+                    rerankApplied: true,
+                    coreTags: ['tagA', 'tagB']
+                }
+            );
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} }
+            });
+            assert.strictEqual(result.success, true);
+            const diag = result.diagnostics.rules[0];
+            assert.strictEqual(diag.timeRangesCount, 1);
+            assert.strictEqual(diag.activatedGroupCount, 1);
+            assert.strictEqual(diag.rerankApplied, true);
+            assert.strictEqual(diag.tagMemoCount, 2);
+            assert.deepStrictEqual(diag.coreTags, ['tagA', 'tagB']);
+        });
+
+        it('skips vector precompute for inlineRule path', async () => {
+            resetMocks([
+                { text: 'no vector', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} }
+            });
+            assert.strictEqual(result.success, true);
+            const precomputeStage = result.diagnostics.pipelineStages.find(
+                (s) => s.name === 'precomputeVector'
+            );
+            assert.ok(precomputeStage, 'should have precomputeVector stage');
+            assert.strictEqual(precomputeStage.detail.skipped, true);
+            assert.strictEqual(result.diagnostics.vectorPrecomputed, false);
+        });
+
+        it('skips aiMemo for inlineRule path even when modifier is present', async () => {
+            resetMocks([
+                { text: 'no aiMemo', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: { aiMemo: true } }
+            });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.diagnostics.summary, undefined);
+            const aiMemoStage = result.diagnostics.pipelineStages.find(
+                (s) => s.name === 'aiMemo'
+            );
+            assert.strictEqual(aiMemoStage, undefined);
+        });
+
+        it('validates agentId and query for inlineRule', async () => {
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const noAgent = await service.executeRecall({
+                agentId: '',
+                query: 'query',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} }
+            });
+            assert.strictEqual(noAgent.success, false);
+            assert.strictEqual(noAgent.status, 400);
+            assert.strictEqual(noAgent.code, 'AGW_RECALL_INVALID_QUERY');
+
+            const noQuery = await service.executeRecall({
+                agentId: 'AgentInline',
+                query: '',
+                inlineRule: { type: 'rag', diaries: ['TestDiary'], modifiers: {} }
+            });
+            assert.strictEqual(noQuery.success, false);
+            assert.strictEqual(noQuery.status, 400);
+            assert.strictEqual(noQuery.code, 'AGW_RECALL_INVALID_QUERY');
         });
     });
 });

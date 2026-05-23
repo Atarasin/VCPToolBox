@@ -453,7 +453,16 @@ function createRecallRuntimeService(deps = {}) {
         throw new Error('[RecallRuntimeService] recallProfileResolver is required');
     }
 
-    async function executeRecall({ agentId, query, profileName, requestContext }) {
+    async function executeRecall({
+        agentId,
+        query,
+        profileName,
+        requestContext,
+        inlineRule,
+        authContext,
+        agentPolicyResolver,
+        adapterAppliedDefaultDiaryPolicy
+    }) {
         const startedAt = Date.now();
         const pipelineStages = [];
         const normalizedAgentId = normalizeString(agentId);
@@ -478,7 +487,16 @@ function createRecallRuntimeService(deps = {}) {
         }
 
         const resolveStartedAt = Date.now();
-        const resolved = profileResolver.resolveForAgent(normalizedAgentId, profileName);
+        let resolved;
+        if (inlineRule && typeof inlineRule === 'object') {
+            resolved = {
+                resolved: true,
+                rules: [inlineRule],
+                profileName: '_inline_'
+            };
+        } else {
+            resolved = profileResolver.resolveForAgent(normalizedAgentId, profileName);
+        }
         if (!resolved.resolved) {
             return buildRecallResult({
                 success: false,
@@ -498,26 +516,29 @@ function createRecallRuntimeService(deps = {}) {
         });
 
         // Pre-compute query vector once for all gated evaluations
+        // Skip for inlineRule path since gated rules are not applicable there
         const vectorStartedAt = Date.now();
         let queryVector = null;
         let vectorFetchError = null;
-        try {
-            const ctxService = deps.contextRuntimeService;
-            const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
-                ? ctxService.getKnowledgeBaseManager(pluginManager)
-                : null;
-            const ragPlugin = ctxService?.getRagPlugin
-                ? ctxService.getRagPlugin(pluginManager)
-                : null;
-            queryVector = await getQueryVector(normalizedQuery, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader);
-        } catch (error) {
-            vectorFetchError = error;
+        if (!inlineRule) {
+            try {
+                const ctxService = deps.contextRuntimeService;
+                const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
+                    ? ctxService.getKnowledgeBaseManager(pluginManager)
+                    : null;
+                const ragPlugin = ctxService?.getRagPlugin
+                    ? ctxService.getRagPlugin(pluginManager)
+                    : null;
+                queryVector = await getQueryVector(normalizedQuery, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader);
+            } catch (error) {
+                vectorFetchError = error;
+            }
         }
         pipelineStages.push({
             name: 'precomputeVector',
             durationMs: Date.now() - vectorStartedAt,
             status: vectorFetchError ? 'error' : 'ok',
-            detail: { vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0 }
+            detail: { vectorPrecomputed: Array.isArray(queryVector) && queryVector.length > 0, skipped: Boolean(inlineRule) }
         });
 
         const ruleDiagnostics = [];
@@ -537,7 +558,8 @@ function createRecallRuntimeService(deps = {}) {
 
             try {
                 // --- Gate evaluation for gated_rag / gated_full_text ---
-                if (GATED_RULE_TYPES.has(rule.type)) {
+                // Skip gate evaluation for inlineRule path (no precomputed vector)
+                if (!inlineRule && GATED_RULE_TYPES.has(rule.type)) {
                     const ctxService = deps.contextRuntimeService;
                     const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
                         ? ctxService.getKnowledgeBaseManager(pluginManager)
@@ -584,12 +606,12 @@ function createRecallRuntimeService(deps = {}) {
                     pluginManager,
                     query: normalizedQuery,
                     requestedDiaries: rule.diaries,
-                    adapterAppliedDefaultDiaryPolicy: false,
+                    adapterAppliedDefaultDiaryPolicy: adapterAppliedDefaultDiaryPolicy || false,
                     agentId: normalizedAgentId,
-                    authContext: requestContext,
+                    authContext: authContext || requestContext,
                     ragOptions,
                     embeddingUtilsLoader,
-                    agentPolicyResolver: null
+                    agentPolicyResolver: agentPolicyResolver || null
                 });
 
                 if (!collectResult.success) {
@@ -609,6 +631,13 @@ function createRecallRuntimeService(deps = {}) {
                 }
 
                 let ruleItems = Array.isArray(collectResult.items) ? collectResult.items : [];
+
+                // --- Enrich rule diagnostics from collectRagItems result ---
+                ruleDiagnostic.timeRangesCount = collectResult.timeRanges?.length || 0;
+                ruleDiagnostic.activatedGroupCount = collectResult.activatedGroups?.size || 0;
+                ruleDiagnostic.rerankApplied = collectResult.rerankApplied || false;
+                ruleDiagnostic.tagMemoCount = collectResult.coreTags?.length || 0;
+                ruleDiagnostic.coreTags = collectResult.coreTags || [];
 
                 // --- Apply S02 post-processing modifiers ---
                 const s02Result = applyS02Modifiers(ruleItems, rule.modifiers);
@@ -668,8 +697,9 @@ function createRecallRuntimeService(deps = {}) {
         });
 
         // --- AIMemo post-recall summarization ---
+        // Skip AIMemo for inlineRule path (profile-level only)
         let aiMemoSummary = null;
-        const globalAiMemo = resolved.rules[0]?.modifiers?.aiMemo
+        const globalAiMemo = !inlineRule && resolved.rules[0]?.modifiers?.aiMemo
             ? parseModifierValue('aiMemo', resolved.rules[0].modifiers.aiMemo)
             : false;
 
