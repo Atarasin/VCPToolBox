@@ -6,6 +6,7 @@ const test = require('node:test');
 const express = require('express');
 
 const createAgentGatewayRoutes = require('../../../routes/agentGatewayRoutes');
+const { getGatewayServiceBundle } = require('../../../modules/agentGateway/createGatewayServiceBundle');
 
 function cosineSimilarity(vectorA, vectorB) {
     if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length) {
@@ -296,6 +297,103 @@ function createProtectedToolPluginManager(overrides = {}) {
             return basePluginManager.getPlugin(toolName);
         }
     };
+}
+
+function createMockRecallRuntimeService(overrides = {}) {
+    return {
+        async executeRecall({ agentId, query, profileName }) {
+            if (overrides.executeRecall) {
+                return overrides.executeRecall({ agentId, query, profileName });
+            }
+
+            return {
+                success: true,
+                agentId: agentId || null,
+                profileName: profileName || 'default',
+                items: [
+                    {
+                        text: 'Recall result for test query',
+                        score: 0.95,
+                        sourceDiary: 'Nova',
+                        sourceFile: '2026-03-20.md',
+                        timestamp: '2026-03-20T10:20:00.000Z',
+                        tags: ['test', 'recall']
+                    }
+                ],
+                diagnostics: {
+                    totalDurationMs: 42,
+                    rules: [
+                        {
+                            ruleIndex: 0,
+                            type: 'rag',
+                            status: 'ok',
+                            durationMs: 30,
+                            itemCount: 1
+                        }
+                    ],
+                    pipelineStages: [
+                        { name: 'resolveProfile', durationMs: 5, status: 'ok' },
+                        { name: 'precomputeVector', durationMs: 7, status: 'ok' }
+                    ],
+                    profileMeta: {
+                        profileName: profileName || 'default',
+                        ruleCount: 1,
+                        modifierKeys: []
+                    }
+                },
+                error: null,
+                code: null,
+                status: 200
+            };
+        }
+    };
+}
+
+function createMockRecallProjectionService(overrides = {}) {
+    return {
+        projectFullResult(result, requestId) {
+            if (overrides.projectFullResult) {
+                return overrides.projectFullResult(result, requestId);
+            }
+
+            return {
+                success: result.success !== false,
+                agentId: result.agentId || null,
+                profileName: result.profileName || null,
+                requestId: requestId || `req-${Date.now()}`,
+                projectedAt: Date.now(),
+                items: result.items?.map((item) => ({
+                    content: item.text || '',
+                    score: item.score || 0,
+                    sourceDiary: item.sourceDiary || '',
+                    sourceFile: item.sourceFile || '',
+                    timestamp: item.timestamp || null,
+                    tags: item.tags || []
+                })) || [],
+                recallBlocks: result.items?.map((item, index) => ({
+                    blockId: `rb-${index}`,
+                    content: item.text || '',
+                    score: item.score || 0,
+                    sourceDiary: item.sourceDiary || ''
+                })) || [],
+                attachments: result.diagnostics?.attachments || [],
+                diagnostics: result.diagnostics || { totalDurationMs: 0, rules: [] },
+                error: result.error || null,
+                code: result.code || null,
+                status: result.status || (result.success !== false ? 200 : 500)
+            };
+        }
+    };
+}
+
+async function createServerWithRecallMocks(pluginManager, recallOverrides = {}) {
+    // Pre-build the service bundle so mock recall services are injected
+    // before createAgentGatewayRoutes destructures them at router creation.
+    const bundle = getGatewayServiceBundle(pluginManager, { gatewayVersion: 'v1' });
+    bundle.recallRuntimeService = createMockRecallRuntimeService(recallOverrides.recallRuntime);
+    bundle.recallProjectionService = createMockRecallProjectionService(recallOverrides.recallProjection);
+
+    return createServer(pluginManager);
 }
 
 async function createServer(pluginManager) {
@@ -1040,6 +1138,226 @@ test('Native tool route maps shared policy denial to AGW_FORBIDDEN', async () =>
         assert.equal(payload.success, false);
         assert.equal(payload.code, 'AGW_FORBIDDEN');
         assert.equal(payload.details.toolName, 'RemoteSearch');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run returns success with items[], recallBlocks[] and diagnostics', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                query: 'test recall query',
+                requestContext: {
+                    requestId: 'req-native-recall-run-001',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-run-001'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(Array.isArray(payload.data.items), true);
+        assert.equal(payload.data.items.length > 0, true);
+        assert.equal(typeof payload.data.items[0].content, 'string');
+        assert.equal(typeof payload.data.items[0].score, 'number');
+        assert.equal(Array.isArray(payload.data.recallBlocks), true);
+        assert.equal(payload.data.recallBlocks.length > 0, true);
+        assert.equal(typeof payload.data.recallBlocks[0].blockId, 'string');
+        assert.equal(typeof payload.data.diagnostics, 'object');
+        assert.equal(typeof payload.data.diagnostics.totalDurationMs, 'number');
+        assert.equal(Array.isArray(payload.data.diagnostics.rules), true);
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run missing agentId returns 400 AGW_INVALID_REQUEST', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: 'test recall query',
+                requestContext: {
+                    requestId: 'req-native-recall-no-agent',
+                    sessionId: 'sess-native-recall-no-agent'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 400);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'AGW_INVALID_REQUEST');
+        assert.equal(payload.details.field, 'agentId');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run missing query returns 400 AGW_INVALID_REQUEST', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                requestContext: {
+                    requestId: 'req-native-recall-no-query',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-no-query'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 400);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'AGW_INVALID_REQUEST');
+        assert.equal(payload.details.field, 'query');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run non-existent profile returns 404 AGW_RECALL_NO_PROFILE', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager, {
+        recallRuntime: {
+            executeRecall: async ({ agentId, query, profileName }) => ({
+                success: false,
+                agentId: agentId || null,
+                profileName: profileName || null,
+                items: [],
+                diagnostics: { totalDurationMs: 5, rules: [] },
+                error: `No recall profile resolved for agent "${agentId}"`,
+                code: 'AGW_RECALL_NO_PROFILE',
+                status: 404
+            })
+        }
+    });
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                query: 'test recall query',
+                profile: 'nonexistent-profile',
+                requestContext: {
+                    requestId: 'req-native-recall-bad-profile',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-bad-profile'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 404);
+        assert.equal(payload.success, false);
+        assert.equal(payload.code, 'AGW_RECALL_NO_PROFILE');
+    } finally {
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('POST /agent_gateway/recall/run native envelope shape verification', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, {
+            Ariadne: 'Ariadne.md'
+        })
+    });
+    const server = await createServerWithRecallMocks(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/recall/run`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                agentId: 'Ariadne',
+                query: 'test recall query',
+                requestContext: {
+                    requestId: 'req-native-recall-envelope',
+                    agentId: 'Ariadne',
+                    sessionId: 'sess-native-recall-envelope'
+                }
+            })
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(payload.success, true);
+        assert.equal(payload.meta.requestId, 'req-native-recall-envelope');
+        assert.equal(payload.meta.operationName, 'recall.run');
+        assert.match(payload.meta.traceId, /^agwop_/);
+        assert.equal(response.headers.get('x-agent-gateway-trace-id'), payload.meta.traceId);
+        assert.equal(typeof payload.data, 'object');
+        assert.equal(payload.data.success, true);
+        assert.equal(payload.data.code, null);
+        assert.equal(payload.data.error, null);
+        assert.equal(typeof payload.data.projectedAt, 'number');
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });
