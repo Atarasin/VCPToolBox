@@ -533,6 +533,8 @@ function createPublishedOpenApiDocument() {
                     responses: {
                         200: { $ref: '#/components/responses/RecallRunSuccess' },
                         400: { $ref: '#/components/responses/ValidationError' },
+                        403: { $ref: '#/components/responses/Forbidden' },
+                        404: { $ref: '#/components/responses/NotFound' },
                         429: { $ref: '#/components/responses/TooManyRequests' },
                         500: { $ref: '#/components/responses/InternalError' }
                     }

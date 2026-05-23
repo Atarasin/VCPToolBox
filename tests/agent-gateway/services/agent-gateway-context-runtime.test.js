@@ -157,6 +157,74 @@ test('ContextRuntimeService rejects forbidden diary access and invalid query', a
     assert.equal(invalidResult.code, 'OCW_RAG_INVALID_QUERY');
 });
 
+test('ContextRuntimeService search returns 404 when requested profile is missing', async () => {
+    const service = createContextServiceWithRecall({}, {}, {
+        recallProfileResolver: {
+            resolveForAgent() {
+                return {
+                    resolved: false,
+                    code: 'RECALL_NO_PROFILE',
+                    profileName: 'missing-profile',
+                    rules: []
+                };
+            }
+        }
+    });
+
+    const result = await service.search({
+        body: {
+            profile: 'missing-profile',
+            query: '查找一个不存在的 profile',
+            requestContext: {
+                source: 'openclaw',
+                agentId: 'agent.nova',
+                sessionId: 'sess-missing-profile-search',
+                requestId: 'req-missing-profile-search'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'openclaw'
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 404);
+    assert.equal(result.code, 'OCW_RECALL_NO_PROFILE');
+});
+
+test('ContextRuntimeService buildRecallContext returns 403 when profile is forbidden', async () => {
+    const service = createContextServiceWithRecall({}, {}, {
+        recallProfileResolver: {
+            resolveForAgent() {
+                return {
+                    resolved: false,
+                    code: 'RECALL_FORBIDDEN',
+                    profileName: 'forbidden-profile',
+                    rules: []
+                };
+            }
+        }
+    });
+
+    const result = await service.buildRecallContext({
+        body: {
+            profile: 'forbidden-profile',
+            query: '查找一个受限 profile',
+            requestContext: {
+                source: 'openclaw-context',
+                agentId: 'agent.nova',
+                sessionId: 'sess-forbidden-profile-context',
+                requestId: 'req-forbidden-profile-context'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'openclaw-context'
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 403);
+    assert.equal(result.code, 'OCW_RECALL_FORBIDDEN');
+});
+
 test('ContextRuntimeService normalizes default diary aliases from policy to canonical targets', async () => {
     const service = createContextServiceWithRecall({
         vectorDBManager: createKnowledgeBaseManager({

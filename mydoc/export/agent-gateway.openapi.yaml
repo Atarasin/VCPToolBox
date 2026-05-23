@@ -261,6 +261,10 @@ paths:
           $ref: "#/components/responses/RecallRunSuccess"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -1485,6 +1489,8 @@ components:
           type: boolean
         tagMemo:
           type: boolean
+        profile:
+          type: string
         requestContext:
           $ref: "#/components/schemas/RequestContext"
         authContext:
@@ -1659,6 +1665,8 @@ components:
           type: boolean
         tagMemo:
           type: boolean
+        profile:
+          type: string
         requestContext:
           $ref: "#/components/schemas/RequestContext"
         authContext:
@@ -1714,6 +1722,10 @@ components:
           $ref: "#/components/schemas/RequestContext"
         authContext:
           $ref: "#/components/schemas/AuthContext"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
     RecallRunItem:
       type: object
       properties:
@@ -1746,6 +1758,40 @@ components:
           format: float
         sourceDiary:
           type: string
+    RecallRunFullTextEntry:
+      type: object
+      properties:
+        content:
+          type: string
+        score:
+          type: number
+          format: float
+        sourceFile:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+    RecallRunFullTextSection:
+      type: object
+      properties:
+        sectionId:
+          type: string
+        diaryName:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecallRunFullTextEntry"
+        entryCount:
+          type: integer
+        combinedScore:
+          type: number
+          format: float
     RecallRunData:
       type: object
       properties:
@@ -1761,6 +1807,14 @@ components:
           type: string
         projectedAt:
           type: integer
+        activeProjection:
+          type: string
+          enum:
+            - items
+            - recallBlocks
+            - fullTextSections
+            - attachments
+            - hybrid
         items:
           type: array
           items:
@@ -1769,6 +1823,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RecallRunBlock"
+        fullTextSections:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecallRunFullTextSection"
         attachments:
           type: array
           items:

@@ -233,11 +233,11 @@ describe('RecallRuntimeService S04 — merge policy', () => {
 
             const result = await service.executeRecall({ agentId: 'AgentDef', query: 'query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(result.items.length, 2);
-            // dup should keep higher score (0.9), sorted first
+            // Rule-level truncate runs before merge, so only the first two items survive
+            // into the default deduplicate + sort stage.
+            assert.strictEqual(result.items.length, 1);
             assert.strictEqual(result.items[0].text, 'dup');
             assert.strictEqual(result.items[0].score, 0.9);
-            assert.strictEqual(result.items[1].text, 'unique');
 
             const mergeStage = result.diagnostics.pipelineStages.find((s) => s.name === 'mergeResults');
             assert.ok(mergeStage);
@@ -611,7 +611,7 @@ describe('RecallRuntimeService S04 — merge policy', () => {
             assert.strictEqual(result.diagnostics.profileMeta.truncateTo, 2);
         });
 
-        it('truncateTo overrides rule-level truncate', async () => {
+        it('truncateTo cannot expand items already truncated at rule level', async () => {
             resetMocks([
                 { text: 'a', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' },
                 { text: 'b', score: 0.8, sourceDiary: 'TestDiary', sourceFile: 'b.md' },
@@ -630,7 +630,7 @@ describe('RecallRuntimeService S04 — merge policy', () => {
 
             const result = await service.executeRecall({ agentId: 'AgentTTOvr', query: 'query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.items.length, 1);
         });
 
         it('profileMeta includes merge, aggregate, projection when set', async () => {

@@ -3,111 +3,69 @@
     "Nexus": {
       "defaultProfile": "nexus-default",
       "allowedProfiles": ["nexus-default"],
-      "targets": ["Nexus日记本"]
+      "targets": ["Nexus日记本", "Nexus避坑指南日记本", "Nexus架构设计日记本", "Nexus工程方法论日记本"]
     },
-    "Aemeath": {
-      "defaultProfile": "aemeath-gated",
-      "allowedProfiles": ["aemeath-gated", "aemeath-fulltext", "aemeath-gated-fulltext"],
-      "targets": ["Aemeath日记本"]
+    "MCPMidas": {
+      "defaultProfile": "Midas-default",
+      "allowedProfiles": ["Midas-default"],
+      "targets": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记"]
+    },
+    "Yui": {
+      "defaultProfile": "Yui-default",
+      "allowedProfiles": ["Yui-default"],
+      "targets": ["Yui日记本"]
     }
   },
   "profiles": {
     "nexus-default": {
-      "merge": "concat",
-      "aggregate": "max",
-      "projection": "semantic",
-      "tokenBudget": 1600,
-      "maxTokenRatio": 0.7,
-      "minScore": 0.2,
-      "metadata": { "priority": "high", "tier": "core" },
       "rules": [
         {
           "baseMode": "rag",
           "targets": {
-            "diaries": ["Nexus日记本"],
-            "kMultiplier": 1.5
+            "diaries": ["Nexus日记本", "Nexus避坑指南日记本", "Nexus架构设计日记本", "Nexus工程方法论日记本"],
+            "aggregate": true,
+            "kMultiplier": 1.0
           },
-          "meta": { "source": "nexus-core" },
           "modifiers": {
             "time": true,
-            "group": true,
             "rerank": true,
             "tagMemo": true,
-            "truncate": true
+            "truncate": 20
           }
         }
       ]
     },
-    "aemeath-gated": {
-      "merge": "interleave",
-      "aggregate": "mean",
-      "projection": "keyword",
-      "tokenBudget": 1200,
-      "maxTokenRatio": 0.6,
-      "minScore": 0.35,
-      "metadata": { "priority": "normal", "tier": "standard" },
+    "Midas-default": {
       "rules": [
         {
-          "baseMode": "gated_rag",
+          "baseMode": "rag",
           "targets": {
-            "diaries": ["Aemeath日记本"],
-            "kMultiplier": 2.0
+            "diaries": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记"],
+            "aggregate": true,
+            "kMultiplier": 1.0
           },
-          "gateThreshold": 0.35,
-          "meta": { "source": "aemeath-gated" },
           "modifiers": {
-            "time": false,
-            "group": true,
-            "rerank": false,
+            "time": true,
+            "rerank": true,
             "tagMemo": true,
-            "truncate": true
+            "truncate": 20
           }
         }
       ]
     },
-    "aemeath-fulltext": {
-      "merge": "concat",
-      "aggregate": "sum",
-      "projection": "full",
-      "tokenBudget": 2000,
-      "maxTokenRatio": 0.8,
-      "minScore": 0.1,
+    "Yui-default": {
       "rules": [
         {
-          "baseMode": "full_text",
+          "baseMode": "rag",
           "targets": {
-            "diaries": ["Aemeath日记本"]
+            "diaries": ["Yui日记本"],
+            "kMultiplier": 1.0
           },
           "modifiers": {
-            "timeDecay": true,
-            "roleValve": true,
-            "base64Memo": true,
-            "truncate": true
-          }
-        }
-      ]
-    },
-    "aemeath-gated-fulltext": {
-      "merge": "interleave",
-      "aggregate": "max",
-      "projection": "hybrid",
-      "tokenBudget": 1500,
-      "maxTokenRatio": 0.7,
-      "minScore": 0.35,
-      "metadata": { "priority": "high" },
-      "rules": [
-        {
-          "baseMode": "gated_full_text",
-          "targets": {
-            "diaries": ["Aemeath日记本"],
-            "kMultiplier": 1.2
-          },
-          "gateThreshold": 0.35,
-          "modifiers": {
-            "timeDecay": true,
-            "roleValve": true,
-            "base64Memo": true,
-            "truncate": true
+            "time": true,
+            "rerank": true,
+            "tagMemo": true,
+            "truncate": 20
           }
         }
       ]

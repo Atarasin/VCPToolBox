@@ -823,20 +823,44 @@ function createContextRuntimeService(deps = {}) {
     function mapAgwToOcwError(agwCode, contextType = 'search') {
         switch (agwCode) {
             case AGW_ERROR_CODES.RECALL_NO_PROFILE:
+                return OPENCLAW_ERROR_CODES.RECALL_NO_PROFILE;
             case AGW_ERROR_CODES.RECALL_FORBIDDEN:
-                return OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN;
+                return OPENCLAW_ERROR_CODES.RECALL_FORBIDDEN;
             case AGW_ERROR_CODES.RECALL_INVALID_QUERY:
+                return OPENCLAW_ERROR_CODES.RECALL_INVALID_QUERY;
             case AGW_ERROR_CODES.RECALL_INVALID_PROFILE:
+                return OPENCLAW_ERROR_CODES.RECALL_INVALID_PROFILE;
             case AGW_ERROR_CODES.RECALL_INVALID_RULE:
+                return OPENCLAW_ERROR_CODES.RECALL_INVALID_RULE;
             case AGW_ERROR_CODES.RECALL_INVALID_MODIFIER:
+                return OPENCLAW_ERROR_CODES.RECALL_INVALID_MODIFIER;
             case AGW_ERROR_CODES.RECALL_INVALID_DIARY:
-                return OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY;
+                return OPENCLAW_ERROR_CODES.RECALL_INVALID_DIARY;
             case AGW_ERROR_CODES.RECALL_EXECUTION_ERROR:
                 return contextType === 'search'
                     ? OPENCLAW_ERROR_CODES.RAG_SEARCH_ERROR
                     : OPENCLAW_ERROR_CODES.RAG_CONTEXT_ERROR;
             default:
                 return agwCode;
+        }
+    }
+
+    function resolveRecallFailureStatus(mappedCode) {
+        switch (mappedCode) {
+            case OPENCLAW_ERROR_CODES.RECALL_FORBIDDEN:
+            case OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN:
+                return 403;
+            case OPENCLAW_ERROR_CODES.RECALL_NO_PROFILE:
+                return 404;
+            case OPENCLAW_ERROR_CODES.RECALL_INVALID_QUERY:
+            case OPENCLAW_ERROR_CODES.RECALL_INVALID_PROFILE:
+            case OPENCLAW_ERROR_CODES.RECALL_INVALID_RULE:
+            case OPENCLAW_ERROR_CODES.RECALL_INVALID_MODIFIER:
+            case OPENCLAW_ERROR_CODES.RECALL_INVALID_DIARY:
+            case OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY:
+                return 400;
+            default:
+                return 500;
         }
     }
 
@@ -972,9 +996,7 @@ function createContextRuntimeService(deps = {}) {
                 }
                 if (!recallResult.success) {
                     const mappedCode = mapAgwToOcwError(recallResult.code, 'search');
-                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                            : 500;
+                    const status = resolveRecallFailureStatus(mappedCode);
                     return {
                         success: false,
                         requestId,
@@ -987,9 +1009,7 @@ function createContextRuntimeService(deps = {}) {
                 const ruleDiag = recallResult.diagnostics?.rules?.[0] || {};
                 if (ruleDiag.status === 'error') {
                     const mappedCode = mapAgwToOcwError(ruleDiag.errorCode, 'search');
-                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                            : 500;
+                    const status = resolveRecallFailureStatus(mappedCode);
                     return {
                         success: false,
                         requestId,
@@ -1142,9 +1162,7 @@ function createContextRuntimeService(deps = {}) {
                 }
                 if (!recallResult.success) {
                     const mappedCode = mapAgwToOcwError(recallResult.code, 'context');
-                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                            : 500;
+                    const status = resolveRecallFailureStatus(mappedCode);
                     return {
                         success: false,
                         requestId,
@@ -1157,9 +1175,7 @@ function createContextRuntimeService(deps = {}) {
                 const ruleDiag = recallResult.diagnostics?.rules?.[0] || {};
                 if (ruleDiag.status === 'error') {
                     const mappedCode = mapAgwToOcwError(ruleDiag.errorCode, 'context');
-                    const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
-                        : mappedCode === OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY ? 400
-                            : 500;
+                    const status = resolveRecallFailureStatus(mappedCode);
                     return {
                         success: false,
                         requestId,

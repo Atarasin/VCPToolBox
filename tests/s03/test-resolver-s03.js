@@ -2,11 +2,15 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const { RecallProfileResolver } = require('../../modules/agentGateway/policy/recallProfileResolver');
 
 function tmpPath(name) {
-    return path.join(__dirname, name);
+    return path.join(
+        os.tmpdir(),
+        `agent-gateway-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${name}`
+    );
 }
 
 function writeTmp(name, payload) {
@@ -205,7 +209,7 @@ describe('S03 — RecallProfileResolver new config fields', () => {
                         profiles: {
                             p1: {
                                 rules: [
-                                    { type: 'rag', diaries: ['D1'] }
+                                    { type: 'rag', diaries: ['t1'] }
                                 ]
                             }
                         }
@@ -616,7 +620,7 @@ describe('S03 — RecallProfileResolver new config fields', () => {
                         profiles: {
                             p1: {
                                 rules: [
-                                    { type: 'rag', diaries: ['D1'] }
+                                    { type: 'rag', diaries: ['t1'] }
                                 ]
                             }
                         }
@@ -670,7 +674,7 @@ describe('S03 — RecallProfileResolver new config fields', () => {
                                 rules: [
                                     {
                                         type: 'rag',
-                                        diaries: ['D1'],
+                                        diaries: ['t1'],
                                         kMultiplier: 3.0,
                                         meta: { warnings: ['warn'] }
                                     }
@@ -712,7 +716,7 @@ describe('S03 — RecallProfileResolver new config fields', () => {
                         rules: [
                             {
                                 type: 'rag',
-                                diaries: ['D1'],
+                                diaries: ['t1'],
                                 kMultiplier: 3.0,
                                 meta: { warnings: ['warn'] }
                             }

@@ -102,4 +102,12 @@ test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas 
         document.paths['/agent_gateway/recall/run'].post.responses['200'].$ref,
         '#/components/responses/RecallRunSuccess'
     );
+    assert.equal(
+        document.paths['/agent_gateway/recall/run'].post.responses['403'].$ref,
+        '#/components/responses/Forbidden'
+    );
+    assert.equal(
+        document.paths['/agent_gateway/recall/run'].post.responses['404'].$ref,
+        '#/components/responses/NotFound'
+    );
 });

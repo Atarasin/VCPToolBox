@@ -149,7 +149,7 @@ describe('S02 — RecallProfileResolver extensions', () => {
     });
 
     describe('normalizeModifierEntry — filtering', () => {
-        it('filters out unknown modifier keys', () => {
+        it('returns RECALL_INVALID_MODIFIER for unknown modifier keys', () => {
             const tmpPath = path.join(__dirname, 'tmp-profiles-filter.json');
             fs.writeFileSync(tmpPath, JSON.stringify({
                 agents: {
@@ -176,13 +176,14 @@ describe('S02 — RecallProfileResolver extensions', () => {
             }));
             const r = new RecallProfileResolver({ configPath: tmpPath });
             const result = r.resolveForAgent('TestAgent', 'p1');
-            assert.ok(result.resolved);
-            const mods = result.rules[0].modifiers;
-            assert.ok(mods.time);
-            assert.ok(mods.timeDecay);
-            assert.ok(mods.base64Memo);
-            assert.strictEqual(mods.unknownMod, undefined);
-            fs.unlinkSync(tmpPath);
+            try {
+                assert.strictEqual(result.resolved, false);
+                assert.strictEqual(result.code, 'RECALL_INVALID_MODIFIER');
+                assert.deepStrictEqual(result.details.invalidModifiers, ['unknownMod']);
+                assert.strictEqual(result.details.ruleIndex, 0);
+            } finally {
+                fs.unlinkSync(tmpPath);
+            }
         });
     });
 

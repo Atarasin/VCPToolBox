@@ -297,7 +297,7 @@ describe('RecallProfileResolver', () => {
         }
     });
 
-    it('skips invalid rule types', () => {
+    it('returns RECALL_INVALID_RULE when any rule type is invalid', () => {
         const tmpFile = createTempConfig({
             agents: {
                 AgentY: {
@@ -315,18 +315,20 @@ describe('RecallProfileResolver', () => {
         try {
             const resolver = new RecallProfileResolver({ configPath: tmpFile });
             const result = resolver.resolveForAgent('AgentY');
-            assert.strictEqual(result.resolved, true);
-            assert.strictEqual(result.rules.length, 1);
-            assert.strictEqual(result.rules[0].type, 'rag');
+            assert.strictEqual(result.resolved, false);
+            assert.strictEqual(result.code, 'RECALL_INVALID_RULE');
+            assert.strictEqual(result.details.ruleIndex, 0);
+            assert.strictEqual(result.details.ruleType, 'invalid_type');
         } finally {
             cleanupTempConfig(tmpFile);
         }
     });
 
-    it('returns RECALL_NO_PROFILE when all rules are invalid', () => {
+    it('returns RECALL_INVALID_RULE when the only rule type is invalid', () => {
         const tmpFile = createTempConfig({
             agents: {
                 AgentZ: {
+                    defaultProfile: 'bad',
                     profiles: {
                         bad: {
                             rules: [
@@ -341,7 +343,9 @@ describe('RecallProfileResolver', () => {
             const resolver = new RecallProfileResolver({ configPath: tmpFile });
             const result = resolver.resolveForAgent('AgentZ');
             assert.strictEqual(result.resolved, false);
-            assert.strictEqual(result.code, 'RECALL_NO_PROFILE');
+            assert.strictEqual(result.code, 'RECALL_INVALID_RULE');
+            assert.strictEqual(result.details.ruleIndex, 0);
+            assert.strictEqual(result.details.ruleType, 'invalid_type');
         } finally {
             cleanupTempConfig(tmpFile);
         }
