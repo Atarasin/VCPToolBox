@@ -109,13 +109,24 @@ function normalizeRule(rule) {
     const gateThreshold = typeof rule.gateThreshold === 'number' && Number.isFinite(rule.gateThreshold)
         ? rule.gateThreshold
         : null;
+    const kMultiplier = typeof rule.kMultiplier === 'number' && Number.isFinite(rule.kMultiplier) && rule.kMultiplier > 0
+        ? rule.kMultiplier
+        : 1.0;
+    const meta = rule.meta && typeof rule.meta === 'object' && !Array.isArray(rule.meta)
+        ? { ...rule.meta }
+        : undefined;
 
-    return {
+    const result = {
         type,
         diaries,
         modifiers,
-        gateThreshold
+        gateThreshold,
+        kMultiplier
     };
+    if (meta !== undefined) {
+        result.meta = meta;
+    }
+    return result;
 }
 
 function normalizeProfile(profile) {
@@ -127,9 +138,27 @@ function normalizeProfile(profile) {
     if (rules.length === 0) {
         return null;
     }
-    return {
-        rules
-    };
+    const merge = typeof profile.merge === 'string' ? profile.merge : undefined;
+    const aggregate = typeof profile.aggregate === 'string' ? profile.aggregate : undefined;
+    const projection = typeof profile.projection === 'string' ? profile.projection : undefined;
+    const metadata = profile.metadata && typeof profile.metadata === 'object' && !Array.isArray(profile.metadata)
+        ? { ...profile.metadata }
+        : undefined;
+
+    const result = { rules };
+    if (merge !== undefined) {
+        result.merge = merge;
+    }
+    if (aggregate !== undefined) {
+        result.aggregate = aggregate;
+    }
+    if (projection !== undefined) {
+        result.projection = projection;
+    }
+    if (metadata !== undefined) {
+        result.metadata = metadata;
+    }
+    return result;
 }
 
 function normalizeAgentEntry(entry) {
@@ -150,10 +179,24 @@ function normalizeAgentEntry(entry) {
     if (Object.keys(profiles).length === 0) {
         return null;
     }
-    return {
+    const allowedProfiles = Array.isArray(entry.allowedProfiles)
+        ? entry.allowedProfiles.map((item) => normalizeString(item)).filter(Boolean)
+        : undefined;
+    const targets = Array.isArray(entry.targets)
+        ? entry.targets.map((item) => normalizeString(item)).filter(Boolean)
+        : undefined;
+
+    const result = {
         defaultProfile: defaultProfile || Object.keys(profiles)[0],
         profiles
     };
+    if (allowedProfiles !== undefined && allowedProfiles.length > 0) {
+        result.allowedProfiles = allowedProfiles;
+    }
+    if (targets !== undefined && targets.length > 0) {
+        result.targets = targets;
+    }
+    return result;
 }
 
 function resolveAgentEntry(agentId, config) {
@@ -233,12 +276,31 @@ class RecallProfileResolver {
             };
         }
 
-        return {
+        const result = {
             resolved: true,
             agentId,
             profileName: targetProfileName,
             rules: profile.rules
         };
+        if (profile.merge !== undefined) {
+            result.merge = profile.merge;
+        }
+        if (profile.aggregate !== undefined) {
+            result.aggregate = profile.aggregate;
+        }
+        if (profile.projection !== undefined) {
+            result.projection = profile.projection;
+        }
+        if (profile.metadata !== undefined) {
+            result.metadata = profile.metadata;
+        }
+        if (agentEntry.allowedProfiles !== undefined) {
+            result.allowedProfiles = agentEntry.allowedProfiles;
+        }
+        if (agentEntry.targets !== undefined) {
+            result.targets = agentEntry.targets;
+        }
+        return result;
     }
 }
 
