@@ -48,12 +48,18 @@
 
 ## 3. Rule 规则对象
 
-每条 rule 定义一次召回行为：
+每条 rule 定义一次召回行为。支持两种写法：
+
+### 3.1 主推荐模式（Primary）— 结构化模型
 
 ```json
 {
-  "type": "rag",
-  "diaries": ["日记本A", "日记本B"],
+  "baseMode": "rag",
+  "targets": {
+    "diaries": ["日记本A", "日记本B"],
+    "kMultiplier": 1.0
+  },
+  "projection": "items",
   "gateThreshold": 0.35,
   "modifiers": {
     "time": true,
@@ -65,16 +71,39 @@
 }
 ```
 
-### 3.1 字段说明
-
 | 字段 | 必填 | 类型 | 说明 |
 |------|------|------|------|
-| `type` | 是 | `string` | 规则类型，见下方「规则类型详解」。 |
-| `diaries` | 是 | `string[]` | 要检索的日记本名称列表。 |
+| `baseMode` | 是 | `string` | 规则类型，见下方「规则类型详解」。 |
+| `targets` | 是 | `object` | 召回目标配置，必须包含 `diaries` 数组。 |
+| `targets.diaries` | 是 | `string[]` | 要检索的日记本名称列表。 |
+| `targets.kMultiplier` | 否 | `number` | 召回倍率乘数，默认 `1.0`。大于 1 扩大召回量，小于 1 缩小。 |
+| `targets.aggregate` | 否 | `boolean` | 是否对该 rule 的结果做聚合去重。 |
+| `projection` | 否 | `string \| object` | 结果投影模式。字符串如 `"items"`；对象写法 `{ "emit": "items" }`。默认不投影。 |
 | `gateThreshold` | 条件必填 | `number` | **门控阈值**，仅 `gated_rag` / `gated_full_text` 需要。范围建议 `0.2 ~ 0.5`。 |
 | `modifiers` | 否 | `object` | 召回修饰符配置，见下方「修饰符详解」。 |
+| `meta` | 否 | `object` | 自定义元数据，透传给诊断信息。 |
+| `id` | 否 | `string` | Rule 标识，用于诊断与日志追踪。 |
 
-### 3.2 规则类型详解
+### 3.2 兼容 fallback（Legacy compatibility）
+
+以下旧字段仍被兼容解析，但运行时会输出 **deprecation warning**：
+
+| 旧字段 | 替代字段 | 说明 |
+|--------|----------|------|
+| `type` | `baseMode` | 规则类型，功能等价。 |
+| `diaries` | `targets.diaries` | 日记本列表，功能等价。 |
+| `kMultiplier` | `targets.kMultiplier` | 召回倍率，功能等价。 |
+
+Legacy 示例（仍可用但不推荐）：
+```json
+{
+  "type": "rag",
+  "diaries": ["日记本A"],
+  "modifiers": { "truncate": 20 }
+}
+```
+
+### 3.3 规则类型详解
 
 | 类型 | 召回深度 | 门控 | 适用场景 |
 |------|----------|------|----------|
@@ -129,7 +158,7 @@
 
 | 修饰符 | 取值类型 | 说明 |
 |--------|----------|------|
-| `truncate` | `number` | **结果截断**，指定最终返回的最大条目数。建议设置正整数如 `20`；非数字值（如 `true`）等价于不截断。取第一条 rule 的 truncate 值作为全局截断。 |
+| `truncate` | `number` | **结果截断**，指定最终返回的最大条目数。建议设置正整数如 `20`；非数字值（如 `true`）等价于不截断。**每条 rule 的 truncate 独立作用于该 rule 的召回结果**，不再取第一条 rule 的值作为全局截断。 |
 | `aiMemo` | `boolean` | **AI 摘要**，在召回结果上调用外部 LLM 生成结构化中文摘要。需配置环境变量 `AIMemoUrl`、`AIMemoApi`、`AIMemoModel`。摘要结果放在 `diagnostics.summary`。 |
 
 ---
@@ -147,8 +176,11 @@
         "nexus-default": {
           "rules": [
             {
-              "type": "rag",
-              "diaries": ["Nexus日记本"],
+              "baseMode": "rag",
+              "targets": {
+                "diaries": ["Nexus日记本"],
+                "kMultiplier": 1.0
+              },
               "modifiers": {
                 "time": true,
                 "group": true,
@@ -176,8 +208,11 @@
         "aemeath-gated": {
           "rules": [
             {
-              "type": "gated_rag",
-              "diaries": ["Aemeath日记本"],
+              "baseMode": "gated_rag",
+              "targets": {
+                "diaries": ["Aemeath日记本"],
+                "kMultiplier": 1.0
+              },
               "gateThreshold": 0.35,
               "modifiers": {
                 "group": true,
@@ -190,8 +225,11 @@
         "aemeath-fulltext": {
           "rules": [
             {
-              "type": "full_text",
-              "diaries": ["Aemeath日记本"],
+              "baseMode": "full_text",
+              "targets": {
+                "diaries": ["Aemeath日记本"],
+                "kMultiplier": 1.0
+              },
               "modifiers": {
                 "timeDecay": { "halfLifeDays": 30 },
                 "roleValve": ["user", "assistant"],
@@ -204,8 +242,11 @@
         "aemeath-gated-fulltext": {
           "rules": [
             {
-              "type": "gated_full_text",
-              "diaries": ["Aemeath日记本"],
+              "baseMode": "gated_full_text",
+              "targets": {
+                "diaries": ["Aemeath日记本"],
+                "kMultiplier": 1.0
+              },
               "gateThreshold": 0.35,
               "modifiers": {
                 "timeDecay": true,
@@ -232,8 +273,11 @@
         "metis-combined": {
           "rules": [
             {
-              "type": "rag",
-              "diaries": ["Metis日记本", "公共知识库"],
+              "baseMode": "rag",
+              "targets": {
+                "diaries": ["Metis日记本", "公共知识库"],
+                "kMultiplier": 1.0
+              },
               "modifiers": {
                 "time": true,
                 "rerank": true,
@@ -241,8 +285,11 @@
               }
             },
             {
-              "type": "full_text",
-              "diaries": ["归档日记本"],
+              "baseMode": "full_text",
+              "targets": {
+                "diaries": ["归档日记本"],
+                "kMultiplier": 1.0
+              },
               "modifiers": {
                 "timeDecay": { "halfLifeDays": 90 },
                 "truncate": 10
@@ -259,7 +306,7 @@
 **多 rule 的执行逻辑：**
 - 各 rule **独立执行**，结果去重后合并。
 - 所有 rule 共享同一个 query vector（预计算一次）。
-- 全局 `truncate` 取**第一条 rule** 的 truncate 值。
+- 每条 rule 的 `truncate` **独立作用于该 rule 的召回结果**。
 
 ### 示例 4：通配符 Fallback
 
@@ -272,8 +319,11 @@
         "default": {
           "rules": [
             {
-              "type": "rag",
-              "diaries": ["通用日记本"],
+              "baseMode": "rag",
+              "targets": {
+                "diaries": ["通用日记本"],
+                "kMultiplier": 1.0
+              },
               "modifiers": {
                 "time": true,
                 "truncate": 10
@@ -397,3 +447,81 @@ Content-Type: application/json
 
 **Q: 可以同时给同一个 Agent 配置多个 profile 吗？**
 > 可以。通过 `profileName` 参数在调用时切换；未指定时使用 `defaultProfile`。
+
+---
+
+## 10. 校验行为与错误码
+
+Resolver 在解析 recall profile 时会对原始配置执行**前置校验**，非法配置不会静默降级为 `RECALL_NO_PROFILE`，而是返回明确的错误码与定位信息。
+
+### 10.1 校验时机与范围
+
+当 `resolveForAgent(agentId, profileName)` 被调用时，resolver 在规则归一化（normalization）之前先检查原始 rule 对象：
+
+1. **Rule type 校验**：检查 `baseMode`（或兼容字段 `type`）是否为允许值。
+2. **Modifier 校验**：检查 `modifiers` 中的每个键是否在允许列表内。
+3. **Diary access 校验**：检查 rule 引用的日记本是否在 Agent 的 `targets` 白名单内（若 Agent 配置了 `targets`）。
+4. **Profile 整体校验**：若以上单项校验全部通过，但归一化后 profile 没有任何有效 rule，则判定为 profile 级错误。
+
+### 10.2 错误码列表
+
+| 错误码 | 含义 | HTTP 映射 | 诊断字段 |
+|--------|------|-----------|----------|
+| `RECALL_INVALID_PROFILE` | Profile 整体无效（所有 rule 均非法或归一化失败） | `400` | `details.message` |
+| `RECALL_INVALID_RULE` | 某条 rule 的 `type`/`baseMode` 不在允许列表 | `400` | `details.ruleIndex`, `details.ruleType`, `details.message` |
+| `RECALL_INVALID_MODIFIER` | 某条 rule 包含未知 modifier 键 | `400` | `details.ruleIndex`, `details.invalidModifiers`, `details.message` |
+| `RECALL_INVALID_DIARY` | 某条 rule 引用了 Agent 无权访问的日记本 | `403` | `details.ruleIndex`, `details.forbidden`, `details.message` |
+
+### 10.3 错误响应示例
+
+**非法 rule type：**
+```json
+{
+  "resolved": false,
+  "code": "RECALL_INVALID_RULE",
+  "agentId": "AgentName",
+  "profileName": "profile-name",
+  "details": {
+    "ruleIndex": 0,
+    "ruleType": "semantic_search",
+    "message": "Rule type \"semantic_search\" is not allowed"
+  },
+  "rules": []
+}
+```
+
+**非法 modifier：**
+```json
+{
+  "resolved": false,
+  "code": "RECALL_INVALID_MODIFIER",
+  "agentId": "AgentName",
+  "profileName": "profile-name",
+  "details": {
+    "ruleIndex": 1,
+    "invalidModifiers": ["unknownMod", "badFlag"],
+    "message": "Invalid modifiers: unknownMod, badFlag"
+  },
+  "rules": []
+}
+```
+
+**非法 diary：**
+```json
+{
+  "resolved": false,
+  "code": "RECALL_INVALID_DIARY",
+  "agentId": "AgentName",
+  "profileName": "profile-name",
+  "details": {
+    "ruleIndex": 0,
+    "forbidden": ["Secret日记本"],
+    "message": "Forbidden diaries: Secret日记本"
+  },
+  "rules": []
+}
+```
+
+### 10.4 与 legacy 行为对比
+
+在 S04 之前，非法 rule type 或未知 modifier 会在归一化阶段被**静默丢弃**（`normalizeRule` 返回 `null`），最终可能导致空 rules 数组，进而触发模糊的 `RECALL_NO_PROFILE`。现在这些错误在解析早期就被拦截，并返回**可预测的错误码和定位信息**，方便运维与配置调试。

@@ -1451,6 +1451,7 @@ function createPublishedOpenApiDocument() {
                         groupAware: { type: 'boolean' },
                         rerank: { type: 'boolean' },
                         tagMemo: { type: 'boolean' },
+                        profile: { type: 'string' },
                         requestContext: { $ref: '#/components/schemas/RequestContext' },
                         authContext: { $ref: '#/components/schemas/AuthContext' }
                     }
@@ -1566,6 +1567,7 @@ function createPublishedOpenApiDocument() {
                         groupAware: { type: 'boolean' },
                         rerank: { type: 'boolean' },
                         tagMemo: { type: 'boolean' },
+                        profile: { type: 'string' },
                         requestContext: { $ref: '#/components/schemas/RequestContext' },
                         authContext: { $ref: '#/components/schemas/AuthContext' }
                     }

@@ -284,6 +284,10 @@ function createGatewayManagedToolDescriptors({
                         minimum: 1,
                         description: 'Maximum number of candidate memories to retrieve.'
                     },
+                    profile: {
+                        type: 'string',
+                        description: 'Optional recall profile name. When provided, profile rules drive retrieval instead of inline parameter defaults.'
+                    },
                     timeAware: {
                         type: 'boolean',
                         description: 'Whether to apply time-aware retrieval heuristics.'
@@ -375,6 +379,10 @@ function createGatewayManagedToolDescriptors({
                     tagMemo: {
                         type: 'boolean',
                         description: 'Whether to boost matches using core memory tag signals.'
+                    },
+                    profile: {
+                        type: 'string',
+                        description: 'Optional recall profile name. When provided, profile rules drive retrieval instead of inline parameter defaults.'
                     }
                 }
             }

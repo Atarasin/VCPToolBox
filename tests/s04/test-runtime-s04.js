@@ -35,7 +35,8 @@ const {
     parseRoleValveConfig,
     evaluateRoleValveExpression,
     applyAIMemo,
-    AIMEMO_PRESETS
+    AIMEMO_PRESETS,
+    mapResolvedRecallFailure
 } = require('../../modules/agentGateway/services/recallRuntimeService');
 
 function createMockResolver(rules, extraProfileFields = {}, profileName = 'default') {
@@ -1271,6 +1272,105 @@ describe('RecallRuntimeService S04 — runtime semantics', () => {
             });
             const result = await service.executeRecall({ agentId: 'AgentPM', query: 'query' });
             assert.strictEqual(result.diagnostics.profileMeta.truncateTo, undefined);
+        });
+    });
+
+    describe('mapResolvedRecallFailure — S04 error codes', () => {
+        it('maps RECALL_INVALID_PROFILE to 400 with details', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_INVALID_PROFILE',
+                profileName: 'badProfile',
+                details: { message: 'All rules in profile are invalid' }
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'badProfile');
+            assert.strictEqual(result.code, 'AGW_RECALL_INVALID_PROFILE');
+            assert.strictEqual(result.status, 400);
+            assert.strictEqual(result.error, 'All rules in profile are invalid');
+            assert.deepStrictEqual(result.details, { message: 'All rules in profile are invalid' });
+        });
+
+        it('maps RECALL_INVALID_RULE to 400 with details', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_INVALID_RULE',
+                profileName: 'p1',
+                details: { ruleIndex: 0, ruleType: 'unknown', message: 'Rule type "unknown" is not allowed' }
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.code, 'AGW_RECALL_INVALID_RULE');
+            assert.strictEqual(result.status, 400);
+            assert.ok(result.error.includes('unknown'));
+            assert.strictEqual(result.details.ruleIndex, 0);
+        });
+
+        it('maps RECALL_INVALID_MODIFIER to 400 with details', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_INVALID_MODIFIER',
+                profileName: 'p1',
+                details: { ruleIndex: 0, invalidModifiers: ['badMod'], message: 'Invalid modifiers: badMod' }
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.code, 'AGW_RECALL_INVALID_MODIFIER');
+            assert.strictEqual(result.status, 400);
+            assert.ok(result.error.includes('badMod'));
+        });
+
+        it('maps RECALL_INVALID_DIARY to 400 with details', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_INVALID_DIARY',
+                profileName: 'p1',
+                details: { ruleIndex: 0, forbidden: ['D3'], message: 'Forbidden diaries: D3' }
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.code, 'AGW_RECALL_INVALID_DIARY');
+            assert.strictEqual(result.status, 400);
+            assert.ok(result.error.includes('D3'));
+        });
+
+        it('maps AGW-prefixed RECALL_INVALID_PROFILE code', () => {
+            const resolved = {
+                resolved: false,
+                code: 'AGW_RECALL_INVALID_PROFILE',
+                details: { message: 'Bad profile' }
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.code, 'AGW_RECALL_INVALID_PROFILE');
+            assert.strictEqual(result.status, 400);
+        });
+
+        it('falls back to default message when details.message is missing', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_INVALID_MODIFIER',
+                details: { ruleIndex: 0 }
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.status, 400);
+            assert.ok(result.error.includes('Invalid modifier'));
+        });
+
+        it('still maps RECALL_FORBIDDEN to 403', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_FORBIDDEN',
+                profileName: 'p1'
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.code, 'AGW_RECALL_FORBIDDEN');
+            assert.strictEqual(result.status, 403);
+        });
+
+        it('still falls back to RECALL_NO_PROFILE for unknown codes', () => {
+            const resolved = {
+                resolved: false,
+                code: 'RECALL_UNKNOWN_CODE'
+            };
+            const result = mapResolvedRecallFailure(resolved, 'AgentA', 'p1');
+            assert.strictEqual(result.code, 'AGW_RECALL_NO_PROFILE');
+            assert.strictEqual(result.status, 404);
         });
     });
 });

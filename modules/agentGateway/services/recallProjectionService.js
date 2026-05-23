@@ -181,6 +181,94 @@ function estimateTokenCount(text) {
     return Math.max(1, cjkCount + Math.ceil(nonCjkCount / 4));
 }
 
+function truncateTextByTokens(text, maxTokens) {
+    const normalizedText = typeof text === 'string' ? text.trim() : '';
+    if (!normalizedText || maxTokens <= 0) {
+        return '';
+    }
+    let candidate = normalizedText;
+    while (candidate && estimateTokenCount(candidate) > maxTokens) {
+        candidate = candidate.slice(0, -1).trimEnd();
+    }
+    return candidate;
+}
+
+function projectBudgetedContextBlocks(items, options) {
+    const opts = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+    const tokenBudget = typeof opts.tokenBudget === 'number' && Number.isFinite(opts.tokenBudget) && opts.tokenBudget > 0
+        ? Math.floor(opts.tokenBudget)
+        : undefined;
+    const maxTokenRatio = typeof opts.maxTokenRatio === 'number' && Number.isFinite(opts.maxTokenRatio)
+        ? Math.max(0.1, Math.min(1.0, opts.maxTokenRatio))
+        : undefined;
+    const minScore = typeof opts.minScore === 'number' && Number.isFinite(opts.minScore)
+        ? Math.max(0, Math.min(1, opts.minScore))
+        : undefined;
+    const maxBlocks = typeof opts.maxBlocks === 'number' && Number.isFinite(opts.maxBlocks) && opts.maxBlocks > 0
+        ? Math.floor(opts.maxBlocks)
+        : undefined;
+
+    const maxInjectedTokens = tokenBudget !== undefined && maxTokenRatio !== undefined
+        ? Math.max(1, Math.floor(tokenBudget * maxTokenRatio))
+        : undefined;
+
+    const scoredItems = Array.isArray(items) ? items : [];
+    const eligibleItems = minScore !== undefined
+        ? scoredItems.filter((item) => typeof item?.score === 'number' && Number.isFinite(item.score) && item.score >= minScore)
+        : scoredItems;
+    const filteredByMinScore = Math.max(0, scoredItems.length - eligibleItems.length);
+
+    let consumedTokens = 0;
+    const selectedItems = [];
+    let truncatedCount = 0;
+
+    for (const item of eligibleItems) {
+        if (maxBlocks !== undefined && selectedItems.length >= maxBlocks) {
+            break;
+        }
+        const itemTokens = estimateTokenCount(item?.text);
+        if (maxInjectedTokens !== undefined && consumedTokens > 0 && consumedTokens + itemTokens > maxInjectedTokens) {
+            continue;
+        }
+        if (maxInjectedTokens !== undefined && itemTokens > maxInjectedTokens) {
+            const remainingTokens = Math.max(1, maxInjectedTokens - consumedTokens);
+            const truncatedText = truncateTextByTokens(item?.text, remainingTokens);
+            if (!truncatedText) {
+                continue;
+            }
+            selectedItems.push({
+                ...item,
+                text: truncatedText,
+                __truncated: true
+            });
+            consumedTokens += estimateTokenCount(truncatedText);
+            truncatedCount += 1;
+            break;
+        }
+        selectedItems.push(item);
+        consumedTokens += itemTokens;
+    }
+
+    const blocks = projectContextBlocks(selectedItems);
+    for (let i = 0; i < blocks.length; i += 1) {
+        if (selectedItems[i].__truncated) {
+            blocks[i].metadata.truncated = true;
+        }
+    }
+
+    const appliedPolicy = {
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(maxTokenRatio !== undefined ? { maxTokenRatio } : {}),
+        ...(maxInjectedTokens !== undefined ? { maxInjectedTokens } : {}),
+        ...(maxBlocks !== undefined ? { maxBlocks } : {}),
+        ...(minScore !== undefined ? { minScore } : {}),
+        filteredByMinScore,
+        truncatedCount
+    };
+
+    return { blocks, consumedTokens, appliedPolicy };
+}
+
 function projectSearchItems(items) {
     if (!Array.isArray(items)) {
         return [];
@@ -226,7 +314,9 @@ function createRecallProjectionService() {
         projectFullResult,
         projectFullTextSections,
         projectSearchItems,
-        projectContextBlocks
+        projectContextBlocks,
+        projectBudgetedContextBlocks,
+        truncateTextByTokens
     };
 }
 
@@ -238,5 +328,8 @@ module.exports = {
     projectFullTextSections,
     projectSearchItems,
     projectContextBlocks,
+    projectBudgetedContextBlocks,
+    truncateTextByTokens,
+    estimateTokenCount,
     resolveActiveProjection
 };

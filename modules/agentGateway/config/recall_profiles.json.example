@@ -1,5 +1,5 @@
 {
-  "_comment": "Recall Profile 配置：每个 agent 可拥有多个 profile，每个 profile 包含一条或多条 recall rules",
+  "_comment": "Recall Profile 配置：每个 agent 可拥有多个 profile，每个 profile 包含一条或多条 recall rules。\nstructured model（baseMode + targets.diaries + targets.kMultiplier）为首选格式。\n旧字段 type/diaries/kMultiplier 仍兼容但已弃用，运行时将输出 deprecation warning。",
   "agents": {
     "AgentName": {
       "defaultProfile": "profile-name",
@@ -7,8 +7,11 @@
         "profile-name": {
           "rules": [
             {
-              "type": "rag",
-              "diaries": ["DiaryName日记本"],
+              "baseMode": "rag",
+              "targets": {
+                "diaries": ["DiaryName日记本"],
+                "kMultiplier": 1.5
+              },
               "modifiers": {
                 "time": true,
                 "group": true,
@@ -22,8 +25,11 @@
         "gated-profile": {
           "rules": [
             {
-              "type": "gated_rag",
-              "diaries": ["DiaryName日记本"],
+              "baseMode": "gated_rag",
+              "targets": {
+                "diaries": ["DiaryName日记本"],
+                "kMultiplier": 2.0
+              },
               "gateThreshold": 0.35,
               "modifiers": {
                 "time": false,

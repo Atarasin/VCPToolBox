@@ -19,7 +19,7 @@ function cosineSimilarity(vectorA, vectorB) {
 const { createContextRuntimeService } = require('../../../modules/agentGateway/services/contextRuntimeService');
 const { createRecallRuntimeService } = require('../../../modules/agentGateway/services/recallRuntimeService');
 
-function createContextServiceWithRecall(overrides = {}, deps = {}) {
+function createContextServiceWithRecall(overrides = {}, deps = {}, recallOverrides = {}) {
     const pluginManager = createPluginManager(overrides);
     const stubProfileResolver = {
         resolveForAgent() {
@@ -35,7 +35,7 @@ function createContextServiceWithRecall(overrides = {}, deps = {}) {
     recallRuntimeService = createRecallRuntimeService({
         pluginManager,
         contextRuntimeService,
-        recallProfileResolver: stubProfileResolver,
+        recallProfileResolver: recallOverrides.recallProfileResolver || stubProfileResolver,
         embeddingUtilsLoader: () => require('../../../EmbeddingUtils')
     });
     return contextRuntimeService;

@@ -16,12 +16,17 @@
       "merge": "concat",
       "aggregate": "max",
       "projection": "semantic",
+      "tokenBudget": 1600,
+      "maxTokenRatio": 0.7,
+      "minScore": 0.2,
       "metadata": { "priority": "high", "tier": "core" },
       "rules": [
         {
-          "type": "rag",
-          "diaries": ["Nexus日记本"],
-          "kMultiplier": 1.5,
+          "baseMode": "rag",
+          "targets": {
+            "diaries": ["Nexus日记本"],
+            "kMultiplier": 1.5
+          },
           "meta": { "source": "nexus-core" },
           "modifiers": {
             "time": true,
@@ -37,13 +42,18 @@
       "merge": "interleave",
       "aggregate": "mean",
       "projection": "keyword",
+      "tokenBudget": 1200,
+      "maxTokenRatio": 0.6,
+      "minScore": 0.35,
       "metadata": { "priority": "normal", "tier": "standard" },
       "rules": [
         {
-          "type": "gated_rag",
-          "diaries": ["Aemeath日记本"],
+          "baseMode": "gated_rag",
+          "targets": {
+            "diaries": ["Aemeath日记本"],
+            "kMultiplier": 2.0
+          },
           "gateThreshold": 0.35,
-          "kMultiplier": 2.0,
           "meta": { "source": "aemeath-gated" },
           "modifiers": {
             "time": false,
@@ -59,10 +69,15 @@
       "merge": "concat",
       "aggregate": "sum",
       "projection": "full",
+      "tokenBudget": 2000,
+      "maxTokenRatio": 0.8,
+      "minScore": 0.1,
       "rules": [
         {
-          "type": "full_text",
-          "diaries": ["Aemeath日记本"],
+          "baseMode": "full_text",
+          "targets": {
+            "diaries": ["Aemeath日记本"]
+          },
           "modifiers": {
             "timeDecay": true,
             "roleValve": true,
@@ -76,13 +91,18 @@
       "merge": "interleave",
       "aggregate": "max",
       "projection": "hybrid",
+      "tokenBudget": 1500,
+      "maxTokenRatio": 0.7,
+      "minScore": 0.35,
       "metadata": { "priority": "high" },
       "rules": [
         {
-          "type": "gated_full_text",
-          "diaries": ["Aemeath日记本"],
+          "baseMode": "gated_full_text",
+          "targets": {
+            "diaries": ["Aemeath日记本"],
+            "kMultiplier": 1.2
+          },
           "gateThreshold": 0.35,
-          "kMultiplier": 1.2,
           "modifiers": {
             "timeDecay": true,
             "roleValve": true,

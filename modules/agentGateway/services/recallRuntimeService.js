@@ -5,6 +5,7 @@ const {
     normalizeDiaryCanonicalName,
     resolveDiaryAliasesToAvailable
 } = require('../policy/mcpAgentMemoryPolicy');
+const { estimateTokenCount, truncateTextByTokens } = require('./recallProjectionService');
 
 const MODIFIER_TO_RAG_OPTION = Object.freeze({
     time: 'timeAware',
@@ -886,7 +887,7 @@ function applyS02Modifiers(items, modifiers, options = {}) {
     // Apply modifiers in pipeline order (only S02 post-processing modifiers)
     for (const modifierKey of MODIFIER_PIPELINE_ORDER) {
         if (modifierKey === 'time' || modifierKey === 'group' || modifierKey === 'tagMemo' ||
-            modifierKey === 'rerank' || modifierKey === 'truncate' || modifierKey === 'aiMemo') {
+            modifierKey === 'rerank' || modifierKey === 'aiMemo') {
             continue;
         }
 
@@ -920,6 +921,9 @@ function applyS02Modifiers(items, modifiers, options = {}) {
             const result = applyBase64Memo(currentItems, modifierValue);
             currentItems = result.items;
             accumulatedAttachments = accumulatedAttachments.concat(result.attachments);
+        } else if (modifierKey === 'truncate') {
+            const truncateLimit = parseModifierValue('truncate', modifierValue);
+            currentItems = applyTruncate(currentItems, truncateLimit);
         }
 
         modifierDetails.push({
@@ -931,6 +935,66 @@ function applyS02Modifiers(items, modifiers, options = {}) {
     }
 
     return { items: currentItems, attachments: accumulatedAttachments, modifierDetails };
+}
+
+// --- Budget post-processing (S02 profile-level) ---
+
+function applyBudgetPostProcessing(items, resolved) {
+    const tokenBudget = resolved?.tokenBudget;
+    const maxTokenRatio = resolved?.maxTokenRatio;
+    const minScore = resolved?.minScore;
+
+    if (tokenBudget === undefined && maxTokenRatio === undefined && minScore === undefined) {
+        return { items, skipped: true, consumedTokens: 0, inputItemCount: items.length, outputItemCount: items.length };
+    }
+
+    const maxInjectedTokens = tokenBudget !== undefined && maxTokenRatio !== undefined
+        ? Math.max(1, Math.floor(tokenBudget * maxTokenRatio))
+        : undefined;
+
+    let eligibleItems = items;
+    if (minScore !== undefined) {
+        eligibleItems = items.filter((item) => typeof item?.score === 'number' && Number.isFinite(item.score) && item.score >= minScore);
+    }
+
+    let consumedTokens = 0;
+    const selectedItems = [];
+    let truncatedCount = 0;
+
+    for (const item of eligibleItems) {
+        const itemTokens = estimateTokenCount(item?.text);
+        if (maxInjectedTokens !== undefined && consumedTokens > 0 && consumedTokens + itemTokens > maxInjectedTokens) {
+            continue;
+        }
+        if (maxInjectedTokens !== undefined && itemTokens > maxInjectedTokens) {
+            const remainingTokens = Math.max(1, maxInjectedTokens - consumedTokens);
+            const truncatedText = truncateTextByTokens(item?.text, remainingTokens);
+            if (!truncatedText) {
+                continue;
+            }
+            selectedItems.push({
+                ...item,
+                text: truncatedText
+            });
+            consumedTokens += estimateTokenCount(truncatedText);
+            truncatedCount += 1;
+            break;
+        }
+        selectedItems.push(item);
+        consumedTokens += itemTokens;
+    }
+
+    return {
+        items: selectedItems,
+        skipped: false,
+        consumedTokens,
+        truncatedCount,
+        inputItemCount: items.length,
+        outputItemCount: selectedItems.length,
+        minScoreApplied: minScore !== undefined,
+        tokenBudgetApplied: tokenBudget !== undefined,
+        maxTokenRatioApplied: maxTokenRatio !== undefined
+    };
 }
 
 // --- Result processing ---
@@ -1054,6 +1118,38 @@ function mapResolvedRecallFailure(resolved, normalizedAgentId, requestedProfileN
             status: 403
         };
     }
+    if (rawCode === 'RECALL_INVALID_PROFILE' || rawCode === AGW_ERROR_CODES.RECALL_INVALID_PROFILE) {
+        return {
+            code: AGW_ERROR_CODES.RECALL_INVALID_PROFILE,
+            error: resolved?.details?.message || `Invalid recall profile for agent "${normalizedAgentId}"`,
+            status: 400,
+            details: resolved?.details || {}
+        };
+    }
+    if (rawCode === 'RECALL_INVALID_RULE' || rawCode === AGW_ERROR_CODES.RECALL_INVALID_RULE) {
+        return {
+            code: AGW_ERROR_CODES.RECALL_INVALID_RULE,
+            error: resolved?.details?.message || `Invalid rule in recall profile for agent "${normalizedAgentId}"`,
+            status: 400,
+            details: resolved?.details || {}
+        };
+    }
+    if (rawCode === 'RECALL_INVALID_MODIFIER' || rawCode === AGW_ERROR_CODES.RECALL_INVALID_MODIFIER) {
+        return {
+            code: AGW_ERROR_CODES.RECALL_INVALID_MODIFIER,
+            error: resolved?.details?.message || `Invalid modifier in recall profile for agent "${normalizedAgentId}"`,
+            status: 400,
+            details: resolved?.details || {}
+        };
+    }
+    if (rawCode === 'RECALL_INVALID_DIARY' || rawCode === AGW_ERROR_CODES.RECALL_INVALID_DIARY) {
+        return {
+            code: AGW_ERROR_CODES.RECALL_INVALID_DIARY,
+            error: resolved?.details?.message || `Invalid diary access in recall profile for agent "${normalizedAgentId}"`,
+            status: 400,
+            details: resolved?.details || {}
+        };
+    }
     return {
         code: AGW_ERROR_CODES.RECALL_NO_PROFILE,
         error: `No recall profile resolved for agent "${normalizedAgentId}"`,
@@ -1154,13 +1250,8 @@ function createRecallRuntimeService(deps = {}) {
         let vectorFetchError = null;
         if (!inlineRule) {
             try {
-                const ctxService = deps.contextRuntimeService;
-                const knowledgeBaseManager = ctxService?.getKnowledgeBaseManager
-                    ? ctxService.getKnowledgeBaseManager(pluginManager)
-                    : null;
-                const ragPlugin = ctxService?.getRagPlugin
-                    ? ctxService.getRagPlugin(pluginManager)
-                    : null;
+                const knowledgeBaseManager = getKnowledgeBaseManager(deps, pluginManager);
+                const ragPlugin = getRagPlugin(deps, pluginManager);
                 queryVector = await getQueryVector(normalizedQuery, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader);
             } catch (error) {
                 vectorFetchError = error;
@@ -1390,9 +1481,32 @@ function createRecallRuntimeService(deps = {}) {
                 });
                 ruleItems = s02Result.items;
                 ruleDiagnostic.modifierDetails = [...preModifierDetails, ...ragModifierDetails, ...s02Result.modifierDetails];
+                const truncateDetail = s02Result.modifierDetails.find((m) => m.modifier === 'truncate');
+                if (truncateDetail) {
+                    ruleDiagnostic.truncateInputCount = truncateDetail.inputCount;
+                    ruleDiagnostic.truncateOutputCount = truncateDetail.outputCount;
+                }
                 if (s02Result.attachments.length > 0) {
                     allAttachments.push(...s02Result.attachments);
                     ruleDiagnostic.attachmentCount = s02Result.attachments.length;
+                }
+
+                // --- Per-rule aiMemo ---
+                const ruleAiMemoModifier = !inlineRule ? rule.modifiers?.aiMemo : undefined;
+                const ruleAiMemo = ruleAiMemoModifier ? parseModifierValue('aiMemo', ruleAiMemoModifier) : false;
+                if (ruleAiMemo) {
+                    const aiMemoConfig = aiMemoConfigLoader();
+                    const preset = (ruleAiMemoModifier && typeof ruleAiMemoModifier === 'object' && !Array.isArray(ruleAiMemoModifier))
+                        ? normalizeString(ruleAiMemoModifier.preset)
+                        : '';
+                    const aiMemoResult = await applyAIMemo(ruleItems, {
+                        ...(aiMemoConfig || {}),
+                        preset: preset || undefined
+                    });
+                    if (aiMemoResult.modifierDetail) {
+                        ruleDiagnostic.modifierDetails.push(aiMemoResult.modifierDetail);
+                        ruleDiagnostic.aiMemoSummary = aiMemoResult.summary;
+                    }
                 }
 
                 ruleItemsArrays.push(ruleItems);
@@ -1488,12 +1602,8 @@ function createRecallRuntimeService(deps = {}) {
             mergeDetail.outputItemCount = mergedItems.length;
         }
 
-        // Apply profile-level truncateTo if set, otherwise fall back to first rule's truncate modifier.
-        const truncateLimit = profileTruncateTo !== undefined
-            ? profileTruncateTo
-            : (resolved.rules[0]?.modifiers?.truncate
-                ? parseModifierValue('truncate', resolved.rules[0].modifiers.truncate)
-                : null);
+        // Apply profile-level truncateTo if set.
+        const truncateLimit = profileTruncateTo !== undefined ? profileTruncateTo : null;
         mergedItems = applyTruncate(mergedItems, truncateLimit);
         mergedItems = mergedItems.map((item) => createRecallBlock(item));
         mergeDetail.outputItemCount = mergedItems.length;
@@ -1505,33 +1615,39 @@ function createRecallRuntimeService(deps = {}) {
             detail: mergeDetail
         });
 
-        // --- AIMemo post-recall summarization ---
-        // Skip AIMemo for inlineRule path (profile-level only)
-        let aiMemoSummary = null;
-        const globalAiMemoModifier = !inlineRule ? resolved.rules[0]?.modifiers?.aiMemo : false;
-        const globalAiMemo = globalAiMemoModifier
-            ? parseModifierValue('aiMemo', globalAiMemoModifier)
-            : false;
+        // --- Budget post-processing ---
+        const budgetStartedAt = Date.now();
+        const budgetResult = applyBudgetPostProcessing(mergedItems, resolved);
+        mergedItems = budgetResult.items;
+        if (!budgetResult.skipped) {
+            pipelineStages.push({
+                name: 'budgetFilter',
+                durationMs: Date.now() - budgetStartedAt,
+                status: 'ok',
+                detail: {
+                    inputItemCount: budgetResult.inputItemCount,
+                    outputItemCount: budgetResult.outputItemCount,
+                    minScoreApplied: budgetResult.minScoreApplied,
+                    tokenBudgetApplied: budgetResult.tokenBudgetApplied,
+                    maxTokenRatioApplied: budgetResult.maxTokenRatioApplied,
+                    tokensConsumed: budgetResult.consumedTokens
+                }
+            });
+        }
 
-        if (globalAiMemo) {
+        // --- Profile-level AIMemo ---
+        let aiMemoSummary = null;
+        const profileAiMemo = !inlineRule ? resolved.aiMemo : undefined;
+        if (profileAiMemo) {
             const aiMemoConfig = aiMemoConfigLoader();
-            // Extract preset from structured modifier object (e.g. { enabled: true, preset: 'concise' })
-            const preset = (globalAiMemoModifier && typeof globalAiMemoModifier === 'object' && !Array.isArray(globalAiMemoModifier))
-                ? normalizeString(globalAiMemoModifier.preset)
+            const preset = (profileAiMemo && typeof profileAiMemo === 'object' && !Array.isArray(profileAiMemo))
+                ? normalizeString(profileAiMemo.preset)
                 : '';
             const aiMemoResult = await applyAIMemo(mergedItems, {
                 ...(aiMemoConfig || {}),
                 preset: preset || undefined
             });
             if (aiMemoResult.modifierDetail) {
-                // Attach modifier detail to the last rule diagnostic for per-modifier reporting
-                const lastRuleDiag = ruleDiagnostics[ruleDiagnostics.length - 1];
-                if (lastRuleDiag) {
-                    if (!lastRuleDiag.modifierDetails) {
-                        lastRuleDiag.modifierDetails = [];
-                    }
-                    lastRuleDiag.modifierDetails.push(aiMemoResult.modifierDetail);
-                }
                 pipelineStages.push({
                     name: 'aiMemo',
                     durationMs: aiMemoResult.modifierDetail.durationMs,
@@ -1577,6 +1693,18 @@ function createRecallRuntimeService(deps = {}) {
                     if (resolved.projection !== undefined) {
                         meta.projection = resolved.projection;
                     }
+                    if (resolved.tokenBudget !== undefined) {
+                        meta.tokenBudget = resolved.tokenBudget;
+                    }
+                    if (resolved.maxTokenRatio !== undefined) {
+                        meta.maxTokenRatio = resolved.maxTokenRatio;
+                    }
+                    if (resolved.minScore !== undefined) {
+                        meta.minScore = resolved.minScore;
+                    }
+                    if (resolved.aiMemo !== undefined) {
+                        meta.aiMemo = resolved.aiMemo;
+                    }
                     return meta;
                 })(),
                 attachments: allAttachments.length > 0 ? allAttachments : undefined,
@@ -1602,6 +1730,7 @@ module.exports = {
     applyTruncate,
     createRecallBlock,
     buildRecallResult,
+    mapResolvedRecallFailure,
     applyTimeDecay,
     applyRoleValve,
     parseRoleValveConfig,
@@ -1609,6 +1738,7 @@ module.exports = {
     applyBase64Memo,
     applyAIMemo,
     applyS02Modifiers,
+    applyBudgetPostProcessing,
     defaultAiMemoConfigLoader,
     AIMEMO_PROMPT,
     AIMEMO_PRESETS,

@@ -39,6 +39,7 @@ const {
     applyRoleValve,
     applyBase64Memo,
     applyS02Modifiers,
+    applyBudgetPostProcessing,
     MODIFIER_PIPELINE_ORDER,
     MODIFIER_TO_RAG_OPTION,
     GATED_RULE_TYPES,
@@ -688,6 +689,193 @@ describe('S02 — RecallRuntimeService extensions', () => {
             const result = await service.executeRecall({ agentId: 'AgentDiag2', query: 'query' });
             assert.strictEqual(result.diagnostics.attachments, undefined);
             assert.strictEqual(result.diagnostics.rules[0].attachmentCount, undefined);
+        });
+    });
+
+    describe('applyBudgetPostProcessing', () => {
+        it('skips when no budget fields are set', () => {
+            const items = [
+                { text: 'a', score: 0.9 },
+                { text: 'b', score: 0.8 }
+            ];
+            const result = applyBudgetPostProcessing(items, {});
+            assert.strictEqual(result.skipped, true);
+            assert.deepStrictEqual(result.items, items);
+            assert.strictEqual(result.inputItemCount, 2);
+            assert.strictEqual(result.outputItemCount, 2);
+        });
+
+        it('filters items below minScore', () => {
+            const items = [
+                { text: 'high', score: 0.9 },
+                { text: 'low', score: 0.5 },
+                { text: 'medium', score: 0.7 }
+            ];
+            const result = applyBudgetPostProcessing(items, { minScore: 0.6 });
+            assert.strictEqual(result.skipped, false);
+            assert.strictEqual(result.outputItemCount, 2);
+            assert.strictEqual(result.items[0].text, 'high');
+            assert.strictEqual(result.items[1].text, 'medium');
+            assert.strictEqual(result.minScoreApplied, true);
+            assert.strictEqual(result.tokenBudgetApplied, false);
+        });
+
+        it('applies token budget and skips items that would exceed', () => {
+            // Each ASCII char = ~0.25 tokens, so 'aaaa' = 1 token
+            const items = [
+                { text: 'aaaaaaaa', score: 0.9 }, // 2 tokens
+                { text: 'bbbbbbbb', score: 0.8 }, // 2 tokens
+                { text: 'cccccccc', score: 0.7 }  // 2 tokens
+            ];
+            const result = applyBudgetPostProcessing(items, { tokenBudget: 4, maxTokenRatio: 0.5 });
+            // maxInjectedTokens = 2
+            assert.strictEqual(result.skipped, false);
+            assert.strictEqual(result.outputItemCount, 1);
+            assert.strictEqual(result.items[0].text, 'aaaaaaaa');
+            assert.strictEqual(result.consumedTokens, 2);
+            assert.strictEqual(result.tokenBudgetApplied, true);
+            assert.strictEqual(result.maxTokenRatioApplied, true);
+        });
+
+        it('truncates a single oversized item to fit remaining budget', () => {
+            const items = [
+                { text: 'aaaaaaaaaaaaaaaa', score: 0.9 } // 4 tokens
+            ];
+            const result = applyBudgetPostProcessing(items, { tokenBudget: 4, maxTokenRatio: 0.5 });
+            // maxInjectedTokens = 2, item is 4 tokens > 2, so truncate to remaining 2 tokens
+            assert.strictEqual(result.skipped, false);
+            assert.strictEqual(result.outputItemCount, 1);
+            assert.strictEqual(result.items[0].text, 'aaaaaaaa');
+            assert.strictEqual(result.truncatedCount, 1);
+            assert.strictEqual(result.consumedTokens, 2);
+        });
+
+        it('skips subsequent items when budget is exhausted', () => {
+            const items = [
+                { text: 'aaaaaaaa', score: 0.9 }, // 2 tokens
+                { text: 'bbbbbbbb', score: 0.8 }  // 2 tokens, would exceed
+            ];
+            const result = applyBudgetPostProcessing(items, { tokenBudget: 4, maxTokenRatio: 0.5 });
+            // maxInjectedTokens = 2
+            // First item fits exactly (2 tokens), second would exceed (2+2=4 > 2) so skipped
+            assert.strictEqual(result.skipped, false);
+            assert.strictEqual(result.outputItemCount, 1);
+            assert.strictEqual(result.items[0].text, 'aaaaaaaa');
+            assert.strictEqual(result.consumedTokens, 2);
+        });
+
+        it('combines minScore and token budget', () => {
+            const items = [
+                { text: 'high', score: 0.9 },
+                { text: 'low but long text', score: 0.5 },
+                { text: 'med', score: 0.7 }
+            ];
+            const result = applyBudgetPostProcessing(items, { tokenBudget: 10, maxTokenRatio: 0.5, minScore: 0.6 });
+            // maxInjectedTokens = 5
+            // high = 1 token, med = 1 token → both fit
+            assert.strictEqual(result.outputItemCount, 2);
+            assert.strictEqual(result.minScoreApplied, true);
+            assert.strictEqual(result.tokenBudgetApplied, true);
+        });
+    });
+
+    describe('executeRecall budgetFilter pipeline stage', () => {
+        it('adds budgetFilter stage when profile has budget fields', async () => {
+            resetMocks([
+                { text: 'item a', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' },
+                { text: 'item b', score: 0.5, sourceDiary: 'TestDiary', sourceFile: 'b.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: {
+                    resolveForAgent: () => ({
+                        resolved: true,
+                        agentId: 'AgentBudget',
+                        profileName: 'budget-profile',
+                        rules: [{
+                            type: 'rag',
+                            diaries: ['TestDiary'],
+                            modifiers: {}
+                        }],
+                        minScore: 0.6,
+                        tokenBudget: 100,
+                        maxTokenRatio: 0.5
+                    })
+                },
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentBudget', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 1);
+            assert.strictEqual(result.items[0].text, 'item a');
+
+            const budgetStage = result.diagnostics.pipelineStages.find((s) => s.name === 'budgetFilter');
+            assert.ok(budgetStage, 'should have budgetFilter stage');
+            assert.strictEqual(budgetStage.detail.inputItemCount, 2);
+            assert.strictEqual(budgetStage.detail.outputItemCount, 1);
+            assert.strictEqual(budgetStage.detail.minScoreApplied, true);
+            assert.strictEqual(budgetStage.detail.tokenBudgetApplied, true);
+            assert.strictEqual(budgetStage.detail.maxTokenRatioApplied, true);
+            assert.strictEqual(budgetStage.detail.tokensConsumed > 0, true);
+        });
+
+        it('skips budgetFilter stage when profile has no budget fields', async () => {
+            resetMocks([
+                { text: 'item a', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: createMockResolver([{
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: {}
+                }]),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentNoBudget', query: 'query' });
+            assert.strictEqual(result.success, true);
+            const budgetStage = result.diagnostics.pipelineStages.find((s) => s.name === 'budgetFilter');
+            assert.strictEqual(budgetStage, undefined);
+        });
+
+        it('includes budget fields in profileMeta when set', async () => {
+            resetMocks([
+                { text: 'item a', score: 0.9, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: {
+                    resolveForAgent: () => ({
+                        resolved: true,
+                        agentId: 'AgentMeta',
+                        profileName: 'meta-profile',
+                        rules: [{
+                            type: 'rag',
+                            diaries: ['TestDiary'],
+                            modifiers: {}
+                        }],
+                        minScore: 0.6,
+                        tokenBudget: 100,
+                        maxTokenRatio: 0.5
+                    })
+                },
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentMeta', query: 'query' });
+            assert.strictEqual(result.success, true);
+            const meta = result.diagnostics.profileMeta;
+            assert.strictEqual(meta.tokenBudget, 100);
+            assert.strictEqual(meta.maxTokenRatio, 0.5);
+            assert.strictEqual(meta.minScore, 0.6);
         });
     });
 

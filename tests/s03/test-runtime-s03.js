@@ -1,5 +1,8 @@
-const { describe, it, before } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
+const axios = require('axios');
+
+const originalAxiosPost = axios.post;
 
 // Mock collectRagItems before requiring the service under test
 const mockCollectRagItemsCalls = [];
@@ -28,9 +31,18 @@ require.cache[require.resolve('../../modules/agentGateway/services/contextRuntim
 const {
     createRecallRuntimeService,
     applyS02Modifiers,
-    buildRecallResult,
-    MODIFIER_PIPELINE_ORDER
+    applyTruncate,
+    createRecallBlock
 } = require('../../modules/agentGateway/services/recallRuntimeService');
+
+function makeItems(count, baseScore = 1.0) {
+    return Array.from({ length: count }, (_, i) => ({
+        text: `item-${i}`,
+        score: baseScore - i * 0.01,
+        sourceDiary: 'TestDiary',
+        sourceFile: `f${i}.md`
+    }));
+}
 
 function createMockResolver(rules, profileName = 'default') {
     return {
@@ -74,21 +86,25 @@ function createMockContextRuntimeService() {
     };
 }
 
-function resetMocks(mockItems) {
+function resetMocks(mockItems, enrichedFields = {}) {
     mockCollectRagItemsCalls.length = 0;
     mockFullTextCalls.length = 0;
+    mockCollectRagItemsImpl = async (args) => {
+        mockCollectRagItemsCalls.push(args);
+        return { ...mockCollectRagItemsResult };
+    };
     mockCollectRagItemsResult = {
         success: true,
-        items: mockItems || []
+        items: mockItems || [],
+        timeRanges: enrichedFields.timeRanges || [],
+        activatedGroups: enrichedFields.activatedGroups || new Map(),
+        rerankApplied: enrichedFields.rerankApplied || false,
+        coreTags: enrichedFields.coreTags || []
     };
     mockFullTextResult = {
         success: true,
         items: mockItems || [],
-        targetDiaries: ['TestDiary']
-    };
-    mockCollectRagItemsImpl = async (args) => {
-        mockCollectRagItemsCalls.push(args);
-        return { ...mockCollectRagItemsResult };
+        targetDiaries: enrichedFields.targetDiaries || ['TestDiary']
     };
 }
 
@@ -96,678 +112,381 @@ function createTestService(overrides = {}) {
     return createRecallRuntimeService({
         pluginManager: createMockPluginManager(),
         contextRuntimeService: createMockContextRuntimeService(),
+        embeddingUtilsLoader: () => ({}),
         fullTextRetriever: async (args) => mockFullTextImpl(args),
         ...overrides
     });
 }
 
-describe('RecallRuntimeService S03 diagnostics', () => {
-    describe('applyS02Modifiers modifierDetails', () => {
-        it('returns modifierDetails array even with no modifiers', () => {
-            const items = [{ text: 'A', score: 0.9 }];
-            const result = applyS02Modifiers(items, {});
-            assert.ok(Array.isArray(result.modifierDetails));
-            assert.strictEqual(result.modifierDetails.length, 0);
+describe('S03 — Per-rule truncate semantic governance', () => {
+    describe('applyTruncate', () => {
+        it('returns items unchanged when limit is not a positive number', () => {
+            const items = makeItems(3);
+            assert.deepStrictEqual(applyTruncate(items, null), items);
+            assert.deepStrictEqual(applyTruncate(items, true), items);
+            assert.deepStrictEqual(applyTruncate(items, 0), items);
+            assert.deepStrictEqual(applyTruncate(items, -1), items);
+            assert.deepStrictEqual(applyTruncate(items, 'bad'), items);
         });
 
-        it('returns modifierDetails array for null modifiers', () => {
-            const items = [{ text: 'A', score: 0.9 }];
-            const result = applyS02Modifiers(items, null);
-            assert.ok(Array.isArray(result.modifierDetails));
-            assert.strictEqual(result.modifierDetails.length, 0);
+        it('truncates items to the specified limit', () => {
+            const items = makeItems(5);
+            const result = applyTruncate(items, 3);
+            assert.strictEqual(result.length, 3);
+            assert.strictEqual(result[0].text, 'item-0');
+            assert.strictEqual(result[2].text, 'item-2');
+        });
+    });
+
+    describe('applyS02Modifiers — truncate in pipeline', () => {
+        it('applies truncate as a pipeline modifier', () => {
+            const items = makeItems(5);
+            const result = applyS02Modifiers(items, { truncate: 3 });
+            assert.strictEqual(result.items.length, 3);
+            assert.strictEqual(result.modifierDetails.length, 1);
+            assert.strictEqual(result.modifierDetails[0].modifier, 'truncate');
+            assert.strictEqual(result.modifierDetails[0].inputCount, 5);
+            assert.strictEqual(result.modifierDetails[0].outputCount, 3);
         });
 
-        it('records duration and counts for each applied modifier', () => {
+        it('truncate:true boolean is a no-op', () => {
+            const items = makeItems(5);
+            const result = applyS02Modifiers(items, { truncate: true });
+            assert.strictEqual(result.items.length, 5);
+            const truncateDetail = result.modifierDetails.find((m) => m.modifier === 'truncate');
+            assert.ok(truncateDetail);
+            assert.strictEqual(truncateDetail.outputCount, 5);
+        });
+
+        it('truncate with explicit 0 is a no-op', () => {
+            const items = makeItems(5);
+            const result = applyS02Modifiers(items, { truncate: 0 });
+            assert.strictEqual(result.items.length, 5);
+            const truncateDetail = result.modifierDetails.find((m) => m.modifier === 'truncate');
+            assert.ok(truncateDetail);
+            assert.strictEqual(truncateDetail.outputCount, 5);
+        });
+
+        it('applies truncate after other S02 modifiers in pipeline order', () => {
             const items = [
-                { text: 'A', score: 0.9, role: 'user' },
-                { text: 'B', score: 0.8, role: 'assistant' }
+                { text: 'a', score: 1.0, role: 'user', timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString() },
+                { text: 'b', score: 1.0, role: 'system' },
+                { text: 'c', score: 1.0, role: 'user' },
+                { text: 'd', score: 1.0, role: 'user' }
             ];
             const result = applyS02Modifiers(items, {
-                timeDecay: { halfLifeDays: 30 },
-                roleValve: ['user']
+                roleValve: ['user'],
+                truncate: 2
             });
-            assert.ok(Array.isArray(result.modifierDetails));
-            assert.strictEqual(result.modifierDetails.length, 2);
-
-            const timeDecayDetail = result.modifierDetails.find((d) => d.modifier === 'timeDecay');
-            assert.ok(timeDecayDetail);
-            assert.strictEqual(typeof timeDecayDetail.durationMs, 'number');
-            assert.ok(timeDecayDetail.durationMs >= 0);
-            assert.strictEqual(timeDecayDetail.inputCount, 2);
-            assert.strictEqual(timeDecayDetail.outputCount, 2);
-
-            const roleValveDetail = result.modifierDetails.find((d) => d.modifier === 'roleValve');
-            assert.ok(roleValveDetail);
-            assert.strictEqual(typeof roleValveDetail.durationMs, 'number');
-            assert.ok(roleValveDetail.durationMs >= 0);
-            assert.strictEqual(roleValveDetail.inputCount, 2);
-            assert.strictEqual(roleValveDetail.outputCount, 1);
-        });
-
-        it('records base64Memo modifier detail with attachment extraction', () => {
-            const items = [
-                { text: 'data:image/png;base64,abc123', score: 0.9 }
-            ];
-            const result = applyS02Modifiers(items, { base64Memo: true });
-            assert.strictEqual(result.modifierDetails.length, 1);
-            assert.strictEqual(result.modifierDetails[0].modifier, 'base64Memo');
-            assert.strictEqual(result.modifierDetails[0].inputCount, 1);
-            assert.strictEqual(result.modifierDetails[0].outputCount, 1);
-            assert.ok(result.modifierDetails[0].durationMs >= 0);
-        });
-
-        it('skips modifiers not present in modifiers object', () => {
-            const items = [{ text: 'A', score: 0.9 }];
-            const result = applyS02Modifiers(items, { timeDecay: { halfLifeDays: 30 } });
-            assert.strictEqual(result.modifierDetails.length, 1);
-            assert.strictEqual(result.modifierDetails[0].modifier, 'timeDecay');
+            // roleValve first → 3 user items, then truncate → 2
+            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.items[0].text, 'a');
+            assert.strictEqual(result.items[1].text, 'c');
         });
     });
 
-    describe('buildRecallResult diagnostics defaults', () => {
-        it('includes pipelineStages in default diagnostics', () => {
-            const result = buildRecallResult({ success: true });
-            assert.ok(Array.isArray(result.diagnostics.pipelineStages));
-            assert.deepStrictEqual(result.diagnostics.pipelineStages, []);
-        });
+    describe('executeRecall — multi-rule truncate independence', () => {
+        it('each rule truncate applies independently before merge', async () => {
+            resetMocks();
 
-        it('includes profileMeta in default diagnostics', () => {
-            const result = buildRecallResult({ success: true });
-            assert.strictEqual(result.diagnostics.profileMeta, null);
-        });
-
-        it('preserves provided diagnostics including pipelineStages and profileMeta', () => {
-            const diagnostics = {
-                totalDurationMs: 150,
-                rules: [{ type: 'rag', status: 'ok' }],
-                pipelineStages: [{ name: 'test', durationMs: 10, status: 'ok' }],
-                profileMeta: { profileName: 'test-profile', ruleCount: 1 }
+            // Use distinct diaries so each rule gets non-overlapping items
+            mockCollectRagItemsImpl = async (args) => {
+                mockCollectRagItemsCalls.push(args);
+                const diary = args.requestedDiaries?.[0];
+                if (diary === 'Diary1') {
+                    return {
+                        success: true,
+                        items: [
+                            { text: 'r1-a', score: 0.95, sourceDiary: 'Diary1', sourceFile: 'a.md' },
+                            { text: 'r1-b', score: 0.94, sourceDiary: 'Diary1', sourceFile: 'b.md' },
+                            { text: 'r1-c', score: 0.93, sourceDiary: 'Diary1', sourceFile: 'c.md' },
+                            { text: 'r1-d', score: 0.92, sourceDiary: 'Diary1', sourceFile: 'd.md' },
+                            { text: 'r1-e', score: 0.91, sourceDiary: 'Diary1', sourceFile: 'e.md' }
+                        ]
+                    };
+                }
+                if (diary === 'Diary2') {
+                    return {
+                        success: true,
+                        items: [
+                            { text: 'r2-a', score: 0.95, sourceDiary: 'Diary2', sourceFile: 'x.md' },
+                            { text: 'r2-b', score: 0.94, sourceDiary: 'Diary2', sourceFile: 'y.md' },
+                            { text: 'r2-c', score: 0.93, sourceDiary: 'Diary2', sourceFile: 'z.md' },
+                            { text: 'r2-d', score: 0.92, sourceDiary: 'Diary2', sourceFile: 'w.md' },
+                            { text: 'r2-e', score: 0.91, sourceDiary: 'Diary2', sourceFile: 'v.md' }
+                        ]
+                    };
+                }
+                return { success: true, items: [] };
             };
-            const result = buildRecallResult({ success: true, diagnostics });
-            assert.deepStrictEqual(result.diagnostics.pipelineStages, diagnostics.pipelineStages);
-            assert.deepStrictEqual(result.diagnostics.profileMeta, diagnostics.profileMeta);
-        });
-    });
 
-    describe('executeRecall pipelineStages', () => {
-        const mockPluginManager = createMockPluginManager();
-        const mockContextService = createMockContextRuntimeService();
-
-        it('includes resolveProfile stage in successful execution', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([{ type: 'rag' }]);
             const service = createTestService({
-                recallProfileResolver: resolver,
-                pluginManager: mockPluginManager,
-                contextRuntimeService: mockContextService
+                recallProfileResolver: createMockResolver([
+                    {
+                        type: 'rag',
+                        diaries: ['Diary1'],
+                        modifiers: { truncate: 3 }
+                    },
+                    {
+                        type: 'rag',
+                        diaries: ['Diary2'],
+                        modifiers: { truncate: 1 }
+                    }
+                ])
             });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.success, true);
-            assert.ok(Array.isArray(result.diagnostics.pipelineStages));
-            assert.ok(result.diagnostics.pipelineStages.length >= 3);
 
-            const resolveStage = result.diagnostics.pipelineStages.find((s) => s.name === 'resolveProfile');
-            assert.ok(resolveStage);
-            assert.strictEqual(resolveStage.status, 'ok');
-            assert.ok(typeof resolveStage.durationMs === 'number');
-            assert.ok(resolveStage.durationMs >= 0);
-            assert.strictEqual(resolveStage.detail.profileName, 'default');
-            assert.strictEqual(resolveStage.detail.ruleCount, 1);
+            const result = await service.executeRecall({ agentId: 'AgentMR', query: 'query' });
+            assert.strictEqual(result.success, true);
+            // R1 truncate=3 → 3 items, R2 truncate=1 → 1 item, merge = 4 total (no overlap)
+            assert.strictEqual(result.items.length, 4, `expected 4 items, got ${result.items.length}`);
+
+            // Verify per-rule diagnostics
+            const r1Diag = result.diagnostics.rules[0];
+            const r2Diag = result.diagnostics.rules[1];
+            assert.strictEqual(r1Diag.truncateInputCount, 5);
+            assert.strictEqual(r1Diag.truncateOutputCount, 3);
+            assert.strictEqual(r2Diag.truncateInputCount, 5);
+            assert.strictEqual(r2Diag.truncateOutputCount, 1);
         });
 
-        it('includes precomputeVector stage', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([{ type: 'rag' }]);
+        it('profile-level truncateTo caps merged output', async () => {
+            resetMocks([
+                { text: 'r1-a', score: 0.95, sourceDiary: 'Diary1', sourceFile: 'a.md' },
+                { text: 'r1-b', score: 0.94, sourceDiary: 'Diary1', sourceFile: 'b.md' },
+                { text: 'r1-c', score: 0.93, sourceDiary: 'Diary1', sourceFile: 'c.md' },
+                { text: 'r1-d', score: 0.92, sourceDiary: 'Diary1', sourceFile: 'd.md' },
+                { text: 'r1-e', score: 0.91, sourceDiary: 'Diary1', sourceFile: 'e.md' }
+            ]);
+
+            const service = createRecallRuntimeService({
+                pluginManager: createMockPluginManager(),
+                recallProfileResolver: {
+                    resolveForAgent: () => ({
+                        resolved: true,
+                        agentId: 'AgentPT',
+                        profileName: 'pt-profile',
+                        rules: [
+                            { type: 'rag', diaries: ['Diary1'], modifiers: { truncate: 3 } },
+                            { type: 'rag', diaries: ['Diary1'], modifiers: { truncate: 3 } }
+                        ],
+                        truncateTo: 2
+                    })
+                },
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({})
+            });
+
+            const result = await service.executeRecall({ agentId: 'AgentPT', query: 'query' });
+            assert.strictEqual(result.success, true);
+            // Each rule truncate=3 → 3+3 = 6 pre-merge, profile truncateTo=2 → capped to 2
+            assert.strictEqual(result.items.length, 2);
+        });
+
+        it('single-rule backward compat: truncate applies pre-merge', async () => {
+            resetMocks([
+                { text: 'a', score: 0.95, sourceDiary: 'TestDiary', sourceFile: 'a.md' },
+                { text: 'b', score: 0.94, sourceDiary: 'TestDiary', sourceFile: 'b.md' },
+                { text: 'c', score: 0.93, sourceDiary: 'TestDiary', sourceFile: 'c.md' },
+                { text: 'd', score: 0.92, sourceDiary: 'TestDiary', sourceFile: 'd.md' },
+                { text: 'e', score: 0.91, sourceDiary: 'TestDiary', sourceFile: 'e.md' }
+            ]);
+
             const service = createTestService({
-                recallProfileResolver: resolver,
-                pluginManager: mockPluginManager,
-                contextRuntimeService: mockContextService
+                recallProfileResolver: createMockResolver([
+                    {
+                        type: 'rag',
+                        diaries: ['TestDiary'],
+                        modifiers: { truncate: 3 }
+                    }
+                ])
             });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const vectorStage = result.diagnostics.pipelineStages.find((s) => s.name === 'precomputeVector');
-            assert.ok(vectorStage);
-            assert.strictEqual(vectorStage.status, 'ok');
-            assert.ok(typeof vectorStage.durationMs === 'number');
-            assert.ok(vectorStage.durationMs >= 0);
-            assert.strictEqual(vectorStage.detail.vectorPrecomputed, true);
+
+            const result = await service.executeRecall({ agentId: 'AgentBC', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.items.length, 3);
+            assert.strictEqual(result.diagnostics.rules[0].truncateInputCount, 5);
+            assert.strictEqual(result.diagnostics.rules[0].truncateOutputCount, 3);
         });
 
-        it('includes ruleExecution stages for each rule', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', diaries: ['DiaryA'] },
-                { type: 'full_text', diaries: ['DiaryB'] }
+        it('multi-rule with no truncate modifier leaves all items', async () => {
+            resetMocks([
+                { text: 'r1-a', score: 0.95, sourceDiary: 'Diary1', sourceFile: 'a.md' },
+                { text: 'r1-b', score: 0.94, sourceDiary: 'Diary1', sourceFile: 'b.md' }
             ]);
+
             const service = createTestService({
-                recallProfileResolver: resolver,
-                pluginManager: mockPluginManager,
-                contextRuntimeService: mockContextService
+                recallProfileResolver: createMockResolver([
+                    { type: 'rag', diaries: ['Diary1'], modifiers: {} },
+                    { type: 'rag', diaries: ['Diary1'], modifiers: {} }
+                ])
             });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const ruleStages = result.diagnostics.pipelineStages.filter((s) => s.name === 'ruleExecution');
-            assert.strictEqual(ruleStages.length, 2);
-            assert.strictEqual(ruleStages[0].ruleIndex, 0);
-            assert.strictEqual(ruleStages[0].type, 'rag');
-            assert.strictEqual(ruleStages[0].status, 'ok');
-            assert.strictEqual(ruleStages[1].ruleIndex, 1);
-            assert.strictEqual(ruleStages[1].type, 'full_text');
-            assert.strictEqual(ruleStages[1].status, 'ok');
-        });
 
-        it('includes mergeResults stage', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([{ type: 'rag' }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const mergeStage = result.diagnostics.pipelineStages.find((s) => s.name === 'mergeResults');
-            assert.ok(mergeStage);
-            assert.strictEqual(mergeStage.status, 'ok');
-            assert.ok(typeof mergeStage.durationMs === 'number');
-            assert.ok(mergeStage.durationMs >= 0);
-            assert.ok(typeof mergeStage.detail.inputItemCount === 'number');
-            assert.ok(typeof mergeStage.detail.outputItemCount === 'number');
-        });
-
-        it('records gated status for blocked rules', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'gated_rag', gateThreshold: 0.99, diaries: ['AnotherDiary'] }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const ruleStage = result.diagnostics.pipelineStages.find((s) => s.name === 'ruleExecution');
-            assert.ok(ruleStage);
-            assert.strictEqual(ruleStage.status, 'gated');
-        });
-
-        it('stages are ordered correctly', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([{ type: 'rag' }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const stageNames = result.diagnostics.pipelineStages.map((s) => s.name);
-            const resolveIdx = stageNames.indexOf('resolveProfile');
-            const vectorIdx = stageNames.indexOf('precomputeVector');
-            const ruleIdx = stageNames.indexOf('ruleExecution');
-            const mergeIdx = stageNames.indexOf('mergeResults');
-            assert.ok(resolveIdx < vectorIdx, 'resolveProfile before precomputeVector');
-            assert.ok(vectorIdx < ruleIdx, 'precomputeVector before ruleExecution');
-            assert.ok(ruleIdx < mergeIdx, 'ruleExecution before mergeResults');
-        });
-    });
-
-    describe('executeRecall profileMeta', () => {
-        const mockPluginManager = createMockPluginManager();
-        const mockContextService = createMockContextRuntimeService();
-
-        it('includes profileMeta with profileName and ruleCount', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag' },
-                { type: 'full_text' }
-            ], 'my-profile');
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.ok(result.diagnostics.profileMeta);
-            assert.strictEqual(result.diagnostics.profileMeta.profileName, 'my-profile');
-            assert.strictEqual(result.diagnostics.profileMeta.ruleCount, 2);
-        });
-
-        it('includes modifierKeys from all rules', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { timeDecay: { halfLifeDays: 30 } } },
-                { type: 'full_text', modifiers: { base64Memo: true, truncate: 10 } }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const modifierKeys = result.diagnostics.profileMeta.modifierKeys;
-            assert.ok(Array.isArray(modifierKeys));
-            assert.ok(modifierKeys.includes('timeDecay'));
-            assert.ok(modifierKeys.includes('base64Memo'));
-            assert.ok(modifierKeys.includes('truncate'));
-        });
-    });
-
-    describe('executeRecall modifierDetails in rule diagnostics', () => {
-        const mockPluginManager = createMockPluginManager();
-        const mockContextService = createMockContextRuntimeService();
-
-        it('includes modifierDetails in rule diagnostic when modifiers are applied', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { timeDecay: { halfLifeDays: 30 } } }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.diagnostics.rules.length, 1);
-            assert.ok(Array.isArray(result.diagnostics.rules[0].modifierDetails));
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 1);
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails[0].modifier, 'timeDecay');
-        });
-
-        it('includes empty modifierDetails when no modifiers are used', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: {} }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.diagnostics.rules.length, 1);
-            assert.ok(Array.isArray(result.diagnostics.rules[0].modifierDetails));
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 0);
-        });
-
-        it('includes RAG-phase modifierDetails for rerank modifier', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { rerank: true } }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.diagnostics.rules.length, 1);
-            assert.ok(Array.isArray(result.diagnostics.rules[0].modifierDetails));
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails.length, 1);
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails[0].modifier, 'rerank');
-            assert.strictEqual(result.diagnostics.rules[0].modifierDetails[0].applied, true);
-        });
-    });
-
-    // --- T04: kMultiplier runtime tests ---
-
-    describe('executeRecall kMultiplier', () => {
-        const mockPluginManager = createMockPluginManager();
-        const mockContextService = createMockContextRuntimeService();
-
-        it('kMultiplier=2.0 on rag rule doubles baseK to 10', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', kMultiplier: 2.0 }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
+            const result = await service.executeRecall({ agentId: 'AgentNoTr', query: 'query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 10);
+            assert.strictEqual(result.items.length, 2);
+            assert.strictEqual(result.diagnostics.rules[0].truncateInputCount, undefined);
+            assert.strictEqual(result.diagnostics.rules[0].truncateOutputCount, undefined);
         });
+    });
+});
 
-        it('kMultiplier=2.0 on full_text rule keeps independent full_text retrieval', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'full_text', kMultiplier: 2.0 }
-            ]);
+describe('S03 — Per-rule aiMemo semantic governance', () => {
+    after(() => {
+        axios.post = originalAxiosPost;
+    });
+
+    describe('executeRecall — per-rule aiMemo', () => {
+        it('multi-rule per-rule aiMemo: each rule gets its own summary', async () => {
+            resetMocks();
+            let axiosCallCount = 0;
+            axios.post = async () => {
+                axiosCallCount += 1;
+                return {
+                    data: {
+                        choices: [{
+                            message: { content: `summary-${axiosCallCount}` }
+                        }]
+                    }
+                };
+            };
+
+            mockCollectRagItemsImpl = async (args) => {
+                mockCollectRagItemsCalls.push(args);
+                const diary = args.requestedDiaries?.[0];
+                if (diary === 'Diary1') {
+                    return {
+                        success: true,
+                        items: [
+                            { text: 'r1-a', score: 0.95, sourceDiary: 'Diary1', sourceFile: 'a.md' }
+                        ]
+                    };
+                }
+                if (diary === 'Diary2') {
+                    return {
+                        success: true,
+                        items: [
+                            { text: 'r2-a', score: 0.95, sourceDiary: 'Diary2', sourceFile: 'x.md' }
+                        ]
+                    };
+                }
+                return { success: true, items: [] };
+            };
+
             const service = createTestService({
-                recallProfileResolver: resolver,
-                pluginManager: mockPluginManager,
-                contextRuntimeService: mockContextService
+                recallProfileResolver: createMockResolver([
+                    { type: 'rag', diaries: ['Diary1'], modifiers: { aiMemo: true } },
+                    { type: 'rag', diaries: ['Diary2'], modifiers: { aiMemo: true } }
+                ]),
+                aiMemoConfigLoader: () => ({ url: 'http://test/', apiKey: 'k', model: 'm' })
             });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
+
+            const result = await service.executeRecall({ agentId: 'AgentAM', query: 'query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 0);
-            assert.strictEqual(mockFullTextCalls.length, 1);
-            assert.strictEqual(mockFullTextCalls[0].rule.kMultiplier, 2.0);
+            assert.strictEqual(axiosCallCount, 2, `expected 2 axios calls, got ${axiosCallCount}`);
+            assert.strictEqual(result.diagnostics.rules[0].aiMemoSummary, 'summary-1');
+            assert.strictEqual(result.diagnostics.rules[1].aiMemoSummary, 'summary-2');
+            assert.ok(result.diagnostics.rules[0].modifierDetails.some((m) => m.modifier === 'aiMemo'));
+            assert.ok(result.diagnostics.rules[1].modifierDetails.some((m) => m.modifier === 'aiMemo'));
         });
 
-        it('kMultiplier=0.5 clamps to at least 1 (rag baseK 5 → 3)', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', kMultiplier: 0.5 }
+        it('profile-level aiMemo generates summary from merged items', async () => {
+            resetMocks([
+                { text: 'r1-a', score: 0.95, sourceDiary: 'Diary1', sourceFile: 'a.md' },
+                { text: 'r2-a', score: 0.94, sourceDiary: 'Diary2', sourceFile: 'x.md' }
             ]);
+            let axiosCallCount = 0;
+            axios.post = async () => {
+                axiosCallCount += 1;
+                return {
+                    data: {
+                        choices: [{
+                            message: { content: 'merged-summary' }
+                        }]
+                    }
+                };
+            };
+
             const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
+                pluginManager: createMockPluginManager(),
+                contextRuntimeService: createMockContextRuntimeService(),
+                embeddingUtilsLoader: () => ({}),
+                fullTextRetriever: async (args) => mockFullTextImpl(args),
+                recallProfileResolver: {
+                    resolveForAgent: () => ({
+                        resolved: true,
+                        agentId: 'AgentPAM',
+                        profileName: 'pam-profile',
+                        rules: [
+                            { type: 'rag', diaries: ['Diary1'], modifiers: {} },
+                            { type: 'rag', diaries: ['Diary2'], modifiers: {} }
+                        ],
+                        aiMemo: true
+                    })
+                },
+                aiMemoConfigLoader: () => ({ url: 'http://test/', apiKey: 'k', model: 'm' })
             });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
+
+            const result = await service.executeRecall({ agentId: 'AgentPAM', query: 'query' });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 3);
+            assert.strictEqual(axiosCallCount, 1, `expected 1 axios call, got ${axiosCallCount}`);
+            assert.strictEqual(result.diagnostics.summary, 'merged-summary');
+            assert.ok(result.diagnostics.pipelineStages.some((s) => s.name === 'aiMemo'));
         });
 
-        it('kMultiplier=-1 is invalid and falls back to baseK=5', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', kMultiplier: -1 }
+        it('inlineRule path skips aiMemo', async () => {
+            resetMocks([
+                { text: 'inline-a', score: 0.95, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
             ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
+            let axiosCallCount = 0;
+            axios.post = async () => {
+                axiosCallCount += 1;
+                return { data: { choices: [{ message: { content: 'should-not-run' } }] } };
+            };
+
+            const service = createTestService({
+                recallProfileResolver: createMockResolver([
+                    { type: 'rag', diaries: ['TestDiary'], modifiers: {} }
+                ]),
+                aiMemoConfigLoader: () => ({ url: 'http://test/', apiKey: 'k', model: 'm' })
             });
+
             const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
+                agentId: 'AgentIR',
+                query: 'query',
+                inlineRule: {
+                    type: 'rag',
+                    diaries: ['TestDiary'],
+                    modifiers: { aiMemo: true }
+                }
             });
             assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5);
+            assert.strictEqual(axiosCallCount, 0, `expected 0 axios calls for inlineRule, got ${axiosCallCount}`);
         });
 
-        it('kMultiplier="invalid" string falls back to baseK', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', kMultiplier: 'invalid' }
+        it('aiMemoConfigLoader returns null skips without error', async () => {
+            resetMocks([
+                { text: 'a', score: 0.95, sourceDiary: 'TestDiary', sourceFile: 'a.md' }
             ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5);
-        });
+            let axiosCallCount = 0;
+            axios.post = async () => {
+                axiosCallCount += 1;
+                return { data: { choices: [{ message: { content: 'should-not-run' } }] } };
+            };
 
-        it('kMultiplier omitted falls back to baseK', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag' }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5);
-        });
-
-        it('kMultiplier on inlineRule is applied (shared rule loop)', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            // No resolver needed for inlineRule path
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: createMockResolver([]),
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query',
-                inlineRule: { type: 'rag', diaries: ['TestDiary'], kMultiplier: 3.0 }
-            });
-            assert.strictEqual(result.success, true);
-            assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 15);
-        });
-    });
-
-    // --- T03: AIMemo modifier tests ---
-
-    describe('MODIFIER_PIPELINE_ORDER includes aiMemo', () => {
-        it('has aiMemo after truncate', () => {
-            const truncateIdx = MODIFIER_PIPELINE_ORDER.indexOf('truncate');
-            const aiMemoIdx = MODIFIER_PIPELINE_ORDER.indexOf('aiMemo');
-            assert.ok(truncateIdx >= 0, 'truncate should be in pipeline order');
-            assert.ok(aiMemoIdx >= 0, 'aiMemo should be in pipeline order');
-            assert.ok(aiMemoIdx > truncateIdx, 'aiMemo must come after truncate');
-            assert.strictEqual(aiMemoIdx, MODIFIER_PIPELINE_ORDER.length - 1, 'aiMemo should be last');
-        });
-    });
-
-    describe('applyAIMemo', () => {
-        const { applyAIMemo } = require('../../modules/agentGateway/services/recallRuntimeService');
-
-        it('skips when config is null', async () => {
-            const items = [{ text: 'Test item', sourceDiary: 'TestDiary', score: 0.9 }];
-            const result = await applyAIMemo(items, null);
-            assert.deepStrictEqual(result.items, items);
-            assert.strictEqual(result.summary, null);
-            assert.strictEqual(result.modifierDetail.skipped, true);
-            assert.strictEqual(result.modifierDetail.modifier, 'aiMemo');
-            assert.strictEqual(result.modifierDetail.inputCount, 1);
-        });
-
-        it('skips when config is empty object', async () => {
-            const items = [{ text: 'Test item', sourceDiary: 'TestDiary', score: 0.9 }];
-            const result = await applyAIMemo(items, {});
-            assert.strictEqual(result.modifierDetail.skipped, true);
-            assert.strictEqual(result.summary, null);
-        });
-
-        it('skips when config missing url', async () => {
-            const items = [{ text: 'Test', score: 0.5 }];
-            const result = await applyAIMemo(items, { apiKey: 'k', model: 'm' });
-            assert.strictEqual(result.modifierDetail.skipped, true);
-        });
-
-        it('skips when config missing apiKey', async () => {
-            const items = [{ text: 'Test', score: 0.5 }];
-            const result = await applyAIMemo(items, { url: 'http://x', model: 'm' });
-            assert.strictEqual(result.modifierDetail.skipped, true);
-        });
-
-        it('skips when config missing model', async () => {
-            const items = [{ text: 'Test', score: 0.5 }];
-            const result = await applyAIMemo(items, { url: 'http://x', apiKey: 'k' });
-            assert.strictEqual(result.modifierDetail.skipped, true);
-        });
-
-        it('skips when items array is empty', async () => {
-            const result = await applyAIMemo([], { url: 'http://x', apiKey: 'k', model: 'm' });
-            assert.strictEqual(result.modifierDetail.skipped, true);
-            assert.strictEqual(result.modifierDetail.inputCount, 0);
-        });
-
-        it('returns modifierDetail with correct structure on skip', async () => {
-            const items = [{ text: 'A', score: 0.9 }];
-            const result = await applyAIMemo(items, null);
-            const detail = result.modifierDetail;
-            assert.strictEqual(detail.modifier, 'aiMemo');
-            assert.strictEqual(typeof detail.durationMs, 'number');
-            assert.ok(detail.durationMs >= 0);
-            assert.strictEqual(detail.inputCount, 1);
-            assert.strictEqual(detail.skipped, true);
-            assert.strictEqual(detail.summaryLength, null);
-            assert.strictEqual(detail.error, null);
-        });
-
-        it('records error in modifierDetail on API failure', async () => {
-            // Provide a config that would trigger an API call to a non-existent URL
-            const items = [{ text: 'Test item for error', sourceDiary: 'Test', score: 0.9 }];
-            const result = await applyAIMemo(items, {
-                url: 'http://127.0.0.1:1/',
-                apiKey: 'test-key',
-                model: 'test-model'
-            });
-            // Should not throw — error is captured in modifierDetail
-            assert.strictEqual(result.summary, null);
-            assert.ok(result.modifierDetail.error, 'should have error message');
-            assert.ok(result.modifierDetail.error.length > 0);
-            assert.strictEqual(typeof result.modifierDetail.durationMs, 'number');
-            assert.ok(result.modifierDetail.durationMs >= 0);
-        });
-    });
-
-    describe('executeRecall AIMemo pipeline stage', () => {
-        const mockPluginManager = createMockPluginManager();
-        const mockContextService = createMockContextRuntimeService();
-
-        it('includes aiMemo pipeline stage when aiMemo modifier is enabled', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { aiMemo: true } }
-            ]);
-            // aiMemoConfigLoader returns null (env vars not set), so stage will be 'skipped'
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService,
+            const service = createTestService({
+                recallProfileResolver: createMockResolver([
+                    { type: 'rag', diaries: ['TestDiary'], modifiers: { aiMemo: true } }
+                ]),
                 aiMemoConfigLoader: () => null
             });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const aiMemoStage = result.diagnostics.pipelineStages.find((s) => s.name === 'aiMemo');
-            assert.ok(aiMemoStage, 'aiMemo pipeline stage should exist');
-            assert.strictEqual(aiMemoStage.status, 'skipped');
-            assert.ok(aiMemoStage.detail.skipped, 'should indicate skipped');
-        });
 
-        it('does not include aiMemo pipeline stage when aiMemo modifier is not enabled', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { rerank: true } }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const aiMemoStage = result.diagnostics.pipelineStages.find((s) => s.name === 'aiMemo');
-            assert.strictEqual(aiMemoStage, undefined, 'aiMemo stage should not exist');
-        });
-
-        it('aiMemo stage is added after mergeResults in pipeline order', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { aiMemo: true } }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService,
-                aiMemoConfigLoader: () => null
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const stageNames = result.diagnostics.pipelineStages.map((s) => s.name);
-            const mergeIdx = stageNames.indexOf('mergeResults');
-            const aiMemoIdx = stageNames.indexOf('aiMemo');
-            assert.ok(mergeIdx >= 0, 'mergeResults should exist');
-            assert.ok(aiMemoIdx >= 0, 'aiMemo should exist');
-            assert.ok(aiMemoIdx > mergeIdx, 'aiMemo should be after mergeResults');
-        });
-
-        it('aiMemo modifierDetail is attached to last rule diagnostic', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([
-                { type: 'rag', modifiers: { aiMemo: true } }
-            ]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService,
-                aiMemoConfigLoader: () => null
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            const lastRuleDiag = result.diagnostics.rules[result.diagnostics.rules.length - 1];
-            assert.ok(Array.isArray(lastRuleDiag.modifierDetails));
-            const aiMemoDetail = lastRuleDiag.modifierDetails.find((d) => d.modifier === 'aiMemo');
-            assert.ok(aiMemoDetail, 'aiMemo detail should be in last rule modifierDetails');
+            const result = await service.executeRecall({ agentId: 'AgentNull', query: 'query' });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(axiosCallCount, 0);
+            assert.strictEqual(result.diagnostics.rules[0].aiMemoSummary, null);
+            const aiMemoDetail = result.diagnostics.rules[0].modifierDetails.find((m) => m.modifier === 'aiMemo');
+            assert.ok(aiMemoDetail);
             assert.strictEqual(aiMemoDetail.skipped, true);
-            assert.strictEqual(typeof aiMemoDetail.durationMs, 'number');
-        });
-
-        it('does not include summary in diagnostics when aiMemo is not enabled', async () => {
-            resetMocks([{ text: 'Result', score: 0.9, sourceDiary: 'TestDiary' }]);
-            const resolver = createMockResolver([{ type: 'rag' }]);
-            const service = createRecallRuntimeService({
-                pluginManager: mockPluginManager,
-                recallProfileResolver: resolver,
-                contextRuntimeService: mockContextService
-            });
-            const result = await service.executeRecall({
-                agentId: 'TestAgent',
-                query: 'test query'
-            });
-            assert.strictEqual(result.diagnostics.summary, undefined, 'summary should be undefined when aiMemo not enabled');
         });
     });
 });

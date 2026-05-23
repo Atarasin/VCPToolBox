@@ -16,6 +16,98 @@ function writeTmp(name, payload) {
 }
 
 describe('S03 — RecallProfileResolver new config fields', () => {
+    describe('normalizeRule — deprecation warnings + dual field output', () => {
+        it('legacy flat fields emit deprecation warnings and produce dual fields', () => {
+            const warnings = [];
+            const originalWarn = console.warn;
+            console.warn = (...args) => warnings.push(args.join(' '));
+
+            const p = writeTmp('tmp-deprecate-legacy.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        profiles: {
+                            p1: {
+                                rules: [
+                                    {
+                                        type: 'rag',
+                                        diaries: ['D1'],
+                                        kMultiplier: 2.0,
+                                        modifiers: { truncate: true }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+
+            console.warn = originalWarn;
+
+            assert.ok(result.resolved);
+            assert.strictEqual(result.rules[0].type, 'rag');
+            assert.strictEqual(result.rules[0].baseMode, 'rag');
+            assert.deepStrictEqual(result.rules[0].diaries, ['D1']);
+            assert.deepStrictEqual(result.rules[0].targets.diaries, ['D1']);
+            assert.strictEqual(result.rules[0].kMultiplier, 2.0);
+            assert.strictEqual(result.rules[0].targets.kMultiplier, 2.0);
+
+            assert.ok(warnings.some(w => w.includes('Deprecated: rule.type → use rule.baseMode')), 'type deprecation warning');
+            assert.ok(warnings.some(w => w.includes('Deprecated: rule.diaries → use rule.targets.diaries')), 'diaries deprecation warning');
+            assert.ok(warnings.some(w => w.includes('Deprecated: rule.kMultiplier → use rule.targets.kMultiplier')), 'kMultiplier deprecation warning');
+
+            fs.unlinkSync(p);
+        });
+
+        it('structured config normalizes without emitting deprecation warnings', () => {
+            const warnings = [];
+            const originalWarn = console.warn;
+            console.warn = (...args) => warnings.push(args.join(' '));
+
+            const p = writeTmp('tmp-structured.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        profiles: {
+                            p1: {
+                                rules: [
+                                    {
+                                        baseMode: 'rag',
+                                        targets: { diaries: ['D1'], kMultiplier: 1.5 },
+                                        modifiers: { truncate: true }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+
+            console.warn = originalWarn;
+
+            assert.ok(result.resolved);
+            assert.strictEqual(result.rules[0].type, 'rag');
+            assert.strictEqual(result.rules[0].baseMode, 'rag');
+            assert.deepStrictEqual(result.rules[0].diaries, ['D1']);
+            assert.deepStrictEqual(result.rules[0].targets.diaries, ['D1']);
+            assert.strictEqual(result.rules[0].kMultiplier, 1.5);
+            assert.strictEqual(result.rules[0].targets.kMultiplier, 1.5);
+
+            // Should have no new deprecation warnings from this test (flags already set from previous test)
+            // But verify no *new* patterns appeared beyond the 3 already captured
+            const structuredWarnings = warnings.filter(w =>
+                w.includes('rule.baseMode') || w.includes('rule.targets.diaries') || w.includes('rule.targets.kMultiplier')
+            );
+            assert.strictEqual(structuredWarnings.length, 0, 'structured config should not trigger deprecation warnings');
+
+            fs.unlinkSync(p);
+        });
+    });
+
     describe('normalizeRule — kMultiplier', () => {
         it('kMultiplier=2.0 is preserved', () => {
             const p = writeTmp('tmp-km-20.json', {
@@ -374,6 +466,74 @@ describe('S03 — RecallProfileResolver new config fields', () => {
             const result = r.resolveForAgent('A', 'p1');
             assert.ok(result.resolved);
             assert.strictEqual(result.metadata, undefined);
+            fs.unlinkSync(p);
+        });
+
+        it('aiMemo=true is preserved', () => {
+            const p = writeTmp('tmp-aimemo-bool.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        profiles: {
+                            p1: {
+                                aiMemo: true,
+                                rules: [
+                                    { type: 'rag', diaries: ['D1'] }
+                                ]
+                            }
+                        }
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+            assert.ok(result.resolved);
+            assert.strictEqual(result.aiMemo, true);
+            fs.unlinkSync(p);
+        });
+
+        it('aiMemo object with preset is preserved', () => {
+            const p = writeTmp('tmp-aimemo-obj.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        profiles: {
+                            p1: {
+                                aiMemo: { enabled: true, preset: 'concise' },
+                                rules: [
+                                    { type: 'rag', diaries: ['D1'] }
+                                ]
+                            }
+                        }
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+            assert.ok(result.resolved);
+            assert.deepStrictEqual(result.aiMemo, { enabled: true, preset: 'concise' });
+            fs.unlinkSync(p);
+        });
+
+        it('aiMemo omitted is not in profile result', () => {
+            const p = writeTmp('tmp-aimemo-omit.json', {
+                agents: {
+                    A: {
+                        defaultProfile: 'p1',
+                        profiles: {
+                            p1: {
+                                rules: [
+                                    { type: 'rag', diaries: ['D1'] }
+                                ]
+                            }
+                        }
+                    }
+                }
+            });
+            const r = new RecallProfileResolver({ configPath: p });
+            const result = r.resolveForAgent('A', 'p1');
+            assert.ok(result.resolved);
+            assert.strictEqual(result.aiMemo, undefined);
             fs.unlinkSync(p);
         });
     });

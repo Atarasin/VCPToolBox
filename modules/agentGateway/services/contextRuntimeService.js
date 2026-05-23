@@ -15,7 +15,9 @@ const {
 } = require('../infra/auditLogger');
 const {
     projectSearchItems,
-    projectContextBlocks
+    projectContextBlocks,
+    projectBudgetedContextBlocks,
+    estimateTokenCount
 } = require('./recallProjectionService');
 
 const DEFAULT_RAG_K = 5;
@@ -525,28 +527,6 @@ function buildRecallQuery(body) {
         .slice(0, 4000);
 }
 
-function estimateTokenCount(text) {
-    const normalizedText = normalizeContextString(text);
-    if (!normalizedText) {
-        return 0;
-    }
-    const cjkCount = (normalizedText.match(/[\u3400-\u9fff]/g) || []).length;
-    const nonCjkCount = normalizedText.length - cjkCount;
-    return Math.max(1, cjkCount + Math.ceil(nonCjkCount / 4));
-}
-
-function truncateTextByTokens(text, maxTokens) {
-    const normalizedText = normalizeContextString(text);
-    if (!normalizedText || maxTokens <= 0) {
-        return '';
-    }
-    let candidate = normalizedText;
-    while (candidate && estimateTokenCount(candidate) > maxTokens) {
-        candidate = candidate.slice(0, -1).trimEnd();
-    }
-    return candidate;
-}
-
 function deduplicateContextItems(items) {
     const deduplicatedItems = new Map();
     for (const item of items) {
@@ -846,6 +826,10 @@ function createContextRuntimeService(deps = {}) {
             case AGW_ERROR_CODES.RECALL_FORBIDDEN:
                 return OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN;
             case AGW_ERROR_CODES.RECALL_INVALID_QUERY:
+            case AGW_ERROR_CODES.RECALL_INVALID_PROFILE:
+            case AGW_ERROR_CODES.RECALL_INVALID_RULE:
+            case AGW_ERROR_CODES.RECALL_INVALID_MODIFIER:
+            case AGW_ERROR_CODES.RECALL_INVALID_DIARY:
                 return OPENCLAW_ERROR_CODES.RAG_INVALID_QUERY;
             case AGW_ERROR_CODES.RECALL_EXECUTION_ERROR:
                 return contextType === 'search'
@@ -910,6 +894,8 @@ function createContextRuntimeService(deps = {}) {
             const agentId = requestContext.agentId;
             const sessionId = requestContext.sessionId;
             const source = requestContext.source;
+            const explicitKRaw = body?.k;
+            const hasExplicitK = explicitKRaw !== undefined && explicitKRaw !== null && explicitKRaw !== '';
             const ragOptions = extractRagOptions(body);
 
             if (!query) {
@@ -954,16 +940,36 @@ function createContextRuntimeService(deps = {}) {
             });
 
             try {
-                const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
-                const recallResult = await getRecallRuntimeService().executeRecall({
-                    agentId,
-                    query,
-                    inlineRule,
-                    requestContext,
-                    authContext,
-                    agentPolicyResolver,
-                    adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
-                });
+                const profileName = normalizeContextString(body?.profile) || undefined;
+                let recallResult;
+                if (profileName) {
+                    recallResult = await getRecallRuntimeService().executeRecall({
+                        agentId,
+                        query,
+                        profileName,
+                        requestContext,
+                        authContext,
+                        agentPolicyResolver,
+                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                    });
+                    if (hasExplicitK && recallResult.items && recallResult.items.length > 0) {
+                        const kOverride = parseContextInteger(explicitKRaw, DEFAULT_RAG_K, 1, MAX_RAG_K);
+                        if (recallResult.items.length > kOverride) {
+                            recallResult.items = recallResult.items.slice(0, kOverride);
+                        }
+                    }
+                } else {
+                    const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
+                    recallResult = await getRecallRuntimeService().executeRecall({
+                        agentId,
+                        query,
+                        inlineRule,
+                        requestContext,
+                        authContext,
+                        agentPolicyResolver,
+                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                    });
+                }
                 if (!recallResult.success) {
                     const mappedCode = mapAgwToOcwError(recallResult.code, 'search');
                     const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
@@ -1067,24 +1073,6 @@ function createContextRuntimeService(deps = {}) {
             const { diary, diaries: requestedDiaries } = resolveDiarySelection(body);
             const query = buildRecallQuery(body);
             const maxBlocks = parseContextInteger(body?.maxBlocks, DEFAULT_CONTEXT_MAX_BLOCKS, 1, MAX_RAG_K);
-            const tokenBudget = parseContextInteger(
-                body?.tokenBudget,
-                DEFAULT_CONTEXT_TOKEN_BUDGET,
-                1,
-                MAX_CONTEXT_TOKEN_BUDGET
-            );
-            const maxTokenRatio = Math.min(
-                1,
-                Math.max(
-                    0.1,
-                    typeof body?.maxTokenRatio === 'number' && Number.isFinite(body.maxTokenRatio)
-                        ? body.maxTokenRatio
-                        : DEFAULT_CONTEXT_MAX_TOKEN_RATIO
-                )
-            );
-            const minScore = typeof body?.minScore === 'number' && Number.isFinite(body.minScore)
-                ? body.minScore
-                : DEFAULT_CONTEXT_MIN_SCORE;
             const ragOptions = {
                 ...extractRagOptions({
                     ...body,
@@ -1128,16 +1116,30 @@ function createContextRuntimeService(deps = {}) {
             });
 
             try {
-                const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
-                const recallResult = await getRecallRuntimeService().executeRecall({
-                    agentId,
-                    query,
-                    inlineRule,
-                    requestContext,
-                    authContext,
-                    agentPolicyResolver,
-                    adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
-                });
+                const profileName = normalizeContextString(body?.profile) || undefined;
+                let recallResult;
+                if (profileName) {
+                    recallResult = await getRecallRuntimeService().executeRecall({
+                        agentId,
+                        query,
+                        profileName,
+                        requestContext,
+                        authContext,
+                        agentPolicyResolver,
+                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                    });
+                } else {
+                    const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
+                    recallResult = await getRecallRuntimeService().executeRecall({
+                        agentId,
+                        query,
+                        inlineRule,
+                        requestContext,
+                        authContext,
+                        agentPolicyResolver,
+                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                    });
+                }
                 if (!recallResult.success) {
                     const mappedCode = mapAgwToOcwError(recallResult.code, 'context');
                     const status = mappedCode === OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN ? 403
@@ -1167,54 +1169,59 @@ function createContextRuntimeService(deps = {}) {
                         details: { agentId, query }
                     };
                 }
-                const result = {
-                    success: true,
-                    targetDiaries: ruleDiag.targetDiaries || requestedDiaries,
-                    items: recallResult.items
+                const result = adaptRecallResultToRagResult(recallResult, requestedDiaries);
+
+                const profileMeta = recallResult.diagnostics?.profileMeta || {};
+
+                const explicitTokenBudget = body?.tokenBudget;
+                const explicitMaxTokenRatio = body?.maxTokenRatio;
+                const explicitMinScore = body?.minScore;
+
+                const effectiveTokenBudget = parseContextInteger(
+                    explicitTokenBudget !== undefined ? explicitTokenBudget : profileMeta.tokenBudget,
+                    DEFAULT_CONTEXT_TOKEN_BUDGET,
+                    1,
+                    MAX_CONTEXT_TOKEN_BUDGET
+                );
+                const effectiveMaxTokenRatio = Math.min(
+                    1,
+                    Math.max(
+                        0.1,
+                        typeof explicitMaxTokenRatio === 'number' && Number.isFinite(explicitMaxTokenRatio)
+                            ? explicitMaxTokenRatio
+                            : (typeof profileMeta.maxTokenRatio === 'number' && Number.isFinite(profileMeta.maxTokenRatio)
+                                ? profileMeta.maxTokenRatio
+                                : DEFAULT_CONTEXT_MAX_TOKEN_RATIO)
+                    )
+                );
+                const effectiveMinScore = typeof explicitMinScore === 'number' && Number.isFinite(explicitMinScore)
+                    ? explicitMinScore
+                    : (typeof profileMeta.minScore === 'number' && Number.isFinite(profileMeta.minScore)
+                        ? profileMeta.minScore
+                        : DEFAULT_CONTEXT_MIN_SCORE);
+
+                const profileSourced = {
+                    tokenBudget: explicitTokenBudget === undefined && profileMeta.tokenBudget !== undefined,
+                    maxTokenRatio: explicitMaxTokenRatio === undefined && profileMeta.maxTokenRatio !== undefined,
+                    minScore: explicitMinScore === undefined && profileMeta.minScore !== undefined,
+                    maxBlocks: false
                 };
 
-                const maxInjectedTokens = Math.max(1, Math.floor(tokenBudget * maxTokenRatio));
-                let consumedTokens = 0;
                 const scoredItems = result.items
                     .filter((item) => typeof item.score === 'number' && Number.isFinite(item.score));
-                const eligibleItems = scoredItems.filter((item) => item.score >= minScore);
-                const deduplicatedItems = deduplicateContextItems(eligibleItems);
+                const deduplicatedItems = deduplicateContextItems(scoredItems);
 
-                const selectedItems = [];
-                for (const item of deduplicatedItems) {
-                    if (selectedItems.length >= maxBlocks) {
-                        break;
+                const { blocks: recallBlocks, consumedTokens, appliedPolicy: budgetPolicy } = projectBudgetedContextBlocks(
+                    deduplicatedItems,
+                    {
+                        tokenBudget: effectiveTokenBudget,
+                        maxTokenRatio: effectiveMaxTokenRatio,
+                        minScore: effectiveMinScore,
+                        maxBlocks
                     }
-                    const itemTokens = estimateTokenCount(item.text);
-                    if (consumedTokens > 0 && consumedTokens + itemTokens > maxInjectedTokens) {
-                        continue;
-                    }
-                    if (itemTokens > maxInjectedTokens) {
-                        const truncatedText = truncateTextByTokens(
-                            item.text,
-                            Math.max(1, maxInjectedTokens - consumedTokens)
-                        );
-                        if (!truncatedText) {
-                            continue;
-                        }
-                        selectedItems.push({
-                            ...item,
-                            text: truncatedText,
-                            __truncated: true
-                        });
-                        consumedTokens += estimateTokenCount(truncatedText);
-                        break;
-                    }
-                    selectedItems.push(item);
-                    consumedTokens += itemTokens;
-                }
+                );
 
-                const recallBlocks = projectContextBlocks(selectedItems);
-                for (let i = 0; i < recallBlocks.length; i += 1) {
-                    if (selectedItems[i].__truncated) {
-                        recallBlocks[i].metadata.truncated = true;
-                    }
-                }
+                const eligibleItems = scoredItems.filter((item) => item.score >= effectiveMinScore);
 
                 auditLogger.logContext('completed', {
                     requestId,
@@ -1241,17 +1248,18 @@ function createContextRuntimeService(deps = {}) {
                         recallBlocks,
                         estimatedTokens: consumedTokens,
                         appliedPolicy: {
-                            tokenBudget,
-                            maxTokenRatio,
-                            maxInjectedTokens,
+                            tokenBudget: effectiveTokenBudget,
+                            maxTokenRatio: effectiveMaxTokenRatio,
+                            maxInjectedTokens: budgetPolicy.maxInjectedTokens,
                             maxBlocks,
-                            minScore,
+                            minScore: effectiveMinScore,
                             mode: ragOptions.mode,
                             timeAware: ragOptions.timeAware,
                             groupAware: ragOptions.groupAware,
                             rerank: ragOptions.rerank,
                             tagMemo: ragOptions.tagMemo,
-                            targetDiaries: result.targetDiaries
+                            targetDiaries: result.targetDiaries,
+                            profileSourced
                         }
                     }
                 };

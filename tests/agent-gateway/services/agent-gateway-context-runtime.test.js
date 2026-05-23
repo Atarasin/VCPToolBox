@@ -332,3 +332,190 @@ test('ContextRuntimeService treats allowed but unmaterialized diary searches as 
     assert.deepEqual(contextResult.data.recallBlocks, []);
     assert.equal(contextResult.data.estimatedTokens, 0);
 });
+
+function createProfileResolver(profileName = 'test-profile', diaries = ['Nova']) {
+    return {
+        resolveForAgent(agentId, requestedProfile) {
+            return {
+                resolved: true,
+                agentId,
+                profileName: requestedProfile || profileName,
+                rules: [{
+                    type: 'rag',
+                    diaries,
+                    modifiers: { time: false, group: false, rerank: false, tagMemo: false, truncate: 10 }
+                }]
+            };
+        }
+    };
+}
+
+function createProfileTestOverrides(searchResults) {
+    return {
+        openClawBridgeConfig: {
+            rag: {
+                agentDiaryMap: {
+                    'agent.nova': ['Nova']
+                },
+                allowCrossRoleAccess: false
+            }
+        },
+        vectorDBManager: createKnowledgeBaseManager({
+            diaries: ['Nova'],
+            searchResults
+        }),
+        ragPlugin: createRagPlugin({
+            parseTime() {
+                return [];
+            }
+        })
+    };
+}
+
+test('ContextRuntimeService search enters profile resolution chain when profile is provided', async () => {
+    const service = createContextServiceWithRecall(
+        createProfileTestOverrides({
+            Nova: [
+                {
+                    text: 'profile result 1',
+                    score: 0.95,
+                    sourceFile: '2026-03-20.md',
+                    fullPath: 'Nova/2026-03-20.md'
+                }
+            ]
+        }),
+        {},
+        {
+            recallProfileResolver: createProfileResolver('nexus-default', ['Nova'])
+        }
+    );
+
+    const result = await service.search({
+        body: {
+            profile: 'nexus-default',
+            query: 'test',
+            requestContext: {
+                source: 'openclaw',
+                agentId: 'agent.nova',
+                sessionId: 'sess-profile-001',
+                requestId: 'req-profile-001'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'openclaw'
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data.items.length, 1);
+    assert.equal(result.data.items[0].text, 'profile result 1');
+    assert.deepEqual(result.data.diagnostics.targetDiaries, ['Nova']);
+});
+
+test('ContextRuntimeService search post-truncates profile results with explicit k', async () => {
+    const service = createContextServiceWithRecall(
+        createProfileTestOverrides({
+            Nova: [
+                { text: 'item a', score: 0.95, sourceFile: 'a.md', fullPath: 'Nova/a.md' },
+                { text: 'item b', score: 0.90, sourceFile: 'b.md', fullPath: 'Nova/b.md' },
+                { text: 'item c', score: 0.85, sourceFile: 'c.md', fullPath: 'Nova/c.md' }
+            ]
+        }),
+        {},
+        {
+            recallProfileResolver: createProfileResolver('nexus-default', ['Nova'])
+        }
+    );
+
+    const result = await service.search({
+        body: {
+            profile: 'nexus-default',
+            query: 'test',
+            k: 2,
+            requestContext: {
+                source: 'openclaw',
+                agentId: 'agent.nova',
+                sessionId: 'sess-profile-002',
+                requestId: 'req-profile-002'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'openclaw'
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data.items.length, 2);
+    assert.equal(result.data.diagnostics.resultCount, 2);
+});
+
+test('ContextRuntimeService buildRecallContext enters profile resolution chain when profile is provided', async () => {
+    const service = createContextServiceWithRecall(
+        createProfileTestOverrides({
+            Nova: [
+                {
+                    text: 'profile context result',
+                    score: 0.95,
+                    sourceFile: '2026-03-20.md',
+                    fullPath: 'Nova/2026-03-20.md'
+                }
+            ]
+        }),
+        {},
+        {
+            recallProfileResolver: createProfileResolver('nexus-default', ['Nova'])
+        }
+    );
+
+    const result = await service.buildRecallContext({
+        body: {
+            profile: 'nexus-default',
+            query: 'test',
+            requestContext: {
+                source: 'openclaw-context',
+                agentId: 'agent.nova',
+                sessionId: 'sess-profile-003',
+                requestId: 'req-profile-003'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'openclaw-context'
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data.recallBlocks.length, 1);
+    assert.equal(result.data.recallBlocks[0].text, 'profile context result');
+    assert.deepEqual(result.data.appliedPolicy.targetDiaries, ['Nova']);
+});
+
+test('ContextRuntimeService search falls back to inlineRule when profile is omitted', async () => {
+    const service = createContextServiceWithRecall({
+        openClawBridgeConfig: {
+            rag: {
+                agentDiaryMap: {
+                    'agent.nova': ['Nova']
+                },
+                allowCrossRoleAccess: false
+            }
+        }
+    }, {}, {
+        recallProfileResolver: createProfileResolver('should-not-be-used', ['ProjectAlpha'])
+    });
+
+    const result = await service.search({
+        body: {
+            query: 'test',
+            diary: 'Nova',
+            requestContext: {
+                source: 'openclaw',
+                agentId: 'agent.nova',
+                sessionId: 'sess-inline-001',
+                requestId: 'req-inline-001'
+            }
+        },
+        startedAt: Date.now(),
+        defaultSource: 'openclaw'
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data.items.length, 1);
+    assert.equal(result.data.items[0].sourceDiary, 'Nova');
+});
