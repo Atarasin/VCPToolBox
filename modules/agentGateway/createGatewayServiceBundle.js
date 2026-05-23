@@ -95,12 +95,14 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         agentPolicyResolver,
         diaryScopeGuard: ensureDiaryAllowed
     });
+    let recallRuntimeService;
     const contextRuntimeService = createContextRuntimeService({
         pluginManager,
         auditLogger,
         authContextResolver: resolveAuthContext,
         agentPolicyResolver,
-        diaryScopeGuard: ensureDiaryAllowed
+        diaryScopeGuard: ensureDiaryAllowed,
+        getRecallRuntimeService: () => recallRuntimeService
     });
     const toolRuntimeService = createToolRuntimeService({
         pluginManager,
@@ -128,7 +130,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         capabilityService
     });
     const recallProfileResolver = new RecallProfileResolver();
-    const recallRuntimeService = createRecallRuntimeService({
+    recallRuntimeService = createRecallRuntimeService({
         pluginManager,
         contextRuntimeService,
         recallProfileResolver
