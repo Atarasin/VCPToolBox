@@ -6,6 +6,9 @@ openspec/
 VCPAsyncResults/
 file/document/AgentTask/
 
+sarprompt.json
+Plugin/SkillBridge/skill-index.txt
+
 # Logs
 logs
 *.log
