@@ -28,6 +28,14 @@ const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 const ENABLE_RECURSIVE_OPERATIONS = process.env.ENABLE_RECURSIVE_OPERATIONS !== 'false';
 const ENABLE_HIDDEN_FILES = process.env.ENABLE_HIDDEN_FILES === 'true';
 
+// WebReadFile/DownloadFile default file storage directory
+// Priority: WEB_FILE_DIR > DEFAULT_DOWNLOAD_DIR > VCPToolBox/file/
+const WEB_FILE_DIR = process.env.WEB_FILE_DIR
+  ? path.resolve(process.env.WEB_FILE_DIR)
+  : (process.env.DEFAULT_DOWNLOAD_DIR
+    ? path.resolve(process.env.DEFAULT_DOWNLOAD_DIR)
+    : path.join(__dirname, '..', '..', 'file'));
+
 // Utility functions
 function debugLog(message, data = null) {
   if (DEBUG_MODE) {
@@ -293,7 +301,7 @@ async function runValidationAndAttachResults(result, filePath, fileContent) {
 // File operation functions
 async function webReadFile(fileUrl) {
   try {
-    const fileDir = path.join(__dirname, '..', '..', '..', 'AppData', 'file');
+    const fileDir = WEB_FILE_DIR;
     await fs.mkdir(fileDir, { recursive: true }); // Ensure directory exists
 
     // Extract filename from URL, handling potential query strings
@@ -511,10 +519,10 @@ async function writeEscapedFile(filePath, content, encoding = 'utf8') {
   // Replace the escaped delimiters with the actual ones
   // Replace all escaped delimiters with the actual ones
   const processedContent = content
-    .replace(/「始exp」/g, '「始」')
-    .replace(/「末exp」/g, '「末」')
-    .replace(/<<<\[TOOL_REQUEST_EXP\]>>>/g, '<<<[TOOL_REQUEST]>>>')
-    .replace(/<<<\[END_TOOL_REQUEST_EXP\]>>>/g, '<<<[END_TOOL_REQUEST]>>>');
+    .replace(/「始ESCAPE」/g, '「始」')
+    .replace(/「末ESCAPE」/g, '「末」')
+    .replace(/<<<\[TOOL_REQUEST_ESCAPE\]>>>/g, '<<<[TOOL_REQUEST]>>>')
+    .replace(/<<<\[END_TOOL_REQUEST_ESCAPE\]>>>/g, '<<<[END_TOOL_REQUEST]>>>');
 
   // Delegate the actual writing to the original writeFile function
   // This reuses all the safety checks, unique file naming, etc.
@@ -665,7 +673,7 @@ async function listDirectory(dirPath, showHidden = ENABLE_HIDDEN_FILES) {
 
     const message = `Directory listing of \`${dirPath}\` (${result.length} items${items.length > MAX_DIRECTORY_ITEMS ? ', truncated' : ''})`;
 
-    let markdownTable = `| 名称 | 类型 | 大小 | 修改时间 | 隐藏 |\n|---|---|---|---|---|\n`;
+    let markdownTable = `---\n| 名称 | 类型 | 大小 | 修改时间 | 隐藏 |\n|---|---|---|---|---|\n`;
     for (const item of result) {
       const typeStr = item.type === 'directory' ? '📁' : '📄';
       const sizeStr = item.sizeFormatted || '-';
@@ -673,6 +681,7 @@ async function listDirectory(dirPath, showHidden = ENABLE_HIDDEN_FILES) {
       const hiddenStr = item.isHidden ? '是' : '否';
       markdownTable += `| ${typeStr} **${item.name}** | ${item.type} | ${sizeStr} | ${timeStr} | ${hiddenStr} |\n`;
     }
+    markdownTable += `---`;
 
     return {
       success: true,
@@ -1057,7 +1066,7 @@ async function downloadFile(url, downloadDir, customFileName) {
     } else if (process.env.DEFAULT_DOWNLOAD_DIR) {
       baseDir = path.resolve(process.env.DEFAULT_DOWNLOAD_DIR);
     } else {
-      baseDir = path.join(__dirname, '..', '..', '..', 'AppData', 'file');
+      baseDir = WEB_FILE_DIR;
     }
 
     const destinationPath = path.join(baseDir, fileName);
@@ -1179,12 +1188,12 @@ async function listAllowedDirectories() {
     } else if (items.length === 1 && (items[0].type === 'error' || items[0].type === 'info')) {
       markdownContent += `*${items[0].name}*\n\n`;
     } else {
-      markdownContent += `| 名称 | 类型 |\n|---|---|\n`;
+      markdownContent += `---\n| 名称 | 类型 |\n|---|---|\n`;
       for (const item of items) {
         const typeIcon = item.type === 'directory' ? '📁' : '📄';
         markdownContent += `| ${typeIcon} **${item.name}** | ${item.type} |\n`;
       }
-      markdownContent += '\n';
+      markdownContent += `---\n\n`;
     }
   }
 

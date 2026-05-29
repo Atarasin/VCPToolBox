@@ -7,6 +7,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const finalContextStore = require('./finalContextStore.js');
 
 // 🌟 核心网络优化：引入防御性长连接池 (Keep-Alive Pool)
 // 解决 "-1s Socket Hang Up" 与上游代理秒断僵尸连接的问题
@@ -29,6 +30,176 @@ const ToolCallParser = require('./vcpLoop/toolCallParser');
 const ToolExecutor = require('./vcpLoop/toolExecutor');
 const StreamHandler = require('./handlers/streamHandler');
 const NonStreamHandler = require('./handlers/nonStreamHandler');
+
+const VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER = '[[VCPToolUse=Forbidden]]';
+
+function parseBooleanEnv(value, defaultValue = false) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  return String(value).toLowerCase() === 'true';
+}
+
+function normalizeClientIp(ip) {
+  if (ip && ip.substr(0, 7) === '::ffff:') {
+    return ip.substr(7);
+  }
+  return ip || 'unknown';
+}
+
+class ResponseReplayCache {
+  constructor({ enabled = false, maxEntries = 100, debugMode = false } = {}) {
+    this.enabled = enabled;
+    this.maxEntries = Number.isFinite(maxEntries) && maxEntries > 0 ? Math.floor(maxEntries) : 100;
+    this.debugMode = debugMode;
+    this.cache = new Map();
+  }
+
+  buildKey(clientIp, messageId) {
+    if (!this.enabled || !messageId) return null;
+    return `${normalizeClientIp(clientIp)}::${String(messageId)}`;
+  }
+
+  get(key) {
+    if (!this.enabled || !key || !this.cache.has(key)) return null;
+    const value = this.cache.get(key);
+    this.cache.delete(key);
+    this.cache.set(key, value);
+    return value;
+  }
+
+  set(key, entry) {
+    if (!this.enabled || !key || !entry || !Array.isArray(entry.chunks) || entry.chunks.length === 0) return;
+    if (this.cache.has(key)) this.cache.delete(key);
+    this.cache.set(key, {
+      ...entry,
+      chunks: entry.chunks.map(chunk => Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(String(chunk))),
+      cachedAt: Date.now()
+    });
+
+    while (this.cache.size > this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      this.cache.delete(oldestKey);
+    }
+
+    if (this.debugMode) {
+      console.log(`[ResponseReplayCache] Cached response for key=${key}. entries=${this.cache.size}/${this.maxEntries}`);
+    }
+  }
+
+  replay(key, req, res) {
+    const entry = this.get(key);
+    if (!entry) return false;
+
+    if (this.debugMode) {
+      console.log(`[ResponseReplayCache] Replaying cached response for key=${key}. No tool chain will be executed.`);
+    }
+
+    if (!res.headersSent) {
+      res.status(entry.statusCode || 200);
+      for (const [name, value] of Object.entries(entry.headers || {})) {
+        if (value !== undefined && value !== null) {
+          res.setHeader(name, value);
+        }
+      }
+    }
+
+    for (const chunk of entry.chunks) {
+      if (res.writableEnded || res.destroyed) break;
+      res.write(chunk);
+    }
+
+    if (!res.writableEnded && !res.destroyed) {
+      res.end();
+    }
+
+    return true;
+  }
+}
+
+function installResponseCacheRecorder(res, { cache, cacheKey, id, clientIp, streamMode, debugMode }) {
+  if (!cache?.enabled || !cacheKey || res.__vcpReplayCacheRecorderInstalled) {
+    return () => {};
+  }
+
+  res.__vcpReplayCacheRecorderInstalled = true;
+
+  const capturedChunks = [];
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+  let finalized = false;
+
+  const captureChunk = (chunk, encoding) => {
+    if (chunk === undefined || chunk === null) return;
+    if (Buffer.isBuffer(chunk)) {
+      capturedChunks.push(Buffer.from(chunk));
+    } else {
+      capturedChunks.push(Buffer.from(String(chunk), typeof encoding === 'string' ? encoding : 'utf8'));
+    }
+  };
+
+  res.write = function patchedWrite(chunk, encoding, callback) {
+    captureChunk(chunk, encoding);
+    return originalWrite(chunk, encoding, callback);
+  };
+
+  res.end = function patchedEnd(chunk, encoding, callback) {
+    captureChunk(chunk, encoding);
+    return originalEnd(chunk, encoding, callback);
+  };
+
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+
+    const statusCode = res.statusCode || 200;
+    if (statusCode >= 200 && statusCode < 500 && capturedChunks.length > 0) {
+      cache.set(cacheKey, {
+        id,
+        clientIp,
+        streamMode,
+        statusCode,
+        headers: res.getHeaders ? res.getHeaders() : {},
+        chunks: capturedChunks
+      });
+    } else if (debugMode) {
+      console.log(`[ResponseReplayCache] Skip caching key=${cacheKey}, status=${statusCode}, chunks=${capturedChunks.length}`);
+    }
+  };
+
+  res.once('finish', finalize);
+
+  return finalize;
+}
+
+/**
+ * 从顶层 system 提示词中检测并移除 VCP 工具禁用占位符。
+ * 只扫描首个连续 system 消息区间，避免普通上下文/用户内容误触发。
+ * @param {Array} messages
+ * @returns {boolean}
+ */
+function consumeVcpToolUseForbiddenPlaceholder(messages) {
+  if (!Array.isArray(messages)) return false;
+
+  let found = false;
+  for (const msg of messages) {
+    if (!msg || msg.role !== 'system') break;
+
+    if (typeof msg.content === 'string') {
+      if (msg.content.includes(VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER)) {
+        found = true;
+        msg.content = msg.content.split(VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER).join('');
+      }
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part?.type === 'text' && typeof part.text === 'string' && part.text.includes(VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER)) {
+          found = true;
+          part.text = part.text.split(VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER).join('');
+        }
+      }
+    }
+  }
+
+  return found;
+}
 
 /**
  * 检测工具返回结果是否为错误
@@ -114,23 +285,50 @@ async function getRealAuthCode(debugMode = false) {
   }
 }
 
+function applyModelFallbackForAttempt(options, candidates, attemptIndex, debugMode = false) {
+  if (!Array.isArray(candidates) || candidates.length === 0 || !options || typeof options.body !== 'string') {
+    return options;
+  }
+
+  const selectedModel = candidates[Math.min(attemptIndex, candidates.length - 1)];
+  if (!selectedModel) return options;
+
+  try {
+    const parsedBody = JSON.parse(options.body);
+    if (!parsedBody || typeof parsedBody !== 'object') return options;
+
+    const previousModel = parsedBody.model;
+    parsedBody.model = selectedModel;
+
+    if (debugMode && previousModel !== selectedModel) {
+      console.log(`[SemanticModelRouter] 容灾切换上游模型: ${previousModel} -> ${selectedModel} (attempt=${attemptIndex + 1})`);
+    }
+
+    return {
+      ...options,
+      body: JSON.stringify(parsedBody)
+    };
+  } catch (error) {
+    if (debugMode) {
+      console.warn(`[SemanticModelRouter] 无法为本次重试替换模型，继续使用原始请求体: ${error.message}`);
+    }
+    return options;
+  }
+}
+
 // A helper function to handle fetch with retries for specific status codes
 // connectionTimeout: 连接超时安全网，防止上游 API 静默挂起导致永久等待（仅覆盖到收到响应头为止）
 async function fetchWithRetry(
   url,
   options,
-  {
-    retries = 3,
-    delay = 1000,
-    debugMode = false,
-    onRetry = null,
-    connectionTimeout = 120000,
-    onAttemptFailure = null,
-    onAttemptSuccess = null,
-  } = {},
+  { retries = 3, delay = 1000, debugMode = false, onRetry = null, connectionTimeout = 120000, modelFallbackCandidates = null } = {},
 ) {
   const { default: fetch } = await import('node-fetch');
-  for (let i = 0; i < retries; i++) {
+  const maxAttempts = Math.max(
+    Number.isFinite(Number(retries)) && Number(retries) > 0 ? Math.floor(Number(retries)) : 1,
+    Array.isArray(modelFallbackCandidates) ? modelFallbackCandidates.length : 0
+  );
+  for (let i = 0; i < maxAttempts; i++) {
     // 为每次尝试创建独立的中止控制器，用于超时保护
     const attemptController = new AbortController();
     let didTimeout = false;
@@ -158,21 +356,35 @@ async function fetchWithRetry(
     };
 
     try {
+      const attemptOptions = applyModelFallbackForAttempt(options, modelFallbackCandidates, i, debugMode);
       const response = await fetch(url, {
-        ...options,
+        ...attemptOptions,
         agent: getFetchAgent, // 注入防御性长连接池
         signal: attemptController.signal,
       });
       cleanup();
 
-      if (response.status === 500 || response.status === 503 || response.status === 429) {
-        if (onAttemptFailure) {
-          await onAttemptFailure(i + 1, {
-            status: response.status,
-            reason: `HTTP_${response.status}`,
-            message: response.statusText,
-          });
+      let shouldRetryStatus = response.status === 500 || response.status === 503 || response.status === 429;
+      let retryMessage = response.statusText;
+
+      // Gemini / NewAPI 偶发特殊空回：上游可能以 401 返回包含 token 的错误文本
+      // 例如：{"error":{"message":"Invalid token ..."}}
+      // 这类并非 VCP 本地 Key 配置错误，而是上游瞬时 token 异常，可安全纳入重试。
+      if (response.status === 401) {
+        try {
+          const responseBodyText = await response.clone().text();
+          if (responseBodyText.toLowerCase().includes('token')) {
+            shouldRetryStatus = true;
+            retryMessage = responseBodyText || response.statusText;
+          }
+        } catch (bodyReadError) {
+          if (debugMode) {
+            console.warn(`[Fetch Retry] Failed to inspect 401 response body: ${bodyReadError.message}`);
+          }
         }
+      }
+
+      if (shouldRetryStatus) {
         const currentDelay = delay * (i + 1);
         if (debugMode) {
           console.warn(
@@ -180,7 +392,7 @@ async function fetchWithRetry(
           );
         }
         if (onRetry) {
-          await onRetry(i + 1, { status: response.status, message: response.statusText });
+          await onRetry(i + 1, { status: response.status, message: retryMessage });
         }
         await new Promise(resolve => setTimeout(resolve, currentDelay));
         continue;
@@ -210,14 +422,7 @@ async function fetchWithRetry(
         if (didTimeout) {
           // 超时中止 → 视为可重试的网络错误
           const msg = `Connection timed out after ${connectionTimeout / 1000}s`;
-          if (onAttemptFailure) {
-            await onAttemptFailure(i + 1, {
-              status: 'TIMEOUT',
-              reason: 'TIMEOUT',
-              message: msg,
-            });
-          }
-          if (i === retries - 1) {
+          if (i === maxAttempts - 1) {
             console.error(`[Fetch Retry] ${msg}. All retries exhausted.`);
             throw new Error(msg);
           }
@@ -233,14 +438,7 @@ async function fetchWithRetry(
         throw error;
       }
 
-      if (onAttemptFailure) {
-        await onAttemptFailure(i + 1, {
-          status: 'NETWORK_ERROR',
-          reason: 'NETWORK_ERROR',
-          message: error.message,
-        });
-      }
-      if (i === retries - 1) {
+      if (i === maxAttempts - 1) {
         console.error(`[Fetch Retry] All retries failed. Last error: ${error.message}`);
         throw error;
       }
@@ -462,6 +660,11 @@ async function _refreshRagBlocksIfNeeded(messages, newContext, pluginManager, de
 class ChatCompletionHandler {
   constructor(config) {
     this.config = config;
+    this.responseReplayCache = new ResponseReplayCache({
+      enabled: parseBooleanEnv(config.responseReplayCacheEnabled ?? process.env.ResponseReplayCacheEnabled, false),
+      maxEntries: parseInt(config.responseReplayCacheMaxEntries ?? process.env.ResponseReplayCacheMaxEntries, 10) || 100,
+      debugMode: config.DEBUG_MODE
+    });
     this.toolExecutor = new ToolExecutor({
       pluginManager: config.pluginManager,
       webSocketServer: config.webSocketServer,
@@ -498,10 +701,7 @@ class ChatCompletionHandler {
       roleDividerRemoveDisabledTags, // 新增
       chinaModel1, // 新增
       chinaModel1Cot, // 新增
-      upstreamCircuitFailureThreshold,
-      upstreamCircuitOpenMs,
-      upstreamHealthProbeIntervalMs,
-      upstreamHealthProbeTimeoutMs,
+      semanticModelRouter,
     } = this.config;
     const circuitFailureThreshold = Number.isFinite(upstreamCircuitFailureThreshold) && upstreamCircuitFailureThreshold > 0
       ? upstreamCircuitFailureThreshold
@@ -517,14 +717,55 @@ class ChatCompletionHandler {
       : DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
 
     const shouldShowVCP = SHOW_VCP_OUTPUT || forceShowVCP;
+    const applyChinaModelThinkingControl = (body) => {
+      if (!body || !body.model || !chinaModel1 || !Array.isArray(chinaModel1) || chinaModel1.length === 0) {
+        return body;
+      }
 
-    let clientIp = req.ip;
-    if (clientIp && clientIp.substr(0, 7) === '::ffff:') {
-      clientIp = clientIp.substr(7);
-    }
+      const modelNameLower = String(body.model).toLowerCase();
+      const isChinaModel = chinaModel1.some(m => modelNameLower.includes(String(m).toLowerCase()));
+      if (!isChinaModel) return body;
+
+      if (chinaModel1Cot) {
+        body.thinking = { type: "enabled" };
+      } else {
+        delete body.thinking;
+      }
+
+      if (DEBUG_MODE) {
+        console.log(`[ChinaModel] 模型 '${body.model}' 匹配成功。思维链状态: ${chinaModel1Cot ? '开启 (enabled)' : '关闭 (已移除字段)'}`);
+      }
+
+      return body;
+    };
+
+    let clientIp = normalizeClientIp(req.ip);
 
     const id = req.body.requestId || req.body.messageId;
+    let originalBody = req.body;
+    const isOriginalRequestStreaming = originalBody.stream === true;
+    const responseCacheKey = this.responseReplayCache.buildKey(clientIp, id);
+
+    if (responseCacheKey && this.responseReplayCache.replay(responseCacheKey, req, res)) {
+      return;
+    }
+
     const abortController = new AbortController();
+
+    let clientDisconnectedAbortReason = null;
+    let cleanupClientDisconnectListeners = () => {};
+    let finalizeResponseCacheRecorder = () => {};
+
+    if (responseCacheKey) {
+      finalizeResponseCacheRecorder = installResponseCacheRecorder(res, {
+        cache: this.responseReplayCache,
+        cacheKey: responseCacheKey,
+        id,
+        clientIp,
+        streamMode: isOriginalRequestStreaming,
+        debugMode: DEBUG_MODE
+      });
+    }
 
     if (id) {
       activeRequests.set(id, {
@@ -532,12 +773,55 @@ class ChatCompletionHandler {
         res,
         abortController,
         timestamp: Date.now(),
-        aborted: false // 修复 Bug #4: 添加中止标志
+        aborted: false, // 修复 Bug #4: 添加中止标志
+        abortReason: null
       });
-    }
 
-    let originalBody = req.body;
-    const isOriginalRequestStreaming = originalBody.stream === true;
+      // 通用前端兼容：如果客户端没有显式调用 /v1/interrupt，
+      // 但 HTTP/SSE 连接已经断开，则把传输层断联转换为同一条级联中止链路。
+      // 注意：这里不能区分“用户点停止 / 刷新页面 / 网络断线 / 代理断开”，统一视为客户端不再等待响应。
+      const triggerClientDisconnectAbort = (reason) => {
+        const requestData = activeRequests.get(id);
+        if (!requestData) return;
+
+        // 正常完成的响应也会触发 close，此时不能误杀已经完成的请求。
+        if (res.writableEnded) return;
+
+        if (requestData.aborted) return;
+
+        requestData.aborted = true;
+        requestData.abortReason = reason;
+        clientDisconnectedAbortReason = reason;
+
+        if (!abortController.signal.aborted) {
+          abortController.abort();
+        }
+
+        console.log(`[ClientDisconnect] Request ${id} aborted due to ${reason}. Upstream cascade abort triggered.`);
+      };
+
+      const onReqAborted = () => triggerClientDisconnectAbort('request_aborted');
+      const onReqClose = () => {
+        if (req.aborted && !res.writableEnded) {
+          triggerClientDisconnectAbort('request_close_after_abort');
+        }
+      };
+      const onResClose = () => {
+        if (!res.writableEnded) {
+          triggerClientDisconnectAbort('response_close_before_finish');
+        }
+      };
+
+      req.on('aborted', onReqAborted);
+      req.on('close', onReqClose);
+      res.on('close', onResClose);
+
+      cleanupClientDisconnectListeners = () => {
+        req.off('aborted', onReqAborted);
+        req.off('close', onReqClose);
+        res.off('close', onResClose);
+      };
+    }
 
     // --- 上下文控制 (Context Control) ---
     // 1. 拦截 contextTokenLimit 参数
@@ -564,27 +848,21 @@ class ChatCompletionHandler {
     try {
       if (originalBody.model) {
         const originalModel = originalBody.model;
-        const redirectedModel = modelRedirectHandler.redirectModelForBackend(originalModel);
-        if (redirectedModel !== originalModel) {
-          originalBody = { ...originalBody, model: redirectedModel };
-          console.log(`[ModelRedirect] 客户端请求模型 '${originalModel}' 已重定向为后端模型 '${redirectedModel}'`);
-        }
+        const isSemanticRoutingModel = semanticModelRouter && typeof semanticModelRouter.isRoutingModel === 'function'
+          ? semanticModelRouter.isRoutingModel(originalModel)
+          : false;
 
-        // --- 国产A类模型推理功能控制 (ChinaModel Thinking Control) ---
-        if (chinaModel1 && Array.isArray(chinaModel1) && chinaModel1.length > 0) {
-          const modelNameLower = originalBody.model.toLowerCase();
-          const isChinaModel = chinaModel1.some(m => modelNameLower.includes(m.toLowerCase()));
-          if (isChinaModel) {
-            if (chinaModel1Cot) {
-              originalBody.thinking = { type: "enabled" };
-            } else {
-              delete originalBody.thinking;
-            }
-
-            if (DEBUG_MODE) {
-              console.log(`[ChinaModel] 模型 '${originalBody.model}' 匹配成功。思维链状态: ${chinaModel1Cot ? '开启 (enabled)' : '关闭 (已移除字段)'}`);
-            }
+        if (!isSemanticRoutingModel) {
+          const redirectedModel = modelRedirectHandler.redirectModelForBackend(originalModel);
+          if (redirectedModel !== originalModel) {
+            originalBody = { ...originalBody, model: redirectedModel };
+            console.log(`[ModelRedirect] 客户端请求模型 '${originalModel}' 已重定向为后端模型 '${redirectedModel}'`);
           }
+
+          // --- 国产A类模型推理功能控制 (ChinaModel Thinking Control) ---
+          applyChinaModelThinkingControl(originalBody);
+        } else if (DEBUG_MODE) {
+          console.log(`[SemanticModelRouter] 检测到语义路由模型 '${originalModel}'，延后到消息预处理完成后选择真实后端模型。`);
         }
       }
 
@@ -603,6 +881,11 @@ class ChatCompletionHandler {
           skipCount: 1
         });
         if (DEBUG_MODE) await writeDebugLog('LogAfterInitialRoleDivider', originalBody.messages);
+      }
+
+      const vcpToolUseForbidden = consumeVcpToolUseForbiddenPlaceholder(originalBody.messages);
+      if (vcpToolUseForbidden && DEBUG_MODE) {
+        console.log(`[VCPToolUse] Detected ${VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER} in top-level system prompt. Tool parsing/execution is disabled for this request.`);
       }
 
       let shouldProcessMedia = false;
@@ -654,6 +937,44 @@ class ChatCompletionHandler {
           tavernProcessedMessages = await pluginManager.executeMessagePreprocessor('VCPTavern', originalBody.messages);
         } catch (pluginError) {
           console.error(`[Server] Error in priority preprocessor VCPTavern:`, pluginError);
+        }
+      }
+
+      // --- 语义模型路由：在变量替换前确定真实后端模型 ---
+      // 这一步必须放在 VCPTavern 之后、变量替换之前：
+      // 1) 路由依据已经包含 Tavern 注入的最新 user/assistant 上下文，更贴近真实意图。
+      // 2) 在变量替换前完成，使后续的 SarPrompt、ChinaModel 等模型相关注入能针对真实路由模型生效。
+      let semanticRoutePlan = null;
+      let semanticModelFallbackCandidates = null;
+      if (semanticModelRouter && typeof semanticModelRouter.isRoutingModel === 'function' && semanticModelRouter.isRoutingModel(originalBody.model)) {
+        semanticRoutePlan = await semanticModelRouter.resolveRoute({
+          requestedModel: originalBody.model,
+          messages: tavernProcessedMessages,
+          pluginManager
+        });
+
+        if (semanticRoutePlan && semanticRoutePlan.active) {
+          const rawCandidates = Array.isArray(semanticRoutePlan.candidates) && semanticRoutePlan.candidates.length > 0
+            ? semanticRoutePlan.candidates
+            : [semanticRoutePlan.selectedModel];
+
+          semanticModelFallbackCandidates = rawCandidates
+            .map(model => modelRedirectHandler.redirectModelForBackend(model))
+            .filter(Boolean)
+            .filter((model, index, arr) => arr.indexOf(model) === index);
+
+          const selectedBackendModel = semanticModelFallbackCandidates[0] || modelRedirectHandler.redirectModelForBackend(semanticRoutePlan.selectedModel);
+          const previousModel = originalBody.model;
+          originalBody = { ...originalBody, model: selectedBackendModel };
+
+          if (DEBUG_MODE || previousModel !== selectedBackendModel) {
+            console.log(
+              `[SemanticModelRouter] 请求模型 '${previousModel}' 已路由到 '${selectedBackendModel}' ` +
+              `(preset=${semanticRoutePlan.presetName}, reason=${semanticRoutePlan.reason}, candidates=${semanticModelFallbackCandidates.join(' -> ')})`
+            );
+          }
+
+          applyChinaModelThinkingControl(originalBody);
         }
       }
 
@@ -785,143 +1106,50 @@ class ChatCompletionHandler {
       // 经过改造后，processedMessages 已经是最终版本，无需再调用 replaceOtherVariables
 
       originalBody.messages = processedMessages;
-      await writeDebugLog('LogOutputAfterProcessing', originalBody);
 
       const willStreamResponse = isOriginalRequestStreaming;
-      const upstreamRequestUrl = `${apiUrl}/v1/chat/completions`;
-      const upstreamOrigin = resolveUpstreamOrigin(upstreamRequestUrl);
-      const trackUpstream = upstreamOrigin && shouldTrackUpstream(upstreamRequestUrl);
-      const upstreamState = trackUpstream ? getUpstreamState(upstreamOrigin) : null;
+      const finalUpstreamBody = { ...originalBody, stream: willStreamResponse };
 
-      if (upstreamState) {
-        const now = Date.now();
-        // 熔断打开时先探活，探活成功立即恢复；失败则继续阻断，保护上游
-        if (upstreamState.circuitOpenUntil > now) {
-          const shouldProbe = now - upstreamState.lastHealthCheckAt >= healthProbeIntervalMs;
-          if (shouldProbe) {
-            const probe = await probeUpstream(upstreamOrigin, apiKey, healthProbeTimeoutMs);
-            upstreamState.lastHealthCheckAt = Date.now();
-            upstreamState.lastHealthOk = probe.ok;
-            if (probe.ok) {
-              console.log(`[Upstream Health] ${upstreamOrigin} probe recovered. status=${probe.status}, latency=${probe.latency}ms`);
-              logCircuitSuccess(upstreamOrigin, upstreamState, { attempt: 'probe', status: probe.status });
-            } else {
-              console.warn(
-                `[Upstream Health] ${upstreamOrigin} probe failed. status=${probe.status}, latency=${probe.latency}ms, message=${probe.message || 'N/A'}`
-              );
-            }
-          }
-          if (upstreamState.circuitOpenUntil > Date.now()) {
-            const retryAfterMs = upstreamState.circuitOpenUntil - Date.now();
-            console.error(
-              `[Upstream Circuit] OPEN ${upstreamOrigin}. request blocked, retry_after=${retryAfterMs}ms, last_reason=${upstreamState.lastFailureReason || 'UNKNOWN'}`
-            );
-            throw new Error(`Upstream circuit open: ${upstreamOrigin}, retry after ${retryAfterMs}ms`);
-          }
-        } else if (now - upstreamState.lastHealthCheckAt >= healthProbeIntervalMs) {
-          // 非熔断状态下按间隔做背景健康检查，用于提前感知链路劣化
-          const probe = await probeUpstream(upstreamOrigin, apiKey, healthProbeTimeoutMs);
-          upstreamState.lastHealthCheckAt = Date.now();
-          upstreamState.lastHealthOk = probe.ok;
-          if (probe.ok) {
-            if (DEBUG_MODE) {
-              console.log(`[Upstream Health] ${upstreamOrigin} healthy. status=${probe.status}, latency=${probe.latency}ms`);
-            }
-          } else {
-            console.warn(
-              `[Upstream Health] ${upstreamOrigin} degraded before request. status=${probe.status}, latency=${probe.latency}ms, message=${probe.message || 'N/A'}`
-            );
-          }
-        }
-      }
+      finalContextStore.setLastFinalContext(finalUpstreamBody, {
+        requestId: req.body.requestId || null,
+        messageId: req.body.messageId || null,
+        clientIp,
+        forceShowVCP,
+        capturedStage: 'before_upstream_fetch'
+      });
 
-      let retryKeepAliveTimer = null;
-      const stopRetryKeepAlive = () => {
-        if (retryKeepAliveTimer) {
-          clearInterval(retryKeepAliveTimer);
-          retryKeepAliveTimer = null;
-        }
-      };
+      await writeDebugLog('LogOutputAfterProcessing', finalUpstreamBody);
 
-      const sendRetryKeepAlive = () => {
-        if (!isOriginalRequestStreaming || res.writableEnded || res.destroyed) {
-          stopRetryKeepAlive();
-          return;
-        }
-        try {
-          res.write(': vcp-retry-keepalive\n\n');
-          if (typeof res.flush === 'function') res.flush();
-        } catch (e) {
-          stopRetryKeepAlive();
-        }
-      };
-
-      let firstAiAPIResponse;
-      try {
-        firstAiAPIResponse = await fetchWithRetry(
-          upstreamRequestUrl,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-              ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] }),
-              Accept: willStreamResponse ? 'text/event-stream' : req.headers['accept'] || 'application/json',
-            },
-            body: JSON.stringify({ ...originalBody, stream: willStreamResponse }),
-            signal: abortController.signal,
+      let firstAiAPIResponse = await fetchWithRetry(
+        `${apiUrl}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+            ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] }),
+            Accept: willStreamResponse ? 'text/event-stream' : req.headers['accept'] || 'application/json',
           },
-          {
-            retries: apiRetries,
-            delay: apiRetryDelay,
-            debugMode: DEBUG_MODE,
-            onAttemptFailure: async (attempt, failure) => {
-              // 每次失败都推进熔断状态机并输出结构化失败日志
-              if (upstreamState) {
-                logCircuitFailure(upstreamOrigin, upstreamState, {
-                  attempt,
-                  status: failure.status,
-                  reason: failure.reason || failure.message,
-                }, circuitFailureThreshold, circuitOpenMs);
-              }
-            },
-            onAttemptSuccess: async (attempt, success) => {
-              // 任意成功即复位熔断状态，避免“假故障”长期阻断
-              if (upstreamState) {
-                logCircuitSuccess(upstreamOrigin, upstreamState, {
-                  attempt,
-                  status: success.status,
-                });
-              }
-            },
-            onRetry: async (attempt, errorInfo) => {
-              if (!isOriginalRequestStreaming || res.writableEnded || res.destroyed) return;
-
-              if (!res.headersSent) {
-                if (DEBUG_MODE)
-                  console.log(`[VCP Retry] First retry attempt (#${attempt}). Sending 200 OK to client to establish stream.`);
-                res.status(200);
-                res.setHeader('Content-Type', 'text/event-stream');
-                res.setHeader('Cache-Control', 'no-cache');
-                res.setHeader('Connection', 'keep-alive');
-                if (typeof res.flushHeaders === 'function') res.flushHeaders();
-              }
-
-              try {
-                res.write(`: vcp-retry-${attempt}-${errorInfo.status || 'UNKNOWN'}\n\n`);
-                if (typeof res.flush === 'function') res.flush();
-              } catch (e) {}
-
-              if (!retryKeepAliveTimer) {
-                retryKeepAliveTimer = setInterval(sendRetryKeepAlive, 5000);
-              }
-            },
-            connectionTimeout: 600000,
+          body: JSON.stringify(finalUpstreamBody),
+          signal: abortController.signal,
+        },
+        {
+          retries: apiRetries,
+          delay: apiRetryDelay,
+          debugMode: DEBUG_MODE,
+          modelFallbackCandidates: semanticModelFallbackCandidates,
+          onRetry: async (attempt, errorInfo) => {
+            if (!res.headersSent && isOriginalRequestStreaming) {
+              if (DEBUG_MODE)
+                console.log(`[VCP Retry] First retry attempt (#${attempt}). Sending 200 OK to client to establish stream.`);
+              res.status(200);
+              res.setHeader('Content-Type', 'text/event-stream');
+              res.setHeader('Cache-Control', 'no-cache');
+              res.setHeader('Connection', 'keep-alive');
+            }
           },
-        );
-      } finally {
-        stopRetryKeepAlive();
-      }
+        },
+      );
 
       const isUpstreamStreaming =
         willStreamResponse && firstAiAPIResponse.headers.get('content-type')?.includes('text/event-stream');
@@ -1009,7 +1237,9 @@ class ChatCompletionHandler {
         _refreshRagBlocksIfNeeded,
         fetchWithRetry,
         isToolResultError,
-        formatToolResult
+        formatToolResult,
+        vcpToolUseForbidden,
+        semanticModelFallbackCandidates
       };
 
       if (isUpstreamStreaming) {
@@ -1019,10 +1249,11 @@ class ChatCompletionHandler {
       }
     } catch (error) {
       if (error.name === 'AbortError') {
-        // When a request is aborted, the '/v1/interrupt' handler is responsible for closing the response stream.
-        // This catch block should simply log the event and stop processing to prevent race conditions
-        // and avoid throwing an uncaught exception if it also tries to write to the already-closed stream.
-        console.log(`[Abort] Caught AbortError for request ${id}. Execution will be halted. The interrupt handler is responsible for the client response.`);
+        // 显式 /v1/interrupt 或客户端断联都会走到这里。
+        // 如果是客户端断联，响应通道通常已经不可写；如果是显式 interrupt，则由 interrupt 路由负责关闭响应流。
+        // 这里仅停止后续处理，避免与中止链路竞态写入。
+        const abortReason = clientDisconnectedAbortReason || activeRequests.get(id)?.abortReason || 'explicit_interrupt_or_abort';
+        console.log(`[Abort] Caught AbortError for request ${id}. Execution halted. reason=${abortReason}`);
         return; // Stop processing and allow the 'finally' block to clean up.
       }
       // Only log full stack trace for non-abort errors
@@ -1103,6 +1334,14 @@ class ChatCompletionHandler {
         }
       }
     } finally {
+      cleanupClientDisconnectListeners();
+
+      if (!res.writableEnded && !res.destroyed) {
+        // 仍未结束的异常路径不应写入缓存；正常 finish 会自动 finalize。
+      } else {
+        finalizeResponseCacheRecorder();
+      }
+
       if (id) {
         const requestData = activeRequests.get(id);
         if (requestData) {
@@ -1114,6 +1353,7 @@ class ChatCompletionHandler {
           if (!requestData.aborted && requestData.abortController && !requestData.abortController.signal.aborted) {
             if (res.destroyed && !res.writableEnded) {
               requestData.aborted = true;
+              requestData.abortReason = 'response_destroyed_in_finally';
               requestData.abortController.abort();
             }
           }

@@ -144,10 +144,35 @@ class LightMemoPlugin {
         const {
             query, maid, folder, k = 5, rerank = false,
             search_all_knowledge_bases = false,
-            tag_boost = 0.5,
+            tag_boost: rawTagBoost = 0.5,
             core_tags = [],
             core_boost_factor = 1.33
         } = args;
+
+        // 🌟 Wave v8: 解析 tag_boost 的 "+" 后缀
+        // tag_boost:「始」0.6「末」  → 正常浪潮 (tagBoost=0.6, geodesic=false)
+        // tag_boost:「始」0.6+「末」 → 浪潮v8 (tagBoost=0.6, geodesic=true)
+        let useGeodesicRerank = false;
+        let tag_boost = rawTagBoost;
+        if (typeof rawTagBoost === 'string') {
+            const trimmedTagBoost = rawTagBoost.trim();
+            if (trimmedTagBoost.endsWith('+')) {
+                useGeodesicRerank = true;
+                tag_boost = this._parseNumber(trimmedTagBoost.slice(0, -1), 0);
+            } else {
+                tag_boost = this._parseNumber(trimmedTagBoost, 0);
+            }
+        } else {
+            tag_boost = this._parseNumber(rawTagBoost, 0);
+        }
+
+        const normalizedK = Math.max(1, Math.floor(this._parseNumber(k, 5)));
+        const normalizedCoreTags = this._parseStringArray(core_tags);
+        const normalizedCoreBoostFactor = this._parseNumber(core_boost_factor, 1.33);
+
+        const parsedMaidScope = this._parseMaidScopedFolder(maid);
+        const scopedMaid = parsedMaidScope.maid;
+        const combinedFolder = this._mergeFolderScopes(folder, parsedMaidScope.folder);
 
         let isMusicSearch = false;
         let actualQuery = query || "";
@@ -189,16 +214,18 @@ class LightMemoPlugin {
         }
 
         if (!actualQuery && timeRange) {
-            actualQuery = maid || folder || "记录"; // 如果只有时间约束，给予默认查询词避免向量化报错
+            actualQuery = scopedMaid || combinedFolder || "记录"; // 如果只有时间约束，给予默认查询词避免向量化报错
         }
 
-        if (!isMusicSearch && (!query || (!maid && !folder))) {
+        if (!isMusicSearch && (!query || (!scopedMaid && !combinedFolder))) {
             throw new Error("参数 'query' 是必需的，且必须提供 'maid' 或 'folder'。");
         }
 
-        const effectiveFolder = isMusicSearch ? 'MusicDiary' : folder;
-        const effectiveMaid = isMusicSearch ? null : maid;
-        const effectiveSearchAll = isMusicSearch ? false : search_all_knowledge_bases;
+        const normalizedSearchAll = this._parseBoolean(search_all_knowledge_bases, false);
+
+        const effectiveFolder = isMusicSearch ? 'MusicDiary' : combinedFolder;
+        const effectiveMaid = isMusicSearch ? null : scopedMaid;
+        const effectiveSearchAll = isMusicSearch ? false : normalizedSearchAll;
 
         // 从所有日记本中收集候选chunks
         const candidates = await this._gatherCandidateChunks({
@@ -251,15 +278,15 @@ class LightMemoPlugin {
             topByKeyword = scoredCandidates
                 .filter(c => c.bm25Score > 0)
                 .sort((a, b) => b.bm25Score - a.bm25Score)
-                .slice(0, k * 5); // 增加候选数量
+                .slice(0, normalizedK * 5); // 增加候选数量
 
             // 如果关键词匹配太少，补充一些向量相似度高的（这里先取前 N 个作为兜底候选）
-            if (topByKeyword.length < k) {
+            if (topByKeyword.length < normalizedK) {
                 console.log(`[LightMemo] BM25 results insufficient (${topByKeyword.length}), adding fallback candidates.`);
                 const existingIds = new Set(topByKeyword.map(c => c.label));
                 const fallbacks = scoredCandidates
                     .filter(c => !existingIds.has(c.label))
-                    .slice(0, k * 2);
+                    .slice(0, normalizedK * 2);
                 topByKeyword = [...topByKeyword, ...fallbacks];
             }
         }
@@ -275,15 +302,16 @@ class LightMemoPlugin {
         let tagBoostInfo = null;
         // 🚀【新步骤】如果启用了 TagMemo，则调用 KBM 的功能来增强向量
         if (tag_boost > 0 && this.vectorDBManager && typeof this.vectorDBManager.applyTagBoost === 'function') {
-            const hasCore = Array.isArray(core_tags) && core_tags.length > 0;
-            console.log(`[LightMemo] Applying TagMemo V6 boost (Factor: ${tag_boost}${hasCore ? `, CoreTags: ${core_tags.length}` : ''})`);
+            const hasCore = normalizedCoreTags.length > 0;
+            const waveLabel = useGeodesicRerank ? 'TagMemo+ (Wave v8)' : 'TagMemo V6';
+            console.log(`[LightMemo] Applying ${waveLabel} boost (Factor: ${tag_boost}${hasCore ? `, CoreTags: ${core_tags.length}` : ''})`);
 
             // 即使 core_tags 为空，KBM 内部也会处理好默认逻辑
             const boostResult = this.vectorDBManager.applyTagBoost(
                 new Float32Array(queryVector),
                 tag_boost,
-                core_tags,
-                core_boost_factor
+                normalizedCoreTags,
+                normalizedCoreBoostFactor
             );
 
             if (boostResult && boostResult.vector) {
@@ -334,25 +362,83 @@ class LightMemoPlugin {
             };
         }).sort((a, b) => b.hybridScore - a.hybridScore);
 
+        // 🌟 Wave v8: 测地线重排 (Geodesic Rerank)
+        let rankedCandidates = hybridScored;
+        if (useGeodesicRerank && tag_boost > 0 && tagBoostInfo && this.vectorDBManager && this.vectorDBManager.geodesicRerank) {
+            console.log(`[LightMemo] 🌟 Wave v8: Applying geodesic rerank to ${hybridScored.length} candidates...`);
+
+            // geodesicRerank expects candidates with `id` (chunk ID) and `score` fields
+            const geoInput = hybridScored.map(c => ({
+                ...c,
+                id: c.label,  // label is chunk.id from SQLite
+                score: c.hybridScore || c.vectorScore || 0
+            }));
+
+            const geoConfig = this.vectorDBManager.ragParams?.KnowledgeBaseManager?.geodesicRerank || {};
+            const reranked = this.vectorDBManager.geodesicRerank(geoInput, {
+                alpha: geoConfig.alpha ?? 0.3,
+                minGeoSamples: geoConfig.minGeoSamples ?? 4
+            });
+
+            // Map results back with geodesic metadata
+            rankedCandidates = reranked.map(r => ({
+                ...r,
+                hybridScore: r.score,
+                tagBoostInfo: tagBoostInfo,
+                waveV8: r.geo_score > 0
+            }));
+
+            const geoCount = rankedCandidates.filter(r => r.waveV8).length;
+            console.log(`[LightMemo] 🌟 Wave v8: Geodesic rerank complete. ${geoCount}/${rankedCandidates.length} candidates with geo contribution.`);
+        }
+
         // 取top K
-        let finalResults = hybridScored.slice(0, k);
+        let finalResults = rankedCandidates.slice(0, normalizedK);
 
         // --- 第三阶段：Rerank（可选） ---
-        // 🌟 Rerank+ (RRF): rerank 参数支持 true/false/"rrf"/"rrf0.7" 四种形式
-        // "rrf" = RRF融合(α=0.5), "rrf0.7" = RRF融合(α=0.7, Reranker占70%权重)
-        const useRerank = rerank === true || (typeof rerank === 'string' && rerank.toLowerCase().startsWith('rrf'));
+        // 🌟 Rerank+ (RRF): rerank 参数支持多种形式
+        //   false          → 不使用 Rerank
+        //   true           → 标准 Rerank（纯精排，无融合）
+        //   "rrf"          → RRF 融合 (α=0.5)
+        //   "rrf0.7"       → RRF 融合 (α=0.7, Reranker 占 70% 权重)
+        //   0.7 (数字)     → RRF 融合 (α=0.7)，等价于 "rrf0.7"
+        //   "0.7" (字符串) → RRF 融合 (α=0.7)，等价于 "rrf0.7"
+        let useRerank = false;
         let rrfOptions = null;
-        if (typeof rerank === 'string' && rerank.toLowerCase().startsWith('rrf')) {
-            const alphaMatch = rerank.match(/rrf(\d+\.?\d*)/i);
-            const alpha = alphaMatch ? Math.min(1.0, Math.max(0.0, parseFloat(alphaMatch[1]))) : 0.5;
-            rrfOptions = { alpha };
-            console.log(`[LightMemo] 🌟 Rerank+ (RRF) 模式启用: α=${alpha}`);
+
+        if (rerank === true) {
+            useRerank = true;
+        } else if (typeof rerank === 'number' && rerank > 0 && rerank <= 1.0) {
+            // 直接传数字 → RRF 融合
+            useRerank = true;
+            rrfOptions = { alpha: rerank };
+            console.log(`[LightMemo] 🌟 Rerank+ (RRF) 数字模式启用: α=${rerank}`);
+        } else if (typeof rerank === 'string') {
+            const lowerRerank = rerank.toLowerCase().trim();
+            if (lowerRerank.startsWith('rrf')) {
+                // "rrf" / "rrf0.7" 形式
+                useRerank = true;
+                const alphaMatch = lowerRerank.match(/rrf(\d+\.?\d*)/);
+                const alpha = alphaMatch ? Math.min(1.0, Math.max(0.0, parseFloat(alphaMatch[1]))) : 0.5;
+                rrfOptions = { alpha };
+                console.log(`[LightMemo] 🌟 Rerank+ (RRF) 模式启用: α=${alpha}`);
+            } else {
+                // 尝试解析为数字字符串 "0.7"
+                const numericAlpha = parseFloat(lowerRerank);
+                if (!isNaN(numericAlpha) && numericAlpha > 0 && numericAlpha <= 1.0) {
+                    useRerank = true;
+                    rrfOptions = { alpha: numericAlpha };
+                    console.log(`[LightMemo] 🌟 Rerank+ (RRF) 数字字符串模式启用: α=${numericAlpha}`);
+                } else if (lowerRerank === 'true') {
+                    useRerank = true;
+                }
+            }
         }
 
         if (useRerank && finalResults.length > 0) {
             // 🌟 Rerank+: 注入检索排位 (retrieval_rank) 用于 RRF 融合
             finalResults.forEach((doc, idx) => { doc.retrieval_rank = idx + 1; });
-            finalResults = await this._rerankDocuments(actualQuery, finalResults, k, rrfOptions);
+            finalResults = await this._rerankDocuments(actualQuery, finalResults, normalizedK, rrfOptions);
         }
 
         return this.formatResults(finalResults, query);
@@ -401,7 +487,9 @@ class LightMemoPlugin {
                 // 使用解构默认值，确保即使 tagBoostInfo 结构不完整也能安全运行
                 const { matchedTags = [], coreTagsMatched = [] } = r.tagBoostInfo;
                 if (matchedTags.length > 0 || coreTagsMatched.length > 0) {
-                    let boostLine = `    [TagMemo 增强: `;
+                    // 🌟 Wave v8: 根据是否有测地线贡献显示不同标签
+                    const memoLabel = r.waveV8 ? 'TagMemo+ v8' : 'TagMemo';
+                    let boostLine = `    [${memoLabel} 增强: `;
                     // 只有当确实命中了核心标签时，才显示 🌟 标志
                     if (coreTagsMatched.length > 0) {
                         boostLine += `🌟${coreTagsMatched.join(', ')} `;
@@ -574,6 +662,119 @@ class LightMemoPlugin {
     }
 
     /**
+     * 将工具协议传入的布尔值参数规范化。
+     * VCP 工具参数常以字符串形式传入，字符串 "false" 在 JS 中是真值，
+     * 如果不转换会导致 search_all_knowledge_bases 被误判为开启。
+     */
+    _parseBoolean(value, defaultValue = false) {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value !== 0;
+        if (typeof value !== 'string') return defaultValue;
+
+        const normalized = value.trim().toLowerCase();
+        if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'n', 'off', ''].includes(normalized)) return false;
+
+        return defaultValue;
+    }
+
+    /**
+     * 将工具协议传入的数字参数规范化。
+     */
+    _parseNumber(value, defaultValue = 0) {
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        if (typeof value !== 'string') return defaultValue;
+
+        const parsed = parseFloat(value.trim());
+        return Number.isFinite(parsed) ? parsed : defaultValue;
+    }
+
+    /**
+     * 将工具协议传入的数组参数规范化。
+     * 兼容真实数组、JSON数组字符串，以及逗号/中文逗号/顿号/竖线分隔字符串。
+     */
+    _parseStringArray(value) {
+        if (Array.isArray(value)) {
+            return value
+                .map(v => typeof v === 'string' ? v.trim() : String(v ?? '').trim())
+                .filter(Boolean);
+        }
+
+        if (typeof value !== 'string') return [];
+
+        const trimmed = value.trim();
+        if (!trimmed) return [];
+
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed)) {
+                    return parsed
+                        .map(v => typeof v === 'string' ? v.trim() : String(v ?? '').trim())
+                        .filter(Boolean);
+                }
+            } catch (e) {
+                // 非 JSON 数组时继续按分隔符解析
+            }
+        }
+
+        return trimmed
+            .split(/[,，、|｜]/)
+            .map(v => v.trim())
+            .filter(Boolean);
+    }
+
+    /**
+     * 解析 maid 中的作用域语法：[文件夹]署名
+     * 示例：[小吉的地缘政治]小吉 => folder: 小吉的地缘政治, maid: 小吉
+     * 文件夹部分支持用中文逗号、英文逗号或 | 分隔多个文件夹。
+     */
+    _parseMaidScopedFolder(maid) {
+        if (typeof maid !== 'string') {
+            return { maid, folder: null };
+        }
+
+        const trimmedMaid = maid.trim();
+        const scopedMatch = trimmedMaid.match(/^\[([^\]]+)\](.*)$/);
+        if (!scopedMatch) {
+            return { maid: trimmedMaid, folder: null };
+        }
+
+        const scopedFolder = scopedMatch[1].trim();
+        const scopedMaid = scopedMatch[2].trim();
+
+        return {
+            maid: scopedMaid || null,
+            folder: scopedFolder || null
+        };
+    }
+
+    /**
+     * 合并显式 folder 参数与 maid 作用域文件夹，兼容中文逗号、英文逗号和 | 分隔的多文件夹写法
+     */
+    _mergeFolderScopes(folder, scopedFolder) {
+        const folders = [];
+
+        const appendFolders = (value) => {
+            if (typeof value !== 'string') return;
+            value.split(/[,，|]/)
+                .map(f => f.trim())
+                .filter(Boolean)
+                .forEach(f => {
+                    if (!folders.includes(f)) {
+                        folders.push(f);
+                    }
+                });
+        };
+
+        appendFolders(folder);
+        appendFolders(scopedFolder);
+
+        return folders.length > 0 ? folders.join(',') : null;
+    }
+
+    /**
      * 改用jieba分词（保留词组）
      */
     _tokenize(text) {
@@ -609,7 +810,7 @@ class LightMemoPlugin {
         }
 
         const candidates = [];
-        const targetFolders = folder ? folder.split(/[,，]/).map(f => f.trim()).filter(Boolean) : [];
+        const targetFolders = folder ? folder.split(/[,，|]/).map(f => f.trim()).filter(Boolean) : [];
 
         try {
             // 🚀 优化：使用 SQL 过滤减少 JS 端的处理压力

@@ -5,6 +5,8 @@ const lunarCalendar = require('chinese-lunar-calendar');
 const agentManager = require('./agentManager.js'); // 引入新的Agent管理器
 const tvsManager = require('./tvsManager.js'); // 引入新的TVS管理器
 const toolboxManager = require('./toolboxManager.js');
+const dynamicToolRegistry = require('./dynamicToolRegistry.js');
+const sarPromptManager = require('./sarPromptManager.js');
 
 const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'Asia/Shanghai';
 const REPORT_TIMEZONE = process.env.REPORT_TIMEZONE || 'Asia/Shanghai'; // 新增：用于控制 AI 报告的时间，默认回退到中国时区
@@ -31,6 +33,25 @@ function resolveTvsDir() {
 }
 const TVS_DIR = resolveTvsDir();
 const VCP_ASYNC_RESULTS_DIR = path.join(__dirname, '..', 'VCPAsyncResults');
+
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceFirstAliasPlaceholder(text, alias, replacementText, prefix = '') {
+    const escapedAlias = escapeRegExp(alias);
+    const escapedPrefix = prefix ? `${escapeRegExp(prefix)}:` : '';
+    const aliasPlaceholderRegex = new RegExp(`\\{\\{(?:${escapedPrefix})?${escapedAlias}\\}\\}`, 'g');
+    let hasReplacedFirst = false;
+
+    return String(text).replace(aliasPlaceholderRegex, () => {
+        if (hasReplacedFirst) {
+            return '';
+        }
+        hasReplacedFirst = true;
+        return replacementText;
+    });
+}
 
 async function resolveAllVariables(text, model, role, context, processingStack = new Set()) {
     if (text == null) return '';
@@ -126,9 +147,7 @@ async function resolveAllVariables(text, model, role, context, processingStack =
                 );
                 processingStack.delete(stackKey);
 
-                processedText = processedText
-                    .replaceAll(`{{${alias}}}`, expandedText)
-                    .replaceAll(`{{toolbox:${alias}}}`, expandedText);
+                processedText = replaceFirstAliasPlaceholder(processedText, alias, expandedText, 'toolbox');
 
                 // 标记此 Toolbox 已展开
                 if (context.expandedToolboxes) {
@@ -229,10 +248,46 @@ async function resolveDynamicFoldProtocol(foldObj, context, placeholderKey) {
 
         const config = ragPlugin.ragParams?.RAGDiaryPlugin || {};
         const mainWeights = config.mainSearchWeights || [0.7, 0.3];
+        const fuzzyConfig = ragPlugin.ragParams?.ContextFoldingV2?.fuzzyEmbedding || {};
+        const fuzzyOptions = {
+            threshold: Number.isFinite(Number(fuzzyConfig.threshold)) ? Number(fuzzyConfig.threshold) : 0.985,
+            minLength: Number.isFinite(Number(fuzzyConfig.minLength)) ? Number(fuzzyConfig.minLength) : 80,
+            maxScan: Number.isFinite(Number(fuzzyConfig.maxScan)) ? Number(fuzzyConfig.maxScan) : 200,
+            maxLengthDiffRatio: Number.isFinite(Number(fuzzyConfig.maxLengthDiffRatio)) ? Number(fuzzyConfig.maxLengthDiffRatio) : 0.02,
+            maxLengthDiffAbs: Number.isFinite(Number(fuzzyConfig.maxLengthDiffAbs)) ? Number(fuzzyConfig.maxLengthDiffAbs) : 80
+        };
+
+        // DynamicFold 专用向量获取：精确缓存 → 高阈值 fuzzy 缓存 → Embedding API。
+        // 这里常在 RAGDiaryPlugin 主链路之后运行，AI 文本可能只有极小差异；
+        // 先 fuzzy 复用可避免动态折叠再次向量化同一段 AI 输出。
+        const getDynamicFoldEmbedding = async (text, label = 'unknown') => {
+            if (!text || typeof text !== 'string' || !text.trim()) return null;
+
+            if (typeof ragPlugin._getEmbeddingFromCacheOnly === 'function') {
+                const exact = ragPlugin._getEmbeddingFromCacheOnly(text);
+                if (exact) return exact;
+            }
+
+            if (typeof ragPlugin._findFuzzyEmbeddingFromCache === 'function') {
+                const fuzzy = ragPlugin._findFuzzyEmbeddingFromCache(text, fuzzyOptions);
+
+                if (fuzzy && fuzzy.vector) {
+                    if (context.DEBUG_MODE) {
+                        console.log(
+                            `[DynamicFold] Fuzzy embedding cache hit (${label}): ` +
+                            `sim=${fuzzy.similarity.toFixed(4)}, len=${text.length}/${fuzzy.length}`
+                        );
+                    }
+                    return fuzzy.vector;
+                }
+            }
+
+            return await ragPlugin.getSingleEmbeddingCached(text);
+        };
 
         const [uVec, aVec] = await Promise.all([
-            userContent ? ragPlugin.getSingleEmbeddingCached(userContent) : Promise.resolve(null),
-            aiContent ? ragPlugin.getSingleEmbeddingCached(aiContent) : Promise.resolve(null)
+            userContent ? getDynamicFoldEmbedding(userContent, 'user_context') : Promise.resolve(null),
+            aiContent ? getDynamicFoldEmbedding(aiContent, 'assistant_context') : Promise.resolve(null)
         ]);
 
         const userVector = ragPlugin._getWeightedAverageVector([uVec, aVec], mainWeights);
@@ -373,7 +428,10 @@ async function replaceOtherVariables(text, model, role, context) {
     let processedText = String(text);
 
     // SarModel 高级预设注入，对 system 角色或 VCPTavern 注入的 user 角色生效
-    if (role === 'system' || (role === 'user' && (processedText.startsWith('[系统提示:]') || processedText.startsWith('[系统邀请指令:]')))) {
+    const systemMarkers = ['[系统提示:]', '[系统邀请指令:]', '[系统通知:]', '[系统通知]'];
+    const isSystemLike = role === 'system' || (role === 'user' && systemMarkers.some(marker => processedText.startsWith(marker)));
+
+    if (isSystemLike) {
         // 查找所有独特的 SarPrompt 占位符，例如 {{SarPrompt1}}, {{SarPrompt2}}
         const sarPlaceholderRegex = /\{\{(SarPrompt\d+)\}\}/g;
         const matches = [...processedText.matchAll(sarPlaceholderRegex)];
@@ -382,22 +440,17 @@ async function replaceOtherVariables(text, model, role, context) {
         for (const placeholder of uniquePlaceholders) {
             // 从 {{SarPrompt4}} 中提取 SarPrompt4
             const promptKey = placeholder.substring(2, placeholder.length - 2);
-            // 从 SarPrompt4 中提取数字 4
-            const numberMatch = promptKey.match(/\d+$/);
-            if (!numberMatch) continue;
-
-            const index = numberMatch[0];
-            const modelKey = `SarModel${index}`;
-
-            const models = process.env[modelKey];
-            let promptValue = process.env[promptKey];
+            
+            // 从 sarPromptManager 中查找匹配的 promptKey
+            const prompts = sarPromptManager.getAllPrompts();
+            const group = prompts.find(g => g.promptKey === promptKey);
             let replacementText = ''; // 默认替换为空字符串
 
-            // 检查模型和提示是否存在
-            if (models && promptValue) {
-                const modelList = models.split(',').map(m => m.trim().toLowerCase());
+            if (group && group.models && group.content) {
+                const modelList = group.models.map(m => m.trim().toLowerCase());
                 // 检查当前模型是否在列表中
                 if (model && modelList.includes(model.toLowerCase())) {
+                    let promptValue = group.content;
                     // 模型匹配，准备注入的文本
                     if (typeof promptValue === 'string' && promptValue.toLowerCase().endsWith('.txt')) {
                         const fileContent = await tvsManager.getContent(promptValue);
@@ -487,6 +540,19 @@ async function replaceOtherVariables(text, model, role, context) {
         }
 
         const individualPluginDescriptions = pluginManager.getIndividualPluginDescriptions();
+        if (processedText.includes('{{VCPDynamicTools}}')) {
+            let dynamicToolsText = '[VCPDynamicTools information unavailable]';
+            try {
+                dynamicToolsText = await dynamicToolRegistry.buildInjection({
+                    messages: context.messages || context.originalMessages || [],
+                    pluginManager,
+                    debugMode: DEBUG_MODE
+                });
+            } catch (error) {
+                console.error('[replaceOtherVariables] Error processing {{VCPDynamicTools}}:', error);
+            }
+            processedText = processedText.replaceAll('{{VCPDynamicTools}}', dynamicToolsText);
+        }
         if (individualPluginDescriptions && individualPluginDescriptions.size > 0) {
             for (const [placeholderKey, description] of individualPluginDescriptions) {
                 processedText = processedText.replaceAll(`{{${placeholderKey}}}`, description || `[${placeholderKey} 信息不可用]`);
@@ -526,15 +592,20 @@ async function replaceOtherVariables(text, model, role, context) {
         }
     }
 
-    const asyncResultPlaceholderRegex = /\{\{VCP_ASYNC_RESULT::([a-zA-Z0-9_.-]+)::([a-zA-Z0-9_-]+)\}\}/g;
+    // 同时兼容标准双花括号、异常三花括号、以及被字符串转义后常见的四花括号格式
+    // 例如：
+    // {{VCP_ASYNC_RESULT::Plugin::id}}
+    // {{{VCP_ASYNC_RESULT::Plugin::id}}}
+    // {{{{VCP_ASYNC_RESULT::Plugin::id}}}}
+    const asyncResultPlaceholderRegex = /\{\{\{\{VCP_ASYNC_RESULT::([a-zA-Z0-9_.-]+)::([a-zA-Z0-9_-]+)\}\}\}\}|\{\{\{VCP_ASYNC_RESULT::([a-zA-Z0-9_.-]+)::([a-zA-Z0-9_-]+)\}\}\}|\{\{VCP_ASYNC_RESULT::([a-zA-Z0-9_.-]+)::([a-zA-Z0-9_-]+)\}\}/g;
     let asyncMatch;
     let tempAsyncProcessedText = processedText;
     const promises = [];
 
     while ((asyncMatch = asyncResultPlaceholderRegex.exec(processedText)) !== null) {
         const placeholder = asyncMatch[0];
-        const pluginName = asyncMatch[1];
-        const requestId = asyncMatch[2];
+        const pluginName = asyncMatch[1] || asyncMatch[3] || asyncMatch[5];
+        const requestId = asyncMatch[2] || asyncMatch[4] || asyncMatch[6];
 
         promises.push(
             (async () => {

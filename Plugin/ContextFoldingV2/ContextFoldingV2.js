@@ -26,6 +26,7 @@ class ContextFoldingV2 {
         this.summaryUserPrompt = '';
         this.minDepth = 3;
         this.maxRetries = 3;
+        this.maxConcurrentSummaries = 5;
 
         // 热调控参数（从 rag_params.json 实时读取）
         this.hotParams = {
@@ -33,12 +34,21 @@ class ContextFoldingV2 {
             thresholdRange: [0.40, 0.60],
             lWeight: 0.05,
             sWeight: 0.05,
-            contextWeights: [0.7, 0.3] // user : assistant 加权比例，与 RAGDiaryPlugin.mainSearchWeights 对齐
+            contextWeights: [0.7, 0.3], // user : assistant 加权比例，与 RAGDiaryPlugin.mainSearchWeights 对齐
+            fuzzyEmbedding: {
+                threshold: 0.985,
+                minLength: 80,
+                maxScan: 200,
+                maxLengthDiffRatio: 0.02,
+                maxLengthDiffAbs: 80
+            }
         };
         this._ragParamsWatcher = null;
 
         // 运行时状态
         this.pendingHashes = new Set(); // 防止并发重复触发摘要生成
+        this.summaryQueue = [];
+        this.activeSummaryCount = 0;
     }
 
     /**
@@ -54,6 +64,10 @@ class ContextFoldingV2 {
         this.summaryUserPrompt = (process.env.FOLDING_SUMMARY_USER_PROMPT || '').replace(/\\n/g, '\n');
         this.minDepth = Math.max(2, parseInt(process.env.FOLDING_MIN_DEPTH) || 3);
         this.maxRetries = parseInt(process.env.FOLDING_MAX_RETRIES) || 3;
+        this.maxConcurrentSummaries = Math.max(1, parseInt(process.env.FOLDING_SUMMARY_MAX_CONCURRENT, 10) || 5);
+
+        // 🌟 保存 PROJECT_BASE_PATH 到实例，供 _loadHotParams / _startHotParamsWatcher 使用
+        this._projectBasePath = (config && config.PROJECT_BASE_PATH) || process.env.PROJECT_BASE_PATH || path.join(__dirname, '../../');
 
         // 2. 接收 ContextBridge
         if (dependencies && dependencies.contextBridge) {
@@ -64,16 +78,24 @@ class ContextFoldingV2 {
             return;
         }
 
-        // 3. 验证 FoldingStore 可用性
-        if (!this.contextBridge.foldingStore) {
-            console.warn('[ContextFoldingV2] FoldingStore 不可用，折叠功能将不可用');
-            return;
-        }
-
-        const stats = this.contextBridge.foldingStore.getStats();
-        if (!stats.available) {
-            console.warn('[ContextFoldingV2] FoldingStore 数据库不可用');
-            return;
+        // 3. 延迟验证 FoldingStore 可用性
+        //    FoldingStore 通过 getter 动态获取，RAGDiaryPlugin 的异步初始化可能尚未完成，
+        //    因此不在此处做硬判断。改为在 processMessages 中按需检查。
+        let storeStatsStr = '未就绪';
+        try {
+            if (this.contextBridge.foldingStore) {
+                const stats = this.contextBridge.foldingStore.getStats();
+                if (stats.available) {
+                    storeStatsStr = `${stats.count}/${stats.maxEntries}条`;
+                    console.log(`[ContextFoldingV2] FoldingStore 已就绪 (${storeStatsStr})`);
+                } else {
+                    console.warn('[ContextFoldingV2] FoldingStore 数据库当前不可用，将在运行时重试');
+                }
+            } else {
+                console.log('[ContextFoldingV2] FoldingStore 当前不可用（RAGDiaryPlugin 可能尚在初始化），将在运行时动态获取');
+            }
+        } catch (foldingStoreError) {
+            console.warn(`[ContextFoldingV2] FoldingStore 可用性检查失败，将在运行时重试: ${foldingStoreError instanceof Error ? foldingStoreError.message : JSON.stringify(foldingStoreError)}`);
         }
 
         // 4. 验证摘要 API 配置
@@ -86,21 +108,25 @@ class ContextFoldingV2 {
         this._startHotParamsWatcher();
 
         this.enabled = true;
-        console.log(`[ContextFoldingV2] 初始化完成 (模型: ${this.summaryModel}, 最低深度: ${this.minDepth}, 阈值基准: ${this.hotParams.thresholdBase}, Store: ${stats.count}/${stats.maxEntries}条)`);
+        console.log(`[ContextFoldingV2] 初始化完成 (模型: ${this.summaryModel}, 最低深度: ${this.minDepth}, 最大并发: ${this.maxConcurrentSummaries}, 阈值基准: ${this.hotParams.thresholdBase}, Store: ${storeStatsStr})`);
     }
 
     /**
      * 从 rag_params.json 加载热调控参数
      */
     async _loadHotParams() {
-        const projectBasePath = process.env.PROJECT_BASE_PATH || path.join(__dirname, '../../');
+        const projectBasePath = this._projectBasePath || process.env.PROJECT_BASE_PATH || path.join(__dirname, '../../');
         const paramsPath = path.join(projectBasePath, 'rag_params.json');
         try {
             const data = await fs.readFile(paramsPath, 'utf-8');
             const allParams = JSON.parse(data);
             if (allParams.ContextFoldingV2) {
                 this.hotParams = { ...this.hotParams, ...allParams.ContextFoldingV2 };
-                console.log(`[ContextFoldingV2] 热参数已加载: 基准=${this.hotParams.thresholdBase}, 范围=[${this.hotParams.thresholdRange}], L系数=${this.hotParams.lWeight}, S系数=${this.hotParams.sWeight}`);
+                console.log(
+                    `[ContextFoldingV2] 热参数已加载: 基准=${this.hotParams.thresholdBase}, ` +
+                    `范围=[${this.hotParams.thresholdRange}], L系数=${this.hotParams.lWeight}, ` +
+                    `S系数=${this.hotParams.sWeight}, Fuzzy=${JSON.stringify(this._getFuzzyEmbeddingOptions())}`
+                );
             }
         } catch (e) {
             console.warn(`[ContextFoldingV2] 读取 rag_params.json 失败，使用默认值: ${e.message}`);
@@ -111,7 +137,7 @@ class ContextFoldingV2 {
      * 监听 rag_params.json 变更
      */
     _startHotParamsWatcher() {
-        const projectBasePath = process.env.PROJECT_BASE_PATH || path.join(__dirname, '../../');
+        const projectBasePath = this._projectBasePath || process.env.PROJECT_BASE_PATH || path.join(__dirname, '../../');
         const paramsPath = path.join(projectBasePath, 'rag_params.json');
         if (this._ragParamsWatcher) return;
 
@@ -142,8 +168,9 @@ class ContextFoldingV2 {
             const activationRegex = /(\{\{ContextFoldingV2(?::(\d+\.?\d*))?\}\}|\[\[ContextFoldingV2(?::(\d+\.?\d*))?\]\])/;
 
             for (let i = 0; i < messages.length; i++) {
-                if (messages[i].role === 'system' && typeof messages[i].content === 'string') {
-                    const match = messages[i].content.match(activationRegex);
+                if (messages[i].role === 'system') {
+                    const systemText = this._getContent(messages[i]);
+                    const match = systemText.match(activationRegex);
                     if (match) {
                         activated = true;
                         activationIndex = i;
@@ -169,9 +196,12 @@ class ContextFoldingV2 {
             // 将占位符从 system 消息中移除（它只是开关，不应出现在最终输出中）
             const newMessages = JSON.parse(JSON.stringify(messages));
             if (activationIndex >= 0 && matchedPlaceholder) {
-                newMessages[activationIndex].content = newMessages[activationIndex].content
-                    .replace(matchedPlaceholder, '')
-                    .trim();
+                this._setContent(
+                    newMessages[activationIndex],
+                    this._getContent(newMessages[activationIndex])
+                        .replace(matchedPlaceholder, '')
+                        .trim()
+                );
             }
 
             // 1. 识别所有 assistant 块并计算深度
@@ -206,20 +236,15 @@ class ContextFoldingV2 {
 
                 const hash = store.hashContent(sanitized);
 
-                // 获取块向量（store → bridge缓存 → embedding API）
+                // 获取块向量（store → 精确缓存 → fuzzy缓存 → embedding API）
+                // 与上下文参考向量使用同一条折叠专用向量化路径，避免候选 assistant 块因微小文本差异重复向量化。
                 let blockVector = null;
                 const entry = store.getEntry(hash);
 
                 if (entry && entry.vector) {
                     blockVector = entry.vector;
                 } else {
-                    // 尝试从 bridge 缓存获取
-                    blockVector = bridge.getEmbeddingFromCache(sanitized);
-                    if (!blockVector) {
-                        // 调用 embedding API
-                        blockVector = await bridge.embedText(sanitized);
-                    }
-                    // 写入 store（无论是否有向量）
+                    blockVector = await this._embedTextForFolding(sanitized, bridge, 'assistant_candidate');
                     if (blockVector) {
                         store.upsertVector(hash, {
                             textPreview: sanitized.substring(0, 80),
@@ -320,9 +345,11 @@ class ContextFoldingV2 {
         const sanitizedAi = lastAiContent ? bridge.sanitize(lastAiContent, 'assistant') : null;
 
         // 向量化
+        // ContextFoldingV2 在 RAGDiaryPlugin 之后执行：先尝试精确缓存，再尝试高阈值 fuzzy 复用 RAG 刚生成的近似向量，
+        // 最后才触发 Embedding API，避免“最新 AI 发言仅有微小文本差异却重复向量化”。
         const [userVec, aiVec] = await Promise.all([
-            sanitizedUser ? bridge.embedText(sanitizedUser) : null,
-            sanitizedAi ? bridge.embedText(sanitizedAi) : null
+            sanitizedUser ? this._embedTextForFolding(sanitizedUser, bridge, 'user_context') : null,
+            sanitizedAi ? this._embedTextForFolding(sanitizedAi, bridge, 'assistant_context') : null
         ]);
 
         // 加权平均（默认 user 0.7, AI 0.3，可通过 rag_params.json 的 ContextFoldingV2.contextWeights 调整）
@@ -331,6 +358,50 @@ class ContextFoldingV2 {
             [userVec, aiVec].filter(Boolean),
             userVec && aiVec ? weights : [1.0]
         );
+    }
+
+    async _embedTextForFolding(text, bridge, label = 'unknown') {
+        if (!text || typeof text !== 'string' || !bridge) return null;
+
+        if (typeof bridge.getEmbeddingFromCache === 'function') {
+            const exact = bridge.getEmbeddingFromCache(text);
+            if (exact) return exact;
+        }
+
+        // 仅在折叠链路中启用高阈值 fuzzy 复用，不影响 RAG 主检索精度。
+        // 参数由 rag_params.json 的 ContextFoldingV2.fuzzyEmbedding 热管理。
+        if (typeof bridge.getFuzzyEmbeddingFromCache === 'function') {
+            const fuzzy = bridge.getFuzzyEmbeddingFromCache(text, this._getFuzzyEmbeddingOptions());
+
+            if (fuzzy && fuzzy.vector) {
+                console.log(
+                    `[ContextFoldingV2] Fuzzy embedding cache hit (${label}): ` +
+                    `sim=${fuzzy.similarity.toFixed(4)}, len=${text.length}/${fuzzy.length}`
+                );
+                return fuzzy.vector;
+            }
+        }
+
+        if (typeof bridge.embedText !== 'function') return null;
+        return await bridge.embedText(text);
+    }
+
+    _getFuzzyEmbeddingOptions() {
+        const defaults = {
+            threshold: 0.985,
+            minLength: 80,
+            maxScan: 200,
+            maxLengthDiffRatio: 0.02,
+            maxLengthDiffAbs: 80
+        };
+        const configured = this.hotParams?.fuzzyEmbedding || {};
+        return {
+            threshold: Number.isFinite(Number(configured.threshold)) ? Number(configured.threshold) : defaults.threshold,
+            minLength: Number.isFinite(Number(configured.minLength)) ? Number(configured.minLength) : defaults.minLength,
+            maxScan: Number.isFinite(Number(configured.maxScan)) ? Number(configured.maxScan) : defaults.maxScan,
+            maxLengthDiffRatio: Number.isFinite(Number(configured.maxLengthDiffRatio)) ? Number(configured.maxLengthDiffRatio) : defaults.maxLengthDiffRatio,
+            maxLengthDiffAbs: Number.isFinite(Number(configured.maxLengthDiffAbs)) ? Number(configured.maxLengthDiffAbs) : defaults.maxLengthDiffAbs
+        };
     }
 
     /**
@@ -366,34 +437,69 @@ class ContextFoldingV2 {
         const store = this.contextBridge.foldingStore;
         store.markPending(hash);
 
-        // 指数退避延迟：1s, 3s, 9s
-        const delay = 1000 * Math.pow(3, retryCount);
+        this.summaryQueue.push({ hash, originalContent, retryCount });
+        this._processSummaryQueue();
+    }
 
-        setTimeout(async () => {
-            try {
-                const startTime = Date.now();
-                const summary = await this._generateSummary(originalContent);
+    _processSummaryQueue() {
+        while (this.activeSummaryCount < this.maxConcurrentSummaries && this.summaryQueue.length > 0) {
+            const task = this.summaryQueue.shift();
+            this.activeSummaryCount++;
+            this._runSummaryTask(task).finally(() => {
+                this.activeSummaryCount = Math.max(0, this.activeSummaryCount - 1);
+                this._processSummaryQueue();
+            });
+        }
+    }
 
-                if (summary) {
-                    store.upsertSummary(hash, summary, 'ready');
-                    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-                    console.log(`[ContextFoldingV2] ✅ 摘要生成成功: hash=${hash.substring(0, 8)}...（耗时 ${elapsed}s）`);
-                } else {
-                    store.upsertSummary(hash, '', 'failed');
-                    console.warn(`[ContextFoldingV2] ❌ 摘要验证失败: hash=${hash.substring(0, 8)}...`);
-                }
-            } catch (e) {
-                store.upsertSummary(hash, '', 'failed');
-                console.error(`[ContextFoldingV2] ❌ 摘要生成异常: ${e.message}`);
-            } finally {
-                this.pendingHashes.delete(hash);
+    async _runSummaryTask(task) {
+        const { hash, originalContent, retryCount } = task;
+        const store = this.contextBridge.foldingStore;
+
+        // 指数退避延迟：1s, 3s, 9s；429 会在此基础上进一步拉长
+        const delay = this._computeRetryDelay(retryCount);
+
+        await this._sleep(delay);
+
+        try {
+            const startTime = Date.now();
+            const result = await this._generateSummary(originalContent);
+
+            if (result && result.summary) {
+                store.upsertSummary(hash, result.summary, 'ready');
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                console.log(`[ContextFoldingV2] ✅ 摘要生成成功: hash=${hash.substring(0, 8)}...（耗时 ${elapsed}s）`);
+                return;
             }
-        }, delay);
+
+            if (result && result.retryable429) {
+                store.upsertSummary(hash, '', 'failed');
+                console.warn(`[ContextFoldingV2] ⏳ 摘要触发 429，将延长退避后重试: hash=${hash.substring(0, 8)}...`);
+            } else {
+                store.upsertSummary(hash, '', 'failed');
+                console.warn(`[ContextFoldingV2] ❌ 摘要验证失败: hash=${hash.substring(0, 8)}...`);
+            }
+        } catch (e) {
+            store.upsertSummary(hash, '', 'failed');
+            console.error(`[ContextFoldingV2] ❌ 摘要生成异常: ${e.message}`);
+        } finally {
+            this.pendingHashes.delete(hash);
+        }
+    }
+
+    _computeRetryDelay(retryCount, options = {}) {
+        const { isRateLimit = false } = options;
+        const baseDelay = 1000 * Math.pow(3, retryCount);
+        return isRateLimit ? baseDelay * 5 : baseDelay;
+    }
+
+    _sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     /**
      * 调用 LLM 生成摘要（含三级安全验证）
-     * 返回完整格式的摘要文本，或 null（验证失败）
+     * 返回 { summary, retryable429 }，其中 summary 为完整格式摘要文本
      */
     async _generateSummary(text) {
         const apiUrl = process.env.API_URL;
@@ -401,7 +507,7 @@ class ContextFoldingV2 {
 
         if (!apiUrl || !apiKey) {
             console.error('[ContextFoldingV2] API_URL 或 API_Key 未配置');
-            return null;
+            return { summary: null, retryable429: false };
         }
 
         // 截断过长内容（防止请求过大）
@@ -435,14 +541,19 @@ class ContextFoldingV2 {
             });
 
             const rawOutput = response.data?.choices?.[0]?.message?.content || '';
-            return this._validateSummary(rawOutput.trim());
+            return {
+                summary: this._validateSummary(rawOutput.trim()),
+                retryable429: false
+            };
         } catch (e) {
             if (e.response) {
+                const isRateLimit = e.response.status === 429;
                 console.error(`[ContextFoldingV2] 摘要API错误: ${e.response.status} ${JSON.stringify(e.response.data).substring(0, 200)}`);
-            } else {
-                console.error(`[ContextFoldingV2] 摘要请求失败: ${e.message}`);
+                return { summary: null, retryable429: isRateLimit };
             }
-            return null;
+
+            console.error(`[ContextFoldingV2] 摘要请求失败: ${e.message}`);
+            return { summary: null, retryable429: false };
         }
     }
 
@@ -515,10 +626,18 @@ class ContextFoldingV2 {
      * 从消息中提取文本内容（兼容字符串和多模态数组格式）
      */
     _getContent(msg) {
-        if (typeof msg.content === 'string') return msg.content;
-        if (Array.isArray(msg.content)) {
-            const textPart = msg.content.find(p => p.type === 'text');
-            return textPart ? textPart.text || '' : '';
+        const content = msg?.content;
+
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) {
+            return content
+                .filter(part => part && part.type === 'text' && typeof part.text === 'string')
+                .map(part => part.text)
+                .join('\n')
+                .trim();
+        }
+        if (content && typeof content === 'object' && typeof content.text === 'string') {
+            return content.text;
         }
         return '';
     }
@@ -527,15 +646,35 @@ class ContextFoldingV2 {
      * 设置消息内容（兼容字符串和多模态数组格式）
      */
     _setContent(msg, newText) {
+        if (!msg) return;
+
         if (typeof msg.content === 'string') {
             msg.content = newText;
         } else if (Array.isArray(msg.content)) {
-            const textPart = msg.content.find(p => p.type === 'text');
-            if (textPart) {
-                textPart.text = newText;
+            const textIndices = [];
+            for (let i = 0; i < msg.content.length; i++) {
+                const part = msg.content[i];
+                if (part && part.type === 'text' && typeof part.text === 'string') {
+                    textIndices.push(i);
+                }
+            }
+
+            if (textIndices.length > 0) {
+                const firstIndex = textIndices[0];
+                msg.content = msg.content
+                    .map((part, index) => {
+                        if (!textIndices.includes(index)) return part;
+                        if (index === firstIndex) {
+                            return { ...part, text: newText };
+                        }
+                        return null;
+                    })
+                    .filter(Boolean);
             } else {
                 msg.content.unshift({ type: 'text', text: newText });
             }
+        } else if (msg.content && typeof msg.content === 'object' && typeof msg.content.text === 'string') {
+            msg.content = { ...msg.content, text: newText };
         } else {
             msg.content = newText;
         }
@@ -546,6 +685,8 @@ class ContextFoldingV2 {
      */
     shutdown() {
         this.pendingHashes.clear();
+        this.summaryQueue = [];
+        this.activeSummaryCount = 0;
         this.enabled = false;
         if (this._ragParamsWatcher) {
             this._ragParamsWatcher.close();

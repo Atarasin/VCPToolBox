@@ -1,6 +1,7 @@
 let lastPageContent = '';
 let vcpIdCounter = 0;
 let isActiveTab = false; // 标记当前标签页是否为活动标签页
+let isMonitoringEnabled = false; // 从 background/storage 同步的页面监控开关
 
 function isInteractive(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) {
@@ -477,20 +478,231 @@ function findElementWithLogging(target) {
     return null;
 }
 
-function sendPageInfoUpdate() {
+function parseBooleanParam(value, defaultValue = false) {
+    if (value === undefined || value === null || value === '') return defaultValue;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+    }
+    return Boolean(value);
+}
+
+function parseNumberParam(value, defaultValue, minValue, maxValue) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return defaultValue;
+    return Math.min(Math.max(parsed, minValue), maxValue);
+}
+
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildSearchRegex(query, useRegex, caseSensitive) {
+    if (!query || !String(query).trim()) {
+        throw new Error('page_code_search 缺少 query 参数');
+    }
+
+    const flags = caseSensitive ? 'g' : 'gi';
+    return new RegExp(useRegex ? query : escapeRegExp(String(query)), flags);
+}
+
+function getElementDescriptor(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) {
+        return 'unknown';
+    }
+
+    const tagName = element.tagName.toLowerCase();
+    const idPart = element.id ? `#${element.id}` : '';
+    const classPart = element.className && typeof element.className === 'string'
+        ? '.' + element.className.trim().split(/\s+/).filter(Boolean).slice(0, 3).join('.')
+        : '';
+    const textPart = (element.innerText || element.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80);
+
+    return `${tagName}${idPart}${classPart}${textPart ? ` :: ${textPart}` : ''}`;
+}
+
+function normalizeSearchScope(scope) {
+    if (!scope) {
+        return ['dom', 'inline_script', 'style', 'codeblock'];
+    }
+
+    return String(scope)
+        .split(',')
+        .map(item => item.trim().toLowerCase())
+        .filter(Boolean);
+}
+
+function collectSearchSources(scopeList) {
+    const sources = [];
+
+    if (scopeList.includes('dom')) {
+        sources.push({
+            sourceType: 'dom',
+            sourceLabel: 'document.documentElement.outerHTML',
+            content: document.documentElement?.outerHTML || '',
+            selector: 'html'
+        });
+    }
+
+    if (scopeList.includes('inline_script') || scopeList.includes('script')) {
+        document.querySelectorAll('script').forEach((script, index) => {
+            if (!script.src && script.textContent && script.textContent.trim()) {
+                sources.push({
+                    sourceType: 'inline_script',
+                    sourceLabel: `inline_script[${index}]`,
+                    content: script.textContent,
+                    selector: getElementDescriptor(script)
+                });
+            }
+        });
+    }
+
+    if (scopeList.includes('style')) {
+        document.querySelectorAll('style').forEach((styleEl, index) => {
+            if (styleEl.textContent && styleEl.textContent.trim()) {
+                sources.push({
+                    sourceType: 'style',
+                    sourceLabel: `style[${index}]`,
+                    content: styleEl.textContent,
+                    selector: getElementDescriptor(styleEl)
+                });
+            }
+        });
+    }
+
+    if (scopeList.includes('codeblock') || scopeList.includes('code') || scopeList.includes('pre')) {
+        document.querySelectorAll('pre, code').forEach((codeEl, index) => {
+            const content = codeEl.innerText || codeEl.textContent || '';
+            if (content.trim()) {
+                sources.push({
+                    sourceType: 'codeblock',
+                    sourceLabel: `${codeEl.tagName.toLowerCase()}[${index}]`,
+                    content,
+                    selector: getElementDescriptor(codeEl)
+                });
+            }
+        });
+    }
+
+    return sources;
+}
+
+function searchInSource(source, regex, contextChars, maxResultsPerSource) {
+    const results = [];
+    const content = source.content || '';
+    if (!content) return results;
+
+    regex.lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(content)) !== null) {
+        const matchText = match[0];
+        const start = match.index;
+        const end = start + matchText.length;
+        const contextStart = Math.max(0, start - contextChars);
+        const contextEnd = Math.min(content.length, end + contextChars);
+
+        results.push({
+            sourceType: source.sourceType,
+            sourceLabel: source.sourceLabel,
+            selector: source.selector,
+            matchText,
+            contextBefore: content.slice(contextStart, start),
+            contextAfter: content.slice(end, contextEnd),
+            position: {
+                start,
+                end
+            }
+        });
+
+        if (results.length >= maxResultsPerSource) {
+            break;
+        }
+
+        if (match.index === regex.lastIndex) {
+            regex.lastIndex++;
+        }
+    }
+
+    return results;
+}
+
+function pageCodeSearch(params = {}) {
+    const requestedMode = String(params.searchMode || 'auto').toLowerCase();
+    const effectiveMode = requestedMode === 'enhanced' ? 'light' : (requestedMode === 'light' ? 'light' : 'auto');
+    const useRegex = parseBooleanParam(params.useRegex, false);
+    const caseSensitive = parseBooleanParam(params.caseSensitive, false);
+    const contextChars = parseNumberParam(params.contextChars, 80, 0, 500);
+    const maxResults = parseNumberParam(params.maxResults, 20, 1, 200);
+    const scopeList = normalizeSearchScope(params.scope);
+    const regex = buildSearchRegex(params.query, useRegex, caseSensitive);
+    const sources = collectSearchSources(scopeList);
+    const results = [];
+    const maxResultsPerSource = Math.max(5, Math.ceil(maxResults / Math.max(sources.length, 1)));
+
+    for (const source of sources) {
+        const sourceResults = searchInSource(source, regex, contextChars, maxResultsPerSource);
+        for (const item of sourceResults) {
+            results.push(item);
+            if (results.length >= maxResults) {
+                break;
+            }
+        }
+        if (results.length >= maxResults) {
+            break;
+        }
+    }
+
+    return {
+        status: 'success',
+        result: {
+            query: params.query,
+            requestedMode,
+            effectiveMode,
+            fallbackApplied: requestedMode === 'enhanced',
+            searchedSources: sources.map(source => ({
+                sourceType: source.sourceType,
+                sourceLabel: source.sourceLabel,
+                selector: source.selector
+            })),
+            totalMatches: results.length,
+            truncated: results.length >= maxResults,
+            results
+        },
+        message: requestedMode === 'enhanced'
+            ? 'enhanced 模式暂未接入资源级搜索，已自动降级为 light 模式'
+            : '页面源码搜索完成'
+    };
+}
+
+function sendPageInfoUpdate(options = {}) {
+    const isForcedUpdate = options.force === true;
+
+    // 监控关闭时静默跳过自动更新，避免控制台持续刷新 VCP Content 日志。
+    if (!isMonitoringEnabled && !isForcedUpdate) {
+        return;
+    }
+
     // 关键检查：只有活动标签页才发送更新（或页面刚加载完成时）
     if (!isActiveTab && document.hidden) {
-        console.log('[VCP Content] ⚠️ 当前非活动标签页，跳过更新');
+        if (isMonitoringEnabled) {
+            console.log('[VCP Content] ⚠️ 当前非活动标签页，跳过更新');
+        }
         return;
     }
     
     const currentPageContent = pageToMarkdown();
     if (currentPageContent && currentPageContent !== lastPageContent) {
         lastPageContent = currentPageContent;
-        console.log('[VCP Content] 📤 发送页面信息到background (活动标签页)');
+        console.log(`[VCP Content] 📤 发送${isForcedUpdate ? '强制' : '自动'}页面信息到background (活动标签页)`);
         chrome.runtime.sendMessage({
             type: 'PAGE_INFO_UPDATE',
-            data: { markdown: currentPageContent }
+            data: { markdown: currentPageContent, force: isForcedUpdate }
         }, () => {
             if (chrome.runtime.lastError) {
                 // console.log("[VCP Content] Page info update failed, context likely invalidated.");
@@ -507,9 +719,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         isActiveTab = false; // 重置活动状态
     } else if (request.type === 'REQUEST_PAGE_INFO_UPDATE') {
         // 收到请求说明这是活动标签页
+        isMonitoringEnabled = true;
         console.log('[VCP Content] 📍 收到更新请求，标记为活动标签页');
         isActiveTab = true;
         sendPageInfoUpdate();
+    } else if (request.type === 'MONITORING_STATUS_CHANGED') {
+        isMonitoringEnabled = request.isMonitoringEnabled === true;
+        if (!isMonitoringEnabled) {
+            isActiveTab = false;
+        }
     } else if (request.type === 'FORCE_PAGE_UPDATE') {
         // 新增：强制更新页面信息（手动刷新）
         console.log('[VCP Content] 🔄 收到强制更新请求');
@@ -520,7 +738,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.log('[VCP Content] 📤 发送强制更新的页面信息');
             chrome.runtime.sendMessage({
                 type: 'PAGE_INFO_UPDATE',
-                data: { markdown: currentPageContent }
+                data: { markdown: currentPageContent, force: true }
             }, () => {
                 if (chrome.runtime.lastError) {
                     console.log("[VCP Content] ❌ 强制更新失败:", chrome.runtime.lastError.message);
@@ -536,54 +754,70 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         return true; // 保持消息通道开放
     } else if (request.type === 'EXECUTE_COMMAND') {
-        const { command, target, text, requestId, sourceClientId } = request.data;
-        let result = {};
-
-        try {
-            let element = findElementWithLogging(target);
-
-            if (!element) {
-                throw new Error(`未能在页面上找到目标为 '${target}' 的元素。`);
-            }
-
-            if (command === 'type') {
-                if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-                    element.value = text;
-                    result = { status: 'success', message: `成功在ID为 '${target}' 的元素中输入文本。` };
+        const { command, target, text, requestId, sourceClientId, query, scope, useRegex, caseSensitive, contextChars, maxResults, searchMode } = request.data;
+        
+        const handleCommand = async () => {
+            let result = {};
+            try {
+                if (command === 'query_html') {
+                    const element = target ? findElementWithLogging(target) : document.body;
+                    if (!element) throw new Error(`未找到目标元素: ${target}`);
+                    result = { status: 'success', result: element.outerHTML };
+                } else if (command === 'query_js') {
+                    const scripts = Array.from(document.scripts).map(s => ({
+                        src: s.src || 'inline',
+                        content: s.src ? null : s.textContent.substring(0, 500) + (s.textContent.length > 500 ? '...' : '')
+                    }));
+                    result = { status: 'success', result: scripts };
+                } else if (command === 'page_code_search') {
+                    result = pageCodeSearch({
+                        query,
+                        scope,
+                        useRegex,
+                        caseSensitive,
+                        contextChars,
+                        maxResults,
+                        searchMode
+                    });
+                } else if (command === 'execute_script') {
+                    throw new Error('execute_script 已迁移到 background 的 chrome.scripting MAIN world 执行路径');
                 } else {
-                    throw new Error(`ID为 '${target}' 的元素不是一个输入框。`);
-                }
-            } else if (command === 'click') {
-                // 模拟真实用户点击，这对于处理使用现代前端框架（如React, Vue）构建的页面至关重要
-                element.focus(); // 首先聚焦元素
-                const clickEvent = new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                });
-                element.dispatchEvent(clickEvent);
-                result = { status: 'success', message: `成功点击了ID为 '${target}' 的元素。` };
-            } else {
-                throw new Error(`不支持的命令: ${command}`);
-            }
-        } catch (error) {
-            result = { status: 'error', error: error.message };
-        }
+                    let element = findElementWithLogging(target);
+                    if (!element) throw new Error(`未能在页面上找到目标为 '${target}' 的元素。`);
 
-        chrome.runtime.sendMessage({
-            type: 'COMMAND_RESULT',
-            data: {
-                requestId,
-                sourceClientId,
-                ...result
+                    if (command === 'type') {
+                        if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+                            element.value = text;
+                            result = { status: 'success', message: `成功在ID为 '${target}' 的元素中输入文本。` };
+                        } else {
+                            throw new Error(`ID为 '${target}' 的元素不是一个输入框。`);
+                        }
+                    } else if (command === 'click') {
+                        element.focus();
+                        const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                        element.dispatchEvent(clickEvent);
+                        result = { status: 'success', message: `成功点击了ID为 '${target}' 的元素。` };
+                    } else {
+                        throw new Error(`不支持的命令: ${command}`);
+                    }
+                }
+            } catch (error) {
+                result = { status: 'error', error: error.message };
             }
-        }, () => {
-            // 捕获当页面跳转等原因导致上下文失效时的错误，这是正常现象
-            if (chrome.runtime.lastError) {
-                console.log("Could not send command result, context likely invalidated:", chrome.runtime.lastError.message);
-            }
-        });
-        setTimeout(sendPageInfoUpdate, 500);
+
+            chrome.runtime.sendMessage({
+                type: 'COMMAND_RESULT',
+                data: { requestId, sourceClientId, ...result }
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    console.log("Could not send command result:", chrome.runtime.lastError.message);
+                }
+            });
+            setTimeout(() => sendPageInfoUpdate({ force: true }), 500);
+        };
+
+        handleCommand();
+        return true;
     }
 });
 
@@ -606,12 +840,19 @@ document.addEventListener('scroll', debouncedSendPageInfoUpdate, true); // 监�
 window.addEventListener('load', () => {
     // 页面加载时检查是否为活动标签页
     isActiveTab = !document.hidden;
-    console.log('[VCP Content] 📄 页面加载完成，活动状态:', isActiveTab);
-    // 页面加载完成后总是尝试发送一次更新
+    if (isMonitoringEnabled) {
+        console.log('[VCP Content] 📄 页面加载完成，活动状态:', isActiveTab);
+    }
+    // 页面加载完成后尝试发送一次更新；监控关闭时会静默跳过
     sendPageInfoUpdate();
 });
 
 document.addEventListener('visibilitychange', () => {
+    if (!isMonitoringEnabled) {
+        isActiveTab = false;
+        return;
+    }
+
     if (document.visibilityState === 'visible') {
         console.log('[VCP Content] 👁️ 标签页变为可见，标记为活动');
         isActiveTab = true;
@@ -638,6 +879,10 @@ document.addEventListener('visibilitychange', () => {
 
 // 新增：窗口获得焦点时也检查并更新
 window.addEventListener('focus', () => {
+    if (!isMonitoringEnabled) {
+        return;
+    }
+
     console.log('[VCP Content] 🎯 窗口获得焦点，验证活动状态');
     chrome.runtime.sendMessage({ type: 'VERIFY_ACTIVE_TAB' }, (response) => {
         if (chrome.runtime.lastError) return;
@@ -650,12 +895,16 @@ window.addEventListener('focus', () => {
     });
 });
 
-// 定期更新，但只在活动标签页时发送
+// 定期更新，但只在监控开启且活动标签页时发送
 setInterval(() => {
-    if (isActiveTab && !document.hidden) {
+    if (isMonitoringEnabled && isActiveTab && !document.hidden) {
         sendPageInfoUpdate();
     }
 }, 5000);
+
+chrome.storage.local.get(['isMonitoringEnabled'], (result) => {
+    isMonitoringEnabled = result.isMonitoringEnabled === true;
+});
 
 function debounce(func, wait) {
     let timeout;

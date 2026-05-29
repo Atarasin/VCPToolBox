@@ -10,10 +10,18 @@ const express = require('express'); // For plugin API routing
 const chokidar = require('chokidar');
 const { getAuthCode } = require('./modules/captchaDecoder'); // 导入统一的解码函数
 const ToolApprovalManager = require('./modules/toolApprovalManager');
+const { hasFoldMarkers, buildDynamicFoldObject } = require('./modules/foldProtocol');
 
 const PLUGIN_DIR = path.join(__dirname, 'Plugin');
 const manifestFileName = 'plugin-manifest.json';
 const PREPROCESSOR_ORDER_FILE = path.join(__dirname, 'preprocessor_order.json');
+const SSH_MANAGER_ENV_PLUGIN_ALLOWLIST = new Set([
+    'LinuxShellExecutor',
+    'LinuxLogMonitor'
+]);
+const LOG_MONITOR_ENV_PLUGIN_ALLOWLIST = new Set([
+    'LinuxLogMonitor'
+]);
 
 class PluginManager extends EventEmitter {
     constructor() {
@@ -118,6 +126,57 @@ class PluginManager extends EventEmitter {
         return effectiveConfig ? effectiveConfig[configKey] : undefined;
     }
 
+    _shouldInjectSSHManagerEnv(pluginName) {
+        return SSH_MANAGER_ENV_PLUGIN_ALLOWLIST.has(pluginName);
+    }
+
+    _shouldInjectLogMonitorEnv(pluginName) {
+        return LOG_MONITOR_ENV_PLUGIN_ALLOWLIST.has(pluginName);
+    }
+
+    _isLinuxShellExecutorLocalUserCommand(plugin, inputData) {
+        if (!plugin || !inputData) return false;
+
+        let args;
+        try {
+            args = typeof inputData === 'string' ? JSON.parse(inputData) : inputData;
+        } catch (e) {
+            return false;
+        }
+
+        if (!args || typeof args !== 'object' || !args.command) {
+            return false;
+        }
+
+        const hostId = args.hostId;
+        if (!hostId) {
+            return true;
+        }
+
+        try {
+            const hostsPath = path.join(plugin.basePath, 'hosts.json');
+            delete require.cache[require.resolve(hostsPath)];
+            const hostsConfig = require(hostsPath);
+            const hostConfig = hostsConfig.hosts?.[hostId];
+            return hostConfig ? hostConfig.type !== 'ssh' : hostId === 'local';
+        } catch (e) {
+            return hostId === 'local';
+        }
+    }
+
+    _shouldInjectSSHManagerEnvForExecution(pluginName, plugin, inputData) {
+        if (!this._shouldInjectSSHManagerEnv(pluginName)) {
+            return false;
+        }
+        if (
+            pluginName === 'LinuxShellExecutor' &&
+            this._isLinuxShellExecutorLocalUserCommand(plugin, inputData)
+        ) {
+            return false;
+        }
+        return true;
+    }
+
     async _executeStaticPluginCommand(plugin) {
         if (!plugin || plugin.pluginType !== 'static' || !plugin.entryPoint || !plugin.entryPoint.command) {
             console.error(`[PluginManager] Invalid static plugin or command for execution: ${plugin ? plugin.name : 'Unknown'}`);
@@ -203,21 +262,34 @@ class PluginManager extends EventEmitter {
 
                 let parsedValue = newValue;
                 if (newValue !== null) {
+                    const trimmedValue = newValue.trim();
+                    parsedValue = trimmedValue;
+
                     try {
-                        let trimmedValue = newValue.trim();
-                        // 尝试解析 JSON，支持 vcp_dynamic_fold 协议
+                        // 优先兼容原有 JSON dynamic fold 协议
                         if (trimmedValue.startsWith('{')) {
                             const jsonObj = JSON.parse(trimmedValue);
                             if (jsonObj && jsonObj.vcp_dynamic_fold) {
                                 parsedValue = jsonObj; // 保持对象形式以供折叠处理
-                            } else {
-                                parsedValue = trimmedValue;
                             }
+                        } else if (hasFoldMarkers(trimmedValue)) {
+                            // 兼容共享的文本折叠协议，支持 [===vcp_fold: x ::desc: ...===]
+                            parsedValue = buildDynamicFoldObject({
+                                content: trimmedValue,
+                                pluginDescription: plugin.description || plugin.displayName || plugin.name,
+                                strategy: 'toolbox_block_similarity'
+                            });
+                        }
+                    } catch (e) {
+                        if (hasFoldMarkers(trimmedValue)) {
+                            parsedValue = buildDynamicFoldObject({
+                                content: trimmedValue,
+                                pluginDescription: plugin.description || plugin.displayName || plugin.name,
+                                strategy: 'toolbox_block_similarity'
+                            });
                         } else {
                             parsedValue = trimmedValue;
                         }
-                    } catch (e) {
-                        parsedValue = newValue.trim();
                     }
                 }
 
@@ -437,7 +509,7 @@ class PluginManager extends EventEmitter {
         for (const module of localModulesToShutdown) {
             if (typeof module.shutdown === 'function') {
                 try {
-                    module.shutdown();
+                    await module.shutdown();
                 } catch (e) {
                     console.error(`[PluginManager] Error during hot-reload shutdown of a plugin:`, e.message);
                 }
@@ -595,11 +667,15 @@ class PluginManager extends EventEmitter {
 
                     await module.initialize(initialConfig, dependencies);
                 } catch (e) {
-                    console.error(`[PluginManager] Error initializing module for ${manifest.name}:`, e);
+                    console.error(`[PluginManager] Error initializing module for ${manifest.name}:`, e instanceof Error ? e.message : JSON.stringify(e));
+                    if (e instanceof Error && e.stack) {
+                        console.error(`[PluginManager] Stack trace for ${manifest.name}:`, e.stack);
+                    }
                 }
             }
 
             this.buildVCPDescription();
+            this.emit('tools_changed', { reason: 'local_reload' });
             console.log(`[PluginManager] Plugin discovery finished. Loaded ${this.plugins.size} plugins.`);
         } catch (error) {
             if (error.code === 'ENOENT') console.error(`[PluginManager] Plugin directory ${PLUGIN_DIR} not found.`);
@@ -685,7 +761,7 @@ class PluginManager extends EventEmitter {
         };
     }
 
-    async processToolCall(toolName, toolArgs, requestIp = null) {
+    async processToolCall(toolName, toolArgs, requestIp = null, sourceNode = null) {
         const plugin = this.plugins.get(toolName);
         if (!plugin) {
             throw new Error(`[PluginManager] Plugin "${toolName}" not found for tool call.`);
@@ -737,11 +813,25 @@ class PluginManager extends EventEmitter {
             return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${timezoneString}`;
         };
 
+        // Helper to clean up fuzzyDiff output for error/success responses
+        const _filterFuzzyDiff = (resultObj, timestamp) => {
+            if (resultObj && typeof resultObj === 'object' &&
+                resultObj.fuzzyDiff && typeof resultObj.fuzzyDiff === 'object') {
+                const { candidateFile, diff } = resultObj.fuzzyDiff;
+                resultObj.fuzzyDiff = { candidateFile, diff, timestamp };
+            }
+        };
+
         const maidNameFromArgs = toolArgs && toolArgs.maid ? toolArgs.maid : null;
         const openClawContext = toolArgs && typeof toolArgs.__openclawContext === 'object' && toolArgs.__openclawContext !== null
             ? { ...toolArgs.__openclawContext }
             : null;
         const pluginSpecificArgs = { ...toolArgs };
+
+        if (maidNameFromArgs && sourceNode) {
+            console.log(`[VCPToolUse]来自${sourceNode}节点(${requestIp || '未知IP'})的${maidNameFromArgs}调用了${toolName}`);
+        }
+
         delete pluginSpecificArgs.__openclawContext;
         if (maidNameFromArgs) {
             // The 'maid' parameter is intentionally passed through for plugins like DeepMemo.
@@ -788,9 +878,14 @@ class PluginManager extends EventEmitter {
         // --- 透明化处理结束 ---
 
         // --- 人工审核逻辑 (新增) ---
-        if (this.toolApprovalManager.shouldApprove(toolName, pluginSpecificArgs)) {
+        const approvalDecision = this.toolApprovalManager.getApprovalDecision(toolName, pluginSpecificArgs);
+        if (approvalDecision.requiresApproval) {
             const requestId = `approve-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-            if (this.debugMode) console.log(`[PluginManager] Tool call for "${toolName}" requires manual approval. Request ID: ${requestId}`);
+            if (this.debugMode) {
+                console.log(
+                    `[PluginManager] Tool call for "${toolName}" requires manual approval. Request ID: ${requestId}. notifyAiOnReject=${approvalDecision.notifyAiOnReject !== false}`
+                );
+            }
 
             const approvalPromise = new Promise((resolve, reject) => {
                 const timeoutDuration = this.toolApprovalManager.getTimeoutMs();
@@ -801,7 +896,12 @@ class PluginManager extends EventEmitter {
                     }
                 }, timeoutDuration);
 
-                this.pendingApprovals.set(requestId, { resolve, reject, timeoutId });
+                this.pendingApprovals.set(requestId, {
+                    resolve,
+                    reject,
+                    timeoutId,
+                    notifyAiOnReject: approvalDecision.notifyAiOnReject !== false
+                });
             });
 
             // 发送审核请求到管理面板
@@ -825,7 +925,13 @@ class PluginManager extends EventEmitter {
             }
 
             try {
-                await approvalPromise;
+                const approvalResult = await approvalPromise;
+                if (approvalResult && approvalResult.silentRejected === true) {
+                    if (this.debugMode) {
+                        console.log(`[PluginManager] Tool call for "${toolName}" (ID: ${requestId}) was rejected silently. Returning empty result to AI.`);
+                    }
+                    return undefined;
+                }
                 if (this.debugMode) console.log(`[PluginManager] Tool call for "${toolName}" (ID: ${requestId}) approved.`);
             } catch (error) {
                 if (this.debugMode) console.warn(`[PluginManager] Tool call for "${toolName}" (ID: ${requestId}) rejected: ${error.message}`);
@@ -896,7 +1002,13 @@ class PluginManager extends EventEmitter {
                         resultFromPlugin = pluginOutput.result;
                     }
                 } else {
-                    throw new Error(JSON.stringify({ plugin_error: pluginOutput.error || `Plugin "${toolName}" reported an unspecified error.` }));
+                    const normalizedPluginOutput = {};
+                    if (pluginOutput.result) {
+                        normalizedPluginOutput.result = pluginOutput.result;
+                    }
+                    normalizedPluginOutput.plugin_error = pluginOutput.error || `Plugin "${toolName}" reported an unspecified error.`;
+                    _filterFuzzyDiff(normalizedPluginOutput, _getFormattedLocalTimestamp());
+                    throw new Error(JSON.stringify(normalizedPluginOutput));
                 }
             }
 
@@ -907,6 +1019,7 @@ class PluginManager extends EventEmitter {
                 finalResultObject.MaidName = maidNameFromArgs;
             }
             finalResultObject.timestamp = _getFormattedLocalTimestamp();
+            _filterFuzzyDiff(finalResultObject, _getFormattedLocalTimestamp());
 
             return finalResultObject;
 
@@ -925,6 +1038,7 @@ class PluginManager extends EventEmitter {
             if (!errorObject.timestamp) {
                 errorObject.timestamp = _getFormattedLocalTimestamp();
             }
+            _filterFuzzyDiff(errorObject, _getFormattedLocalTimestamp());
             throw new Error(JSON.stringify(errorObject));
         }
     }
@@ -983,6 +1097,30 @@ class PluginManager extends EventEmitter {
         const fileServerKey = this.getResolvedPluginConfigValue('ImageServer', 'File_Key');
         if (fileServerKey) {
             additionalEnv.IMAGESERVER_FILE_KEY = fileServerKey;
+        }
+
+        // 新增：注入 SSHManagerService 的 UDS 路径（如果服务已启动）
+        const sshManagerSock = global.__vcp_ssh_manager_sock;
+        if (sshManagerSock && this._shouldInjectSSHManagerEnvForExecution(pluginName, plugin, inputData)) {
+            additionalEnv.SSH_MANAGER_SOCK = sshManagerSock;
+            if (global.__vcp_ssh_manager_token) {
+                additionalEnv.SSH_MANAGER_TOKEN = global.__vcp_ssh_manager_token;
+            }
+            if (this.debugMode) console.log(`[PluginManager] 注入 SSH_MANAGER_SOCK=${sshManagerSock} 到插件 ${pluginName}`);
+        } else if (sshManagerSock && this.debugMode) {
+            console.log(`[PluginManager] 跳过向非白名单插件 ${pluginName} 注入 SSH_MANAGER_SOCK`);
+        }
+
+        // 注入 LinuxLogMonitorServer 的 UDS 路径和 token（仅限白名单插件）
+        const logMonitorSock = global.__vcp_log_monitor_sock;
+        if (logMonitorSock && this._shouldInjectLogMonitorEnv(pluginName, plugin)) {
+            additionalEnv.LOG_MONITOR_SOCK = logMonitorSock;
+            if (global.__vcp_log_monitor_token) {
+                additionalEnv.LOG_MONITOR_TOKEN = global.__vcp_log_monitor_token;
+            }
+            if (this.debugMode) console.log(`[PluginManager] 注入 LOG_MONITOR_SOCK=${logMonitorSock} 到插件 ${pluginName}`);
+        } else if (logMonitorSock && this.debugMode) {
+            console.log(`[PluginManager] 跳过向非白名单插件 ${pluginName} 注入 LOG_MONITOR_SOCK`);
         }
 
         // Pass CALLBACK_BASE_URL and PLUGIN_NAME to asynchronous plugins
@@ -1168,6 +1306,8 @@ class PluginManager extends EventEmitter {
             clearTimeout(approval.timeoutId);
             if (approved) {
                 approval.resolve();
+            } else if (approval.notifyAiOnReject === false) {
+                approval.resolve({ silentRejected: true });
             } else {
                 approval.reject(new Error(JSON.stringify({ plugin_error: 'Manual approval was REJECTED by user.' })));
             }
@@ -1260,14 +1400,25 @@ class PluginManager extends EventEmitter {
         }
         // 注册后重建描述，以包含新插件
         this.buildVCPDescription();
+        this.emit('tools_changed', { reason: 'distributed_register', serverId });
     }
 
     unregisterAllDistributedTools(serverId) {
         if (this.debugMode) console.log(`[PluginManager] Unregistering all tools from distributed server: ${serverId}`);
         let unregisteredCount = 0;
+        const unregisteredPluginNames = [];
+        const unregisteredManifests = [];
         for (const [name, manifest] of this.plugins.entries()) {
             if (manifest.isDistributed && manifest.serverId === serverId) {
-                this.plugins.delete(name);
+                unregisteredPluginNames.push(name);
+                unregisteredManifests.push(JSON.parse(JSON.stringify(manifest)));
+            }
+        }
+        if (unregisteredPluginNames.length > 0) {
+            this.emit('distributed_tools_offline', { serverId, pluginNames: unregisteredPluginNames, manifests: unregisteredManifests });
+        }
+        for (const name of unregisteredPluginNames) {
+            if (this.plugins.delete(name)) {
                 unregisteredCount++;
                 if (this.debugMode) console.log(`  - Unregistered: ${name}`);
             }
@@ -1279,6 +1430,9 @@ class PluginManager extends EventEmitter {
         }
 
         // 新增：清理分布式静态占位符
+        if (unregisteredCount > 0) {
+            this.emit('tools_changed', { reason: 'distributed_unregister', serverId, pluginNames: unregisteredPluginNames });
+        }
         this.clearDistributedStaticPlaceholders(serverId);
     }
 
@@ -1289,16 +1443,33 @@ class PluginManager extends EventEmitter {
         }
 
         for (const [placeholder, value] of Object.entries(placeholders)) {
-            // 新增逻辑：尝试解析可能的 JSON 折叠对象
+            // 兼容 JSON 折叠对象与共享文本折叠协议
             let parsedValue = value;
-            if (typeof value === 'string' && value.trim().startsWith('{')) {
-                try {
-                    const jsonObj = JSON.parse(value.trim());
-                    if (jsonObj && jsonObj.vcp_dynamic_fold) {
-                        parsedValue = jsonObj; // 保持对象形式以供折叠处理
+            if (typeof value === 'string') {
+                const trimmedValue = value.trim();
+                parsedValue = trimmedValue;
+
+                if (trimmedValue.startsWith('{')) {
+                    try {
+                        const jsonObj = JSON.parse(trimmedValue);
+                        if (jsonObj && jsonObj.vcp_dynamic_fold) {
+                            parsedValue = jsonObj; // 保持对象形式以供折叠处理
+                        }
+                    } catch (e) {
+                        if (hasFoldMarkers(trimmedValue)) {
+                            parsedValue = buildDynamicFoldObject({
+                                content: trimmedValue,
+                                pluginDescription: placeholder,
+                                strategy: 'toolbox_block_similarity'
+                            });
+                        }
                     }
-                } catch (e) {
-                    // 解析失败说明只是普通的字符串，可以直接忽略错误
+                } else if (hasFoldMarkers(trimmedValue)) {
+                    parsedValue = buildDynamicFoldObject({
+                        content: trimmedValue,
+                        pluginDescription: placeholder,
+                        strategy: 'toolbox_block_similarity'
+                    });
                 }
             }
 

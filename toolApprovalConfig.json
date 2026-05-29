@@ -2,7 +2,12 @@
   "enabled": true,
   "approveAll": false,
   "timeoutMinutes": 5,
+  "approveAll": false,
+  "fuzzyToolMatching": false,
   "approvalList": [
-    "PowerShellExecutor"
+    "PowerShellExecutor",
+    "ServerPowerShellExecutor",
+    "FileOperator",
+    "ServerFileOperator"
   ]
 }

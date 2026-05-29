@@ -36,7 +36,9 @@ class StreamHandler {
       originalBody,
       clientIp,
       _refreshRagBlocksIfNeeded,
-      fetchWithRetry
+      fetchWithRetry,
+      vcpToolUseForbidden,
+      semanticModelFallbackCandidates
     } = this.context;
 
     const shouldShowVCP = SHOW_VCP_OUTPUT || this.context.forceShowVCP;
@@ -256,7 +258,7 @@ class StreamHandler {
       }
       currentMessagesForLoop.push(...assistantMessages);
 
-      const toolCalls = ToolCallParser.parse(currentAIContentForLoop);
+      const toolCalls = vcpToolUseForbidden ? [] : ToolCallParser.parse(currentAIContentForLoop);
       if (toolCalls.length === 0) {
         if (DEBUG_MODE) console.log('[VCP Stream Loop] No tool calls found. Exiting loop.');
         if (!res.writableEnded) {
@@ -334,7 +336,7 @@ class StreamHandler {
             body: JSON.stringify({ ...originalBody, messages: currentMessagesForLoop, stream: true }),
             signal: abortController.signal,
           },
-          { retries: apiRetries, delay: apiRetryDelay, debugMode: DEBUG_MODE }
+          { retries: apiRetries, delay: apiRetryDelay, debugMode: DEBUG_MODE, modelFallbackCandidates: semanticModelFallbackCandidates }
         );
 
         if (nextAiAPIResponse.ok) {
@@ -458,7 +460,7 @@ class StreamHandler {
           body: JSON.stringify({ ...originalBody, messages: currentMessagesForLoop, stream: true }),
           signal: abortController.signal,
         },
-        { retries: apiRetries, delay: apiRetryDelay, debugMode: DEBUG_MODE }
+        { retries: apiRetries, delay: apiRetryDelay, debugMode: DEBUG_MODE, modelFallbackCandidates: semanticModelFallbackCandidates }
       );
 
       if (!nextAiAPIResponse.ok) break;
