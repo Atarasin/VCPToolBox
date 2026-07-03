@@ -1,6 +1,7 @@
 .sisyphus/
 .claude/
 .trae/
+.tmp/
 openspec/
 
 VCPAsyncResults/

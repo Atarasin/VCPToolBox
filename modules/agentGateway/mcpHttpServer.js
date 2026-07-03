@@ -211,6 +211,26 @@ function writeJsonRpcResponse(res, statusCode, payload, extraHeaders = {}) {
     res.status(statusCode).type('application/json').send(JSON.stringify(payload));
 }
 
+function writeEmptyResponse(res, statusCode, extraHeaders = {}) {
+    if (res.headersSent || res.writableEnded) {
+        return;
+    }
+
+    Object.entries(extraHeaders).forEach(([headerName, headerValue]) => {
+        if (headerValue === undefined || headerValue === null || headerValue === '') {
+            return;
+        }
+        res.setHeader(headerName, headerValue);
+    });
+
+    res.status(statusCode).end();
+}
+
+function requestAcceptsEventStream(req) {
+    const acceptHeader = sanitizeRequestContextValue(req.get('accept'), 512);
+    return acceptHeader.toLowerCase().includes('text/event-stream');
+}
+
 function createSessionContext(auth, options = {}, profile = {}) {
     const sessionPrefix = sanitizeRequestContextValue(options.sessionIdPrefix, 32) || 'mcphttp';
     const source = sanitizeRequestContextValue(profile.source, 128)
@@ -757,17 +777,26 @@ function createMcpHttpServer(options = {}) {
                 res.setHeader('MCP-Session-Id', session.context.sessionId);
             }
 
+            // Streamable HTTP notifications must acknowledge delivery without a JSON-RPC body.
+            if (!expectsResponse) {
+                if (dispatchOptions.destroySessionOnFailure && !initializeSucceeded) {
+                    await destroySession(session, 'initialize_failed');
+                }
+                writeEmptyResponse(res, 202);
+                return;
+            }
+
             if (!response) {
                 if (dispatchOptions.destroySessionOnFailure) {
                     await destroySession(session, 'initialize_failed');
                 }
-                res.status(202).end();
+                writeEmptyResponse(res, 202);
                 return;
             }
 
             if (dispatchOptions.streamOnly) {
                 await queueStreamFrame(session, createSseFrame('message', response));
-                res.status(202).end();
+                writeEmptyResponse(res, 202);
                 return;
             }
 
@@ -893,6 +922,13 @@ function createMcpHttpServer(options = {}) {
 
         const providedSessionId = sanitizeRequestContextValue(req.get(MCP_SESSION_HEADER), 256);
         if (!providedSessionId) {
+            if (requestAcceptsEventStream(req)) {
+                // Codex probes canonical GET /mcp as an SSE capability check before a session exists.
+                writeEmptyResponse(res, 405, {
+                    Allow: 'POST, GET, DELETE'
+                });
+                return;
+            }
             writeJsonRpcResponse(res, 400, createSessionErrorResponse(null, 'missing_session_header'));
             return;
         }

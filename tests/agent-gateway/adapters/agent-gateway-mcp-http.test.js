@@ -477,6 +477,26 @@ test('streamable HTTP GET /mcp requires a valid session header', async () => {
     }
 }, INTEGRATION_TEST_TIMEOUT_MS);
 
+test('streamable HTTP GET /mcp returns 405 for explicit SSE probes without a session header', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const response = await fetch(`${fixture.baseUrl}/mcp`, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                accept: 'text/event-stream'
+            }
+        });
+        const body = await response.text();
+
+        assert.equal(response.status, 405);
+        assert.equal(body, '');
+        assert.equal(response.headers.get('allow'), 'POST, GET, DELETE');
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
 test('streamable HTTP GET /mcp emits heartbeat comments for live sessions', async () => {
     const fixture = await createFixture({
         heartbeatIntervalMs: 25
@@ -542,6 +562,36 @@ test('streamable HTTP follow-up POST mirrors JSON-RPC responses onto the active 
         } finally {
             await stream.close();
         }
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP notifications return 202 without a JSON-RPC response body', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const initialize = await postJson(`${fixture.baseUrl}/mcp`, createInitializePayload(1), {
+            headers: createGatewayAuthHeaders()
+        });
+        const sessionId = initialize.headers['mcp-session-id'];
+
+        const response = await fetch(`${fixture.baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'content-type': 'application/json',
+                'MCP-Session-Id': sessionId
+            },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'notifications/initialized'
+            })
+        });
+        const body = await response.text();
+
+        assert.equal(response.status, 202);
+        assert.equal(body, '');
     } finally {
         await fixture.close();
     }
