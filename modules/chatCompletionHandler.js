@@ -9,6 +9,14 @@ const http = require('http');
 const https = require('https');
 const finalContextStore = require('./finalContextStore.js');
 
+// 多模态配置真相源（JSON 优先 + 热更新），用于在请求时动态拉取 MultiModalForceTranslateModels
+let multiModalConfigStore = null;
+try {
+  multiModalConfigStore = require('./multiModalConfigStore.js');
+} catch (storeError) {
+  multiModalConfigStore = null;
+}
+
 // 🌟 核心网络优化：引入防御性长连接池 (Keep-Alive Pool)
 // 解决 "-1s Socket Hang Up" 与上游代理秒断僵尸连接的问题
 const agentOptions = {
@@ -202,6 +210,75 @@ function consumeVcpToolUseForbiddenPlaceholder(messages) {
 }
 
 /**
+ * 检测当前真实后端模型是否命中纯文本模型 Tag 列表（不区分大小写）。
+ * 配合模型动态路由（VCPModelAuto / SemanticModelRouter）使用：
+ * 当语义路由切换到不支持多模态的模型（如 deepseek-v4 / GLM-4.5）时，
+ * 自动把 base64 翻译为文本，避免上游 API 报错或丢图。
+ *
+ * @param {string} modelName 真实后端模型名（已经过 ModelRedirect 与语义路由解析）
+ * @param {string[]} tagList tag 数组（已统一为小写，由 server.js 解析）
+ * @returns {boolean} 是否命中
+ */
+function isTextOnlyModelByTag(modelName, tagList) {
+  if (!modelName || !Array.isArray(tagList) || tagList.length === 0) return false;
+  const lowerName = String(modelName).toLowerCase();
+  for (const tag of tagList) {
+    if (!tag) continue;
+    if (lowerName.includes(tag)) return true;
+  }
+  return false;
+}
+
+/**
+ * 检测一条消息（或其 content 数组）中是否包含 base64 多模态部分。
+ * 仅用于 Force-Translate 触发判定，避免在没有图片/音视频的请求里空转翻译插件。
+ *
+ * @param {Array} messages 消息数组
+ * @returns {boolean}
+ */
+function messagesContainBase64Media(messages) {
+  if (!Array.isArray(messages)) return false;
+  for (const msg of messages) {
+    if (!msg || (msg.role !== 'user' && msg.role !== 'system')) continue;
+    if (!Array.isArray(msg.content)) continue;
+    for (const part of msg.content) {
+      if (
+        part &&
+        part.type === 'image_url' &&
+        part.image_url &&
+        typeof part.image_url.url === 'string' &&
+        /^data:(image|audio|video)\/[^;]+;base64,/.test(part.image_url.url)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Copy non-enumerable array metadata produced by upstream preprocessors.
+ * OneRing attaches __oneRingMeta to the messages array itself; any pipeline
+ * step that returns a fresh array must preserve it explicitly.
+ */
+function copyArrayMetadata(source, target) {
+  if (!Array.isArray(source) || !Array.isArray(target)) return target;
+
+  for (const key of Object.getOwnPropertyNames(source)) {
+    if (/^(?:length|\d+)$/.test(key)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (!descriptor) continue;
+    try {
+      Object.defineProperty(target, key, descriptor);
+    } catch (e) {
+      // Metadata preservation is best-effort and must not break request flow.
+    }
+  }
+
+  return target;
+}
+
+/**
  * 检测工具返回结果是否为错误
  * @param {any} result - 工具返回的结果
  * @returns {boolean} - 是否为错误结果
@@ -213,23 +290,36 @@ function isToolResultError(result) {
 
   // 1. 对象形式的错误检测
   if (typeof result === 'object') {
-    // 检查常见的错误标识字段
-    if (result.error === true ||
+    // 判定顺序必须先看明确成功标志：
+    // 工具成功返回的正文/嵌套字段里可能包含“拒绝/错误/error”等业务文本，不能因此覆盖 status: success。
+    if (
+      result.success === true ||
+      result.status === 'success' ||
+      result.status === 'ok' ||
+      result.ok === true
+    ) {
+      return false;
+    }
+
+    // 然后只信任结构化失败字段。
+    if (
+      result.error === true ||
       result.success === false ||
       result.status === 'error' ||
       result.status === 'failed' ||
-      result.code?.toString().startsWith('4') || // 4xx 错误码
-      result.code?.toString().startsWith('5')) { // 5xx 错误码
+      result.status === 'failure' ||
+      result.ok === false
+    ) {
       return true;
     }
 
-    // 对象转字符串后检查
-    try {
-      const jsonStr = JSON.stringify(result).toLowerCase();
-      return jsonStr.includes('"error"') && !jsonStr.includes('"error":false');
-    } catch (e) {
-      return false;
+    const codeValue = result.code ?? result.statusCode ?? result.httpStatus;
+    const numericCode = Number(codeValue);
+    if (Number.isFinite(numericCode) && numericCode >= 400 && numericCode < 600) {
+      return true;
     }
+
+    return false;
   }
 
   // 2. 字符串形式的错误检测（模糊匹配）
@@ -246,10 +336,8 @@ function isToolResultError(result) {
       }
     }
 
-    // 模糊匹配（需要更谨慎）
-    // 只有在明确包含"错误"或"失败"这类强指示词时才认为是错误
-    if (result.includes('错误') || result.includes('失败') ||
-      lowerResult.includes('error:') || lowerResult.includes('failed:')) {
+    // 字符串仅接受显式错误前缀/格式，不再因正文任意位置包含“错误/失败/拒绝”等业务文本而误判。
+    if (lowerResult.includes('error:') || lowerResult.includes('failed:')) {
       return true;
     }
   }
@@ -321,7 +409,7 @@ function applyModelFallbackForAttempt(options, candidates, attemptIndex, debugMo
 async function fetchWithRetry(
   url,
   options,
-  { retries = 3, delay = 1000, debugMode = false, onRetry = null, connectionTimeout = 120000, modelFallbackCandidates = null } = {},
+  { retries = 3, delay = 1000, debugMode = false, onRetry = null, connectionTimeout = 900000, modelFallbackCandidates = null } = {},
 ) {
   const { default: fetch } = await import('node-fetch');
   const maxAttempts = Math.max(
@@ -693,6 +781,7 @@ class ChatCompletionHandler {
       apiRetries,
       apiRetryDelay,
       RAGMemoRefresh,
+      apiConnectionTimeoutMs,
       enableRoleDivider, // 新增
       enableRoleDividerInLoop, // 新增
       roleDividerIgnoreList, // 新增
@@ -702,6 +791,7 @@ class ChatCompletionHandler {
       chinaModel1, // 新增
       chinaModel1Cot, // 新增
       semanticModelRouter,
+      multiModalForceTranslateModels: configForceTranslateModels, // 启动时快照（ENV）作为兜底
     } = this.config;
     const circuitFailureThreshold = Number.isFinite(upstreamCircuitFailureThreshold) && upstreamCircuitFailureThreshold > 0
       ? upstreamCircuitFailureThreshold
@@ -715,6 +805,19 @@ class ChatCompletionHandler {
     const healthProbeTimeoutMs = Number.isFinite(upstreamHealthProbeTimeoutMs) && upstreamHealthProbeTimeoutMs > 0
       ? upstreamHealthProbeTimeoutMs
       : DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
+
+    // 优先从 multimodal-config.json 真相源拉取最新 tag 列表，失败时回退 ENV 快照
+    let multiModalForceTranslateModels = configForceTranslateModels;
+    if (multiModalConfigStore) {
+      try {
+        const liveTags = multiModalConfigStore.getForceTranslateModels();
+        if (Array.isArray(liveTags)) {
+          multiModalForceTranslateModels = liveTags;
+        }
+      } catch (storeReadErr) {
+        // 静默回退，不阻塞请求
+      }
+    }
 
     const shouldShowVCP = SHOW_VCP_OUTPUT || forceShowVCP;
     const applyChinaModelThinkingControl = (body) => {
@@ -743,6 +846,19 @@ class ChatCompletionHandler {
 
     const id = req.body.requestId || req.body.messageId;
     let originalBody = req.body;
+    const vcpchatExtensions = originalBody && typeof originalBody === 'object'
+      ? originalBody.vcpchatExtensions
+      : null;
+    if (vcpchatExtensions !== undefined) {
+      delete originalBody.vcpchatExtensions;
+      const bindingCount = Array.isArray(vcpchatExtensions?.messageTimestampBindings)
+        ? vcpchatExtensions.messageTimestampBindings.length
+        : 0;
+      console.log(`[VCPChatExtensions] Intercepted and stripped vcpchatExtensions before upstream forwarding. timestampBindings=${bindingCount}`);
+    }
+    const requestPreprocessorConfig = vcpchatExtensions
+      ? { vcpchatExtensions }
+      : {};
     const isOriginalRequestStreaming = originalBody.stream === true;
     const responseCacheKey = this.responseReplayCache.buildKey(clientIp, id);
 
@@ -868,21 +984,6 @@ class ChatCompletionHandler {
 
       await writeDebugLog('LogInput', originalBody);
 
-      // --- 角色分割处理 (Role Divider) - 初始阶段 ---
-      // 移动到最前端，确保拆分出的楼层能享受后续所有解析功能
-      if (enableRoleDivider) {
-        if (DEBUG_MODE) console.log('[Server] Applying Role Divider processing (Initial Stage)...');
-        // skipCount: 1 to exclude the initial SystemPrompt from splitting
-        originalBody.messages = roleDivider.process(originalBody.messages, {
-          ignoreList: roleDividerIgnoreList,
-          switches: roleDividerSwitches,
-          scanSwitches: roleDividerScanSwitches,
-          removeDisabledTags: roleDividerRemoveDisabledTags,
-          skipCount: 1
-        });
-        if (DEBUG_MODE) await writeDebugLog('LogAfterInitialRoleDivider', originalBody.messages);
-      }
-
       const vcpToolUseForbidden = consumeVcpToolUseForbiddenPlaceholder(originalBody.messages);
       if (vcpToolUseForbidden && DEBUG_MODE) {
         console.log(`[VCPToolUse] Detected ${VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER} in top-level system prompt. Tool parsing/execution is disabled for this request.`);
@@ -934,7 +1035,7 @@ class ChatCompletionHandler {
       if (pluginManager.messagePreprocessors.has('VCPTavern')) {
         if (DEBUG_MODE) console.log(`[Server] Calling priority message preprocessor: VCPTavern`);
         try {
-          tavernProcessedMessages = await pluginManager.executeMessagePreprocessor('VCPTavern', originalBody.messages);
+          tavernProcessedMessages = await pluginManager.executeMessagePreprocessor('VCPTavern', originalBody.messages, requestPreprocessorConfig);
         } catch (pluginError) {
           console.error(`[Server] Error in priority preprocessor VCPTavern:`, pluginError);
         }
@@ -978,10 +1079,34 @@ class ChatCompletionHandler {
         }
       }
 
+      // --- 纯文本模型强制翻译多模态 ---
+      // 当语义路由 / ModelRedirect 解析后的真实后端模型命中
+      // MultiModalForceTranslateModels 列表（不区分大小写、tag 子串匹配）时：
+      // 1) 自动开启多模态翻译（无视用户是否配置 {{TransBase64}}/{{TransBase64+}}）
+      // 2) 强制关闭 + 模式的 base64 还原（因为目标模型是纯文本模型，无法处理 base64）
+      // 3) 初始请求仍仅在消息确实含有 base64 多模态时执行翻译，避免空转翻译插件
+      // 4) 该标记也会传递给 VCP loop，用于工具回包后才出现 image_url 的情况
+      const isTextOnlyForceTranslateModel = Array.isArray(multiModalForceTranslateModels) &&
+        multiModalForceTranslateModels.length > 0 &&
+        isTextOnlyModelByTag(originalBody.model, multiModalForceTranslateModels);
+      if (
+        isTextOnlyForceTranslateModel &&
+        messagesContainBase64Media(tavernProcessedMessages)
+      ) {
+        const previousMode = shouldProcessMediaPlus ? 'TransBase64+' : (shouldProcessMedia ? 'TransBase64' : 'none');
+        shouldProcessMedia = true;
+        shouldProcessMediaPlus = false; // 关键：禁用还原 base64
+        console.log(
+          `[MultiModalForceTranslate] 模型 '${originalBody.model}' 命中纯文本模型 tag 列表，` +
+          `自动启用多模态文本翻译并禁用 base64 还原（先前模式: ${previousMode}）。`
+        );
+      }
+
       // --- 统一处理所有变量替换 ---
       // 创建一个包含所有所需依赖的统一上下文
       const processingContext = {
         pluginManager,
+        webSocketServer,
         cachedEmojiLists: this.config.cachedEmojiLists,
         detectors: this.config.detectors,
         superDetectors: this.config.superDetectors,
@@ -1047,7 +1172,7 @@ class ChatCompletionHandler {
         if (pluginManager.messagePreprocessors.has(processorName)) {
           if (DEBUG_MODE) console.log(`[Server] Calling message preprocessor: ${processorName}`);
           try {
-            processedMessages = await pluginManager.executeMessagePreprocessor(processorName, processedMessages);
+            processedMessages = await pluginManager.executeMessagePreprocessor(processorName, processedMessages, requestPreprocessorConfig);
           } catch (pluginError) {
             console.error(`[Server] Error in preprocessor ${processorName}:`, pluginError);
           }
@@ -1061,7 +1186,7 @@ class ChatCompletionHandler {
 
         if (DEBUG_MODE) console.log(`[Server] Calling message preprocessor: ${name}`);
         try {
-          processedMessages = await pluginManager.executeMessagePreprocessor(name, processedMessages);
+          processedMessages = await pluginManager.executeMessagePreprocessor(name, processedMessages, requestPreprocessorConfig);
         } catch (pluginError) {
           console.error(`[Server] Error in preprocessor ${name}:`, pluginError);
         }
@@ -1103,9 +1228,46 @@ class ChatCompletionHandler {
         if (DEBUG_MODE) console.log(`[Server] TransBase64+ cleanup and media restore complete.`);
       }
 
-      // 经过改造后，processedMessages 已经是最终版本，无需再调用 replaceOtherVariables
+      // --- Detector / SuperDetector 后置处理 ---
+      // 保证所有消息预处理器执行完成后，再统一应用 Detector 与 SuperDetector；
+      // Role Divider 必须在其后作为最终消息拆分步骤。
+      // Detector 会返回 fresh array；必须显式保护 OneRing 等预处理器挂在数组上的非枚举元数据。
+      const messagesBeforeDetectors = processedMessages;
+      processedMessages = copyArrayMetadata(
+        messagesBeforeDetectors,
+        messageProcessor.applyDetectorsToMessages(processedMessages, processingContext)
+      );
+      if (DEBUG_MODE) await writeDebugLog('LogAfterDetectors', processedMessages);
 
+      // --- 角色分割处理 (Role Divider) - 最终阶段 ---
+      if (enableRoleDivider) {
+        if (DEBUG_MODE) console.log('[Server] Applying Role Divider processing (Final Stage)...');
+        // skipCount: 1 to exclude the initial SystemPrompt from splitting
+        processedMessages = roleDivider.process(processedMessages, {
+          ignoreList: roleDividerIgnoreList,
+          switches: roleDividerSwitches,
+          scanSwitches: roleDividerScanSwitches,
+          removeDisabledTags: roleDividerRemoveDisabledTags,
+          skipCount: 1
+        });
+        if (DEBUG_MODE) await writeDebugLog('LogAfterFinalRoleDivider', processedMessages);
+      }
+
+      // 经过改造后，processedMessages 已经是最终版本，无需再调用 replaceOtherVariables
       originalBody.messages = processedMessages;
+
+      let oneRingResponseMeta = null;
+      try {
+        const oneRingModule = pluginManager?.messagePreprocessors?.get?.('OneRing');
+        if (oneRingModule && typeof oneRingModule.extractMetaFromMessages === 'function') {
+          oneRingResponseMeta = oneRingModule.extractMetaFromMessages(processedMessages);
+          if (DEBUG_MODE && oneRingResponseMeta) {
+            console.log(`[OneRing] Frozen response meta before upstream fetch: agent=${oneRingResponseMeta.agentName} frontend=${oneRingResponseMeta.frontendSource} turn=${oneRingResponseMeta.turnId || 'none'}`);
+          }
+        }
+      } catch (oneRingMetaError) {
+        console.warn('[OneRing] Failed to freeze response meta before upstream fetch:', oneRingMetaError.message);
+      }
 
       const willStreamResponse = isOriginalRequestStreaming;
       const finalUpstreamBody = { ...originalBody, stream: willStreamResponse };
@@ -1137,6 +1299,7 @@ class ChatCompletionHandler {
           retries: apiRetries,
           delay: apiRetryDelay,
           debugMode: DEBUG_MODE,
+          connectionTimeout: apiConnectionTimeoutMs,
           modelFallbackCandidates: semanticModelFallbackCandidates,
           onRetry: async (attempt, errorInfo) => {
             if (!res.headersSent && isOriginalRequestStreaming) {
@@ -1239,7 +1402,13 @@ class ChatCompletionHandler {
         isToolResultError,
         formatToolResult,
         vcpToolUseForbidden,
-        semanticModelFallbackCandidates
+        apiConnectionTimeoutMs,
+        semanticModelFallbackCandidates,
+        oneRingResponseMeta,
+        shouldProcessMedia,
+        shouldProcessMediaPlus,
+        isTextOnlyForceTranslateModel,
+        requestPreprocessorConfig
       };
 
       if (isUpstreamStreaming) {

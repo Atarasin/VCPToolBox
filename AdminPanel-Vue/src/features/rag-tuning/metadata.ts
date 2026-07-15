@@ -323,15 +323,15 @@ export const PARAM_METADATA: Record<string, Record<string, ParamMeta>> = {
     geodesicRerank: {
       label: "测地线重排(V8)",
       summary: "复用 Spike 距离场对 KNN 候选做基于 Tag 地形的二次重排。通过 ::TagMemo+ 修饰符激活。",
-      logic: "V8 核心引擎，让被语义山峰挡住的相关记忆通过 Tag 拓扑关联浮出。三层防御链保证最坏情况无改动。",
-      range: "包含 2 个子参数，见下方详细说明。",
+      logic: "V8 核心引擎，让被语义山峰挡住的相关记忆通过 Tag 拓扑关联浮出。新增地图可信度门控：当能量场过稀、采样覆盖不足或测地线分数没有区分度时，主动回归 KNN 保底。",
+      range: "包含 α、采样密度与低可信地图回退等 8 个子参数，见下方详细说明。",
       tone: "critical",
     },
     "geodesicRerank.alpha": {
       label: "测地线混合权重 (α)",
       summary: "测地线分数在最终排序中的占比。0=纯KNN余弦距离，1=纯测地线Tag地形距离。",
       logic: "调高：更信任 Tag 拓扑关联，被语义山峰遮挡的记忆更容易浮出；调低：更保守，主要依赖原始向量相似度。",
-      range: "建议区间: 0.1 ~ 0.5 (默认 0.3)",
+      range: "建议区间: 0.1 ~ 0.6；当前默认由 rag_params.json 中的 KnowledgeBaseManager.geodesicRerank.alpha 决定",
       tone: "sensitive",
     },
     "geodesicRerank.minGeoSamples": {
@@ -339,6 +339,48 @@ export const PARAM_METADATA: Record<string, Record<string, ParamMeta>> = {
       summary: "一个 chunk 在距离场上至少需要命中多少个 Tag 才有资格参与测地线评估。低于此值退化为纯 KNN。",
       logic: "调高：更严格，只有 Tag 密度高的 chunk 才会被测地线影响；调低：更宽松，但可能因采样不足导致估计不可靠。莱恩建议 4 作为基准。",
       range: "建议区间: 2 ~ 8 (整数，默认 4)",
+      tone: "sensitive",
+    },
+    "geodesicRerank.fallbackToKnnOnLowTrust": {
+      label: "低可信地图回归 KNN",
+      summary: "测地线地图可信度不足时是否直接回到原始 KNN 排序。1=开启，0=关闭。",
+      logic: "建议保持开启。关闭后即使 Tag 能量场稀疏、候选采样不足或测地线分数缺乏区分度，也会继续尝试测地线融合，误伤风险更高。",
+      range: "0 (关闭) / 1 (开启)，默认 1",
+      tone: "critical",
+    },
+    "geodesicRerank.minFieldTags": {
+      label: "地图最小激活 Tag 数",
+      summary: "查询级 Tag 能量场至少需要激活多少个正能量 Tag，才认为这张语义地图具备基本可信度。",
+      logic: "调高会更保守，低覆盖 query 更容易回归 KNN；调低会允许更稀疏的地图参与重排。",
+      range: "建议 2 ~ 12，默认 4",
+      tone: "sensitive",
+    },
+    "geodesicRerank.minFieldEntropy": {
+      label: "地图最小熵",
+      summary: "限制能量场不能过度集中在单个 Tag 上，避免单点幻觉把测地线重排带偏。",
+      logic: "调高会要求 Tag 能量更分散、更像一张地图；调低会允许强单峰地图参与重排。若频繁回退可略降到 0.08。",
+      range: "建议 0.05 ~ 0.30，默认 0.12",
+      tone: "sensitive",
+    },
+    "geodesicRerank.minGeoCoverageRatio": {
+      label: "候选最小测地线覆盖率",
+      summary: "参与测地线贡献的候选占总候选的最低比例。低于此值说明候选池对当前地图采样不足。",
+      logic: "调高会更保守，只有较多候选都能被 Tag 地图解释时才启用测地线；调低则更愿意使用局部地图。",
+      range: "建议 0.10 ~ 0.50，默认 0.20",
+      tone: "sensitive",
+    },
+    "geodesicRerank.minMaxGeoScore": {
+      label: "最大地形能量下限",
+      summary: "候选中最高测地线原始分数必须达到该值，否则认为整张地图对候选池太弱。",
+      logic: "用于防止所有候选都只吃到极弱能量还被归一化放大。一般保持很小即可。",
+      range: "建议 0.001 ~ 0.10，默认 0.01",
+      tone: "stable",
+    },
+    "geodesicRerank.minGeoScoreSpread": {
+      label: "地形分数最小区分度",
+      summary: "候选测地线分数的最大值与最小正值差距。差距过小说明地图没有排序分辨率。",
+      logic: "调高会要求测地线更有区分能力才参与融合；调低会允许平坦地形也参与重排。",
+      range: "建议 0.005 ~ 0.20，默认 0.03",
       tone: "sensitive",
     },
     orderedCooccurrence: {
@@ -593,107 +635,134 @@ export function getSubParamRange(subKey: string, subVal?: unknown): {
   step: number;
 } {
   const key = subKey.toLowerCase();
+  const leafKey = key.split(".").pop() ?? key;
 
   // Wormhole routing explicit ranges (must be checked before generic threshold rules).
-  if (key === "tensionthreshold") {
+  if (leafKey === "tensionthreshold") {
     return { min: 0.5, max: 3, step: 0.01 };
   }
 
-  if (key === "firingthreshold") {
+  if (leafKey === "firingthreshold") {
     return { min: 0, max: 1, step: 0.01 };
   }
 
-  if (key === "basemomentum") {
+  // Fuzzy embedding 需要更高精度，支持 0.001 级热调参观察。
+  // 注意：这里用完整路径判断，避免影响其它 threshold 类参数。
+  if (key === "fuzzyembedding.threshold") {
+    return { min: 0.97, max: 0.995, step: 0.001 };
+  }
+
+  if (leafKey === "basemomentum") {
     return { min: 1, max: 10, step: 0.1 };
   }
 
-  if (key === "basedecay" || key === "wormholedecay") {
+  if (leafKey === "basedecay" || leafKey === "wormholedecay") {
     return { min: 0, max: 1, step: 0.01 };
   }
 
-  if (key === "maxsafehops") {
+  if (leafKey === "maxsafehops") {
     return { min: 1, max: 20, step: 1 };
   }
 
-  if (key === "maxemergentnodes") {
+  if (leafKey === "maxemergentnodes") {
     return { min: 1, max: 200, step: 1 };
   }
 
-  if (key === "maxneighborspernode") {
+  if (leafKey === "maxneighborspernode") {
     return { min: 1, max: 20, step: 1 };
   }
 
   // 🆕 V8: 测地线混合权重
-  if (key === 'alpha') {
+  if (key === "geodesicrerank.alpha") {
     return { min: 0, max: 1, step: 0.01 };
   }
-  
+
+  // 🛡️ V8: 测地线低可信地图回退开关
+  if (key === "geodesicrerank.fallbacktoknnonlowtrust") {
+    return { min: 0, max: 1, step: 1 };
+  }
+
+  // 🛡️ V8: 查询级地图最小激活 Tag 数
+  if (key === "geodesicrerank.minfieldtags") {
+    return { min: 1, max: 20, step: 1 };
+  }
+
+  // 🛡️ V8: 查询级地图熵与候选覆盖/区分度门槛
+  if (
+    key === "geodesicrerank.minfieldentropy"
+    || key === "geodesicrerank.mingeocoverageratio"
+    || key === "geodesicrerank.minmaxgeoscore"
+    || key === "geodesicrerank.mingeoscorespread"
+  ) {
+    return { min: 0, max: 1, step: 0.01 };
+  }
+
   // 🆕 V8: 最小采样密度门槛
-  if (key.includes('samples')) {
+  if (leafKey.includes('samples')) {
     return { min: 1, max: 20, step: 1 };
   }
 
   // 🆕 V8.2: 有序双向势能流形参数
-  if (key === 'forwardgain' || key === 'reversegain'
-      || key === 'minreversegain' || key === 'maxreversegain') {
+  if (leafKey === 'forwardgain' || leafKey === 'reversegain'
+      || leafKey === 'minreversegain' || leafKey === 'maxreversegain') {
     return { min: 0, max: 1.5, step: 0.01 };
   }
-  if (key === 'distancedecay') {
+  if (leafKey === 'distancedecay') {
     return { min: 0, max: 0.5, step: 0.01 };
   }
-  if (key === 'reverseanchorboost' || key === 'semanticgainenabled') {
+  if (leafKey === 'reverseanchorboost' || leafKey === 'semanticgainenabled') {
     return { min: 0, max: 1, step: 1 }; // toggle 用 0/1 表达
   }
-  if (key === 'reverseanchormax') {
+  if (leafKey === 'reverseanchormax') {
     return { min: 1, max: 3, step: 0.05 };
   }
-  if (key === 'semanticgainpeak') {
+  if (leafKey === 'semanticgainpeak') {
     return { min: 0, max: 1, step: 0.01 };
   }
-  if (key === 'semanticgainsigma') {
+  if (leafKey === 'semanticgainsigma') {
     return { min: 0.05, max: 0.6, step: 0.01 };
   }
-  if (key === 'semanticgainlowsimfallback') {
+  if (leafKey === 'semanticgainlowsimfallback') {
     return { min: 0, max: 0.5, step: 0.01 };
   }
-  if (key === 'reverseinversionguard') {
+  if (leafKey === 'reverseinversionguard') {
     return { min: 0.5, max: 1, step: 0.01 };
   }
 
-  if (key === "minlength" || key === "maxscan" || key === "maxlengthdiffabs") {
-    return { min: 1, max: key === "maxscan" ? 1000 : 500, step: 1 };
+  if (leafKey === "minlength" || leafKey === "maxscan" || leafKey === "maxlengthdiffabs") {
+    return { min: 1, max: leafKey === "maxscan" ? 1000 : 500, step: 1 };
   }
 
-  if (key === "maxlengthdiffratio") {
+  if (leafKey === "maxlengthdiffratio") {
     return { min: 0, max: 0.2, step: 0.001 };
   }
 
-  if (key === "shotgundecayfactor") {
+  if (leafKey === "shotgundecayfactor") {
     return { min: 0, max: 1, step: 0.01 };
   }
 
-  if (key === "shotgunhistorysegmentlimit") {
+  if (leafKey === "shotgunhistorysegmentlimit") {
     return { min: 0, max: 10, step: 1 };
   }
 
-  if (key.includes("days")) {
+  if (leafKey.includes("days")) {
     return { min: 1, max: 365, step: 1 };
   }
 
-  if (key.includes("threshold")) {
+  if (leafKey.includes("threshold")) {
     return { min: 0, max: 1, step: 0.01 };
   }
 
-  if (key.includes("hops") || key.includes("nodes") || key.includes("neighbors")) {
-    return { min: 1, max: key.includes('nodes') ? 200 : 20, step: 1 };
+  if (leafKey.includes("hops") || leafKey.includes("nodes") || leafKey.includes("neighbors")) {
+    return { min: 1, max: leafKey.includes('nodes') ? 200 : 20, step: 1 };
   }
 
-  if (key.includes("momentum")) {
+  if (leafKey.includes("momentum")) {
     return { min: 1, max: 10, step: 0.1 };
   }
 
   // 🛠️ 修复：语言补偿器和时间衰减的浮点参数
-  if (key.includes("penalty") || key.includes("score") || key.includes("min")) {
+  if (leafKey.includes("penalty") || leafKey.includes("score") || leafKey.includes("min")) {
     return { min: 0, max: 1, step: 0.01 };
   }
 
