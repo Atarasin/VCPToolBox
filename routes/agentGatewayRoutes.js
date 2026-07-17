@@ -411,7 +411,8 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
                 details: {
                     authSource: dedicatedAuth.authSource
                 },
-                extraMeta: buildNativeResponseMeta(dedicatedAuth)
+                extraHeaders: { [AGENT_GATEWAY_HEADERS.TRACE_ID]: requestContext.traceId },
+                extraMeta: buildNativeResponseMeta(dedicatedAuth, { traceId: requestContext.traceId })
             });
         }
 

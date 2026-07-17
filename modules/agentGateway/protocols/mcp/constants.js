@@ -1,4 +1,4 @@
-const packageMetadata = require('../../../../package.json');
+const packageMetadata = require('../../composition/packageMetadata');
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
 

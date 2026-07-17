@@ -54,7 +54,8 @@ test('backend proxy adapter forwards gateway_recall_run to backendClient.runReca
             profile: 'custom-profile'
         },
         requestContext: {
-            requestId: 'req-mcp-backend-recall-001'
+            requestId: 'req-mcp-backend-recall-001',
+            traceId: 'trace-mcp-backend-recall-001'
         }
     });
 
@@ -66,9 +67,11 @@ test('backend proxy adapter forwards gateway_recall_run to backendClient.runReca
         requestContext: {
             requestId: 'req-mcp-backend-recall-001',
             agentId: 'Ariadne',
-            sessionId: 'mcp-session'
+            sessionId: 'mcp-session',
+            traceId: 'trace-mcp-backend-recall-001'
         }
     });
+    assert.equal(calls[0].requestOptions.headers['x-agent-gateway-trace-id'], 'trace-mcp-backend-recall-001');
     assert.equal(result.isError, false);
     assert.equal(result.status, 'completed');
     assert.equal(result.structuredContent.toolName, 'gateway_recall_run');

@@ -238,13 +238,15 @@ test('protocolGovernance resolves dedicated auth, native request context and ide
         requestIdPrefix: 'agw'
     });
 
-    assert.deepEqual(requestContext, {
+    assert.deepEqual({ ...requestContext, traceId: undefined }, {
         requestId: 'req-governed-001',
         sessionId: 'sess-governed-001',
         agentId: 'Ariadne',
         source: 'native-client',
-        runtime: 'native'
+        runtime: 'native',
+        traceId: undefined
     });
+    assert.match(requestContext.traceId, /^agwop_/);
 
     const idempotencyKey = resolveGovernedIdempotencyKey({
         body: {

@@ -1,9 +1,11 @@
-const packageJson = require('../../../package.json');
+const packageJson = require('./packageMetadata');
 const {
     createSchemaRegistry
 } = require('../infra/schemaRegistry');
 const {
-    createAuditLogger
+    createAuditLogger,
+    createConsoleAuditSink,
+    createFileAuditSink
 } = require('../infra/auditLogger');
 const {
     mapOpenClawMemoryWriteError,
@@ -74,9 +76,10 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
 
     const ports = options.ports || bindVcpPorts(pluginManager, options.portBindings);
     const schemaRegistry = createSchemaRegistry();
-    const auditLogger = createAuditLogger({
-        prefix: options.auditPrefix || DEFAULT_AUDIT_PREFIX
-    });
+    const auditSinks = [createConsoleAuditSink()];
+    const auditFile = options.auditFile || process.env.AGENT_GATEWAY_AUDIT_FILE;
+    if (auditFile) auditSinks.push(createFileAuditSink(auditFile));
+    const auditLogger = createAuditLogger({ prefix: options.auditPrefix || DEFAULT_AUDIT_PREFIX, sinks: auditSinks });
     const agentPolicyResolver = createAgentPolicyResolver({
         pluginManager
     });

@@ -4,6 +4,7 @@ const {
     normalizeRequestContext,
     sanitizeRequestContextValue
 } = require('./requestContext');
+const { resolveTraceId } = require('../infra/trace');
 
 function timingSafeStringEqual(left, right) {
     const leftDigest = crypto.createHash('sha256').update(String(left), 'utf8').digest();
@@ -120,7 +121,7 @@ function resolveNativeRequestContext(input, options = {}) {
     const headers = options.headers && typeof options.headers === 'object' ? options.headers : {};
     const context = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
 
-    return normalizeRequestContext({
+    const normalized = normalizeRequestContext({
         requestId: context.requestId || query.requestId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.REQUEST_ID),
         sessionId: context.sessionId || query.sessionId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.SESSION_ID),
         agentId: context.agentId || query.agentId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.AGENT_ID),
@@ -131,6 +132,11 @@ function resolveNativeRequestContext(input, options = {}) {
         defaultRuntime: options.defaultRuntime || 'native',
         requestIdPrefix: options.requestIdPrefix || 'agw'
     });
+    normalized.traceId = resolveTraceId(
+        context.traceId || query.traceId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.TRACE_ID),
+        'agwop'
+    );
+    return normalized;
 }
 
 function resolveGovernedIdempotencyKey({ body, headers, pluginManager } = {}) {

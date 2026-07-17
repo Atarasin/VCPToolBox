@@ -47,6 +47,7 @@ const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
 const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError } = require('./inProcessOperations');
 const { createReadResourceHandler } = require('./resourceHandlers');
+const { resolveTraceId } = require('../../infra/trace');
 
 function normalizeMcpString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
@@ -336,6 +337,7 @@ function buildMcpContexts(bundle, input = {}, defaultSource) {
         defaultRuntime: 'mcp',
         requestIdPrefix: 'mcp'
     });
+    requestContext.traceId = resolveTraceId(requestInput.traceId, 'agwop');
     const authContext = bundle.authContextResolver({
         authContext: input.authContext,
         requestContext,

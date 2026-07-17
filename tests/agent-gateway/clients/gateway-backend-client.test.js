@@ -109,3 +109,16 @@ test('GatewayBackendClient reads VCP_MCP_BACKEND_TIMEOUT_MS when no timeout is i
         }
     }
 });
+
+test('GatewayBackendClient forwards an explicit trace header unchanged', async () => {
+    let capturedHeaders;
+    const client = new GatewayBackendClient({
+        baseUrl: 'http://127.0.0.1:3000',
+        fetchImpl: async (_url, options) => {
+            capturedHeaders = options.headers;
+            return createJsonResponse({ success: true });
+        }
+    });
+    await client.searchMemory({}, { headers: { 'x-agent-gateway-trace-id': 'trace-cross-boundary' } });
+    assert.equal(capturedHeaders['x-agent-gateway-trace-id'], 'trace-cross-boundary');
+});

@@ -1,8 +1,7 @@
-const crypto = require('crypto');
-
 const {
     AGW_ERROR_CODES
 } = require('../contracts/errorCodes');
+const { resolveTraceId } = require('../infra/trace');
 
 const DEFAULT_MAX_RECENT_REJECTIONS = 20;
 
@@ -36,10 +35,6 @@ function normalizeBoolean(value, fallbackValue = false) {
         }
     }
     return fallbackValue;
-}
-
-function createTraceId(prefix = 'agt') {
-    return `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
 }
 
 function getOperationalConfig(pluginManager) {
@@ -267,7 +262,7 @@ function createOperabilityService(deps = {}) {
         beginRequest({ operationName, requestContext, authContext, payloadBytes } = {}) {
             const normalizedOperationName = normalizeOperabilityString(operationName) || 'unknown';
             const requestId = normalizeOperabilityString(requestContext?.requestId, 128);
-            const traceId = createTraceId('agwop');
+            const traceId = resolveTraceId(requestContext?.traceId, 'agwop');
             const timestamp = now();
             const subjectKey = createSubjectKey(normalizedOperationName, requestContext, authContext);
             const policy = resolveOperationPolicy(config, normalizedOperationName);

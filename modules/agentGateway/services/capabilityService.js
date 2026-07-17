@@ -1,4 +1,4 @@
-const packageJson = require('../../../package.json');
+const packageJson = require('../composition/packageMetadata');
 const { createSchemaRegistry } = require('../infra/schemaRegistry');
 
 function normalizeCapabilityString(value) {

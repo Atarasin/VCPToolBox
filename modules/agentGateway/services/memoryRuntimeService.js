@@ -9,9 +9,6 @@ const {
     mapOpenClawMemoryWriteError
 } = require('../infra/errorMapper');
 const {
-    createAuditLogger
-} = require('../infra/auditLogger');
-const {
     resolveConfiguredAgentMemoryPolicy
 } = require('../policy/mcpAgentMemoryPolicy');
 
@@ -409,7 +406,7 @@ function createMemoryRuntimeService(deps = {}) {
     }
     const diaryStorePort = deps.diaryStorePort;
 
-    const auditLogger = deps.auditLogger || createAuditLogger();
+    const auditLogger = deps.auditLogger || { logMemory() {} };
     const mapWriteError = deps.mapMemoryWriteError || mapOpenClawMemoryWriteError;
     const authContextResolver = typeof deps.authContextResolver === 'function'
         ? deps.authContextResolver

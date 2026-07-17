@@ -11,9 +11,6 @@ const {
     resolveDiaryAliasesToAvailable
 } = require('../policy/mcpAgentMemoryPolicy');
 const {
-    createAuditLogger
-} = require('../infra/auditLogger');
-const {
     projectSearchItems,
     projectContextBlocks,
     projectBudgetedContextBlocks,
@@ -74,7 +71,7 @@ function createContextRuntimeService(deps = {}) {
         throw new Error('[ContextRuntimeService] getRecallRuntimeService is required');
     }
 
-    const auditLogger = deps.auditLogger || createAuditLogger();
+    const auditLogger = deps.auditLogger || { logSearch() {}, logContext() {} };
     const embeddingUtilsLoader = deps.getEmbeddingUtils || deps.ragRetrieverPort?.embeddingUtilsLoader;
     const authContextResolver = typeof deps.authContextResolver === 'function'
         ? deps.authContextResolver

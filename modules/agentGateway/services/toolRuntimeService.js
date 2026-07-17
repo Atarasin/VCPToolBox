@@ -7,9 +7,6 @@ const {
 const {
     mapOpenClawToolExecutionError
 } = require('../infra/errorMapper');
-const {
-    createAuditLogger
-} = require('../infra/auditLogger');
 
 const DEFAULT_MEMORY_BRIDGE_TOOL_NAME = 'vcp_memory_write';
 
@@ -195,7 +192,7 @@ function createToolRuntimeService(deps = {}) {
 
     const auditLogger = deps.auditLogger && typeof deps.auditLogger.logToolInvoke === 'function'
         ? deps.auditLogger
-        : createAuditLogger();
+        : { logToolInvoke() {} };
     const mapToolExecutionError = typeof deps.mapToolExecutionError === 'function'
         ? deps.mapToolExecutionError
         : mapOpenClawToolExecutionError;

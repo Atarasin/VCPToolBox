@@ -28,6 +28,7 @@ const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
 const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
+const { resolveTraceId } = require('../../infra/trace');
 
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
@@ -341,6 +342,22 @@ function buildBody(input, args, { requireSession = true, defaultAgentId = '', de
     };
 }
 
+function buildRequestOptions(input) {
+    const traceId = normalizeMcpString(input?.requestContext?.traceId, 128);
+    return {
+        ...(input?.signal ? { signal: input.signal } : {}),
+        ...(traceId ? { headers: { 'x-agent-gateway-trace-id': traceId } } : {})
+    };
+}
+
+function ensureTraceContext(input) {
+    const requestContext = input?.requestContext && typeof input.requestContext === 'object' ? input.requestContext : {};
+    return {
+        ...input,
+        requestContext: { ...requestContext, traceId: resolveTraceId(requestContext.traceId, 'agwop') }
+    };
+}
+
 function buildJobQuery(input, args, defaultAgentId = '', defaultSessionId = 'mcp-session') {
     const requestContext = input?.requestContext && typeof input.requestContext === 'object'
         ? input.requestContext
@@ -421,6 +438,7 @@ function createBackendProxyMcpAdapter({
         },
 
         async getPrompt(input = {}) {
+            input = ensureTraceContext(input);
             const name = normalizeMcpString(input.name);
             const args = input.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
                 ? input.arguments
@@ -447,7 +465,7 @@ function createBackendProxyMcpAdapter({
                 ...input,
                 agentId: args.agentId || input.agentId
             }, `prompts/get:${name}`, defaultAgentId);
-            const requestOptions = input.signal ? { signal: input.signal } : undefined;
+            const requestOptions = buildRequestOptions(input);
             const response = await backendClient.renderAgent(agentId, buildBody({
                 ...input,
                 agentId
@@ -476,6 +494,7 @@ function createBackendProxyMcpAdapter({
         },
 
         async callTool(input = {}) {
+            input = ensureTraceContext(input);
             const name = normalizeMcpString(input.name);
             const args = input.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
                 ? input.arguments
@@ -492,7 +511,7 @@ function createBackendProxyMcpAdapter({
                 });
             }
 
-            const requestOptions = input.signal ? { signal: input.signal } : undefined;
+            const requestOptions = buildRequestOptions(input);
             const operation = getGatewayOperation(name);
             if (!operation) {
                 throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {

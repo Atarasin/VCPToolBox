@@ -2,6 +2,15 @@ const {
     createRequestId,
     sanitizeRequestContextValue
 } = require('../contracts/requestContext');
+const crypto = require('node:crypto');
+
+function createTraceId(prefix = 'agw') {
+    return `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+}
+
+function resolveTraceId(providedTraceId, prefix = 'agw') {
+    return sanitizeRequestContextValue(providedTraceId, 128) || createTraceId(prefix);
+}
 
 function reuseRequestId(providedRequestId, options = {}) {
     const prefix = sanitizeRequestContextValue(options.prefix, 16) || 'agw';
@@ -29,6 +38,8 @@ function createTraceMeta({ requestId, startedAt, versionKey, versionValue, extra
 }
 
 module.exports = {
+    createTraceId,
+    resolveTraceId,
     reuseRequestId,
     getDurationMs,
     createTraceMeta

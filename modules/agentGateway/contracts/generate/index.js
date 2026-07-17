@@ -1,4 +1,4 @@
-const packageJson = require('../../../../package.json');
+const packageJson = require('../../composition/packageMetadata');
 const sourceDocument = require('../schemas/openapiDocument.json');
 const { createGatewayManagedToolDescriptors } = require('../../protocols/mcp/descriptors');
 
