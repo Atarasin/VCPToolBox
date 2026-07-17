@@ -1,0 +1,15 @@
+interface:
+  display_name: "Midas VCP"
+  short_description: "Use Agent Gateway recall and memory"
+  default_prompt: "Use $midas-vcp to retrieve relevant VCP context and write durable memory for this task."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "vcp-agent-gateway"
+      description: "Agent Gateway MCP server for Midas recall, bootstrap diagnostics, and durable memory writes."
+      transport: "streamable_http"
+      url: "http://10.126.126.2:6005/mcp"
+
+policy:
+  allow_implicit_invocation: true
