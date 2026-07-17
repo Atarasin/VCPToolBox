@@ -24,6 +24,8 @@ const DEFAULT_AUTH_TIMEOUT_MS = 5000;
 const DEFAULT_RATE_LIMIT_MESSAGES = 60;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;
 const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
+const DEFAULT_DISCOVERY_MAX_SESSIONS = 32;
+const DEFAULT_DISCOVERY_SESSION_TTL_MS = 60 * 1000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15000;
 const MAX_SESSIONS_ENV = 'VCP_MCP_HTTP_MAX_SESSIONS';
 const MAX_PAYLOAD_BYTES_ENV = 'VCP_MCP_HTTP_MAX_PAYLOAD_BYTES';
@@ -31,6 +33,8 @@ const AUTH_TIMEOUT_MS_ENV = 'VCP_MCP_HTTP_AUTH_TIMEOUT_MS';
 const RATE_LIMIT_MESSAGES_ENV = 'VCP_MCP_HTTP_RATE_LIMIT_MESSAGES';
 const RATE_LIMIT_WINDOW_MS_ENV = 'VCP_MCP_HTTP_RATE_LIMIT_WINDOW_MS';
 const SESSION_IDLE_MS_ENV = 'VCP_MCP_HTTP_SESSION_IDLE_MS';
+const DISCOVERY_MAX_SESSIONS_ENV = 'VCP_MCP_HTTP_DISCOVERY_MAX_SESSIONS';
+const DISCOVERY_SESSION_TTL_MS_ENV = 'VCP_MCP_HTTP_DISCOVERY_SESSION_TTL_MS';
 const MCP_SESSION_HEADER = 'mcp-session-id';
 const DEFAULT_SOURCE = 'agent-gateway-mcp-http';
 const DEFAULT_RUNTIME = 'mcp-http';
@@ -360,6 +364,16 @@ function createMcpHttpServer(options = {}) {
         SESSION_IDLE_MS_ENV,
         DEFAULT_SESSION_IDLE_MS
     );
+    const discoveryMaxSessions = resolveConfiguredPositiveInteger(
+        options.discoveryMaxSessions,
+        DISCOVERY_MAX_SESSIONS_ENV,
+        DEFAULT_DISCOVERY_MAX_SESSIONS
+    );
+    const discoverySessionTtlMs = resolveConfiguredPositiveInteger(
+        options.discoverySessionTtlMs,
+        DISCOVERY_SESSION_TTL_MS_ENV,
+        DEFAULT_DISCOVERY_SESSION_TTL_MS
+    );
     const heartbeatIntervalMs = Number.isFinite(options.heartbeatIntervalMs) && options.heartbeatIntervalMs > 0
         ? options.heartbeatIntervalMs
         : DEFAULT_HEARTBEAT_INTERVAL_MS;
@@ -372,6 +386,7 @@ function createMcpHttpServer(options = {}) {
     });
     const router = express.Router();
     const sessions = new Map();
+    const discoverySessions = new Map();
     let attachedApp = null;
     let runtimeContext = null;
     let runtimePromise = null;
@@ -421,7 +436,9 @@ function createMcpHttpServer(options = {}) {
 
     function findSession(sessionId) {
         const normalizedSessionId = sanitizeRequestContextValue(sessionId, 256);
-        return normalizedSessionId ? sessions.get(normalizedSessionId) || null : null;
+        return normalizedSessionId
+            ? sessions.get(normalizedSessionId) || discoverySessions.get(normalizedSessionId) || null
+            : null;
     }
 
     function clearIdleTimer(session) {
@@ -479,7 +496,7 @@ function createMcpHttpServer(options = {}) {
         clearIdleTimer(session);
         session.idleTimer = setTimeout(() => {
             void destroySession(session, 'idle_expired');
-        }, sessionIdleMs);
+        }, session.kind === 'discovery' ? discoverySessionTtlMs : sessionIdleMs);
         if (typeof session.idleTimer.unref === 'function') {
             session.idleTimer.unref();
         }
@@ -487,6 +504,10 @@ function createMcpHttpServer(options = {}) {
 
     function touchSession(session) {
         session.lastActivityAt = Date.now();
+        if (session.kind === 'discovery') {
+            discoverySessions.delete(session.context.sessionId);
+            discoverySessions.set(session.context.sessionId, session);
+        }
         scheduleIdleExpiry(session);
     }
 
@@ -497,6 +518,7 @@ function createMcpHttpServer(options = {}) {
 
         session.cleanedUp = true;
         sessions.delete(session.context.sessionId);
+        discoverySessions.delete(session.context.sessionId);
         clearIdleTimer(session);
         abortInFlight(session, reason);
         closeActiveStream(session, reason);
@@ -631,6 +653,7 @@ function createMcpHttpServer(options = {}) {
         const context = createSessionContext(auth, options, profile);
         const session = {
             cleanedUp: false,
+            kind: profile.kind === 'discovery' ? 'discovery' : 'standard',
             context,
             createdAt: Date.now(),
             lastActivityAt: Date.now(),
@@ -644,9 +667,24 @@ function createMcpHttpServer(options = {}) {
             streamQueue: Promise.resolve(),
             idleTimer: null
         };
-        sessions.set(context.sessionId, session);
+        const store = session.kind === 'discovery' ? discoverySessions : sessions;
+        store.set(context.sessionId, session);
         scheduleIdleExpiry(session);
         return session;
+    }
+
+    async function createDiscoverySession(auth, profile = {}) {
+        while (discoverySessions.size >= discoveryMaxSessions) {
+            const oldestSession = discoverySessions.values().next().value;
+            if (!oldestSession) {
+                break;
+            }
+            await destroySession(oldestSession, 'discovery_lru_evicted');
+        }
+        return createSession(auth, {
+            ...profile,
+            kind: 'discovery'
+        });
     }
 
     async function resolveRequestAuth(req, requestId = null) {
@@ -869,12 +907,7 @@ function createMcpHttpServer(options = {}) {
 
         if (!providedSessionId) {
             if (isDiscoveryRequest) {
-                if (sessions.size >= maxSessions) {
-                    writeJsonRpcResponse(res, 503, createSessionLimitErrorResponse(requestId, maxSessions));
-                    return;
-                }
-
-                const session = createSession(authResult.auth, {
+                const session = await createDiscoverySession(authResult.auth, {
                     source: DEFAULT_SOURCE,
                     runtime: DEFAULT_RUNTIME
                 });
@@ -892,12 +925,7 @@ function createMcpHttpServer(options = {}) {
         const ownershipError = ensureSessionOwnership(session, authResult.auth, requestId);
         if (ownershipError) {
             if (!session && isDiscoveryRequest) {
-                if (sessions.size >= maxSessions) {
-                    writeJsonRpcResponse(res, 503, createSessionLimitErrorResponse(requestId, maxSessions));
-                    return;
-                }
-
-                session = createSession(authResult.auth, {
+                session = await createDiscoverySession(authResult.auth, {
                     source: DEFAULT_SOURCE,
                     runtime: DEFAULT_RUNTIME
                 });
@@ -1074,7 +1102,10 @@ function createMcpHttpServer(options = {}) {
         }
 
         closePromise = (async () => {
-            await Promise.all(Array.from(sessions.values(), (session) => destroySession(session, 'server_close')));
+            await Promise.all([
+                ...Array.from(sessions.values(), (session) => destroySession(session, 'server_close')),
+                ...Array.from(discoverySessions.values(), (session) => destroySession(session, 'server_close'))
+            ]);
 
             if (ownsRuntime && options.shutdownOnClose !== false) {
                 try {
@@ -1097,7 +1128,13 @@ function createMcpHttpServer(options = {}) {
         initialize: attach,
         close,
         getSessionCount() {
+            return sessions.size + discoverySessions.size;
+        },
+        getStandardSessionCount() {
             return sessions.size;
+        },
+        getDiscoverySessionCount() {
+            return discoverySessions.size;
         },
         getPaths() {
             return {

@@ -37,6 +37,7 @@ test('authContextResolver builds canonical transitional auth context', () => {
     assert.equal(authContext.agentId, 'agent.nova');
     assert.equal(authContext.authMode, 'admin_transition');
     assert.equal(authContext.isTransitionalAuth, true);
+    assert.deepEqual(authContext.roles, ['admin_transition']);
     assert.deepEqual(authContext.agentIdentity.aliases.includes('agent.nova'), true);
     assert.equal(authContext.gatewayIdentity.adapter, 'native');
 });
