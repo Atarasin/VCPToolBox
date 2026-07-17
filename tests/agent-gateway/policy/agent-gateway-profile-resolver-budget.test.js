@@ -2,10 +2,13 @@ const assert = require('node:assert');
 const { describe, it } = require('node:test');
 
 const { RecallProfileResolver } = require('../../../modules/agentGateway/policy/recallProfileResolver');
+const fixturePath = require('path').join(
+    __dirname, '..', '..', 'fixtures', 'agent-gateway', 'recall_profiles.json'
+);
 
 describe('RecallProfileResolver budget fields', () => {
     const resolver = new RecallProfileResolver({
-        configPath: require('path').join(__dirname, '..', '..', '..', 'modules', 'agentGateway', 'config', 'recall_profiles.json')
+        configPath: fixturePath
     });
 
     it('resolves nexus-default with tokenBudget, maxTokenRatio, minScore', () => {

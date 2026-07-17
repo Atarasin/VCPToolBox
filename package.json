@@ -4,6 +4,7 @@
   "main": "Server.js",
   "scripts": {
     "test": "node --test tests/rag-params/*.test.js",
+    "test:agent-gateway": "node scripts/run-agent-gateway-tests.js",
     "export:agent-gateway-openapi": "node scripts/exportAgentGatewayOpenApi.js",
     "start:mcp-agent-gateway": "node scripts/start-agent-gateway-mcp-server.js",
     "smoke:agent-gateway-codex-mcp": "node scripts/run-agent-gateway-codex-e2e.js",

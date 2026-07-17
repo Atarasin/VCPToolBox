@@ -9,7 +9,7 @@
     },
     "x-gateway-version": "v1",
     "x-release-stage": "ga",
-    "x-vcp-version": "7.1.2"
+    "x-vcp-version": "1.0.0"
   },
   "servers": [
     {

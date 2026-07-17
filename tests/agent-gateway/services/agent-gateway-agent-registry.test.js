@@ -285,7 +285,7 @@ test('AgentRegistryService default render resolves nested variables and passes p
         messagePreprocessors: new Map([['RAGDiaryPlugin', ragPlugin]]),
         getAllPlaceholderValues() {
             return new Map([
-                ['{{VCPWeatherInfo}}', { value: '⚠️天气预警\n晴 25C' }]
+                ['VCPWeatherInfo', { value: '⚠️天气预警\n晴 25C' }]
             ]);
         },
         getIndividualPluginDescriptions() {
