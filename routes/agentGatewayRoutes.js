@@ -388,7 +388,7 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
     });
 
     router.use((req, res, next) => {
-        const dedicatedAuth = resolveDedicatedGatewayAuth({
+        const dedicatedAuth = req.agentGatewayAuth || resolveDedicatedGatewayAuth({
             headers: req.headers,
             pluginManager
         });

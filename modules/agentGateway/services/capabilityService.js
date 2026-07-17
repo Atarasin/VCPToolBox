@@ -1,9 +1,6 @@
 const packageJson = require('../../../package.json');
 const { createSchemaRegistry } = require('../infra/schemaRegistry');
 
-let cachedKnowledgeBaseManager = null;
-let cachedRagPlugin = null;
-
 function normalizeCapabilityString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -95,7 +92,8 @@ function getRagConfig(pluginManager) {
     };
 }
 
-function getKnowledgeBaseManager(pluginManager) {
+function getKnowledgeBaseManager(pluginManager, ragRetrieverPort) {
+    if (ragRetrieverPort?.knowledgeBaseManager) return ragRetrieverPort.knowledgeBaseManager;
     if (pluginManager?.vectorDBManager) {
         return pluginManager.vectorDBManager;
     }
@@ -105,13 +103,11 @@ function getKnowledgeBaseManager(pluginManager) {
     if (pluginManager?.openClawBridge?.knowledgeBaseManager) {
         return pluginManager.openClawBridge.knowledgeBaseManager;
     }
-    if (!cachedKnowledgeBaseManager) {
-        cachedKnowledgeBaseManager = require('../../../KnowledgeBaseManager');
-    }
-    return cachedKnowledgeBaseManager;
+    return null;
 }
 
-function getRagPlugin(pluginManager) {
+function getRagPlugin(pluginManager, ragRetrieverPort) {
+    if (ragRetrieverPort?.ragPlugin) return ragRetrieverPort.ragPlugin;
     const pluginManagerRagPlugin = pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
     if (pluginManagerRagPlugin) {
         return pluginManagerRagPlugin;
@@ -119,14 +115,7 @@ function getRagPlugin(pluginManager) {
     if (pluginManager?.openClawBridge?.ragPlugin) {
         return pluginManager.openClawBridge.ragPlugin;
     }
-    if (!cachedRagPlugin) {
-        try {
-            cachedRagPlugin = require('../../../Plugin/RAGDiaryPlugin/RAGDiaryPlugin');
-        } catch (error) {
-            cachedRagPlugin = null;
-        }
-    }
-    return cachedRagPlugin;
+    return null;
 }
 
 function isBridgeablePlugin(plugin) {
@@ -319,7 +308,7 @@ function createCapabilityService(deps = {}) {
 
     return {
         async getMemoryTargets({ agentId, authContext }) {
-            const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
+            const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, deps.ragRetrieverPort);
             const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
             const resolvedAuthContext = authContextResolver
                 ? authContextResolver({
@@ -349,8 +338,8 @@ function createCapabilityService(deps = {}) {
                 .map((diaryName) => createTargetDescriptor(diaryName));
         },
         async getCapabilities({ agentId, includeMemoryTargets = true, authContext }) {
-            const ragPlugin = getRagPlugin(pluginManager);
-            const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
+            const ragPlugin = getRagPlugin(pluginManager, deps.ragRetrieverPort);
+            const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, deps.ragRetrieverPort);
             const resolvedAuthContext = authContextResolver
                 ? authContextResolver({
                     authContext,

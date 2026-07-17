@@ -183,6 +183,7 @@ function createToolRuntimeService(deps = {}) {
     if (!pluginManager) {
         throw new Error('[ToolRuntimeService] pluginManager is required');
     }
+    const toolInvokerPort = deps.toolInvokerPort;
     const schemaRegistry = deps.schemaRegistry;
     if (!schemaRegistry || typeof schemaRegistry.getToolInputSchema !== 'function') {
         throw new Error('[ToolRuntimeService] schemaRegistry is required');
@@ -313,7 +314,8 @@ function createToolRuntimeService(deps = {}) {
                 };
             }
 
-            const plugin = pluginManager.getPlugin?.(normalizedToolName) || pluginManager.plugins?.get?.(normalizedToolName);
+            const plugin = toolInvokerPort?.getTool?.(normalizedToolName) ||
+                pluginManager.getPlugin?.(normalizedToolName) || pluginManager.plugins?.get?.(normalizedToolName);
             if (!plugin || !isBridgeablePlugin(plugin)) {
                 return {
                     success: false,
@@ -352,7 +354,8 @@ function createToolRuntimeService(deps = {}) {
                 }
             }
 
-            if (pluginManager.toolApprovalManager?.shouldApprove?.(normalizedToolName)) {
+            if (toolInvokerPort?.requiresApproval?.(normalizedToolName) ||
+                pluginManager.toolApprovalManager?.shouldApprove?.(normalizedToolName)) {
                 const approvalJob = jobRuntimeService
                     ? jobRuntimeService.createWaitingApprovalJob({
                         operation: 'tool.invoke',
@@ -431,11 +434,14 @@ function createToolRuntimeService(deps = {}) {
             const openClawContext = createLegacyOpenClawContext(requestContext);
 
             try {
-                const result = await pluginManager.processToolCall(normalizedToolName, {
+                const invocationArgs = {
                     ...args,
                     __agentGatewayContext: agentGatewayContext,
                     __openclawContext: openClawContext
-                }, clientIp);
+                };
+                const result = toolInvokerPort?.available
+                    ? await toolInvokerPort.invoke(normalizedToolName, invocationArgs, clientIp)
+                    : await pluginManager.processToolCall(normalizedToolName, invocationArgs, clientIp);
 
                 auditLogger.logToolInvoke('invoke.completed', {
                     requestId,

@@ -726,6 +726,7 @@ const adminAuth = (req, res, next) => {
 
             if (dedicatedGatewayAuth.provided) {
                 if (dedicatedGatewayAuth.authenticated) {
+                    req.agentGatewayAuth = dedicatedGatewayAuth;
                     return next();
                 }
 
@@ -870,6 +871,12 @@ const adminAuth = (req, res, next) => {
         // 4. 认证成功
         if (clientIp) {
             loginAttempts.delete(clientIp); // 成功后清除尝试记录
+        }
+        if (isAgentGatewayPath) {
+            req.agentGatewayAuth = {
+                ...resolveDedicatedGatewayAuth({ headers: {}, pluginManager }),
+                outerAuthenticated: true
+            };
         }
         return next();
     }
@@ -1503,7 +1510,7 @@ const adminPanelRoutes = require('./routes/adminPanelRoutes')(
     apiKey,
     tdbKnowledgeManager
 );
-const agentGatewayRoutes = require('./routes/agentGatewayRoutes')(pluginManager);
+const { bootstrapGateway } = require('./modules/agentGateway/composition/bootstrapGateway');
 
 // 新增：引入 VCP 论坛 API 路由
 const forumApiRoutes = require('./routes/forumApi');
@@ -1603,7 +1610,7 @@ async function initialize() {
     await pluginManager.initializeServices(app, adminPanelRoutes, __dirname);
     // 在所有服务插件都注册完路由后，再将 adminApiRouter 挂载到主 app 上
     app.use('/admin_api', adminPanelRoutes);
-    app.use('/agent_gateway', agentGatewayRoutes);
+    bootstrapGateway({ app, pluginManager });
     // 挂载 VCP 论坛 API 路由
     app.use('/admin_api/forum', forumApiRoutes);
     console.log('服务类插件初始化完成，管理面板 API、Native Agent Gateway 路由和 VCP 论坛 API 路由已挂载。');

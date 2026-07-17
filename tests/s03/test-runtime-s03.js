@@ -114,6 +114,10 @@ function createTestService(overrides = {}) {
         contextRuntimeService: createMockContextRuntimeService(),
         embeddingUtilsLoader: () => ({}),
         fullTextRetriever: async (args) => mockFullTextImpl(args),
+        llmCompletionPort: {
+            available: true,
+            complete: (_config, payload) => axios.post('http://test/v1/chat/completions', payload)
+        },
         ...overrides
     });
 }
@@ -411,6 +415,10 @@ describe('S03 — Per-rule aiMemo semantic governance', () => {
                 contextRuntimeService: createMockContextRuntimeService(),
                 embeddingUtilsLoader: () => ({}),
                 fullTextRetriever: async (args) => mockFullTextImpl(args),
+                llmCompletionPort: {
+                    available: true,
+                    complete: (_config, payload) => axios.post('http://test/v1/chat/completions', payload)
+                },
                 recallProfileResolver: {
                     resolveForAgent: () => ({
                         resolved: true,

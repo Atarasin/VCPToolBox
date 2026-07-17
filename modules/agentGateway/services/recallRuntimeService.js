@@ -1,4 +1,3 @@
-const axios = require('axios');
 const { AGW_ERROR_CODES } = require('../contracts/errorCodes');
 const { collectRagItems } = require('./contextRuntimeService');
 const {
@@ -244,6 +243,7 @@ function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
 }
 
 function getKnowledgeBaseManager(deps, pluginManager) {
+    if (deps.ragRetrieverPort?.knowledgeBaseManager) return deps.ragRetrieverPort.knowledgeBaseManager;
     const ctxService = deps.contextRuntimeService;
     if (ctxService?.getKnowledgeBaseManager) {
         return ctxService.getKnowledgeBaseManager(pluginManager);
@@ -255,6 +255,7 @@ function getKnowledgeBaseManager(deps, pluginManager) {
 }
 
 function getRagPlugin(deps, pluginManager) {
+    if (deps.ragRetrieverPort?.ragPlugin) return deps.ragRetrieverPort.ragPlugin;
     const ctxService = deps.contextRuntimeService;
     if (ctxService?.getRagPlugin) {
         return ctxService.getRagPlugin(pluginManager);
@@ -822,20 +823,21 @@ const AIMEMO_PRESETS = Object.freeze({
     ].join('\n')
 });
 
-async function applyAIMemo(items, config) {
+async function applyAIMemo(items, config, llmCompletionPort) {
     const startedAt = Date.now();
+    const requestedPreset = normalizeString(config?.preset) || 'default';
     const modifierDetail = {
         modifier: 'aiMemo',
         durationMs: 0,
         inputCount: Array.isArray(items) ? items.length : 0,
         skipped: false,
         summaryLength: null,
-        preset: normalizeString(config?.preset) || 'default',
+        preset: AIMEMO_PRESETS[requestedPreset] ? requestedPreset : 'default',
         error: null
     };
 
     // Silently skip if config is missing or items are empty
-    if (!config || !config.url || !config.apiKey || !config.model) {
+    if (!config || !config.url || !config.apiKey || !config.model || !llmCompletionPort?.available) {
         modifierDetail.skipped = true;
         modifierDetail.durationMs = Date.now() - startedAt;
         return { items, summary: null, modifierDetail };
@@ -862,22 +864,12 @@ async function applyAIMemo(items, config) {
         modifierDetail.preset = effectivePreset;
         const prompt = presetPrompt.replace('{{knowledge_base}}', knowledgeBase);
 
-        const response = await axios.post(
-            `${config.url}v1/chat/completions`,
-            {
+        const response = await llmCompletionPort.complete(config, {
                 model: config.model,
                 messages: [{ role: 'user', content: prompt }],
                 temperature: 0.3,
                 max_tokens: 2000
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${config.apiKey}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: 60000
-            }
-        );
+            });
 
         const summary = response.data?.choices?.[0]?.message?.content || null;
         modifierDetail.summaryLength = summary ? summary.length : null;
@@ -1185,7 +1177,7 @@ function createRecallRuntimeService(deps = {}) {
     const pluginManager = deps.pluginManager;
     const profileResolver = deps.recallProfileResolver;
     const defaultAgentPolicyResolver = deps.agentPolicyResolver || null;
-    const embeddingUtilsLoader = deps.embeddingUtilsLoader || (() => require('../../../EmbeddingUtils'));
+    const embeddingUtilsLoader = deps.embeddingUtilsLoader || deps.ragRetrieverPort?.embeddingUtilsLoader;
     const aiMemoConfigLoader = deps.aiMemoConfigLoader || defaultAiMemoConfigLoader;
     const fullTextRetriever = typeof deps.fullTextRetriever === 'function'
         ? deps.fullTextRetriever
@@ -1463,6 +1455,7 @@ function createRecallRuntimeService(deps = {}) {
                         authContext: authContext || requestContext,
                         ragOptions,
                         embeddingUtilsLoader,
+                        ragRetrieverPort: deps.ragRetrieverPort,
                         agentPolicyResolver: effectiveAgentPolicyResolver
                     });
                 }
@@ -1521,7 +1514,7 @@ function createRecallRuntimeService(deps = {}) {
                     const aiMemoResult = await applyAIMemo(ruleItems, {
                         ...(aiMemoConfig || {}),
                         preset: preset || undefined
-                    });
+                    }, deps.llmCompletionPort);
                     if (aiMemoResult.modifierDetail) {
                         ruleDiagnostic.modifierDetails.push(aiMemoResult.modifierDetail);
                         ruleDiagnostic.aiMemoSummary = aiMemoResult.summary;
@@ -1665,7 +1658,7 @@ function createRecallRuntimeService(deps = {}) {
             const aiMemoResult = await applyAIMemo(mergedItems, {
                 ...(aiMemoConfig || {}),
                 preset: preset || undefined
-            });
+            }, deps.llmCompletionPort);
             if (aiMemoResult.modifierDetail) {
                 pipelineStages.push({
                     name: 'aiMemo',

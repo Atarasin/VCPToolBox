@@ -30,9 +30,6 @@ const DEFAULT_CONTEXT_MIN_SCORE = 0.3;
 const DEFAULT_CONTEXT_MAX_TOKEN_RATIO = 0.6;
 const MAX_CONTEXT_MESSAGES = 12;
 
-let cachedKnowledgeBaseManager = null;
-let cachedRagPlugin = null;
-
 function normalizeContextString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -262,7 +259,8 @@ function resolveDiarySelection(body) {
     };
 }
 
-function getKnowledgeBaseManager(pluginManager) {
+function getKnowledgeBaseManager(pluginManager, ragRetrieverPort) {
+    if (ragRetrieverPort?.knowledgeBaseManager) return ragRetrieverPort.knowledgeBaseManager;
     if (pluginManager?.vectorDBManager) {
         return pluginManager.vectorDBManager;
     }
@@ -272,13 +270,11 @@ function getKnowledgeBaseManager(pluginManager) {
     if (pluginManager?.openClawBridge?.knowledgeBaseManager) {
         return pluginManager.openClawBridge.knowledgeBaseManager;
     }
-    if (!cachedKnowledgeBaseManager) {
-        cachedKnowledgeBaseManager = require('../../../KnowledgeBaseManager');
-    }
-    return cachedKnowledgeBaseManager;
+    return null;
 }
 
-function getRagPlugin(pluginManager) {
+function getRagPlugin(pluginManager, ragRetrieverPort) {
+    if (ragRetrieverPort?.ragPlugin) return ragRetrieverPort.ragPlugin;
     const pluginManagerRagPlugin = pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
     if (pluginManagerRagPlugin) {
         return pluginManagerRagPlugin;
@@ -286,14 +282,7 @@ function getRagPlugin(pluginManager) {
     if (pluginManager?.openClawBridge?.ragPlugin) {
         return pluginManager.openClawBridge.ragPlugin;
     }
-    if (!cachedRagPlugin) {
-        try {
-            cachedRagPlugin = require('../../../Plugin/RAGDiaryPlugin/RAGDiaryPlugin');
-        } catch (error) {
-            cachedRagPlugin = null;
-        }
-    }
-    return cachedRagPlugin;
+    return null;
 }
 
 async function listDiaryTargets(knowledgeBaseManager) {
@@ -602,10 +591,11 @@ async function collectRagItems({
     authContext,
     ragOptions,
     embeddingUtilsLoader,
-    agentPolicyResolver
+    agentPolicyResolver,
+    ragRetrieverPort
 }) {
-    const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager);
-    const ragPlugin = getRagPlugin(pluginManager);
+    const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, ragRetrieverPort);
+    const ragPlugin = getRagPlugin(pluginManager, ragRetrieverPort);
     const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
     const policyAuthContext = resolvePolicyAuthContext(authContext, null, agentId);
     const resolvedPolicy = agentPolicyResolver
@@ -837,7 +827,7 @@ function createContextRuntimeService(deps = {}) {
     }
 
     const auditLogger = deps.auditLogger || createAuditLogger();
-    const embeddingUtilsLoader = deps.getEmbeddingUtils || (() => require('../../../EmbeddingUtils'));
+    const embeddingUtilsLoader = deps.getEmbeddingUtils || deps.ragRetrieverPort?.embeddingUtilsLoader;
     const authContextResolver = typeof deps.authContextResolver === 'function'
         ? deps.authContextResolver
         : null;

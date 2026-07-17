@@ -407,6 +407,7 @@ function createMemoryRuntimeService(deps = {}) {
     if (!pluginManager) {
         throw new Error('[MemoryRuntimeService] pluginManager is required');
     }
+    const diaryStorePort = deps.diaryStorePort;
 
     const auditLogger = deps.auditLogger || createAuditLogger();
     const mapWriteError = deps.mapMemoryWriteError || mapOpenClawMemoryWriteError;
@@ -518,7 +519,7 @@ function createMemoryRuntimeService(deps = {}) {
                 };
             }
 
-            const memoryWriter = getMemoryWritePluginInfo(pluginManager);
+            const memoryWriter = diaryStorePort?.getWriter?.() || getMemoryWritePluginInfo(pluginManager);
             if (!memoryWriter) {
                 return {
                     success: false,
@@ -610,7 +611,7 @@ function createMemoryRuntimeService(deps = {}) {
                 });
                 const tagLine = `Tag: ${tags.join(', ')}`;
                 const bridgeToolName = normalizeMemoryString(options?.bridgeToolName);
-                const writeResult = await pluginManager.processToolCall('DailyNote', {
+                const writeArgs = {
                     command: 'create',
                     maid,
                     Date: dateString,
@@ -626,7 +627,10 @@ function createMemoryRuntimeService(deps = {}) {
                         sessionId,
                         requestId
                     }
-                }, clientIp);
+                };
+                const writeResult = diaryStorePort?.available
+                    ? await diaryStorePort.invoke(writeArgs, clientIp)
+                    : await pluginManager.processToolCall('DailyNote', writeArgs, clientIp);
                 const filePath = extractMemoryWritePath(writeResult);
                 const entryId = createMemoryEntryId({
                     diaryName: targetDiary,
