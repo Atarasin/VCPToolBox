@@ -4,6 +4,10 @@ const test = require('node:test');
 const legacyDescriptors = require('../../../modules/agentGateway/adapters/mcpDescriptorRegistry');
 const descriptors = require('../../../modules/agentGateway/protocols/mcp/descriptors');
 const { createMcpHarness } = require('../../../modules/agentGateway/protocols/mcp/harness');
+const legacyInProcess = require('../../../modules/agentGateway/adapters/mcpAdapter');
+const canonicalInProcess = require('../../../modules/agentGateway/protocols/mcp/inProcessExecutor');
+const legacyBackendProxy = require('../../../modules/agentGateway/adapters/mcpBackendProxyAdapter');
+const canonicalBackendProxy = require('../../../modules/agentGateway/protocols/mcp/backendProxyExecutor');
 
 function createNoopAdapter() {
     return {
@@ -22,6 +26,13 @@ test('legacy and canonical descriptor paths expose identical module identities',
         legacyDescriptors.createGatewayManagedToolDescriptors,
         descriptors.createGatewayManagedToolDescriptors
     );
+});
+
+test('legacy adapter paths re-export canonical executor identities', () => {
+    assert.equal(legacyInProcess, canonicalInProcess);
+    assert.equal(legacyBackendProxy, canonicalBackendProxy);
+    assert.equal(canonicalInProcess.createInProcessExecutor, canonicalInProcess.createMcpAdapter);
+    assert.equal(canonicalBackendProxy.createBackendProxyExecutor, canonicalBackendProxy.createBackendProxyMcpAdapter);
 });
 
 test('descriptor set is unchanged when callers pass the removed diaryRagLoopOnly option', () => {

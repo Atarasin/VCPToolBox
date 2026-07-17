@@ -214,6 +214,7 @@ test('backend proxy diary policy uses the configured default agent and returns s
 
         assert.equal(calls[0].requestContext.agentId, 'EnvAgent');
         assert.deepEqual(calls[0].diaries, ['Nova']);
+        assert.equal(calls[0].__defaultDiaryPolicyApplied, undefined);
         assert.equal(forbidden.isError, true);
         assert.equal(forbidden.error.details.gatewayStatus, 403);
     } finally {

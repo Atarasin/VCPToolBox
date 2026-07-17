@@ -930,7 +930,7 @@ function createContextRuntimeService(deps = {}) {
     }
 
     return {
-        async search({ body, startedAt, defaultSource }) {
+        async search({ body, startedAt, defaultSource, diaryPolicy = {} }) {
             const query = normalizeContextString(body?.query);
             const { diary, diaries: requestedDiaries } = resolveDiarySelection(body);
             const requestContext = normalizeContextRequestContext(body?.requestContext, defaultSource);
@@ -1001,7 +1001,7 @@ function createContextRuntimeService(deps = {}) {
                         requestContext,
                         authContext,
                         agentPolicyResolver,
-                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                        adapterAppliedDefaultDiaryPolicy: diaryPolicy.appliedDefault === true || body?.__defaultDiaryPolicyApplied === true
                     });
                     if (hasExplicitK && recallResult.items && recallResult.items.length > 0) {
                         const kOverride = parseContextInteger(explicitKRaw, DEFAULT_RAG_K, 1, MAX_RAG_K);
@@ -1018,7 +1018,7 @@ function createContextRuntimeService(deps = {}) {
                         requestContext,
                         authContext,
                         agentPolicyResolver,
-                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                        adapterAppliedDefaultDiaryPolicy: diaryPolicy.appliedDefault === true || body?.__defaultDiaryPolicyApplied === true
                     });
                 }
                 if (!recallResult.success) {
@@ -1104,7 +1104,7 @@ function createContextRuntimeService(deps = {}) {
                 };
             }
         },
-        async buildRecallContext({ body, startedAt, defaultSource }) {
+        async buildRecallContext({ body, startedAt, defaultSource, diaryPolicy = {} }) {
             const requestContext = normalizeContextRequestContext(body?.requestContext, defaultSource);
             const authContext = authContextResolver
                 ? authContextResolver({
@@ -1173,7 +1173,7 @@ function createContextRuntimeService(deps = {}) {
                         requestContext,
                         authContext,
                         agentPolicyResolver,
-                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                        adapterAppliedDefaultDiaryPolicy: diaryPolicy.appliedDefault === true || body?.__defaultDiaryPolicyApplied === true
                     });
                 } else {
                     const inlineRule = buildInlineRule(requestedDiaries, ragOptions);
@@ -1184,7 +1184,7 @@ function createContextRuntimeService(deps = {}) {
                         requestContext,
                         authContext,
                         agentPolicyResolver,
-                        adapterAppliedDefaultDiaryPolicy: body?.__defaultDiaryPolicyApplied === true
+                        adapterAppliedDefaultDiaryPolicy: diaryPolicy.appliedDefault === true || body?.__defaultDiaryPolicyApplied === true
                     });
                 }
                 if (!recallResult.success) {

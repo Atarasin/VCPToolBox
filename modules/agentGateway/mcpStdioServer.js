@@ -2,7 +2,7 @@ const { StdioTransport } = require('./transport');
 
 const {
     createBackendProxyMcpServerHarness
-} = require('./adapters/mcpBackendProxyAdapter');
+} = require('./protocols/mcp/backendProxyExecutor');
 const {
     GatewayBackendClient
 } = require('./GatewayBackendClient');
