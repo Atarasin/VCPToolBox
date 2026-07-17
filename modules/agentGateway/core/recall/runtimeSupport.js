@@ -1,9 +1,4 @@
-const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { collectRagItems } = require('./ragRetriever');
-const {
-    normalizeDiaryCanonicalName,
-    resolveDiaryAliasesToAvailable
-} = require('../../policy/mcpAgentMemoryPolicy');
 const { estimateTokenCount, truncateTextByTokens } = require('./recallProjectionService');
 const {
     aggregateDeduplicateItems,
@@ -247,118 +242,6 @@ async function listDiaryTargets(knowledgeBaseManager) {
     return rows
         .map((row) => normalizeString(row.diary_name))
         .filter(Boolean);
-}
-
-function buildFullTextItem({ diaryName, content, rank }) {
-    return {
-        text: normalizeString(content),
-        score: typeof rank === 'number' && Number.isFinite(rank) ? rank : 1,
-        sourceDiary: normalizeString(diaryName),
-        sourceFile: '',
-        timestamp: null,
-        tags: []
-    };
-}
-
-async function defaultFullTextRetriever({
-    deps,
-    pluginManager,
-    requestedDiaries,
-    agentId,
-    authContext,
-    agentPolicyResolver,
-    adapterAppliedDefaultDiaryPolicy
-}) {
-    const knowledgeBaseManager = getKnowledgeBaseManager(deps, pluginManager);
-    const ragPlugin = getRagPlugin(deps, pluginManager);
-    const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
-    const policyAuthContext = resolvePolicyAuthContext(authContext, agentId);
-    const resolvedPolicy = agentPolicyResolver
-        ? await agentPolicyResolver.resolvePolicy({
-            authContext: policyAuthContext,
-            availableDiaries
-        })
-        : null;
-    const allowedDiaries = resolvedPolicy
-        ? normalizeStringArray(resolvedPolicy.allowedDiaryNames)
-        : resolveAllowedDiaries({
-            agentId,
-            availableDiaries,
-            ragConfig: getRagConfig(pluginManager)
-        });
-    const defaultDiaries = resolvedPolicy?.defaultDiaryNames?.length > 0
-        ? normalizeStringArray(resolvedPolicy.defaultDiaryNames)
-        : allowedDiaries;
-    const normalizedRequestedDiaries = resolveDiaryAliasesToAvailable(requestedDiaries, availableDiaries)
-        .map((requestedDiary) => normalizeDiaryCanonicalName(requestedDiary))
-        .filter(Boolean);
-    const forbiddenDiaries = normalizedRequestedDiaries.filter((requestedDiary) => !allowedDiaries.includes(requestedDiary));
-    if (forbiddenDiaries.length > 0) {
-        if (adapterAppliedDefaultDiaryPolicy) {
-            const filteredDefaultDiaries = normalizedRequestedDiaries.filter((requestedDiary) => allowedDiaries.includes(requestedDiary));
-            if (filteredDefaultDiaries.length > 0) {
-                requestedDiaries = filteredDefaultDiaries;
-            } else {
-                return {
-                    success: false,
-                    status: 403,
-                    code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
-                    error: 'No default diary targets are configured for this agent'
-                };
-            }
-        } else {
-            return {
-                success: false,
-                status: 403,
-                code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
-                error: 'Requested diary target is not allowed for this agent'
-            };
-        }
-    } else {
-        requestedDiaries = normalizedRequestedDiaries;
-    }
-
-    const targetDiaries = requestedDiaries.length > 0
-        ? requestedDiaries
-        : resolveDiaryAliasesToAvailable(defaultDiaries, availableDiaries)
-            .map((defaultDiary) => normalizeDiaryCanonicalName(defaultDiary))
-            .filter(Boolean);
-    if (targetDiaries.length === 0) {
-        return {
-            success: false,
-            status: 403,
-            code: AGW_ERROR_CODES.RECALL_FORBIDDEN,
-            error: 'No default diary targets are configured for this agent'
-        };
-    }
-    if (typeof ragPlugin?.getDiaryContent !== 'function') {
-        return {
-            success: false,
-            status: 500,
-            code: AGW_ERROR_CODES.RECALL_EXECUTION_ERROR,
-            error: 'Full text retrieval is not available'
-        };
-    }
-
-    const items = [];
-    for (let index = 0; index < targetDiaries.length; index += 1) {
-        const diaryName = targetDiaries[index];
-        const content = await ragPlugin.getDiaryContent(diaryName);
-        if (!normalizeString(content)) {
-            continue;
-        }
-        items.push(buildFullTextItem({
-            diaryName,
-            content,
-            rank: Math.max(0.1, 1 - (index * 0.01))
-        }));
-    }
-
-    return {
-        success: true,
-        targetDiaries,
-        items
-    };
 }
 
 function parseModifierValue(key, value) {
@@ -636,8 +519,6 @@ module.exports = {
     getKnowledgeBaseManager,
     getRagPlugin,
     listDiaryTargets,
-    buildFullTextItem,
-    defaultFullTextRetriever,
     parseModifierValue,
     parseTimeDecayConfig,
     normalizeConversationMessages,

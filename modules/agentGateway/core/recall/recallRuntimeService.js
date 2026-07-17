@@ -14,6 +14,7 @@ const support = require('./runtimeSupport');
 const modifiers = require('./modifiers');
 const { createRecallPipeline } = require('./pipeline');
 const { defaultFullTextRetriever } = require('./fullTextRetriever');
+const fullText = require('./fullTextRetriever');
 const {
     FULL_TEXT_RULE_TYPES,
     GATED_RULE_TYPES,
@@ -140,6 +141,7 @@ module.exports = {
     applyBudgetPostProcessing,
     ...support,
     ...modifiers,
+    ...fullText,
     aggregateDeduplicateItems,
     applyTruncate,
     createRecallBlock,

@@ -29,6 +29,7 @@ const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
 const { resolveTraceId } = require('../../infra/trace');
+const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
 
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
@@ -517,6 +518,16 @@ function createBackendProxyMcpAdapter({
                 throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
                     field: 'name',
                     name
+                });
+            }
+            const validationErrors = validateGatewayToolArguments(name, {
+                ...args,
+                agentId: args.agentId || input.agentId || input.requestContext?.agentId || defaultAgentId
+            });
+            if (validationErrors.length && name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
+                const field = validationErrors[0].params?.missingProperty || validationErrors[0].path.slice(1) || 'arguments';
+                throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, `${field} is required`, {
+                    field, validationErrors
                 });
             }
 

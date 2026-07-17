@@ -48,6 +48,7 @@ const { getGatewayOperation } = require('./operations');
 const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError } = require('./inProcessOperations');
 const { createReadResourceHandler } = require('./resourceHandlers');
 const { resolveTraceId } = require('../../infra/trace');
+const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
 
 function normalizeMcpString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
@@ -591,6 +592,18 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             field: 'name',
             name
         });
+    }
+    const validationErrors = validateGatewayToolArguments(name, {
+        ...args,
+        agentId: args.agentId || input.agentId || input.requestContext?.agentId
+    });
+    if (validationErrors.length && name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
+        const field = validationErrors[0].params?.missingProperty || validationErrors[0].path.slice(1) || 'arguments';
+        if (field === 'agentId') {
+            throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'agentId is required', {
+                field, validationErrors
+            });
+        }
     }
 
     return handler({

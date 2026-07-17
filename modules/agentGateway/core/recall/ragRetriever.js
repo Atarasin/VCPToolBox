@@ -5,10 +5,7 @@ const {
     AGW_ERROR_CODES,
     OPENCLAW_ERROR_CODES
 } = require('../../contracts/errorCodes');
-const {
-    normalizeDiaryCanonicalName,
-    resolveDiaryAliasesToAvailable
-} = require('../../policy/mcpAgentMemoryPolicy');
+const { resolveDiaryAccess } = require('./diaryAccess');
 const {
     createAuditLogger
 } = require('../../infra/auditLogger');
@@ -423,129 +420,61 @@ function summarizeScoreStats(values) {
     };
 }
 
-/**
- * 共享 search/context 的检索主流程，避免在 adapter 内复制实现。
- */
-async function collectRagItems({
-    pluginManager,
-    query,
-    requestedDiaries,
-    adapterAppliedDefaultDiaryPolicy = false,
-    agentId,
-    authContext,
-    ragOptions,
-    embeddingUtilsLoader,
-    agentPolicyResolver,
-    ragRetrieverPort
-}) {
-    const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, ragRetrieverPort);
-    const ragPlugin = getRagPlugin(pluginManager, ragRetrieverPort);
+async function resolveRagAccess(params, knowledgeBaseManager) {
     const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
-    const policyAuthContext = resolvePolicyAuthContext(authContext, null, agentId);
-    const resolvedPolicy = agentPolicyResolver
-        ? await agentPolicyResolver.resolvePolicy({
-            authContext: policyAuthContext,
-            availableDiaries
-        })
-        : null;
-    const allowedDiaries = resolvedPolicy
-        ? resolvedPolicy.allowedDiaryNames
-        : resolveAllowedDiaries({
-            agentId,
+    const policyAuthContext = resolvePolicyAuthContext(params.authContext, null, params.agentId);
+    return resolveDiaryAccess({
+        requestedDiaries: params.requestedDiaries,
+        availableDiaries,
+        agentId: params.agentId,
+        authContext: policyAuthContext,
+        policyResolver: params.agentPolicyResolver,
+        fallbackAllowedDiaries: resolveAllowedDiaries({
+            agentId: params.agentId,
             availableDiaries,
-            ragConfig: getRagConfig(pluginManager)
-        });
-    const defaultDiaries = resolvedPolicy?.defaultDiaryNames?.length > 0
-        ? resolvedPolicy.defaultDiaryNames
-        : allowedDiaries;
-    // Diary selectors are access-control inputs, not existence checks. VCP can
-    // lazily materialize a diary later, so unresolved-but-allowed targets should
-    // continue as empty search/context results instead of failing with not-found.
-    requestedDiaries = resolveDiaryAliasesToAvailable(requestedDiaries, availableDiaries)
-        .map((requestedDiary) => normalizeDiaryCanonicalName(requestedDiary))
-        .filter(Boolean);
-    const forbiddenDiaries = requestedDiaries.filter((requestedDiary) => !allowedDiaries.includes(requestedDiary));
-    if (forbiddenDiaries.length > 0) {
-        if (adapterAppliedDefaultDiaryPolicy) {
-            const filteredDefaultDiaries = requestedDiaries.filter((requestedDiary) => allowedDiaries.includes(requestedDiary));
-            if (filteredDefaultDiaries.length > 0) {
-                requestedDiaries = filteredDefaultDiaries;
-            } else {
-                return {
-                    success: false,
-                    status: 403,
-                    code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
-                    error: 'No default diary targets are configured for this agent',
-                    details: {
-                        agentId,
-                        allowedDiaries,
-                        defaultDiaries
-                    }
-                };
-            }
-        } else {
-            return {
-                success: false,
-                status: 403,
-                code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
-                error: 'Requested diary target is not allowed for this agent',
-                details: {
-                    diary: forbiddenDiaries[0],
-                    diaries: forbiddenDiaries,
-                    agentId
-                }
-            };
-        }
-    }
+            ragConfig: getRagConfig(params.pluginManager)
+        }),
+        appliedDefaultPolicy: params.adapterAppliedDefaultDiaryPolicy,
+        forbiddenCode: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN
+    });
+}
 
-    const targetDiaries = requestedDiaries.length > 0
-        ? requestedDiaries
-        : resolveDiaryAliasesToAvailable(defaultDiaries, availableDiaries)
-            .map((defaultDiary) => normalizeDiaryCanonicalName(defaultDiary))
-            .filter(Boolean);
-    if (targetDiaries.length === 0) {
-        return {
-            success: false,
-            status: 403,
-            code: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN,
-            error: 'No default diary targets are configured for this agent',
-            details: {
-                agentId,
-                allowedDiaries,
-                defaultDiaries
-            }
-        };
-    }
-
+async function prepareRagVectors({ query, ragOptions, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader }) {
     const queryVector = await getQueryVector(query, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader);
-    if (!Array.isArray(queryVector) || queryVector.length === 0) {
-        throw new Error('Failed to build query embedding');
-    }
-
+    if (!Array.isArray(queryVector) || !queryVector.length) throw new Error('Failed to build query embedding');
     let finalQueryVector = queryVector;
     let activatedGroups = new Map();
-    if (
-        ragOptions.groupAware &&
-        ragPlugin?.semanticGroups?.detectAndActivateGroups &&
-        ragPlugin?.semanticGroups?.getEnhancedVector
-    ) {
+    if (ragOptions.groupAware && ragPlugin?.semanticGroups?.detectAndActivateGroups && ragPlugin?.semanticGroups?.getEnhancedVector) {
         activatedGroups = ragPlugin.semanticGroups.detectAndActivateGroups(query);
-        const enhancedVector = await ragPlugin.semanticGroups.getEnhancedVector(query, activatedGroups, queryVector);
-        if (Array.isArray(enhancedVector) && enhancedVector.length > 0) {
-            finalQueryVector = enhancedVector;
-        }
+        const enhanced = await ragPlugin.semanticGroups.getEnhancedVector(query, activatedGroups, queryVector);
+        if (Array.isArray(enhanced) && enhanced.length) finalQueryVector = enhanced;
     }
-
     let scoringVector = finalQueryVector;
     let coreTags = [];
     const effectiveTagBoost = ragOptions.tagMemoWeight || TAG_BOOST;
     if (ragOptions.tagMemo && typeof knowledgeBaseManager?.applyTagBoost === 'function') {
-        const boostResult = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), effectiveTagBoost);
-        if (boostResult?.vector) {
-            scoringVector = Array.from(boostResult.vector);
-        }
-        coreTags = extractCoreTags(boostResult?.info);
+        const boost = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), effectiveTagBoost);
+        if (boost?.vector) scoringVector = Array.from(boost.vector);
+        coreTags = extractCoreTags(boost?.info);
     }
+    return { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector };
+}
+
+/**
+ * 共享 search/context 的检索主流程，避免在 adapter 内复制实现。
+ */
+async function collectRagItems(params) {
+    const { pluginManager, query, ragOptions, embeddingUtilsLoader, ragRetrieverPort } = params;
+    const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, ragRetrieverPort);
+    const ragPlugin = getRagPlugin(pluginManager, ragRetrieverPort);
+    // Diary selectors are access-control inputs, not existence checks. VCP can
+    // lazily materialize a diary later, so unresolved-but-allowed targets should
+    // continue as empty search/context results instead of failing with not-found.
+    const access = await resolveRagAccess(params, knowledgeBaseManager);
+    if (!access.success) return access;
+    const targetDiaries = access.targetDiaries;
+    const vectors = await prepareRagVectors({ query, ragOptions, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader });
+    const { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector } = vectors;
 
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
@@ -705,4 +634,3 @@ module.exports = {
     summarizeScoreStats,
     collectRagItems
 };
-

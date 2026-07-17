@@ -281,6 +281,76 @@ function resolveAgentEntry(agentId, config) {
     return null;
 }
 
+function findRawProfile(config, agentId, profileName) {
+    if (config.profiles && typeof config.profiles === 'object' && !Array.isArray(config.profiles) && config.profiles[profileName]) {
+        return config.profiles[profileName];
+    }
+    for (const alias of buildAgentAliases(agentId)) {
+        const entry = config.agents?.[alias];
+        if (entry && typeof entry === 'object' && !Array.isArray(entry) && entry.profiles?.[profileName]) {
+            return entry.profiles[profileName];
+        }
+    }
+    return config.agents?.['*']?.profiles?.[profileName];
+}
+
+function invalidResolution(code, agentId, profileName, details) {
+    return { resolved: false, code, agentId, profileName, details, rules: [] };
+}
+
+function validateRawRule({ resolver, rawRule, ruleIndex, agentId, profileName, targets }) {
+    if (!rawRule || typeof rawRule !== 'object' || Array.isArray(rawRule)) return null;
+    const ruleType = normalizeString(rawRule.baseMode || rawRule.type);
+    if (ruleType && !ALLOWED_RULE_TYPES.has(ruleType)) {
+        return invalidResolution('RECALL_INVALID_RULE', agentId, profileName, {
+            ruleIndex, ruleType, message: `Rule type "${ruleType}" is not allowed`
+        });
+    }
+    const modifiers = resolver.validateModifiers(rawRule.modifiers);
+    if (!modifiers.valid) {
+        return invalidResolution('RECALL_INVALID_MODIFIER', agentId, profileName, {
+            ruleIndex, invalidModifiers: modifiers.invalid,
+            message: `Invalid modifiers: ${modifiers.invalid.join(', ')}`
+        });
+    }
+    const diaries = normalizeStringArray(rawRule.targets?.diaries ?? rawRule.diaries);
+    const diaryAccess = resolver.validateDiaryAccess(diaries, targets);
+    if (!diaryAccess.valid) {
+        return invalidResolution('RECALL_INVALID_DIARY', agentId, profileName, {
+            ruleIndex, forbidden: diaryAccess.forbidden,
+            message: `Forbidden diaries: ${diaryAccess.forbidden.join(', ')}`
+        });
+    }
+    return null;
+}
+
+function validateRawProfile({ resolver, rawProfile, agentId, profileName, targets }) {
+    if (!rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) return null;
+    const rules = Array.isArray(rawProfile.rules) ? rawProfile.rules : [];
+    for (let ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
+        const invalid = validateRawRule({ resolver, rawRule: rules[ruleIndex], ruleIndex, agentId, profileName, targets });
+        if (invalid) return invalid;
+    }
+    if (rules.length && !normalizeProfile({ ...rawProfile, rules })) {
+        return invalidResolution('RECALL_INVALID_PROFILE', agentId, profileName, {
+            message: 'All rules in profile are invalid'
+        });
+    }
+    return null;
+}
+
+function buildResolvedProfile(agentId, profileName, profile, agentEntry) {
+    const result = { resolved: true, agentId, profileName, rules: profile.rules };
+    for (const key of [
+        'merge', 'aggregate', 'projection', 'truncateTo', 'tokenBudget', 'maxTokenRatio', 'minScore', 'metadata', 'aiMemo'
+    ]) {
+        if (profile[key] !== undefined) result[key] = profile[key];
+    }
+    if (agentEntry.allowedProfiles !== undefined) result.allowedProfiles = agentEntry.allowedProfiles;
+    if (agentEntry.targets !== undefined) result.targets = agentEntry.targets;
+    return result;
+}
+
 class RecallProfileResolver {
     constructor({ configPath } = {}) {
         this.configPath = normalizeString(configPath) || DEFAULT_CONFIG_PATH;
@@ -354,103 +424,14 @@ class RecallProfileResolver {
             };
         }
 
-        // --- S04: raw-profile validation before normalization ---
-        let rawProfile = (config.profiles && typeof config.profiles === 'object' && !Array.isArray(config.profiles))
-            ? config.profiles[targetProfileName]
-            : undefined;
-        if (!rawProfile) {
-            const aliases = buildAgentAliases(agentId);
-            for (const alias of aliases) {
-                const rawEntry = config.agents?.[alias];
-                if (rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry) && rawEntry.profiles?.[targetProfileName]) {
-                    rawProfile = rawEntry.profiles[targetProfileName];
-                    break;
-                }
-            }
-            if (!rawProfile) {
-                const wildcardRaw = config.agents?.['*'];
-                if (wildcardRaw && typeof wildcardRaw === 'object' && !Array.isArray(wildcardRaw) && wildcardRaw.profiles?.[targetProfileName]) {
-                    rawProfile = wildcardRaw.profiles[targetProfileName];
-                }
-            }
-        }
-
-        if (rawProfile && typeof rawProfile === 'object' && !Array.isArray(rawProfile)) {
-            const rawRules = Array.isArray(rawProfile.rules) ? rawProfile.rules : [];
-            for (let ruleIndex = 0; ruleIndex < rawRules.length; ruleIndex += 1) {
-                const rawRule = rawRules[ruleIndex];
-                if (!rawRule || typeof rawRule !== 'object' || Array.isArray(rawRule)) {
-                    continue;
-                }
-                const ruleType = normalizeString(rawRule.baseMode || rawRule.type);
-                if (ruleType && !ALLOWED_RULE_TYPES.has(ruleType)) {
-                    return {
-                        resolved: false,
-                        code: 'RECALL_INVALID_RULE',
-                        agentId,
-                        profileName: targetProfileName,
-                        details: {
-                            ruleIndex,
-                            ruleType,
-                            message: `Rule type "${ruleType}" is not allowed`
-                        },
-                        rules: []
-                    };
-                }
-
-                const modifierValidation = this.validateModifiers(rawRule.modifiers);
-                if (!modifierValidation.valid) {
-                    return {
-                        resolved: false,
-                        code: 'RECALL_INVALID_MODIFIER',
-                        agentId,
-                        profileName: targetProfileName,
-                        details: {
-                            ruleIndex,
-                            invalidModifiers: modifierValidation.invalid,
-                            message: `Invalid modifiers: ${modifierValidation.invalid.join(', ')}`
-                        },
-                        rules: []
-                    };
-                }
-
-                const ruleDiaries = normalizeStringArray(
-                    rawRule.targets?.diaries !== undefined ? rawRule.targets.diaries : rawRule.diaries
-                );
-                const diaryValidation = this.validateDiaryAccess(ruleDiaries, agentEntry?.targets);
-                if (!diaryValidation.valid) {
-                    return {
-                        resolved: false,
-                        code: 'RECALL_INVALID_DIARY',
-                        agentId,
-                        profileName: targetProfileName,
-                        details: {
-                            ruleIndex,
-                            forbidden: diaryValidation.forbidden,
-                            message: `Forbidden diaries: ${diaryValidation.forbidden.join(', ')}`
-                        },
-                        rules: []
-                    };
-                }
-            }
-
-            if (rawRules.length > 0) {
-                const normalizedTest = normalizeProfile({ ...rawProfile, rules: rawRules });
-                if (!normalizedTest) {
-                    return {
-                        resolved: false,
-                        code: 'RECALL_INVALID_PROFILE',
-                        agentId,
-                        profileName: targetProfileName,
-                        details: {
-                            message: 'All rules in profile are invalid'
-                        },
-                        rules: []
-                    };
-                }
-            }
-        }
-        // --- end S04 validation ---
+        const invalidProfile = validateRawProfile({
+            resolver: this,
+            rawProfile: findRawProfile(config, agentId, targetProfileName),
+            agentId,
+            profileName: targetProfileName,
+            targets: agentEntry.targets
+        });
+        if (invalidProfile) return invalidProfile;
 
         const profile = profiles[targetProfileName];
         if (!profile) {
@@ -464,46 +445,7 @@ class RecallProfileResolver {
             };
         }
 
-        const result = {
-            resolved: true,
-            agentId,
-            profileName: targetProfileName,
-            rules: profile.rules
-        };
-        if (profile.merge !== undefined) {
-            result.merge = profile.merge;
-        }
-        if (profile.aggregate !== undefined) {
-            result.aggregate = profile.aggregate;
-        }
-        if (profile.projection !== undefined) {
-            result.projection = profile.projection;
-        }
-        if (profile.truncateTo !== undefined) {
-            result.truncateTo = profile.truncateTo;
-        }
-        if (profile.tokenBudget !== undefined) {
-            result.tokenBudget = profile.tokenBudget;
-        }
-        if (profile.maxTokenRatio !== undefined) {
-            result.maxTokenRatio = profile.maxTokenRatio;
-        }
-        if (profile.minScore !== undefined) {
-            result.minScore = profile.minScore;
-        }
-        if (profile.metadata !== undefined) {
-            result.metadata = profile.metadata;
-        }
-        if (profile.aiMemo !== undefined) {
-            result.aiMemo = profile.aiMemo;
-        }
-        if (agentEntry.allowedProfiles !== undefined) {
-            result.allowedProfiles = agentEntry.allowedProfiles;
-        }
-        if (agentEntry.targets !== undefined) {
-            result.targets = agentEntry.targets;
-        }
-        return result;
+        return buildResolvedProfile(agentId, targetProfileName, profile, agentEntry);
     }
 }
 

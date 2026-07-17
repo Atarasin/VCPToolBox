@@ -171,83 +171,13 @@ function projectFullTextSections(recallResult) {
     return sections;
 }
 
-function estimateTokenCount(text) {
-    const normalizedText = typeof text === 'string' ? text.trim() : '';
-    if (!normalizedText) {
-        return 0;
-    }
-    const cjkCount = (normalizedText.match(/[\u3400-\u9fff]/g) || []).length;
-    const nonCjkCount = normalizedText.length - cjkCount;
-    return Math.max(1, cjkCount + Math.ceil(nonCjkCount / 4));
-}
-
-function truncateTextByTokens(text, maxTokens) {
-    const normalizedText = typeof text === 'string' ? text.trim() : '';
-    if (!normalizedText || maxTokens <= 0) {
-        return '';
-    }
-    let candidate = normalizedText;
-    while (candidate && estimateTokenCount(candidate) > maxTokens) {
-        candidate = candidate.slice(0, -1).trimEnd();
-    }
-    return candidate;
-}
+const { estimateTokenCount, truncateTextByTokens } = require('./tokenText');
+const { selectBudgetedItems } = require('./tokenBudget');
 
 function projectBudgetedContextBlocks(items, options) {
     const opts = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
-    const tokenBudget = typeof opts.tokenBudget === 'number' && Number.isFinite(opts.tokenBudget) && opts.tokenBudget > 0
-        ? Math.floor(opts.tokenBudget)
-        : undefined;
-    const maxTokenRatio = typeof opts.maxTokenRatio === 'number' && Number.isFinite(opts.maxTokenRatio)
-        ? Math.max(0.1, Math.min(1.0, opts.maxTokenRatio))
-        : undefined;
-    const minScore = typeof opts.minScore === 'number' && Number.isFinite(opts.minScore)
-        ? Math.max(0, Math.min(1, opts.minScore))
-        : undefined;
-    const maxBlocks = typeof opts.maxBlocks === 'number' && Number.isFinite(opts.maxBlocks) && opts.maxBlocks > 0
-        ? Math.floor(opts.maxBlocks)
-        : undefined;
-
-    const maxInjectedTokens = tokenBudget !== undefined && maxTokenRatio !== undefined
-        ? Math.max(1, Math.floor(tokenBudget * maxTokenRatio))
-        : undefined;
-
-    const scoredItems = Array.isArray(items) ? items : [];
-    const eligibleItems = minScore !== undefined
-        ? scoredItems.filter((item) => typeof item?.score === 'number' && Number.isFinite(item.score) && item.score >= minScore)
-        : scoredItems;
-    const filteredByMinScore = Math.max(0, scoredItems.length - eligibleItems.length);
-
-    let consumedTokens = 0;
-    const selectedItems = [];
-    let truncatedCount = 0;
-
-    for (const item of eligibleItems) {
-        if (maxBlocks !== undefined && selectedItems.length >= maxBlocks) {
-            break;
-        }
-        const itemTokens = estimateTokenCount(item?.text);
-        if (maxInjectedTokens !== undefined && consumedTokens > 0 && consumedTokens + itemTokens > maxInjectedTokens) {
-            continue;
-        }
-        if (maxInjectedTokens !== undefined && itemTokens > maxInjectedTokens) {
-            const remainingTokens = Math.max(1, maxInjectedTokens - consumedTokens);
-            const truncatedText = truncateTextByTokens(item?.text, remainingTokens);
-            if (!truncatedText) {
-                continue;
-            }
-            selectedItems.push({
-                ...item,
-                text: truncatedText,
-                __truncated: true
-            });
-            consumedTokens += estimateTokenCount(truncatedText);
-            truncatedCount += 1;
-            break;
-        }
-        selectedItems.push(item);
-        consumedTokens += itemTokens;
-    }
+    const selected = selectBudgetedItems(items, { ...opts, maxItems: opts.maxBlocks });
+    const selectedItems = selected.items;
 
     const blocks = projectContextBlocks(selectedItems);
     for (let i = 0; i < blocks.length; i += 1) {
@@ -257,16 +187,16 @@ function projectBudgetedContextBlocks(items, options) {
     }
 
     const appliedPolicy = {
-        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
-        ...(maxTokenRatio !== undefined ? { maxTokenRatio } : {}),
-        ...(maxInjectedTokens !== undefined ? { maxInjectedTokens } : {}),
-        ...(maxBlocks !== undefined ? { maxBlocks } : {}),
-        ...(minScore !== undefined ? { minScore } : {}),
-        filteredByMinScore,
-        truncatedCount
+        ...(selected.policy.tokenBudget !== undefined ? { tokenBudget: selected.policy.tokenBudget } : {}),
+        ...(selected.policy.maxTokenRatio !== undefined ? { maxTokenRatio: selected.policy.maxTokenRatio } : {}),
+        ...(selected.policy.tokenLimit !== undefined ? { maxInjectedTokens: selected.policy.tokenLimit } : {}),
+        ...(selected.policy.maxItems !== undefined ? { maxBlocks: selected.policy.maxItems } : {}),
+        ...(selected.policy.minScore !== undefined ? { minScore: selected.policy.minScore } : {}),
+        filteredByMinScore: selected.filteredByMinScore,
+        truncatedCount: selected.truncatedCount
     };
 
-    return { blocks, consumedTokens, appliedPolicy };
+    return { blocks, consumedTokens: selected.consumedTokens, appliedPolicy };
 }
 
 function projectSearchItems(items) {

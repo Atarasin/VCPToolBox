@@ -1,11 +1,8 @@
-const { estimateTokenCount } = require('./recallProjectionService');
 const { applyTruncate } = require('./recallItem');
 const {
     MODIFIER_PIPELINE_ORDER,
     normalizeString,
     normalizeStringArray,
-    parseBoolean,
-    parseJsonObject,
     parseModifierValue,
     parseTimeDecayConfig,
     evaluateRoleValveExpression
@@ -215,58 +212,56 @@ function applyS02Modifiers(items, modifiers, options = {}) {
     let accumulatedAttachments = [];
     const modifierDetails = [];
 
-    // Apply modifiers in pipeline order (only S02 post-processing modifiers)
-    for (const modifierKey of MODIFIER_PIPELINE_ORDER) {
-        if (modifierKey === 'time' || modifierKey === 'group' || modifierKey === 'tagMemo' ||
-            modifierKey === 'rerank' || modifierKey === 'aiMemo') {
-            continue;
-        }
-
-        const modifierValue = modifiers[modifierKey];
-        if (modifierValue === undefined) {
-            continue;
-        }
-
+    const postModifiers = MODIFIER_PIPELINE_ORDER
+        .map((key) => MODIFIER_REGISTRY[key])
+        .filter((definition) => definition.stage === 'post' && modifiers[definition.key] !== undefined);
+    for (const definition of postModifiers) {
         const modifierStartedAt = Date.now();
         const inputCount = currentItems.length;
-
-        if (modifierKey === 'roleValve') {
-            const roleValveConfig = parseRoleValveConfig(modifierValue);
-            if (roleValveConfig.mode === 'expression') {
-                continue;
-            }
-            const rvResult = applyRoleValve(currentItems, modifierValue, options);
-            currentItems = rvResult.items;
-            modifierDetails.push({
-                modifier: modifierKey,
-                durationMs: Date.now() - modifierStartedAt,
-                inputCount,
-                outputCount: currentItems.length,
-                expression: rvResult.expression,
-                matchedCount: rvResult.matchedCount
-            });
-            continue;
-        } else {
-            const result = POST_MODIFIER_REGISTRY[modifierKey](currentItems, modifierValue);
-            currentItems = result.items;
-            accumulatedAttachments = accumulatedAttachments.concat(result.attachments || []);
-        }
-
+        const result = definition.apply(currentItems, modifiers[definition.key], options);
+        if (result.skip) continue;
+        currentItems = result.items;
+        accumulatedAttachments = accumulatedAttachments.concat(result.attachments || []);
         modifierDetails.push({
-            modifier: modifierKey,
+            modifier: definition.key,
             durationMs: Date.now() - modifierStartedAt,
             inputCount,
-            outputCount: currentItems.length
+            outputCount: currentItems.length,
+            ...(result.detail || {})
         });
     }
 
     return { items: currentItems, attachments: accumulatedAttachments, modifierDetails };
 }
 
-const POST_MODIFIER_REGISTRY = Object.freeze({
-    timeDecay: (items, value) => ({ items: applyTimeDecay(items, value) }),
-    base64Memo: (items, value) => applyBase64Memo(items, value),
-    truncate: (items, value) => ({ items: applyTruncate(items, parseModifierValue('truncate', value)) })
+const MODIFIER_REGISTRY = Object.freeze({
+    time: Object.freeze({ key: 'time', stage: 'retrieval' }),
+    group: Object.freeze({ key: 'group', stage: 'retrieval' }),
+    tagMemo: Object.freeze({ key: 'tagMemo', stage: 'retrieval' }),
+    rerank: Object.freeze({ key: 'rerank', stage: 'retrieval' }),
+    timeDecay: Object.freeze({
+        key: 'timeDecay', stage: 'post',
+        apply: (items, value) => ({ items: applyTimeDecay(items, value) })
+    }),
+    roleValve: Object.freeze({
+        key: 'roleValve', stage: 'post',
+        apply(items, value, options) {
+            if (parseRoleValveConfig(value).mode === 'expression') return { items, skip: true };
+            const result = applyRoleValve(items, value, options);
+            return {
+                items: result.items,
+                detail: { expression: result.expression, matchedCount: result.matchedCount }
+            };
+        }
+    }),
+    base64Memo: Object.freeze({
+        key: 'base64Memo', stage: 'post', apply: (items, value) => applyBase64Memo(items, value)
+    }),
+    truncate: Object.freeze({
+        key: 'truncate', stage: 'post',
+        apply: (items, value) => ({ items: applyTruncate(items, parseModifierValue('truncate', value)) })
+    }),
+    aiMemo: Object.freeze({ key: 'aiMemo', stage: 'global', apply: applyAIMemo })
 });
 
 // --- Budget post-processing (S02 profile-level) ---
@@ -283,6 +278,7 @@ module.exports = {
     applyTimeDecay,
     defaultAiMemoConfigLoader,
     evaluateRoleValveExpression,
+    MODIFIER_PIPELINE_ORDER,
+    MODIFIER_REGISTRY,
     parseRoleValveConfig
-    , POST_MODIFIER_REGISTRY
 };

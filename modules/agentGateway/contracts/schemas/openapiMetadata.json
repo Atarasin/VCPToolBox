@@ -1,0 +1,67 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "VCP Agent Gateway API",
+    "version": "1.0.0",
+    "description": "VCP Agent Gateway 的正式 Native published contract。\n\n说明：\n- 当前对外协议版本为 `v1`，发布阶段为 `ga`。\n- 该文档覆盖当前正式开放的 `health / capabilities / agents / metrics / memory / context / tools / jobs / events` 资源。\n- 推荐优先使用独立 Gateway 凭证接入；Basic Auth 与 `admin_auth` Cookie 仅作为过渡兼容链路记录。\n- 该契约与 `routes/agentGatewayRoutes.js`、M7-M11 主 specs 以及 contract validation 保持对齐。",
+    "contact": {
+      "name": "VCP Team"
+    },
+    "x-gateway-version": "v1",
+    "x-release-stage": "ga",
+    "x-vcp-version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "本地默认端口"
+    },
+    {
+      "url": "http://localhost:8080",
+      "description": "备用端口"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Capabilities"
+    },
+    {
+      "name": "Agents"
+    },
+    {
+      "name": "Operations"
+    },
+    {
+      "name": "Memory"
+    },
+    {
+      "name": "Recall"
+    },
+    {
+      "name": "Context"
+    },
+    {
+      "name": "Tools"
+    },
+    {
+      "name": "Jobs"
+    },
+    {
+      "name": "Events"
+    }
+  ],
+  "security": [
+    {
+      "gatewayKeyHeader": []
+    },
+    {
+      "gatewayBearerAuth": []
+    },
+    {
+      "basicAuth": []
+    },
+    {
+      "adminAuthCookie": []
+    }
+  ]
+}
