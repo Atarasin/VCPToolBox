@@ -1,4 +1,3 @@
-const packageMetadata = require('../../../package.json');
 const {
     OPENCLAW_TO_AGENT_GATEWAY_CODE,
     AGW_ERROR_CODES
@@ -19,18 +18,16 @@ const {
     normalizeDiaryCanonicalName,
     resolveConfiguredAgentMemoryPolicy
 } = require('../policy/mcpAgentMemoryPolicy');
-
-const MCP_ERROR_CODES = Object.freeze({
-    INVALID_REQUEST: 'MCP_INVALID_REQUEST',
-    INVALID_ARGUMENTS: 'MCP_INVALID_ARGUMENTS',
-    FORBIDDEN: 'MCP_FORBIDDEN',
-    NOT_FOUND: 'MCP_NOT_FOUND',
-    TIMEOUT: 'MCP_TIMEOUT',
-    RUNTIME_ERROR: 'MCP_RUNTIME_ERROR',
-    RESOURCE_UNSUPPORTED: 'MCP_RESOURCE_UNSUPPORTED'
-});
-
-const MCP_ERROR_CODE_SET = new Set(Object.values(MCP_ERROR_CODES));
+const { createMcpHarness } = require('../protocols/mcp/harness');
+const {
+    createMcpError,
+    createMcpPromptTextMessage,
+    createMcpTextContent,
+    sanitizeMcpErrorDetails,
+    serializeMcpValue
+} = require('../protocols/mcp/resultShapes');
+const { mapGatewayFailureToMcpErrorCode } = require('../protocols/mcp/errorMapping');
+const { MCP_ERROR_CODES } = require('../protocols/mcp/constants');
 
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
@@ -52,54 +49,6 @@ function normalizeMcpString(value, maxLength = 128) {
     return normalized.slice(0, maxLength);
 }
 
-function isPlainObject(value) {
-    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function createMcpError(code, message, details = {}) {
-    const error = new Error(message);
-    error.code = code;
-    error.details = details;
-    return error;
-}
-
-const MAX_SANITIZATION_DEPTH = 8;
-
-function sanitizeMcpErrorDetails(value, depth = 0, seen = new WeakSet()) {
-    if (depth > MAX_SANITIZATION_DEPTH) {
-        return undefined;
-    }
-
-    if (Array.isArray(value)) {
-        return value
-            .map((entry) => sanitizeMcpErrorDetails(entry, depth + 1, seen))
-            .filter((entry) => typeof entry !== 'undefined');
-    }
-
-    if (!isPlainObject(value)) {
-        return value;
-    }
-
-    if (seen.has(value)) {
-        return undefined;
-    }
-    seen.add(value);
-
-    const sanitized = {};
-    Object.entries(value).forEach(([key, entry]) => {
-        if (key.toLowerCase() === 'stack') {
-            return;
-        }
-
-        const sanitizedEntry = sanitizeMcpErrorDetails(entry, depth + 1, seen);
-        if (typeof sanitizedEntry !== 'undefined') {
-            sanitized[key] = sanitizedEntry;
-        }
-    });
-
-    return sanitized;
-}
-
 function buildGatewayFailureDetails(result) {
     return sanitizeMcpErrorDetails({
         canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
@@ -109,125 +58,6 @@ function buildGatewayFailureDetails(result) {
         ...buildOperabilityMetadata(result.meta),
         ...(result.details && typeof result.details === 'object' ? result.details : {})
     }) || {};
-}
-
-function shapeHarnessFailure(error) {
-    const rawCode = normalizeMcpString(error?.code, 64);
-
-    if (!MCP_ERROR_CODE_SET.has(rawCode)) {
-        return {
-            message: 'Gateway backend request failed',
-            data: {
-                code: MCP_ERROR_CODES.RUNTIME_ERROR,
-                ...(rawCode ? { sourceErrorCode: rawCode } : {})
-            }
-        };
-    }
-
-    const details = sanitizeMcpErrorDetails(error?.details);
-    return {
-        message: normalizeMcpString(error?.message || 'MCP adapter request failed', 256) || 'MCP adapter request failed',
-        data: {
-            code: rawCode,
-            ...(isPlainObject(details) ? details : {})
-        }
-    };
-}
-
-function serializeMcpValue(value) {
-    if (typeof value === 'string') {
-        return value;
-    }
-    try {
-        return JSON.stringify(value, null, 2);
-    } catch (error) {
-        return String(value);
-    }
-}
-
-function createMcpTextContent(value) {
-    return [{
-        type: 'text',
-        text: serializeMcpValue(value)
-    }];
-}
-
-function createMcpPromptTextMessage(text) {
-    return {
-        role: 'system',
-        content: [{
-            type: 'text',
-            text: typeof text === 'string' ? text : String(text || '')
-        }]
-    };
-}
-
-function buildJsonRpcError(id, code, message, data) {
-    return {
-        jsonrpc: '2.0',
-        id: id ?? null,
-        error: {
-            code,
-            message,
-            data
-        }
-    };
-}
-
-function buildMcpInitializeResult(params = {}) {
-    const requestedProtocolVersion = typeof params.protocolVersion === 'string'
-        ? params.protocolVersion.trim()
-        : '';
-
-    return {
-        protocolVersion: requestedProtocolVersion || '2025-06-18',
-        capabilities: {
-            prompts: {
-                listChanged: false
-            },
-            resources: {
-                listChanged: false
-            },
-            tools: {
-                listChanged: false
-            }
-        },
-        serverInfo: {
-            name: 'vcp-agent-gateway',
-            version: packageMetadata.version
-        },
-        instructions: 'Use the published Agent Gateway diary RAG prompts, tools, and resources through this MCP server.'
-    };
-}
-
-function mapGatewayFailureToMcpErrorCode(code) {
-    const canonicalCode = OPENCLAW_TO_AGENT_GATEWAY_CODE[code] || code || AGW_ERROR_CODES.INTERNAL_ERROR;
-    switch (canonicalCode) {
-    case AGW_ERROR_CODES.INVALID_REQUEST:
-        return MCP_ERROR_CODES.INVALID_REQUEST;
-    case AGW_ERROR_CODES.VALIDATION_ERROR:
-        return MCP_ERROR_CODES.INVALID_ARGUMENTS;
-    case AGW_ERROR_CODES.FORBIDDEN:
-        return MCP_ERROR_CODES.FORBIDDEN;
-    case AGW_ERROR_CODES.NOT_FOUND:
-        return MCP_ERROR_CODES.NOT_FOUND;
-    case AGW_ERROR_CODES.TIMEOUT:
-        return MCP_ERROR_CODES.TIMEOUT;
-    case AGW_ERROR_CODES.RECALL_NO_PROFILE:
-        return MCP_ERROR_CODES.NOT_FOUND;
-    case AGW_ERROR_CODES.RECALL_FORBIDDEN:
-        return MCP_ERROR_CODES.FORBIDDEN;
-    case AGW_ERROR_CODES.RECALL_INVALID_QUERY:
-    case AGW_ERROR_CODES.RECALL_INVALID_PROFILE:
-    case AGW_ERROR_CODES.RECALL_INVALID_RULE:
-    case AGW_ERROR_CODES.RECALL_INVALID_MODIFIER:
-    case AGW_ERROR_CODES.RECALL_INVALID_DIARY:
-        return MCP_ERROR_CODES.INVALID_ARGUMENTS;
-    case AGW_ERROR_CODES.RECALL_EXECUTION_ERROR:
-        return MCP_ERROR_CODES.RUNTIME_ERROR;
-    default:
-        return MCP_ERROR_CODES.RUNTIME_ERROR;
-    }
 }
 
 function buildOperabilityMetadata(meta = {}) {
@@ -996,67 +826,7 @@ function createBackendProxyMcpAdapter({
 
 function createBackendProxyMcpServerHarness(options = {}) {
     const adapter = options.adapter || createBackendProxyMcpAdapter(options);
-
-    return {
-        adapter,
-        // This harness is cached as a singleton across stdio and websocket transports.
-        // Keep per-connection mutable state in transport-injected requestContext/sessionId, not on the harness object.
-        async handleRequest(message = {}) {
-            const request = message && typeof message === 'object' ? message : {};
-            const params = request.params && typeof request.params === 'object' ? request.params : {};
-
-            try {
-                let result;
-                switch (request.method) {
-                case 'initialize':
-                    result = buildMcpInitializeResult(params);
-                    break;
-                case 'notifications/initialized':
-                    result = null;
-                    break;
-                case 'ping':
-                    result = {};
-                    break;
-                case 'prompts/list':
-                    result = await adapter.listPrompts(params);
-                    break;
-                case 'prompts/get':
-                    result = await adapter.getPrompt(params);
-                    break;
-                case 'tools/list':
-                    result = await adapter.listTools(params);
-                    break;
-                case 'tools/call':
-                    result = await adapter.callTool(params);
-                    break;
-                case 'resources/list':
-                    result = await adapter.listResources(params);
-                    break;
-                case 'resources/read':
-                    result = await adapter.readResource(params);
-                    break;
-                default:
-                    return buildJsonRpcError(request.id, -32601, 'Method not found', {
-                        method: request.method || ''
-                    });
-                }
-
-                return {
-                    jsonrpc: '2.0',
-                    id: request.id ?? null,
-                    result
-                };
-            } catch (error) {
-                const shapedError = shapeHarnessFailure(error);
-                return buildJsonRpcError(
-                    request.id,
-                    -32000,
-                    shapedError.message,
-                    shapedError.data
-                );
-            }
-        }
-    };
+    return createMcpHarness({ adapter });
 }
 
 module.exports = {

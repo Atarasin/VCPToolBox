@@ -39,89 +39,20 @@ const {
     createAgentPromptTemplateResource,
     createJobEventsResource
 } = require('./mcpDescriptorRegistry');
-const packageMetadata = require('../../../package.json');
-const { sanitizeMcpErrorDetails } = require('./mcpBackendProxyAdapter');
-
-const MCP_ERROR_CODES = Object.freeze({
-    INVALID_REQUEST: 'MCP_INVALID_REQUEST',
-    INVALID_ARGUMENTS: 'MCP_INVALID_ARGUMENTS',
-    FORBIDDEN: 'MCP_FORBIDDEN',
-    NOT_FOUND: 'MCP_NOT_FOUND',
-    TIMEOUT: 'MCP_TIMEOUT',
-    RUNTIME_ERROR: 'MCP_RUNTIME_ERROR',
-    RESOURCE_UNSUPPORTED: 'MCP_RESOURCE_UNSUPPORTED'
-});
+const { createMcpHarness } = require('../protocols/mcp/harness');
+const {
+    createMcpError,
+    createMcpPromptTextMessage,
+    createMcpTextContent,
+    serializeMcpValue
+} = require('../protocols/mcp/resultShapes');
+const { mapGatewayFailureToMcpErrorCode } = require('../protocols/mcp/errorMapping');
+const { MCP_ERROR_CODES } = require('../protocols/mcp/constants');
 
 function normalizeMcpString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
 }
 
-function createMcpError(code, message, details = {}) {
-    const error = new Error(message);
-    error.code = code;
-    error.details = details;
-    return error;
-}
-
-function serializeMcpValue(value) {
-    if (typeof value === 'string') {
-        return value;
-    }
-    try {
-        return JSON.stringify(value, null, 2);
-    } catch (error) {
-        return String(value);
-    }
-}
-
-function createMcpTextContent(value) {
-    return [{
-        type: 'text',
-        text: serializeMcpValue(value)
-    }];
-}
-
-function createMcpPromptTextMessage(text) {
-    return {
-        role: 'system',
-        content: [{
-            type: 'text',
-            text: typeof text === 'string' ? text : String(text || '')
-        }]
-    };
-}
-
-
-function mapGatewayFailureToMcpErrorCode(code) {
-    const canonicalCode = OPENCLAW_TO_AGENT_GATEWAY_CODE[code] || code || AGW_ERROR_CODES.INTERNAL_ERROR;
-    switch (canonicalCode) {
-    case AGW_ERROR_CODES.INVALID_REQUEST:
-        return MCP_ERROR_CODES.INVALID_REQUEST;
-    case AGW_ERROR_CODES.VALIDATION_ERROR:
-        return MCP_ERROR_CODES.INVALID_ARGUMENTS;
-    case AGW_ERROR_CODES.FORBIDDEN:
-        return MCP_ERROR_CODES.FORBIDDEN;
-    case AGW_ERROR_CODES.NOT_FOUND:
-        return MCP_ERROR_CODES.NOT_FOUND;
-    case AGW_ERROR_CODES.TIMEOUT:
-        return MCP_ERROR_CODES.TIMEOUT;
-    case AGW_ERROR_CODES.RECALL_NO_PROFILE:
-        return MCP_ERROR_CODES.NOT_FOUND;
-    case AGW_ERROR_CODES.RECALL_FORBIDDEN:
-        return MCP_ERROR_CODES.FORBIDDEN;
-    case AGW_ERROR_CODES.RECALL_INVALID_QUERY:
-        return MCP_ERROR_CODES.INVALID_ARGUMENTS;
-    case AGW_ERROR_CODES.RECALL_INVALID_PROFILE:
-    case AGW_ERROR_CODES.RECALL_INVALID_RULE:
-    case AGW_ERROR_CODES.RECALL_INVALID_MODIFIER:
-    case AGW_ERROR_CODES.RECALL_INVALID_DIARY:
-        return MCP_ERROR_CODES.INVALID_ARGUMENTS;
-    case AGW_ERROR_CODES.RECALL_EXECUTION_ERROR:
-        return MCP_ERROR_CODES.RUNTIME_ERROR;
-    default:
-        return MCP_ERROR_CODES.RUNTIME_ERROR;
-    }
-}
 
 function createFailureResult(result, options = {}) {
     const operability = options.operability && typeof options.operability === 'object'
@@ -1388,108 +1319,9 @@ function createMcpAdapter(pluginManager, options = {}) {
     };
 }
 
-function buildJsonRpcError(id, code, message, data) {
-    return {
-        jsonrpc: '2.0',
-        id: id ?? null,
-        error: {
-            code,
-            message,
-            data
-        }
-    };
-}
-
-function buildMcpInitializeResult(params = {}) {
-    const requestedProtocolVersion = typeof params.protocolVersion === 'string'
-        ? params.protocolVersion.trim()
-        : '';
-
-    return {
-        protocolVersion: requestedProtocolVersion || '2025-06-18',
-        capabilities: {
-            prompts: {
-                listChanged: false
-            },
-            resources: {
-                listChanged: false
-            },
-            tools: {
-                listChanged: false
-            }
-        },
-        serverInfo: {
-            name: 'vcp-agent-gateway',
-            version: packageMetadata.version
-        },
-        instructions: 'Use the published Agent Gateway prompts, tools, and resources over MCP stdio.'
-    };
-}
-
 function createMcpServerHarness(pluginManager, options = {}) {
     const adapter = options.adapter || createMcpAdapter(pluginManager, options);
-
-    return {
-        adapter,
-        async handleRequest(message = {}) {
-            const request = message && typeof message === 'object' ? message : {};
-            const params = request.params && typeof request.params === 'object' ? request.params : {};
-
-            try {
-                let result;
-                switch (request.method) {
-                case 'initialize':
-                    result = buildMcpInitializeResult(params);
-                    break;
-                case 'notifications/initialized':
-                    result = null;
-                    break;
-                case 'ping':
-                    result = {};
-                    break;
-                case 'prompts/list':
-                    result = await adapter.listPrompts(params);
-                    break;
-                case 'prompts/get':
-                    result = await adapter.getPrompt(params);
-                    break;
-                case 'tools/list':
-                    result = await adapter.listTools(params);
-                    break;
-                case 'tools/call':
-                    result = await adapter.callTool(params);
-                    break;
-                case 'resources/list':
-                    result = await adapter.listResources(params);
-                    break;
-                case 'resources/read':
-                    result = await adapter.readResource(params);
-                    break;
-                default:
-                    return buildJsonRpcError(request.id, -32601, 'Method not found', {
-                        method: request.method || ''
-                    });
-                }
-
-                return {
-                    jsonrpc: '2.0',
-                    id: request.id ?? null,
-                    result
-                };
-            } catch (error) {
-                const details = sanitizeMcpErrorDetails(error.details);
-                return buildJsonRpcError(
-                    request.id,
-                    -32000,
-                    error.message || 'MCP adapter request failed',
-                    {
-                        code: error.code || MCP_ERROR_CODES.RUNTIME_ERROR,
-                        ...(details && typeof details === 'object' ? details : {})
-                    }
-                );
-            }
-        }
-    };
+    return createMcpHarness({ adapter });
 }
 
 module.exports = {
