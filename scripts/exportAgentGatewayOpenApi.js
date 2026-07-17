@@ -3,8 +3,8 @@ const path = require('node:path');
 const yaml = require('js-yaml');
 
 const {
-    createPublishedOpenApiDocument
-} = require('../modules/agentGateway/contracts/publishedOpenApiDocument');
+    generateOpenApiDocument
+} = require('../modules/agentGateway/contracts/generate');
 
 async function ensureDir(directoryPath) {
     await fs.mkdir(directoryPath, { recursive: true });
@@ -20,7 +20,7 @@ async function main() {
     const exportDir = path.join(rootDir, 'mydoc', 'export');
     const yamlPath = path.join(exportDir, 'agent-gateway.openapi.yaml');
     const jsonPath = path.join(exportDir, 'agent-gateway.openapi.json');
-    const document = createPublishedOpenApiDocument();
+    const document = generateOpenApiDocument();
 
     await writeDocument(yamlPath, yaml.dump(document, {
         noRefs: true,
