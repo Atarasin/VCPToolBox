@@ -397,360 +397,258 @@ function buildPromptMeta(result, agentId) {
     };
 }
 
-function createBackendProxyMcpAdapter({
-    backendClient,
-    defaultAgentId = process.env.VCP_MCP_DEFAULT_AGENT_ID || '',
-    includeAgentRender = true
-}) {
-    if (!backendClient) {
-        throw new Error('backendClient is required');
-    }
-
-    const gatewayManagedTools = createGatewayManagedToolDescriptors({
-        diaryRagLoopOnly: true
-    });
-    const gatewayManagedPrompts = createGatewayManagedPromptDescriptors({
-        includeAgentRender
-    });
-
-    return {
-        supportedResourceTemplates: MCP_DIARY_LOOP_RESOURCE_TEMPLATES,
-        supportedPromptNames: gatewayManagedPrompts.map((prompt) => prompt.name),
-        async listTools(input = {}) {
-            const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
-            return {
-                tools: gatewayManagedTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
-                meta: {
-                    requestId: normalizeMcpString(input.requestContext?.requestId, 128),
-                    ...(agentId ? { agentId } : {})
-                }
-            };
-        },
-
-        async listPrompts(input = {}) {
-            const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
-            return {
-                prompts: gatewayManagedPrompts,
-                meta: {
-                    requestId: normalizeMcpString(input.requestContext?.requestId, 128),
-                    ...(agentId ? { agentId } : {})
-                }
-            };
-        },
-
-        async getPrompt(input = {}) {
-            input = ensureTraceContext(input);
-            const name = normalizeMcpString(input.name);
-            const args = input.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
-                ? input.arguments
-                : null;
-
-            if (!name) {
-                throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'prompts/get requires prompt name', {
-                    field: 'name'
-                });
+const BACKEND_PROXY_METHODS = {
+    async listTools(state, input = {}) {
+        const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
+        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
+        return {
+            tools: gatewayManagedTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
+            meta: {
+                requestId: normalizeMcpString(input.requestContext?.requestId, 128),
+                ...(agentId ? { agentId } : {})
             }
-            if (!args) {
-                throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'prompts/get requires an arguments object', {
-                    field: 'arguments'
-                });
-            }
-            if (name !== MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER) {
-                throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported MCP prompt', {
-                    field: 'name',
-                    name
-                });
-            }
+        };
+    },
 
-            const agentId = ensureAgentId({
-                ...input,
-                agentId: args.agentId || input.agentId
-            }, `prompts/get:${name}`, defaultAgentId);
-            const requestOptions = buildRequestOptions(input);
-            const response = await backendClient.renderAgent(agentId, buildBody({
-                ...input,
-                agentId
-            }, args, {
-                requireSession: false,
-                defaultAgentId
-            }), requestOptions);
-            const result = normalizeNativeResult(response);
-
-            if (!result.success) {
-                throw createMcpError(
-                    mapGatewayFailureToMcpErrorCode(result.code),
-                    result.error || 'MCP prompt request failed',
-                    buildGatewayFailureDetails(result)
-                );
+    async listPrompts(state, input = {}) {
+        const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
+        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
+        return {
+            prompts: gatewayManagedPrompts,
+            meta: {
+                requestId: normalizeMcpString(input.requestContext?.requestId, 128),
+                ...(agentId ? { agentId } : {})
             }
+        };
+    },
 
-            return {
-                name,
-                description: 'Final rendered Agent Gateway prompt published through the MCP prompt surface.',
-                messages: [
-                    createMcpPromptTextMessage(result.data?.renderedPrompt || '')
-                ],
-                meta: buildPromptMeta(result, agentId)
-            };
-        },
+    async getPrompt(state, input = {}) {
+        const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
+        input = ensureTraceContext(input);
+        const name = normalizeMcpString(input.name);
+        const args = input.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
+            ? input.arguments
+            : null;
 
-        async callTool(input = {}) {
-            input = ensureTraceContext(input);
-            const name = normalizeMcpString(input.name);
-            const args = input.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
-                ? input.arguments
-                : null;
-
-            if (!name) {
-                throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'tools/call requires tool name', {
-                    field: 'name'
-                });
-            }
-            if (!args) {
-                throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'tools/call requires an arguments object', {
-                    field: 'arguments'
-                });
-            }
-
-            const requestOptions = buildRequestOptions(input);
-            const operation = getGatewayOperation(name);
-            if (!operation) {
-                throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
-                    field: 'name',
-                    name
-                });
-            }
-            const validationErrors = validateGatewayToolArguments(name, {
-                ...args,
-                agentId: args.agentId || input.agentId || input.requestContext?.agentId || defaultAgentId
+        if (!name) {
+            throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'prompts/get requires prompt name', {
+                field: 'name'
             });
-            if (validationErrors.length && name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
-                const field = validationErrors[0].params?.missingProperty || validationErrors[0].path.slice(1) || 'arguments';
-                throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, `${field} is required`, {
-                    field, validationErrors
-                });
+        }
+        if (!args) {
+            throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'prompts/get requires an arguments object', {
+                field: 'arguments'
+            });
+        }
+        if (name !== MCP_GATEWAY_PROMPT_NAMES.AGENT_RENDER) {
+            throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported MCP prompt', {
+                field: 'name',
+                name
+            });
+        }
+
+        const agentId = ensureAgentId({
+            ...input,
+            agentId: args.agentId || input.agentId
+        }, `prompts/get:${name}`, defaultAgentId);
+        const requestOptions = buildRequestOptions(input);
+        const response = await backendClient.renderAgent(agentId, buildBody({
+            ...input,
+            agentId
+        }, args, {
+            requireSession: false,
+            defaultAgentId
+        }), requestOptions);
+        const result = normalizeNativeResult(response);
+
+        if (!result.success) {
+            throw createMcpError(
+                mapGatewayFailureToMcpErrorCode(result.code),
+                result.error || 'MCP prompt request failed',
+                buildGatewayFailureDetails(result)
+            );
+        }
+
+        return {
+            name,
+            description: 'Final rendered Agent Gateway prompt published through the MCP prompt surface.',
+            messages: [
+                createMcpPromptTextMessage(result.data?.renderedPrompt || '')
+            ],
+            meta: buildPromptMeta(result, agentId)
+        };
+    },
+
+    async callTool(state, input = {}) {
+        const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
+        input = ensureTraceContext(input);
+        const name = normalizeMcpString(input.name);
+        const args = input.arguments && typeof input.arguments === 'object' && !Array.isArray(input.arguments)
+            ? input.arguments
+            : null;
+
+        if (!name) {
+            throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'tools/call requires tool name', {
+                field: 'name'
+            });
+        }
+        if (!args) {
+            throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'tools/call requires an arguments object', {
+                field: 'arguments'
+            });
+        }
+
+        const requestOptions = buildRequestOptions(input);
+        const operation = getGatewayOperation(name);
+        if (!operation) {
+            throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
+                field: 'name',
+                name
+            });
+        }
+        const validationErrors = validateGatewayToolArguments(name, {
+            ...args,
+            agentId: args.agentId || input.agentId || input.requestContext?.agentId || defaultAgentId
+        });
+        if (validationErrors.length && name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
+            const field = validationErrors[0].params?.missingProperty || validationErrors[0].path.slice(1) || 'arguments';
+            throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, `${field} is required`, {
+                field, validationErrors
+            });
+        }
+
+        const executeDiaryOperation = async (methodName) => {
+            const scoped = applyDiaryPolicyGate({
+                toolName: name,
+                payload: buildBody(input, args, { defaultAgentId }),
+                input,
+                defaultAgentId
+            });
+            if (scoped.rejection) {
+                return { finalResult: createFailureResult(scoped.rejection) };
             }
-
-            const executeDiaryOperation = async (methodName) => {
-                const scoped = applyDiaryPolicyGate({
-                    toolName: name,
-                    payload: buildBody(input, args, { defaultAgentId }),
-                    input,
-                    defaultAgentId
-                });
-                if (scoped.rejection) {
-                    return { finalResult: createFailureResult(scoped.rejection) };
-                }
-                return {
-                    response: await backendClient[methodName](scoped.payload, requestOptions)
-                };
+            return {
+                response: await backendClient[methodName](scoped.payload, requestOptions)
             };
+        };
 
-            const handlers = {
-                memorySearch: () => executeDiaryOperation('searchMemory'),
-                contextAssemble: () => executeDiaryOperation('assembleContext'),
-                memoryWrite: async () => {
-                    const writeBody = buildBody(input, args, { defaultAgentId });
-                    const idempotencyKey = normalizeMcpString(
-                        writeBody.options?.idempotencyKey || writeBody.target?.idempotencyKey ||
-                        args.idempotencyKey || writeBody.idempotencyKey,
-                        256
-                    );
-                    const resolvedDiary = normalizeDiaryCanonicalName(
-                        normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
-                    );
-                    if (resolvedDiary) {
-                        writeBody.diary = resolvedDiary;
-                        if (writeBody.target && typeof writeBody.target === 'object') {
-                            writeBody.target.diary = resolvedDiary;
-                        }
+        const handlers = {
+            memorySearch: () => executeDiaryOperation('searchMemory'),
+            contextAssemble: () => executeDiaryOperation('assembleContext'),
+            memoryWrite: async () => {
+                const writeBody = buildBody(input, args, { defaultAgentId });
+                const idempotencyKey = normalizeMcpString(
+                    writeBody.options?.idempotencyKey || writeBody.target?.idempotencyKey ||
+                    args.idempotencyKey || writeBody.idempotencyKey,
+                    256
+                );
+                const resolvedDiary = normalizeDiaryCanonicalName(
+                    normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
+                );
+                if (resolvedDiary) {
+                    writeBody.diary = resolvedDiary;
+                    if (writeBody.target && typeof writeBody.target === 'object') {
+                        writeBody.target.diary = resolvedDiary;
                     }
-                    if (idempotencyKey) {
-                        writeBody.idempotencyKey = idempotencyKey;
-                        writeBody.options = { ...(writeBody.options || {}), idempotencyKey };
-                    }
-                    return backendClient.writeMemory(writeBody, requestOptions);
-                },
-                recallRun: async () => {
-                    const recallBody = buildBody(input, args, { requireSession: false, defaultAgentId });
-                    if (!normalizeMcpString(recallBody.query, 4096)) {
-                        throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_recall_run requires query', {
-                            field: 'query'
-                        });
-                    }
-                    return backendClient.runRecall(recallBody, requestOptions);
-                },
-                render: () => backendClient.renderAgent(
-                    ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
+                }
+                if (idempotencyKey) {
+                    writeBody.idempotencyKey = idempotencyKey;
+                    writeBody.options = { ...(writeBody.options || {}), idempotencyKey };
+                }
+                return backendClient.writeMemory(writeBody, requestOptions);
+            },
+            recallRun: async () => {
+                const recallBody = buildBody(input, args, { requireSession: false, defaultAgentId });
+                if (!normalizeMcpString(recallBody.query, 4096)) {
+                    throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_recall_run requires query', {
+                        field: 'query'
+                    });
+                }
+                return backendClient.runRecall(recallBody, requestOptions);
+            },
+            render: () => backendClient.renderAgent(
+                ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
+                buildBody(input, args, { requireSession: false, defaultAgentId }),
+                requestOptions
+            ),
+            jobGet: () => {
+                ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
+                return backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId), requestOptions);
+            },
+            jobCancel: () => {
+                ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
+                return backendClient.cancelJob(
+                    args.jobId,
                     buildBody(input, args, { requireSession: false, defaultAgentId }),
                     requestOptions
-                ),
-                jobGet: () => {
-                    ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
-                    return backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId), requestOptions);
-                },
-                jobCancel: () => {
-                    ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
-                    return backendClient.cancelJob(
-                        args.jobId,
-                        buildBody(input, args, { requireSession: false, defaultAgentId }),
-                        requestOptions
-                    );
-                },
-                removedRender: () => {
-                    throw createMcpError(
-                        MCP_ERROR_CODES.NOT_FOUND,
-                        'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
-                        { field: 'name', name, primarySurface: 'prompts/get' }
-                    );
-                }
-            };
-
-            const handler = handlers[operation.backendExecutor];
-            if (!handler) {
-                throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
-                    field: 'name',
-                    name
-                });
-            }
-            const execution = await handler();
-            if (execution?.finalResult) {
-                return execution.finalResult;
-            }
-            const response = execution?.response ?? execution;
-
-            const result = normalizeNativeResult(response);
-            if (!result.success) {
-                return createFailureResult(result);
-            }
-            if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
-                result.data = buildBootstrapResult(result.data || {}, result.data?.agentId || input.agentId || args.agentId || defaultAgentId);
-            }
-            if (
-                DEFERRED_RESULT_TOOL_NAMES.has(name) &&
-                (result.status === 'accepted' || result.status === 'waiting_approval')
-            ) {
-                return createGatewayManagedDeferredResult(name, result);
-            }
-            return createGatewayManagedSuccessResult(name, result);
-        },
-
-        async listResources(input = {}) {
-            const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
-
-            if (!agentId) {
-                return {
-                    resources: [],
-                    meta: {
-                        requestId: normalizeMcpString(input.requestContext?.requestId, 128)
-                    }
-                };
-            }
-
-            return {
-                resources: [
-                    createMemoryTargetsResource(agentId)
-                ],
-                meta: {
-                    requestId: normalizeMcpString(input.requestContext?.requestId, 128),
-                    agentId
-                }
-            };
-        },
-
-        async readResource(input = {}) {
-            const parsed = parseResourceUri(input.uri);
-            if (!parsed) {
+                );
+            },
+            removedRender: () => {
                 throw createMcpError(
-                    MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
-                    'Unsupported resource URI',
-                    {
-                        uri: input.uri || '',
-                        supportedTemplates: MCP_DIARY_LOOP_RESOURCE_TEMPLATES
-                    }
+                    MCP_ERROR_CODES.NOT_FOUND,
+                    'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
+                    { field: 'name', name, primarySurface: 'prompts/get' }
                 );
             }
+        };
 
-            if (parsed.kind === MCP_RESOURCE_KINDS.MEMORY_TARGETS) {
-                const agentId = ensureAgentId({
-                    ...input,
-                    agentId: parsed.agentId || input.agentId
-                }, 'resources/read', defaultAgentId);
-                const response = await backendClient.getMemoryTargets({
-                    agentId,
+        const handler = handlers[operation.backendExecutor];
+        if (!handler) {
+            throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
+                field: 'name',
+                name
+            });
+        }
+        const execution = await handler();
+        if (execution?.finalResult) {
+            return execution.finalResult;
+        }
+        const response = execution?.response ?? execution;
+
+        const result = normalizeNativeResult(response);
+        if (!result.success) {
+            return createFailureResult(result);
+        }
+        if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
+            result.data = buildBootstrapResult(result.data || {}, result.data?.agentId || input.agentId || args.agentId || defaultAgentId);
+        }
+        if (
+            DEFERRED_RESULT_TOOL_NAMES.has(name) &&
+            (result.status === 'accepted' || result.status === 'waiting_approval')
+        ) {
+            return createGatewayManagedDeferredResult(name, result);
+        }
+        return createGatewayManagedSuccessResult(name, result);
+    },
+
+    async listResources(state, input = {}) {
+        const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
+        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
+
+        if (!agentId) {
+            return {
+                resources: [],
+                meta: {
                     requestId: normalizeMcpString(input.requestContext?.requestId, 128)
-                }, input.signal ? { signal: input.signal } : undefined);
-                const result = normalizeNativeResult(response);
-                if (!result.success) {
-                    throw createMcpError(
-                        mapGatewayFailureToMcpErrorCode(result.code),
-                        result.error || 'Failed to read memory targets resource',
-                        buildGatewayFailureDetails(result)
-                    );
                 }
+            };
+        }
 
-                return {
-                    contents: [{
-                        uri: input.uri,
-                        mimeType: 'application/json',
-                        text: serializeMcpValue(result.data?.targets || [])
-                    }],
-                    meta: {
-                        requestId: result.requestId,
-                        agentId
-                    }
-                };
+        return {
+            resources: [
+                createMemoryTargetsResource(agentId)
+            ],
+            meta: {
+                requestId: normalizeMcpString(input.requestContext?.requestId, 128),
+                agentId
             }
+        };
+    },
 
-            if (parsed.kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
-                ensureJobIdentity(input, 'resources/read', defaultAgentId);
-                const jobQuery = buildJobQuery(input, {
-                    jobId: parsed.jobId
-                }, defaultAgentId);
-                const [jobResponse, eventsResponse] = await Promise.all([
-                    backendClient.getJob(parsed.jobId, jobQuery, input.signal ? { signal: input.signal } : undefined),
-                    backendClient.listJobEvents(parsed.jobId, jobQuery, input.signal ? { signal: input.signal } : undefined)
-                ]);
-                const jobResult = normalizeNativeResult(jobResponse);
-
-                if (!jobResult.success) {
-                    throw createMcpError(
-                        mapGatewayFailureToMcpErrorCode(jobResult.code),
-                        jobResult.error || 'Failed to read Gateway job runtime events',
-                        buildGatewayFailureDetails(jobResult)
-                    );
-                }
-
-                if (!eventsResponse.ok) {
-                    throw createMcpError(
-                        MCP_ERROR_CODES.RUNTIME_ERROR,
-                        'Failed to list Gateway job runtime events',
-                        {
-                            requestId: jobResult.requestId || '',
-                            gatewayStatus: eventsResponse.httpStatus
-                        }
-                    );
-                }
-
-                const payload = {
-                    jobId: parsed.jobId,
-                    job: jobResult.data?.job || null,
-                    events: eventsResponse.events.filter((event) => event?.eventType !== 'gateway.meta')
-                };
-
-                return {
-                    contents: [{
-                        uri: buildJobEventsResourceUri(parsed.jobId),
-                        mimeType: 'application/json',
-                        text: serializeMcpValue(payload)
-                    }],
-                    meta: {
-                        requestId: jobResult.requestId || normalizeMcpString(input.requestContext?.requestId, 128),
-                        jobId: parsed.jobId
-                    }
-                };
-            }
-
+    async readResource(state, input = {}) {
+        const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
+        const parsed = parseResourceUri(input.uri);
+        if (!parsed) {
             throw createMcpError(
                 MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
                 'Unsupported resource URI',
@@ -760,6 +658,116 @@ function createBackendProxyMcpAdapter({
                 }
             );
         }
+
+        if (parsed.kind === MCP_RESOURCE_KINDS.MEMORY_TARGETS) {
+            const agentId = ensureAgentId({
+                ...input,
+                agentId: parsed.agentId || input.agentId
+            }, 'resources/read', defaultAgentId);
+            const response = await backendClient.getMemoryTargets({
+                agentId,
+                requestId: normalizeMcpString(input.requestContext?.requestId, 128)
+            }, input.signal ? { signal: input.signal } : undefined);
+            const result = normalizeNativeResult(response);
+            if (!result.success) {
+                throw createMcpError(
+                    mapGatewayFailureToMcpErrorCode(result.code),
+                    result.error || 'Failed to read memory targets resource',
+                    buildGatewayFailureDetails(result)
+                );
+            }
+
+            return {
+                contents: [{
+                    uri: input.uri,
+                    mimeType: 'application/json',
+                    text: serializeMcpValue(result.data?.targets || [])
+                }],
+                meta: {
+                    requestId: result.requestId,
+                    agentId
+                }
+            };
+        }
+
+        if (parsed.kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
+            ensureJobIdentity(input, 'resources/read', defaultAgentId);
+            const jobQuery = buildJobQuery(input, {
+                jobId: parsed.jobId
+            }, defaultAgentId);
+            const [jobResponse, eventsResponse] = await Promise.all([
+                backendClient.getJob(parsed.jobId, jobQuery, input.signal ? { signal: input.signal } : undefined),
+                backendClient.listJobEvents(parsed.jobId, jobQuery, input.signal ? { signal: input.signal } : undefined)
+            ]);
+            const jobResult = normalizeNativeResult(jobResponse);
+
+            if (!jobResult.success) {
+                throw createMcpError(
+                    mapGatewayFailureToMcpErrorCode(jobResult.code),
+                    jobResult.error || 'Failed to read Gateway job runtime events',
+                    buildGatewayFailureDetails(jobResult)
+                );
+            }
+
+            if (!eventsResponse.ok) {
+                throw createMcpError(
+                    MCP_ERROR_CODES.RUNTIME_ERROR,
+                    'Failed to list Gateway job runtime events',
+                    {
+                        requestId: jobResult.requestId || '',
+                        gatewayStatus: eventsResponse.httpStatus
+                    }
+                );
+            }
+
+            const payload = {
+                jobId: parsed.jobId,
+                job: jobResult.data?.job || null,
+                events: eventsResponse.events.filter((event) => event?.eventType !== 'gateway.meta')
+            };
+
+            return {
+                contents: [{
+                    uri: buildJobEventsResourceUri(parsed.jobId),
+                    mimeType: 'application/json',
+                    text: serializeMcpValue(payload)
+                }],
+                meta: {
+                    requestId: jobResult.requestId || normalizeMcpString(input.requestContext?.requestId, 128),
+                    jobId: parsed.jobId
+                }
+            };
+        }
+
+        throw createMcpError(
+            MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
+            'Unsupported resource URI',
+            {
+                uri: input.uri || '',
+                supportedTemplates: MCP_DIARY_LOOP_RESOURCE_TEMPLATES
+            }
+        );
+    }
+};
+
+function createBackendProxyMcpAdapter({
+    backendClient,
+    defaultAgentId = process.env.VCP_MCP_DEFAULT_AGENT_ID || '',
+    includeAgentRender = true
+}) {
+    if (!backendClient) throw new Error('backendClient is required');
+    const state = {
+        backendClient,
+        defaultAgentId,
+        gatewayManagedTools: createGatewayManagedToolDescriptors({ diaryRagLoopOnly: true }),
+        gatewayManagedPrompts: createGatewayManagedPromptDescriptors({ includeAgentRender })
+    };
+    return {
+        supportedResourceTemplates: MCP_DIARY_LOOP_RESOURCE_TEMPLATES,
+        supportedPromptNames: state.gatewayManagedPrompts.map((prompt) => prompt.name),
+        ...Object.fromEntries(Object.entries(BACKEND_PROXY_METHODS).map(([name, method]) => [
+            name, (input) => method(state, input)
+        ]))
     };
 }
 

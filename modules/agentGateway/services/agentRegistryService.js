@@ -360,6 +360,130 @@ function buildPromptTemplatePreview(detail) {
     };
 }
 
+function createAgentRegistryContext({ agentManager, capabilityService }) {
+    async function ensureAgentState() {
+        if (agentManager?.agentMap instanceof Map && agentManager.agentMap.size === 0 && typeof agentManager.loadMap === 'function') {
+            await agentManager.loadMap();
+        }
+        if (typeof agentManager.getAllAgentFiles === 'function') {
+            await agentManager.getAllAgentFiles();
+        } else if (Array.isArray(agentManager?.agentFiles) && !agentManager.agentFiles.length && typeof agentManager.scanAgentFiles === 'function') {
+            await agentManager.scanAgentFiles();
+        }
+    }
+
+    function getAgentEntries() {
+        if (!(agentManager?.agentMap instanceof Map)) return [];
+        return Array.from(agentManager.agentMap.entries())
+            .map(([alias, sourceFile]) => ({ alias: normalizeRegistryString(alias), sourceFile: normalizeRegistryString(sourceFile) }))
+            .filter((entry) => entry.alias && entry.sourceFile)
+            .sort((left, right) => left.alias.localeCompare(right.alias));
+    }
+
+    async function loadAgentSource(agentId) {
+        await ensureAgentState();
+        const normalizedAgentId = normalizeRegistryString(agentId);
+        if (!normalizedAgentId || typeof agentManager?.isAgent !== 'function' || !agentManager.isAgent(normalizedAgentId)) {
+            throw createNotFoundError(normalizedAgentId || agentId);
+        }
+        const sourceFile = normalizeRegistryString(agentManager.agentMap.get(normalizedAgentId));
+        const agentDir = normalizeRegistryString(agentManager?.agentDir) || path.join(__dirname, '..', '..', '..', 'Agent');
+        const absoluteSourcePath = path.join(agentDir, sourceFile.replace(/\//g, path.sep));
+        const stat = await getFileStatOrNull(absoluteSourcePath);
+        const rawPrompt = await agentManager.getAgentPrompt(normalizedAgentId);
+        return {
+            agentId: normalizedAgentId, alias: normalizedAgentId, sourceFile, absoluteSourcePath,
+            exists: Boolean(stat), stat, rawPrompt: typeof rawPrompt === 'string' ? rawPrompt : String(rawPrompt || '')
+        };
+    }
+
+    async function buildCapabilityMetadata(agentId, options = {}) {
+        const [capabilities, memoryTargets] = await Promise.all([
+            capabilityService.getCapabilities({ agentId, includeMemoryTargets: false, authContext: options.authContext }),
+            capabilityService.getMemoryTargets({ agentId, authContext: options.authContext })
+        ]);
+        const toolNames = (capabilities.tools || []).map((tool) => tool.name);
+        const memoryTargetIds = (memoryTargets || []).map((target) => target.id);
+        return {
+            accessibleTools: capabilities.tools || [], accessibleMemoryTargets: memoryTargets || [],
+            defaultPolicies: { toolNames, memoryTargetIds },
+            capabilityHints: {
+                toolNames, memoryTargetIds, contextSupported: Boolean(capabilities.context),
+                memoryWriteSupported: Boolean(capabilities.memory?.features?.writeBack),
+                jobsSupported: Boolean(capabilities.jobs?.supported), eventsSupported: Boolean(capabilities.events?.supported)
+            }
+        };
+    }
+
+    async function buildListRecord(agentId, options = {}) {
+        const source = await loadAgentSource(agentId);
+        const metadata = await buildCapabilityMetadata(agentId, options);
+        return {
+            agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile, exists: source.exists,
+            mtime: toIsoStringOrNull(source.stat?.mtimeMs), hash: createSha256(source.rawPrompt),
+            summary: buildSummary(source.rawPrompt), defaultPolicies: metadata.defaultPolicies,
+            capabilityHints: metadata.capabilityHints
+        };
+    }
+
+    return { agentManager, buildCapabilityMetadata, buildListRecord, ensureAgentState, getAgentEntries, loadAgentSource };
+}
+
+function createAgentRegistryApi(context, renderPrompt, pluginManager) {
+    const { agentManager, buildCapabilityMetadata, buildListRecord, ensureAgentState, getAgentEntries, loadAgentSource } = context;
+    const api = {
+        async listAgents(options = {}) {
+            await ensureAgentState();
+            return Promise.all(getAgentEntries().map((entry) => buildListRecord(entry.alias, options)));
+        },
+        async getAgentDetail(agentId, options = {}) {
+            const [source, metadata] = await Promise.all([loadAgentSource(agentId), buildCapabilityMetadata(agentId, options)]);
+            return {
+                agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile, exists: source.exists,
+                mtime: toIsoStringOrNull(source.stat?.mtimeMs), hash: createSha256(source.rawPrompt), summary: buildSummary(source.rawPrompt),
+                defaultPolicies: metadata.defaultPolicies, capabilityHints: metadata.capabilityHints,
+                prompt: {
+                    raw: source.rawPrompt, size: source.rawPrompt.length,
+                    placeholderSummary: buildPlaceholderSummary(source.rawPrompt, agentManager),
+                    dependencies: collectPromptDependencies(source.rawPrompt, agentManager)
+                },
+                accessibleTools: metadata.accessibleTools, accessibleMemoryTargets: metadata.accessibleMemoryTargets
+            };
+        },
+        async getAgentProfile(agentId, options = {}) { return buildAgentProfile(await api.getAgentDetail(agentId, options)); },
+        async getPromptTemplatePreview(agentId, options = {}) {
+            return buildPromptTemplatePreview(await api.getAgentDetail(agentId, options));
+        },
+        async renderAgent(agentId, options = {}) {
+            const source = await loadAgentSource(agentId);
+            const renderVariables = normalizeRenderVariables(options.variables);
+            const model = normalizeRegistryString(options.model);
+            const maxLength = Number.isFinite(options.maxLength) ? options.maxLength : DEFAULT_RENDER_MAX_LENGTH;
+            const renderContext = createDefaultRenderContext(pluginManager, { ...options.context, messages: options.messages });
+            const rendered = await renderPrompt({
+                agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile,
+                rawPrompt: source.rawPrompt, renderVariables, model, renderContext
+            });
+            const normalized = typeof rendered === 'string' ? rendered : String(rendered || '');
+            const unresolved = collectUnresolvedConstructs(normalized);
+            const renderedPrompt = truncateRegistryText(normalized, maxLength);
+            const truncated = renderedPrompt.length !== normalized.length;
+            const warnings = [];
+            const dependencies = collectPromptDependencies(source.rawPrompt, agentManager);
+            const renderedDependencies = collectPromptDependencies(normalized, agentManager);
+            if (unresolved.length) warnings.push('render output still contains unresolved prompt constructs');
+            if (truncated) warnings.push('render output was truncated to the requested maxLength');
+            return {
+                agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile, renderedPrompt,
+                dependencies, unresolved, warnings, truncated,
+                renderMeta: createRenderMeta({ dependencies, renderedDependencies, unresolved, truncated, renderVariables }),
+                meta: { model, rawSize: source.rawPrompt.length, renderedSize: normalized.length, variableKeys: Object.keys(renderVariables) }
+            };
+        }
+    };
+    return api;
+}
+
 /**
  * AgentRegistryService 以 agent-first 视角导出定义信息，不暴露后台目录管理语义。
  */
@@ -384,224 +508,8 @@ function createAgentRegistryService(deps = {}) {
             return renderRagPromptPass(variableRenderedPrompt, renderContext, agentId);
         };
 
-    async function ensureAgentState() {
-        if (
-            agentManager?.agentMap instanceof Map &&
-            agentManager.agentMap.size === 0 &&
-            typeof agentManager.loadMap === 'function'
-        ) {
-            await agentManager.loadMap();
-        }
-        if (typeof agentManager.getAllAgentFiles === 'function') {
-            await agentManager.getAllAgentFiles();
-        } else if (
-            Array.isArray(agentManager?.agentFiles) &&
-            agentManager.agentFiles.length === 0 &&
-            typeof agentManager.scanAgentFiles === 'function'
-        ) {
-            await agentManager.scanAgentFiles();
-        }
-    }
-
-    function getAgentEntries() {
-        if (!(agentManager?.agentMap instanceof Map)) {
-            return [];
-        }
-        return Array.from(agentManager.agentMap.entries())
-            .map(([alias, sourceFile]) => ({
-                alias: normalizeRegistryString(alias),
-                sourceFile: normalizeRegistryString(sourceFile)
-            }))
-            .filter((entry) => entry.alias && entry.sourceFile)
-            .sort((left, right) => left.alias.localeCompare(right.alias));
-    }
-
-    function resolveAbsoluteSourcePath(sourceFile) {
-        const normalizedAgentDir = normalizeRegistryString(agentManager?.agentDir) || path.join(__dirname, '..', '..', '..', 'Agent');
-        return path.join(normalizedAgentDir, sourceFile.replace(/\//g, path.sep));
-    }
-
-    async function loadAgentSource(agentId) {
-        await ensureAgentState();
-        const normalizedAgentId = normalizeRegistryString(agentId);
-        if (!normalizedAgentId || typeof agentManager?.isAgent !== 'function' || !agentManager.isAgent(normalizedAgentId)) {
-            throw createNotFoundError(normalizedAgentId || agentId);
-        }
-
-        const sourceFile = normalizeRegistryString(agentManager.agentMap.get(normalizedAgentId));
-        const absoluteSourcePath = resolveAbsoluteSourcePath(sourceFile);
-        const stat = await getFileStatOrNull(absoluteSourcePath);
-        const rawPrompt = await agentManager.getAgentPrompt(normalizedAgentId);
-
-        return {
-            agentId: normalizedAgentId,
-            alias: normalizedAgentId,
-            sourceFile,
-            absoluteSourcePath,
-            exists: Boolean(stat),
-            stat,
-            rawPrompt: typeof rawPrompt === 'string' ? rawPrompt : String(rawPrompt || '')
-        };
-    }
-
-    async function buildCapabilityMetadata(agentId, options = {}) {
-        const [capabilities, memoryTargets] = await Promise.all([
-            capabilityService.getCapabilities({
-                agentId,
-                includeMemoryTargets: false,
-                authContext: options.authContext
-            }),
-            capabilityService.getMemoryTargets({
-                agentId,
-                authContext: options.authContext
-            })
-        ]);
-
-        return {
-            accessibleTools: capabilities.tools || [],
-            accessibleMemoryTargets: memoryTargets || [],
-            defaultPolicies: {
-                toolNames: (capabilities.tools || []).map((tool) => tool.name),
-                memoryTargetIds: (memoryTargets || []).map((target) => target.id)
-            },
-            capabilityHints: {
-                toolNames: (capabilities.tools || []).map((tool) => tool.name),
-                memoryTargetIds: (memoryTargets || []).map((target) => target.id),
-                contextSupported: Boolean(capabilities.context),
-                memoryWriteSupported: Boolean(capabilities.memory?.features?.writeBack),
-                jobsSupported: Boolean(capabilities.jobs?.supported),
-                eventsSupported: Boolean(capabilities.events?.supported)
-            }
-        };
-    }
-
-    async function buildListRecord(agentId, options = {}) {
-        const source = await loadAgentSource(agentId);
-        const capabilityMetadata = await buildCapabilityMetadata(agentId, options);
-
-        return {
-            agentId: source.agentId,
-            alias: source.alias,
-            sourceFile: source.sourceFile,
-            exists: source.exists,
-            mtime: toIsoStringOrNull(source.stat?.mtimeMs),
-            hash: createSha256(source.rawPrompt),
-            summary: buildSummary(source.rawPrompt),
-            defaultPolicies: capabilityMetadata.defaultPolicies,
-            capabilityHints: capabilityMetadata.capabilityHints
-        };
-    }
-
-    return {
-        async listAgents(options = {}) {
-            await ensureAgentState();
-            const entries = getAgentEntries();
-            return Promise.all(entries.map((entry) => buildListRecord(entry.alias, options)));
-        },
-
-        async getAgentDetail(agentId, options = {}) {
-            const [source, capabilityMetadata] = await Promise.all([
-                loadAgentSource(agentId),
-                buildCapabilityMetadata(agentId, options)
-            ]);
-            const dependencies = collectPromptDependencies(source.rawPrompt, agentManager);
-            const placeholderSummary = buildPlaceholderSummary(source.rawPrompt, agentManager);
-
-            return {
-                agentId: source.agentId,
-                alias: source.alias,
-                sourceFile: source.sourceFile,
-                exists: source.exists,
-                mtime: toIsoStringOrNull(source.stat?.mtimeMs),
-                hash: createSha256(source.rawPrompt),
-                summary: buildSummary(source.rawPrompt),
-                defaultPolicies: capabilityMetadata.defaultPolicies,
-                capabilityHints: capabilityMetadata.capabilityHints,
-                prompt: {
-                    raw: source.rawPrompt,
-                    size: source.rawPrompt.length,
-                    placeholderSummary,
-                    dependencies
-                },
-                accessibleTools: capabilityMetadata.accessibleTools,
-                accessibleMemoryTargets: capabilityMetadata.accessibleMemoryTargets
-            };
-        },
-
-        async getAgentProfile(agentId, options = {}) {
-            const detail = await this.getAgentDetail(agentId, options);
-            return buildAgentProfile(detail);
-        },
-
-        async getPromptTemplatePreview(agentId, options = {}) {
-            const detail = await this.getAgentDetail(agentId, options);
-            return buildPromptTemplatePreview(detail);
-        },
-
-        async renderAgent(agentId, options = {}) {
-            const source = await loadAgentSource(agentId);
-            const renderVariables = normalizeRenderVariables(options.variables);
-            const model = normalizeRegistryString(options.model);
-            const maxLength = Number.isFinite(options.maxLength)
-                ? options.maxLength
-                : DEFAULT_RENDER_MAX_LENGTH;
-            const renderContext = createDefaultRenderContext(pluginManager, {
-                ...options.context,
-                messages: options.messages
-            });
-
-            const renderedText = await renderPrompt({
-                agentId: source.agentId,
-                alias: source.alias,
-                sourceFile: source.sourceFile,
-                rawPrompt: source.rawPrompt,
-                renderVariables,
-                model,
-                renderContext
-            });
-
-            const normalizedRenderedText = typeof renderedText === 'string'
-                ? renderedText
-                : String(renderedText || '');
-            const unresolved = collectUnresolvedConstructs(normalizedRenderedText);
-            const truncatedPrompt = truncateRegistryText(normalizedRenderedText, maxLength);
-            const truncated = truncatedPrompt.length !== normalizedRenderedText.length;
-            const warnings = [];
-            const dependencies = collectPromptDependencies(source.rawPrompt, agentManager);
-            const renderedDependencies = collectPromptDependencies(normalizedRenderedText, agentManager);
-
-            if (unresolved.length > 0) {
-                warnings.push('render output still contains unresolved prompt constructs');
-            }
-            if (truncated) {
-                warnings.push('render output was truncated to the requested maxLength');
-            }
-
-            return {
-                agentId: source.agentId,
-                alias: source.alias,
-                sourceFile: source.sourceFile,
-                renderedPrompt: truncatedPrompt,
-                dependencies,
-                unresolved,
-                warnings,
-                truncated,
-                renderMeta: createRenderMeta({
-                    dependencies,
-                    renderedDependencies,
-                    unresolved,
-                    truncated,
-                    renderVariables
-                }),
-                meta: {
-                    model,
-                    rawSize: source.rawPrompt.length,
-                    renderedSize: normalizedRenderedText.length,
-                    variableKeys: Object.keys(renderVariables)
-                }
-            };
-        }
-    };
+    const context = createAgentRegistryContext({ agentManager, capabilityService });
+    return createAgentRegistryApi(context, renderPrompt, pluginManager);
 }
 
 module.exports = {
