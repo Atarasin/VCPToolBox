@@ -40,6 +40,7 @@ const {
     createJobEventsResource
 } = require('./mcpDescriptorRegistry');
 const packageMetadata = require('../../../package.json');
+const { sanitizeMcpErrorDetails } = require('./mcpBackendProxyAdapter');
 
 const MCP_ERROR_CODES = Object.freeze({
     INVALID_REQUEST: 'MCP_INVALID_REQUEST',
@@ -442,6 +443,13 @@ function applyAgentDiaryPolicyToGatewayArgs(name, args, input = {}) {
         256
     );
     const policy = resolveConfiguredAgentMemoryPolicy({ agentId });
+
+    if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
+        return {
+            args,
+            rejection: null
+        };
+    }
 
     const requestId = normalizeMcpString(input?.requestContext?.requestId, 128);
     const { diary, diaries } = normalizeDiarySelectionArgs(args);
@@ -1469,13 +1477,14 @@ function createMcpServerHarness(pluginManager, options = {}) {
                     result
                 };
             } catch (error) {
+                const details = sanitizeMcpErrorDetails(error.details);
                 return buildJsonRpcError(
                     request.id,
                     -32000,
                     error.message || 'MCP adapter request failed',
                     {
                         code: error.code || MCP_ERROR_CODES.RUNTIME_ERROR,
-                        ...(error.details && typeof error.details === 'object' ? error.details : {})
+                        ...(details && typeof details === 'object' ? details : {})
                     }
                 );
             }

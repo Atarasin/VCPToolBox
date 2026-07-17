@@ -98,3 +98,20 @@ describe('RecallProfileResolver budget fields', () => {
         }
     });
 });
+
+describe('RecallProfileResolver published example', () => {
+    const exampleResolver = new RecallProfileResolver({
+        configPath: require('path').join(
+            __dirname, '..', '..', '..', 'modules', 'agentGateway', 'config', 'recall_profiles.json.example'
+        )
+    });
+
+    for (const profileName of ['profile-name', 'gated-profile', 'full-text-profile']) {
+        it(`keeps ${profileName} valid and selectable`, () => {
+            const result = exampleResolver.resolveForAgent('AgentName', profileName);
+            assert.strictEqual(result.resolved, true);
+            assert.strictEqual(result.profileName, profileName);
+            assert.ok(result.rules.length > 0);
+        });
+    }
+});

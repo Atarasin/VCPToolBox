@@ -240,16 +240,19 @@ function buildOperabilityMetadata(meta = {}) {
 
 function createFailureResult(result) {
     const operability = buildOperabilityMetadata(result.meta);
+    const gatewayStatus = typeof result.httpStatus === 'number'
+        ? result.httpStatus
+        : (typeof result.status === 'number' ? result.status : undefined);
     const errorDetails = sanitizeMcpErrorDetails({
         canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[result.code] || result.code || '',
         gatewayCode: result.code || '',
         requestId: result.requestId || '',
-        gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
+        gatewayStatus,
         ...operability,
         ...(result.details && typeof result.details === 'object' ? result.details : {})
     }) || {};
     const contentDetails = sanitizeMcpErrorDetails({
-        gatewayStatus: typeof result.httpStatus === 'number' ? result.httpStatus : undefined,
+        gatewayStatus,
         ...operability,
         ...(result.details && typeof result.details === 'object' ? result.details : {})
     }) || {};
@@ -506,7 +509,10 @@ function applyAgentDiaryPolicyToBody(name, body = {}) {
         };
     }
 
-    const agentId = normalizeMcpString(body?.requestContext?.agentId || body?.agentId, 256);
+    const agentId = normalizeMcpString(
+        body?.requestContext?.agentId || body?.agentId || process.env.VCP_MCP_DEFAULT_AGENT_ID,
+        256
+    );
     const policy = resolveConfiguredAgentMemoryPolicy({ agentId });
 
     if (policy.allowedDiaryNames.length === 0 && policy.defaultDiaryNames.length === 0) {
@@ -533,6 +539,7 @@ function applyAgentDiaryPolicyToBody(name, body = {}) {
                 rejection: {
                     success: false,
                     requestId: normalizeMcpString(body?.requestContext?.requestId, 128),
+                    status: 403,
                     code: AGW_ERROR_CODES.FORBIDDEN,
                     error: 'Requested diary target is not allowed for this agent',
                     details: {
@@ -561,6 +568,7 @@ function applyAgentDiaryPolicyToBody(name, body = {}) {
             rejection: {
                 success: false,
                 requestId: normalizeMcpString(body?.requestContext?.requestId, 128),
+                status: 403,
                 code: AGW_ERROR_CODES.FORBIDDEN,
                 error: 'No default diary targets are configured for this agent',
                 details: {
@@ -643,7 +651,7 @@ function buildPromptMeta(result, agentId) {
 
 function createBackendProxyMcpAdapter({
     backendClient,
-    defaultAgentId = '',
+    defaultAgentId = process.env.VCP_MCP_DEFAULT_AGENT_ID || '',
     includeAgentRender = true
 }) {
     if (!backendClient) {
@@ -770,6 +778,13 @@ function createBackendProxyMcpAdapter({
                 response = await backendClient.assembleContext(scopedBody.body, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
                 const writeBody = buildBody(input, args, { defaultAgentId });
+                const idempotencyKey = normalizeMcpString(
+                    writeBody.options?.idempotencyKey ||
+                    writeBody.target?.idempotencyKey ||
+                    args.idempotencyKey ||
+                    writeBody.idempotencyKey,
+                    256
+                );
                 const resolvedDiary = normalizeDiaryCanonicalName(
                     normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
                 );
@@ -779,15 +794,27 @@ function createBackendProxyMcpAdapter({
                         writeBody.target.diary = resolvedDiary;
                     }
                 }
+                if (idempotencyKey) {
+                    writeBody.idempotencyKey = idempotencyKey;
+                    writeBody.options = {
+                        ...(writeBody.options || {}),
+                        idempotencyKey
+                    };
+                }
                 response = await backendClient.writeMemory(writeBody, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
-                response = await backendClient.runRecall(
-                    buildBody(input, args, {
-                        requireSession: false,
-                        defaultAgentId
-                    }),
-                    requestOptions
-                );
+                const recallBody = buildBody(input, args, {
+                    requireSession: false,
+                    defaultAgentId
+                });
+                if (!normalizeMcpString(recallBody.query, 4096)) {
+                    throw createMcpError(
+                        MCP_ERROR_CODES.INVALID_ARGUMENTS,
+                        'gateway_recall_run requires query',
+                        { field: 'query' }
+                    );
+                }
+                response = await backendClient.runRecall(recallBody, requestOptions);
             } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
                 response = await backendClient.renderAgent(
                     ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
@@ -1035,5 +1062,6 @@ function createBackendProxyMcpServerHarness(options = {}) {
 module.exports = {
     MCP_ERROR_CODES,
     createBackendProxyMcpAdapter,
-    createBackendProxyMcpServerHarness
+    createBackendProxyMcpServerHarness,
+    sanitizeMcpErrorDetails
 };

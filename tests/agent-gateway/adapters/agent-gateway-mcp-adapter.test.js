@@ -1645,6 +1645,38 @@ test('MCP discovery falls back to global gateway-managed tools when no default a
     assert.equal(resourcesResponse.result.meta.agentId, undefined);
 });
 
+test('in-process MCP harness sanitizes nested stack details', async () => {
+    const harness = createMcpServerHarness(null, {
+        adapter: {
+            async callTool() {
+                const error = new Error('sanitized failure');
+                error.code = 'MCP_RUNTIME_ERROR';
+                error.details = {
+                    stack: 'top-level secret stack',
+                    safe: 'visible',
+                    nested: {
+                        stack: 'nested secret stack',
+                        reason: 'allowed'
+                    }
+                };
+                throw error;
+            }
+        }
+    });
+
+    const response = await harness.handleRequest({
+        jsonrpc: '2.0',
+        id: 'sanitize-error',
+        method: 'tools/call',
+        params: { name: 'anything', arguments: {} }
+    });
+
+    assert.equal(response.error.data.safe, 'visible');
+    assert.equal(response.error.data.stack, undefined);
+    assert.equal(response.error.data.nested.reason, 'allowed');
+    assert.equal(response.error.data.nested.stack, undefined);
+});
+
 test('Gateway-managed MCP tools reuse one deferred runtime envelope for render and bootstrap', async () => {
     const pluginManager = createPluginManager();
     const baseBundle = getGatewayServiceBundle(pluginManager);
