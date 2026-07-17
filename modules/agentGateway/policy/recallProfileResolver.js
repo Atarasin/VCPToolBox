@@ -1,7 +1,8 @@
-const fs = require('fs');
 const path = require('path');
 
 const { buildAgentAliases } = require('./authContextResolver');
+const { createHotJsonConfigLoader } = require('./shared/hotJsonConfigLoader');
+const { normalizeString, normalizeStringArray } = require('./shared/normalize');
 
 const DEFAULT_CONFIG_PATH = path.join(__dirname, '..', 'config', 'recall_profiles.json');
 
@@ -34,23 +35,16 @@ const _deprecationFlags = {
     kMultiplier: false
 };
 
-let cachedConfigPath = '';
-let cachedConfigMtimeMs = -1;
-let cachedConfigPayload = Object.freeze({ agents: {}, profiles: {} });
-
-function normalizeString(value) {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizeStringArray(value) {
-    if (Array.isArray(value)) {
-        return value.map((item) => normalizeString(item)).filter(Boolean);
+const loadRecallProfiles = createHotJsonConfigLoader({
+    fallback: { agents: {}, profiles: {} },
+    normalize(parsed) {
+        const agents = parsed?.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents)
+            ? parsed.agents : {};
+        const profiles = parsed?.profiles && typeof parsed.profiles === 'object' && !Array.isArray(parsed.profiles)
+            ? parsed.profiles : {};
+        return { agents, profiles };
     }
-    if (typeof value === 'string') {
-        return value.split(',').map((item) => item.trim()).filter(Boolean);
-    }
-    return [];
-}
+});
 
 function normalizeBoolean(value) {
     if (typeof value === 'boolean') {
@@ -76,43 +70,6 @@ function normalizeProjection(value) {
         return normalizeString(value.emit) || undefined;
     }
     return undefined;
-}
-
-function loadRecallProfiles(configPath) {
-    let stat;
-    try {
-        stat = fs.statSync(configPath);
-    } catch (error) {
-        cachedConfigPath = configPath;
-        cachedConfigMtimeMs = -1;
-        cachedConfigPayload = Object.freeze({ agents: {}, profiles: {} });
-        return cachedConfigPayload;
-    }
-
-    if (cachedConfigPath === configPath && cachedConfigMtimeMs === stat.mtimeMs) {
-        return cachedConfigPayload;
-    }
-
-    try {
-        const rawText = fs.readFileSync(configPath, 'utf8');
-        const parsed = JSON.parse(rawText);
-        const agents = parsed?.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents)
-            ? parsed.agents
-            : {};
-        const profiles = parsed?.profiles && typeof parsed.profiles === 'object' && !Array.isArray(parsed.profiles)
-            ? parsed.profiles
-            : {};
-
-        cachedConfigPath = configPath;
-        cachedConfigMtimeMs = stat.mtimeMs;
-        cachedConfigPayload = Object.freeze({ agents, profiles });
-        return cachedConfigPayload;
-    } catch (error) {
-        cachedConfigPath = configPath;
-        cachedConfigMtimeMs = stat.mtimeMs;
-        cachedConfigPayload = Object.freeze({ agents: {}, profiles: {} });
-        return cachedConfigPayload;
-    }
 }
 
 function normalizeModifierEntry(value) {

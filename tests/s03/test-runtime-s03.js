@@ -18,9 +18,9 @@ let mockFullTextImpl = async (args) => {
     return { ...mockFullTextResult };
 };
 
-require.cache[require.resolve('../../modules/agentGateway/services/contextRuntimeService')] = {
-    id: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
-    filename: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
+require.cache[require.resolve('../../modules/agentGateway/core/recall/ragRetriever')] = {
+    id: require.resolve('../../modules/agentGateway/core/recall/ragRetriever'),
+    filename: require.resolve('../../modules/agentGateway/core/recall/ragRetriever'),
     loaded: true,
     exports: {
         collectRagItems: async (args) => mockCollectRagItemsImpl(args),
