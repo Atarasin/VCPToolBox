@@ -1,6 +1,6 @@
 # 01 · 现状架构与技术负债登记
 
-> 所有结论均附 `文件:行号` 证据，基于 2026-07-09 的代码状态（分支 main）。
+> 原始调查基于 2026-07-09 的代码状态（分支 main）；2026-07-17 评审复核后修正 A3/A6 定性并补充测试基线。为保持跨文档引用稳定，撤销项仍保留原编号。
 
 ## 1. 现状架构全景
 
@@ -35,7 +35,7 @@
 | `capabilityService` | 415 | 能力清单（tools/memoryTargets）聚合 |
 | `agentRegistryService` | 609 | Agent 档案 / prompt 模板渲染（依赖 `agentManager` + `messageProcessor`） |
 | `jobRuntimeService` | 352 | 异步 job 状态机（**纯内存**，无持久化） |
-| `memoryRuntimeService` | 701 | 记忆写��（经 `processToolCall('DailyNote', …)`） |
+| `memoryRuntimeService` | 701 | 记忆写入（经 `processToolCall('DailyNote', …)`） |
 | `contextRuntimeService` | 1336 | rag/search 与 rag/context 主流程；导出 `collectRagItems`（`:596-825`） |
 | `toolRuntimeService` | 494 | 普通插件工具执行（审批、schema 校验、job 化） |
 | `operabilityService` | 457 | 限流 / 并发 / 载荷治理 |
@@ -84,13 +84,20 @@ RAG 本体在网关之外：`Plugin/RAGDiaryPlugin/RAGDiaryPlugin.js`（embeddin
 - 配置：`config.env` 的 `AGENT_GATEWAY_KEY/ID`、`VCP_MCP_HTTP_*`、`VCP_MCP_WS_*`、`VCP_MCP_BACKEND_*`、`VCP_MCP_DEFAULT_AGENT_ID`。
 - 依赖方向：agentGateway 单向依赖 `modules/agentManager`、`modules/messageProcessor` 与根级 RAG 组件；**无同级模块反向依赖**（重构自由度高）。
 
+### 1.6 评审时测试与装配基线（2026-07-17）
+
+- 全量执行 `node --test --test-concurrency=1 tests/agent-gateway/**/*.test.js tests/s*/test-*.js`：共 684 tests，675 pass，9 fail；并行执行结果相同。
+- 失败集中在四类：已导出的 OpenAPI YAML/JSON 与 canonical document 漂移；recall profile 测试直接读取当前 `config/recall_profiles.json`；AgentRegistry 默认渲染用例；CapabilityService 版本断言。
+- 根 `npm test` 只运行 `tests/rag-params/*.test.js`，不存在 Agent Gateway 全量聚合命令；`.github/workflows/ci.yml` 的 validate job 只执行 `npm ci`，不运行测试。
+- Native 路由在 `server.js:1506` 创建并触发 service bundle 构造，宿主插件直到 `server.js:1594` 才加载。目标端口若在 bundle 构造期验证 RAG 插件，必须先调整这一装配时序。
+
 ## 2. 负债形成机制（为什么会这样）
 
 模块按里程碑（S01→S05）快速演进，每次扩展一条新链路（native REST → in-process MCP → backend-proxy MCP → 三种传输）时，直接复制上一条链路的实现再修改。复制体随后各自演化，产生漂移。`index.js:2-3` 的注释（"按里程碑逐步补齐"）与 git 历史（`553c8d6e` "重构召回配置结构"、`79da8cdc` "S04标准化"）均可佐证。
 
 ## 3. 技术负债登记表
 
-分级：**A=行为 bug/安全**（必须修）、**B=结构性重复**（漂移温床）、**C=可维护性**（巨型文件/隐式契约）、**D=基础设施缺口**。
+分级：**A=行为 bug/安全**（必须修；评审撤销项除外）、**B=结构性重复**（漂移温床）、**C=可维护性**（巨型文件/隐式契约）、**D=基础设施缺口**。
 
 ### A 类：正确性与安全
 
@@ -98,10 +105,10 @@ RAG 本体在网关之外：`Plugin/RAGDiaryPlugin/RAGDiaryPlugin.js`（embeddin
 |---|---|---|---|
 | A1 | proxy adapter 丢失全部 recall 错误码映射：`RECALL_NO_PROFILE/FORBIDDEN/INVALID_*` 等 8 个码在 `mapGatewayFailureToMcpErrorCode` 中无 case，全部降级 `RUNTIME_ERROR` | `mcpBackendProxyAdapter.js:203-219` vs `mcpAdapter.js:94-123` | stdio/HTTP/WS 三种 MCP 传输（默认走 proxy）上 recall 语义错误全部失真；客户端无法区分 404/403/400 |
 | A2 | diary 策略两版漂移：proxy 版有"策略全空直接放行"短路（`:500-505`），in-process 版无；in-process 版有 `VCP_MCP_DEFAULT_AGENT_ID` 兜底（`:441`），proxy 版无；rejection 的 `status` 字段一有一无 | `mcpAdapter.js:431-514` vs `mcpBackendProxyAdapter.js:489-571` | 同一 agent 同一 diary 请求，两条链路准入结论可能不同——策略执行面分叉 |
-| A3 | HTTP/WS server 共享 `runtimeState` 模块级单例，却各自 `ownsRuntime=true`；任一 `close()` 调 `shutdownBackendProxyMcpRuntime()` 清空单例，连带失效另一个传输的 harness | `mcpStdioServer.js:10-13,88-91`；`mcpHttpServer.js:409`；`mcpWebSocketServer.js:302` | 单独关闭/重启任一传输时另一传输静默失效；当前仅靠 `server.js:1808-1817` 的关闭顺序掩盖 |
+| A3 | **评审后撤销原行为 bug 结论**：`shutdownBackendProxyMcpRuntime()` 只清空模块级引用；HTTP/WS 各自保留已取得的 `runtimeContext.harness`，且 `GatewayBackendClient` 当前无 close/dispose 资源。清空单例后旧 harness 仍可响应 | `mcpStdioServer.js:50-91`；`mcpHttpServer.js:393-420`；`mcpWebSocketServer.js:284-313` | 不存在“另一传输静默失效”的已证实行为。所有权命名和重复初始化可能性改登记为 C12；未出现失败测试前不进入热修 |
 | A4 | harness 调用与后端回环 fetch 无超时：WS/stdio 未传 AbortSignal，`GatewayBackendClient.requestJson` 无默认 timeout；两者的消息队列是串行 promise，一次挂起 → 后续请求全部阻塞 | `mcpWebSocketServer.js:424,532`；`mcpStdioServer.js:149,165`；`GatewayBackendClient.js:111-123` | 后端一次网络抖动可使 WS 连接/stdio 进程永久卡死 |
-| A5 | 网关密钥非常量时间比较（`providedGatewayKey === config.gatewayKey`） | `protocolGovernance.js:163` | 时序侧信道；修复成本一行（`crypto.timingSafeEqual`） |
-| A6 | 未认证时返回 `roles:['admin_transition']` 占位角色，语义上是"未认证"却携带角色，下游易误判 | `protocolGovernance.js:150-159` | 权限语义含混 |
+| A5 | 网关密钥非常量时间比较（`providedGatewayKey === config.gatewayKey`） | `protocolGovernance.js:163` | 时序侧信道；需先将两侧转换为固定长度摘要再使用 `crypto.timingSafeEqual`，避免不同长度输入抛错或提前返回 |
+| A6 | **评审后重新定性**：Native 未提供 dedicated key 时会先经外层 Admin Basic/Cookie 鉴权，`admin_transition` 表达的是过渡认证身份，并非简单“未认证”；直接清空 roles 会改变 role-based policy。真正问题是外层鉴权结果未作为显式状态传给 gateway | `server.js:683-882`；`protocolGovernance.js:142-169`；`authContextResolver.js:81-110` | 不做局部 roles 热修；与 B11 合并为认证边界债务，本轮在“不升级认证体系”约束下显式豁免并保留既有行为 |
 | A7 | HTTP 自愈发现（无 session 的 `tools/list` 等自动建临时 session）占用 `maxSessions` 名额，需等 idle（默认 10min）回收 | `mcpHttpServer.js:40-45,870-889` | 可被无 session 发现请求刷爆至 503 |
 | A8 | in-process harness 顶层 catch 直接透传 `error.details`（可能含 stack），proxy 版有 `sanitizeMcpErrorDetails` 白名单 | `mcpAdapter.js:1472-1479` vs `mcpBackendProxyAdapter.js:66-101,1010-1018` | 两链路错误暴露面不对等；in-process 有信息泄露风险 |
 | A9 | `recall_profiles.json` 与 `.example` 已漂移（example 落后） | `config/recall_profiles.json` vs `.example`（diff 不同） | 新部署照 example 配置会与文档行为不符 |
@@ -138,6 +145,7 @@ RAG 本体在网关之外：`Plugin/RAGDiaryPlugin/RAGDiaryPlugin.js`（embeddin
 | C9 | AIMemo 提示词/预设（约 60 行中文模板）硬编码在 runtime service 内，axios 直调 LLM，`${config.url}v1/chat/completions` 依赖 url 尾斜杠约定 | `recallRuntimeService.js:769-891` |
 | C10 | 三传输批处理行为不一致：WS 支持 batch（`mcpWebSocketServer.js:441-476`），HTTP/stdio 拒绝（`mcpHttpServer.js:174-180`、`mcpStdioServer.js:139-144`）；`validateMcpTransport` 只在 WS 路径生效（`mcpWebSocketServer.js:495`） |
 | C11 | 日志不成体系：`writeStderr` 签名两版（`mcpHttpServer.js:381-386` 单参 vs `mcpWebSocketServer.js:56-62` 双参）；无级别、无 requestId/sessionId 关联字段 |
+| C12 | backend-proxy runtime 的创建/缓存放在 `mcpStdioServer.js`，HTTP/WS 又各自声明 `ownsRuntime`；当前不会使既有 harness 失效，但所有权边界与进程级关闭职责不清，清空缓存后可重复初始化 | `mcpStdioServer.js:10-13,50-91`；`mcpHttpServer.js:366-379,1071-1090`；`mcpWebSocketServer.js:263-282,667-697` |
 
 ### D 类：基础设施缺口
 
@@ -149,6 +157,7 @@ RAG 本体在网关之外：`Plugin/RAGDiaryPlugin/RAGDiaryPlugin.js`（embeddin
 | D4 | trace 未贯通：`infra/trace.js` 的 `reuseRequestId/createTraceMeta` 零调用方；`operabilityService.js:41-43` 自造 `createTraceId`；traceId 每操作随机生成（`:270`），不接入 `x-request-id` / `x-agent-gateway-trace-id`（头已在 `protocolGovernance.js:35` 定义但未用） |
 | D5 | `jobRuntimeService` 纯内存，进程重启 job 丢失、多实例不可用（当前可接受，登记备查） |
 | D6 | HTTP 有 session idle 回收（`mcpHttpServer.js:478-486`），WS 无 idle 回收只有 ping/pong（`mcpWebSocketServer.js:315-345`），stdio 两者皆无——回收策略三态不一致；SSE 背压 `await drain` 可能永久挂起（`mcpHttpServer.js:542-543`） |
+| D7 | Agent Gateway 全量测试无单一 npm 命令、未接入 CI，且评审基线已有 9 个稳定失败；部分 resolver 测试直接读取运行配置，无法作为可靠重构门禁 | `package.json:5-16`；`.github/workflows/ci.yml:30-47`；`tests/s01/test-resolver.js:28-47`；`tests/agent-gateway/policy/agent-gateway-profile-resolver-budget.test.js:6-42` |
 
 ## 4. 值得保留的设计（重构时不要破坏）
 
@@ -156,5 +165,5 @@ RAG 本体在网关之外：`Plugin/RAGDiaryPlugin/RAGDiaryPlugin.js`（embeddin
 - **recall 诊断体系**：`pipelineStages` / `ruleDiagnostics` / `modifierDetails` 的可观测性设计完整，重构 pipeline 时应作为 stage 协议的一部分保留。
 - **S04 前置校验的精确错误码**（`RECALL_INVALID_RULE/MODIFIER/DIARY` 带 `ruleIndex`）——比静默降级好得多，是既有行为承诺。
 - **mtime 热加载**语义（改配置无需重启）——抽公共加载器时保留。
-- **契约测试**的"路径集合三方一致"机制——Phase 5 在其上加深度即可。
+- **契约测试**的"路径集合三方一致"机制——Phase 5A 在其上加深度即可。
 - **transport 的 dumb-pipe 抽象**（`transport/mcpTransport.js` 契约）——方向正确，问题是校验未全面生效。

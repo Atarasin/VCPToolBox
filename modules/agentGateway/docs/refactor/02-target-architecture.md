@@ -13,8 +13,9 @@
 modules/agentGateway/
 ├─ index.js                      # 公共出口（真实完整的 barrel）
 ├─ composition/                  # 【组装根】唯一允许接触 pluginManager / 根级 require 的地方
+│  ├─ bootstrapGateway.js              # 宿主 ready 后创建 routes/bundle，执行绑定完整性校验
 │  ├─ createGatewayServiceBundle.js   # 现文件迁入，改为组装 ports + services
-│  └─ vcpPortBindings.js              # pluginManager → 各端口实现的绑定
+│  └─ vcpPortBindings.js              # pluginManager → 各端口实现的绑定；不在插件加载前执行
 │
 ├─ ports/                        # 【新增】VCP 能力端口：显式接口 + 运行时校验
 │  ├─ index.js
@@ -54,7 +55,7 @@ modules/agentGateway/
 │     ├─ errorMapping.js         # gateway→MCP 错误码映射单一实现（A1）
 │     ├─ harness.js              # createMcpHarness(executor) —— method 分发单一实现
 │     ├─ diaryPolicyGate.js      # diary 策略注入/准入单一实现（A2）
-│     ├─ descriptors.js          # 现 mcpDescriptorRegistry（Phase 5 改为 schema 生成）
+│     ├─ descriptors.js          # 现 mcpDescriptorRegistry（Phase 5A 改为 catalog 生成）
 │     ├─ inProcessExecutor.js    # 差异体 1：直调 service bundle（原 mcpAdapter 的执行部分）
 │     └─ backendProxyExecutor.js # 差异体 2：经 GatewayBackendClient 转发
 │
@@ -62,17 +63,18 @@ modules/agentGateway/
 │  ├─ shared/
 │  │  ├─ slidingWindowRateLimit.js    # B4
 │  │  ├─ mcpContextInjector.js        # session/connection 上下文注入（B4）
-│  │  ├─ runtimeHandle.js             # 引用计数的 backend-proxy runtime（A3）
-│  │  ├─ jsonRpcCodec.js              # parse/batch/notification 语义统一（C10）
+│  │  ├─ runtimeProvider.js           # 进程级 runtime 创建/缓存；transport 不拥有共享 runtime
+│  │  ├─ jsonRpcCodec.js              # 统一解析/notification；batch policy 参数化并保留现行为
 │  │  └─ transportLogger.js           # 统一 stderr 日志（C11）
 │  ├─ mcpTransport.js / stdioTransport.js / webSocketTransport.js   # 保留
 │  ├─ httpServer.js               # 原 mcpHttpServer，闭包拆分
 │  ├─ webSocketServer.js
 │  └─ stdioServer.js              # 不再兼营"公共 runtime 工厂"职责
 │
-├─ contracts/                    # 保留；Phase 5 增加 schemas/ 单源
-│  ├─ schemas/                   # 每工具/端点一份 JSON Schema（单源）
-│  ├─ generate/                  # schema → MCP descriptor / OpenAPI 生成器
+├─ contracts/                    # 保留；Phase 5A 增加 operation catalog
+│  ├─ operations/                # 每个 canonical operation 一份定义：args/result/errors/bindings
+│  ├─ schemas/                   # operation 引用的 JSON Schema；不按协议复制业务形状
+│  ├─ generate/                  # operation catalog → MCP descriptor / OpenAPI 生成器
 │  └─ …（现有文件）
 │
 ├─ infra/                        # auditLogger 可插拔 sink；trace 贯通
@@ -85,11 +87,34 @@ modules/agentGateway/
 
 ## 3. 关键设计决策
 
+### 3.0 装配生命周期先于端口抽象
+
+**现状约束**：`server.js` 在模块装载阶段创建 `agentGatewayRoutes`，由此触发 service bundle 构造；`pluginManager.loadPlugins()` 与 service 插件初始化发生在之后。RAG 端口依赖的 `RAGDiaryPlugin` 此时尚未进入 `messagePreprocessors`，不能在现时序下做真实 fail-fast。
+
+**目标时序**：
+
+```
+创建 pluginManager
+  → loadPlugins()
+  → initializeServices()
+  → bootstrapGateway(pluginManager)
+       ├─ assertVcpHostReady()
+       ├─ bindVcpPorts()
+       ├─ createGatewayServiceBundle()
+       └─ create/mount Native routes；向 MCP in-process 入口暴露同一 bundle
+  → app.listen()
+```
+
+- `assertVcpHostReady()` 校验的是实际宿主组件和已启用能力的必需方法，不接受“永远存在、内部再 lazy lookup”的包装器冒充 fail-fast。宿主配置明确禁用的可选能力绑定 typed unavailable port，并沿用既有 operation failure/capability 暴露语义；不能因单项可选能力缺失让整个 Gateway 无条件启动失败。
+- 可选能力在宿主 ready 后固定为 capability snapshot；运行期间插件热重载如需改变能力，必须显式 rebuild/refresh port snapshot，不能静默改变接口形状。
+- 独立测试可直接传入 fake ports，不要求启动完整 pluginManager；生产装配测试必须按真实启动顺序执行一次。
+- 在完成该时序调整前，不迁移 service 构造逻辑到构造期严格端口校验。
+
 ### 3.1 端口层（ports/）——"VCP 能力"的显式建模
 
 **现状**：service 层通过多级 `||` 回退猜测 `pluginManager` 上有什么（C2），并用 lazy `require('../../../…')` 兜底（C3），还直接调 RAG 插件的下划线私有方法（C6）。这意味着 VCP 宿主任何重命名都可能静默破坏网关，且 service 无法脱离完整宿主做测试。
 
-**目标**：每个端口是一个 `create*Port(bindings)` 工厂，输出**冻结的窄接口**，构造时校验必需方法存在（fail-fast），可选能力用 `capabilities` 标志显式声明而非运行时 `typeof` 探测：
+**目标**：每个端口是一个 `create*Port(bindings)` 工厂，在宿主 ready 后输出**冻结的窄接口**。对已启用能力，构造时校验实际绑定的必需方法存在（fail-fast）；对明确禁用的可选能力，构造显式 unavailable port；细粒度可选方法用 `capabilities` 标志声明，而非业务执行阶段临时 `typeof` 探测：
 
 ```js
 // ports/ragRetrieverPort.js（示意）
@@ -109,12 +134,12 @@ function createRagRetrieverPort(bindings) {
 }
 ```
 
-`composition/vcpPortBindings.js` 是唯一知道 `RAGDiaryPlugin._rerankDocuments`、`knowledgeBaseManager.search(…, 1.33, …)` 这些宿主细节的地方——把 `1.33`、tagBoost 语义等魔法值连同注释集中于此。RAG 私有 API（`_rerankDocuments` 等）在绑定处包一层，后续与 RAGDiaryPlugin 协商公开 API 时只改这一个文件。
+`composition/vcpPortBindings.js` 是唯一知道 `RAGDiaryPlugin._rerankDocuments`、`knowledgeBaseManager.search(…, 1.33, …)` 这些宿主细节的地方——把 `1.33`、tagBoost 语义等魔法值连同注释集中于此。RAG 私有 API（`_rerankDocuments` 等）在绑定处包一层，后续与 RAGDiaryPlugin 协商公开 API 时只改这一个文件。绑定函数不得在插件加载前执行，也不得用 lazy root `require` 掩盖宿主未 ready。
 
 **收益**：
 - service/core 可用假端口做单测，不再 mock 整个 pluginManager；
 - `getKnowledgeBaseManager`/`getRagPlugin` 两套四份的探测函数（B5 一部分）直接删除；
-- C5 的 late-binding 循环依赖消解：recall 与 context 都依赖 ports，互相之间只剩纯函数引用。
+- 为 C5 的 late-binding 循环依赖消解创造前提：recall 与 context 先改为依赖 ports，Phase 4 再把共享 retriever 搬到 `core/recall/`，届时两者不再互相持有 service。
 
 ### 3.2 单一 MCP 核心（protocols/mcp/）——消灭双 adapter
 
@@ -155,14 +180,14 @@ const GATEWAY_OPERATIONS = {
 
 ### 3.3 传输公共层（transport/shared/）
 
-**现状**：HTTP/WS 逐字拷贝限流、上下文注入、harness 解析等（B4）；runtime 单例所有权冲突（A3）；无超时（A4）；批处理/日志三态不一致（C10/C11）。
+**现状**：HTTP/WS 逐字拷贝限流、上下文注入、harness 解析等（B4）；runtime 所有权边界不清（C12）；无超时（A4）；批处理/日志三态不一致（C10/C11）。
 
 **目标**：
-- **runtimeHandle**：`acquireBackendProxyRuntime()` 返回引用计数句柄，`handle.release()` 减计数，归零才真正 shutdown。HTTP/WS/stdio 各持一个句柄，任一关闭不影响其余（修复 A3）。`mcpStdioServer.js` 不再兼任"公共 runtime 工厂"，该职责移到 `transport/shared/runtimeHandle.js`。
+- **runtimeProvider**：评审已撤销“A3 会让其他 harness 失效”的判断，因此不为一个未复现问题引入引用计数。共享 runtime 由进程级 composition/provider 创建和缓存；HTTP/WS transport 只持有借用引用，`close()` 只关闭自身 session/connection，不 reset 共享 runtime。stdio 独立进程可以拥有自己的 provider，并在进程结束时 reset。若未来 backend client 出现真实 `close/dispose` 资源，再基于失败测试引入明确 owner 或引用计数。
 - **统一 dispatch 超时**：`jsonRpcCodec.dispatch(harness, request, { signal, timeoutMs })` 内建 `AbortSignal.timeout` 合成；三传输统一把 signal 注入 ctx，`GatewayBackendClient` 增加默认 timeout（可配 `VCP_MCP_BACKEND_TIMEOUT_MS`，默认 30s）（修复 A4）。
-- **批处理策略统一**：以 MCP 规范为准做一个决定（建议三传输都支持 batch，上限沿用 WS 的 20），写进 jsonRpcCodec；行为差异从"实现巧合"变成"配置"。
+- **批处理策略显式但保持兼容**：`jsonRpcCodec` 接受 `batchPolicy`，WS 配置为现有的“支持、上限 20”，HTTP/stdio 配置为现有的“拒绝 batch”。结构重构阶段只统一实现入口，不扩大接受范围。三传输统一支持 batch 属 Phase 6 行为变更，需单独契约评审。
 - **`createMcpHttpServer` 767 行闭包拆分**：session 生命周期（`sessionStore.js`）、SSE 流管理（`sseStream.js`）、请求分发三块拆为可单测单元；SSE 背压加超时兜底（D6）。
-- WS 增加 idle 回收与 HTTP 对齐；自愈发现 session 改为不占 `maxSessions` 配额的短时匿名会话或直接免 session 处理 discovery 方法（修复 A7）。
+- WS 增加 idle 回收与 HTTP 对齐；HTTP 自愈发现 session 标记为 `kind:'discovery'`，进入独立有界 LRU 池并使用 60s TTL，不计入正常 `maxSessions`。响应仍返回可在 TTL 内复用的 session id，保持客户端兼容（修复 A7）。
 
 ### 3.4 recall 管线重组（core/recall/）
 
@@ -174,7 +199,7 @@ const GATEWAY_OPERATIONS = {
 executeRecall(input)
   → stages/resolveProfile      # profileResolver + mapResolvedRecallFailure
   → stages/precomputeVector    # 经 ragRetrieverPort.embedQuery
-  → stages/executeRules        # 对每条 rule: gates → retriever → modifiers（并行执行见下）
+  → stages/executeRules        # 对每条 rule: gates → retriever → modifiers（保持现有串行顺序）
   │    ├─ gates/roleValveGate.js  gates/conceptSimilarityGate.js
   │    ├─ retrievers/ragRetriever.js        # 原 collectRagItems，搬家后成为唯一实现
   │    ├─ retrievers/fullTextRetriever.js   # 原 defaultFullTextRetriever
@@ -189,18 +214,20 @@ executeRecall(input)
 - **`recallItem.js`**：统一 item 形状（`text/score/sourceDiary/sourceFile/timestamp/tags/role`），提供 `itemKey(item)`；interleave 的 O(n²) `find` 改 Map 索引（B9）。
 - **modifier 注册表**取代 `MODIFIER_PIPELINE_ORDER` 里的 continue/if 特判：每个 modifier 自带执行阶段声明，`applyS02Modifiers` 里"跳过 time/group/tagMemo/rerank/aiMemo"的知识改由注册表表达。
 - **diary 准入去重**：`defaultFullTextRetriever` 与 `collectRagItems` 各自 80 行的准入块合并为 `resolveDiaryAccess({ requestedDiaries, agentId, authContext, policyResolver, appliedDefaultPolicy }) → { targetDiaries | rejection }` 单一函数（同时服务 B5 与 A2 的策略统一）。
-- **规则并行**：现状 for 循环串行执行 rules（`recallRuntimeService.js:1295`）。拆分后 rules 天然无相互依赖，改 `Promise.all` 并行（保留 ruleIndex 顺序输出）；这是重构顺带的性能收益，diagnostics 的 durationMs 语义不变。
+- **规则执行顺序冻结**：现状 for 循环串行执行 rules（`recallRuntimeService.js:1295`）。虽然拆分后数据依赖更清晰，但 rules 仍共享 KnowledgeBaseManager、缓存、reranker、LLM 后端与外部限流；本轮保持串行和调用顺序不变。未来并行化放入 Phase 6，要求有界并发、默认并发度 1、真实后端压力测试与可回滚开关。
 - contextRuntimeService 的 search/context 主流程改为调用 `retrievers/ragRetriever`，删除自己的那份实现。
 
-### 3.5 契约单源（contracts/schemas/ + 生成器）
+### 3.5 契约单源（operation catalog + schemas + 生成器）
 
 **现状**：同一工具的形状存在三份手工副本——descriptorRegistry 硬编码 inputSchema（311 行）、publishedOpenApiDocument 手写 1821 行、toolRuntimeService 手写校验器；三者无机器对齐（D1/D2）。
 
 **目标**：
-- `contracts/schemas/` 下每个 gateway 工具/端点一份标准 JSON Schema（draft-07，人手维护的**唯一**形状源）。
-- 引入 **ajv**（无 ESM 冲突，仓库 CommonJS 兼容）编译校验器：toolRuntimeService 的手写 `validateToolSchemaValue` 保留为插件"猜测 schema"的宽松路径，gateway 托管工具改走 ajv 严格校验。
-- `contracts/generate/`：构建期脚本从 schemas 生成 MCP tool descriptors 与 OpenAPI paths/components；`scripts/exportAgentGatewayOpenApi.js` 改调生成器。`publishedOpenApiDocument.js` 退役为生成产物（描述文字/example 保留在 schema 的 `description`/`examples` 字段中迁移）。
-- 契约测试升级：现有"路径集合一致"保留，新增"descriptor == 由 schema 生成"与"响应样例通过 schema 校验"两层。
+- `contracts/operations/` 下每个 canonical operation 一份定义，至少包含 `operationId`、args/result schema 引用、稳定错误码集合、REST binding（method/path/parameter locations）和 MCP binding（tool/prompt/resource 名及后处理）。8 个 MCP 工具与 15 个 REST 端点不强求一一对应。
+- `contracts/schemas/` 只维护业务 args/result/envelope 的 JSON Schema；同一 operation 不因 REST/MCP 各复制一份业务形状。协议独有 envelope 与参数位置由 binding 描述。
+- 继续发布 OpenAPI 3.0.3 时，生成器必须显式处理 draft-07 与 OAS 3.0 的差异（如 `nullable`、`example/examples`、部分关键字支持）；若升级到 OpenAPI 3.1，作为单独契约决策，不在搬家提交中顺带完成。
+- 引入显式顶层依赖的 **ajv**（锁定 CommonJS 兼容版本）编译 gateway 托管 operation 校验器，但默认保持现有接受语义：`coerceTypes:false`、`useDefaults:false`、`removeAdditional:false`；`additionalProperties`、enum/format/pattern 是否生效逐 operation 以历史请求 corpus 确认。插件“猜测 schema”的宽松路径不变。
+- `contracts/generate/` 从 operation catalog 生成 MCP descriptors 与 OpenAPI paths/components；`scripts/exportAgentGatewayOpenApi.js` 改调生成器。**唯一手写源是 operation catalog/schema**；`publishedOpenApiDocument.js` 与导出的 JSON/YAML 均作为生成产物提交仓库，运行时不维护第二套生成逻辑。CI 重生成后要求零 diff。
+- 契约测试升级：路径集合一致、descriptor/catalog 同源、关键请求与响应样例通过 schema、生成产物无 diff、历史合法/非法请求 corpus 的判定不变。
 - `info.version` 取自 `packageJson`，消灭双版本。
 
 ### 3.6 基础设施（infra/）
@@ -215,8 +242,8 @@ executeRecall(input)
 
 | 层次 | 消费者 | 入口 | 特点 |
 |---|---|---|---|
-| L1 REST | 服务端集成 | `/agent_gateway/*` | OpenAPI 由 schema 生成，永远与实现同步 |
-| L2 MCP | Agent 工具生态 | `/mcp`(http/ws) 或 stdio | 三传输行为一致（同 harness 同 executor 语义），8 工具 schema 与 REST 同源 |
+| L1 REST | 服务端集成 | `/agent_gateway/*` | OpenAPI 由 operation catalog + schema 生成，永远与实现同步 |
+| L2 MCP | Agent 工具生态 | `/mcp`(http/ws) 或 stdio | 共享 harness/executor 语义；transport batch policy 显式保留；8 工具与 REST operation 同源 |
 | L3 in-process | 仓库内其他模块（如 vcpLoop/workflowKernel 未来需要 recall 时） | `require('modules/agentGateway').core` + 组装根 | 直接拿 service，不经协议层；ports 使其可脱离完整宿主测试 |
 
 RAG 检索作为最核心能力，其单一调用面为：`core/recall/recallRuntimeService.executeRecall()`（profile 驱动）与 `core/recall/retrievers/ragRetriever()`（参数驱动），REST 的 `/recall/run`、`/rag/search`、`/rag/context` 与 MCP 的 `gateway_recall_run`、`gateway_memory_search`、`gateway_context_assemble` 全部收敛到这两个入口。
