@@ -7,7 +7,7 @@ const WebSocket = require('ws');
 const {
     AGW_ERROR_CODES
 } = require('./contracts/errorCodes');
-const { normalizeRequestContext, sanitizeRequestContextValue } = require('./contracts/requestContext');
+const { sanitizeRequestContextValue } = require('./contracts/requestContext');
 const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance');
 const { WebSocketTransport, validateMcpTransport } = require('./transport');
 const {
@@ -15,6 +15,13 @@ const {
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime
 } = require('./mcpStdioServer');
+const {
+    checkSlidingWindowRateLimit,
+    createSlidingWindowRateLimit,
+    dispatchJsonRpc,
+    injectMcpContext,
+    parseJsonRpcPayload
+} = require('./transport/shared');
 
 const DEFAULT_ENDPOINT_PATH = '/mcp';
 const DEFAULT_PING_INTERVAL_MS = 30000;
@@ -30,6 +37,7 @@ const MAX_PAYLOAD_BYTES_ENV = 'VCP_MCP_WS_MAX_PAYLOAD_BYTES';
 const UPGRADE_AUTH_TIMEOUT_MS_ENV = 'VCP_MCP_WS_UPGRADE_AUTH_TIMEOUT_MS';
 const RATE_LIMIT_MESSAGES_ENV = 'VCP_MCP_WS_RATE_LIMIT_MESSAGES';
 const RATE_LIMIT_WINDOW_MS_ENV = 'VCP_MCP_WS_RATE_LIMIT_WINDOW_MS';
+const IDLE_TIMEOUT_MS_ENV = 'VCP_MCP_WS_IDLE_TIMEOUT_MS';
 const DEFAULT_SOURCE = 'agent-gateway-mcp-ws';
 const DEFAULT_RUNTIME = 'mcp-websocket';
 const JSON_RPC_SERVER_ERROR_CODE = -32000;
@@ -164,68 +172,11 @@ function buildRateLimitRejectionPayload(rawMessage, rateLimit) {
 }
 
 function checkRateLimit(connection, timestamp = Date.now()) {
-    const rateLimit = connection.rateLimit;
-    if (!rateLimit || rateLimit.limit <= 0 || rateLimit.windowMs <= 0) {
-        return { allowed: true };
-    }
-
-    const cutoff = timestamp - rateLimit.windowMs;
-    connection.rateLimit.timestamps = connection.rateLimit.timestamps.filter((entry) => entry > cutoff);
-
-    if (connection.rateLimit.timestamps.length >= rateLimit.limit) {
-        return {
-            allowed: false,
-            retryAfterMs: Math.max(0, connection.rateLimit.timestamps[0] + rateLimit.windowMs - timestamp),
-            limit: rateLimit.limit,
-            windowMs: rateLimit.windowMs
-        };
-    }
-
-    connection.rateLimit.timestamps.push(timestamp);
-    return { allowed: true };
+    return checkSlidingWindowRateLimit(connection.rateLimit, timestamp);
 }
 
 function injectConnectionContext(request, connectionContext, options = {}) {
-    const requestObject = isPlainObject(request) ? request : {};
-    const params = isPlainObject(requestObject.params) ? { ...requestObject.params } : {};
-    const clientRequestContext = isPlainObject(params.requestContext) ? params.requestContext : {};
-    const requestIdPrefix = sanitizeRequestContextValue(options.requestIdPrefix, 16) || 'agwmcp';
-    const topLevelAgentId = sanitizeRequestContextValue(params.agentId, 256);
-
-    const normalizedRequestContext = normalizeRequestContext({
-        requestId: clientRequestContext.requestId,
-        agentId: clientRequestContext.agentId || topLevelAgentId,
-        source: clientRequestContext.source || connectionContext.source,
-        runtime: clientRequestContext.runtime || connectionContext.runtime,
-        sessionId: connectionContext.sessionId
-    }, {
-        defaultSource: connectionContext.source,
-        defaultRuntime: connectionContext.runtime,
-        requestIdPrefix
-    });
-
-    return {
-        ...requestObject,
-        params: {
-            ...params,
-            ...(topLevelAgentId || normalizedRequestContext.agentId
-                ? { agentId: topLevelAgentId || normalizedRequestContext.agentId }
-                : {}),
-            // The canonical websocket session identity always comes from the server.
-            sessionId: connectionContext.sessionId,
-            requestContext: {
-                ...normalizedRequestContext,
-                ...(connectionContext.gatewayId ? { gatewayId: connectionContext.gatewayId } : {})
-            },
-            authContext: {
-                ...(connectionContext.gatewayId ? { gatewayId: connectionContext.gatewayId } : {}),
-                sessionId: connectionContext.sessionId,
-                ...(connectionContext.authMode ? { authMode: connectionContext.authMode } : {}),
-                ...(connectionContext.authSource ? { authSource: connectionContext.authSource } : {}),
-                ...(connectionContext.roles.length > 0 ? { roles: [...connectionContext.roles] } : {})
-            }
-        }
-    };
+    return injectMcpContext(request, connectionContext, options);
 }
 
 function createMcpWebSocketServer(options = {}) {
@@ -260,6 +211,9 @@ function createMcpWebSocketServer(options = {}) {
         RATE_LIMIT_WINDOW_MS_ENV,
         DEFAULT_RATE_LIMIT_WINDOW_MS
     );
+    const idleTimeoutMs = resolvePositiveInteger(options.idleTimeoutMs)
+        || resolvePositiveInteger(process.env[IDLE_TIMEOUT_MS_ENV])
+        || 0;
     const initializeRuntime = options.initializeRuntime || initializeBackendProxyMcpRuntime;
     const shutdownRuntime = options.shutdownRuntime || shutdownBackendProxyMcpRuntime;
     const resolveAuth = options.resolveAuth || resolveDedicatedGatewayAuth;
@@ -344,6 +298,17 @@ function createMcpWebSocketServer(options = {}) {
         }
     }
 
+    function touchConnection(connection) {
+        connection.lastActivityAt = Date.now();
+        if (connection.idleTimer) clearTimeout(connection.idleTimer);
+        if (idleTimeoutMs <= 0) return;
+        connection.idleTimer = setTimeout(() => {
+            connection.ws.terminate();
+            void cleanupConnection(connection, 'idle-timeout');
+        }, idleTimeoutMs);
+        if (typeof connection.idleTimer.unref === 'function') connection.idleTimer.unref();
+    }
+
     async function cleanupConnection(connection, _reason = 'cleanup') {
         if (!connection) {
             return;
@@ -359,6 +324,10 @@ function createMcpWebSocketServer(options = {}) {
         if (connection.heartbeatTimer) {
             clearInterval(connection.heartbeatTimer);
             connection.heartbeatTimer = null;
+        }
+        if (connection.idleTimer) {
+            clearTimeout(connection.idleTimer);
+            connection.idleTimer = null;
         }
 
         connection.cleanupPromise = (async () => {
@@ -385,105 +354,29 @@ function createMcpWebSocketServer(options = {}) {
     }
 
     async function handleClientMessage(connection, rawMessage) {
-        const messageText = typeof rawMessage === 'string' ? rawMessage.trim() : '';
-        if (!messageText) {
+        const parsed = parseJsonRpcPayload(rawMessage, {
+            batchPolicy: 'allow',
+            maxBatchSize
+        });
+        if (parsed.error) {
+            connection.transport.send(JSON.stringify(parsed.error));
             return;
         }
 
-        let request;
-        try {
-            request = JSON.parse(messageText);
-        } catch (error) {
-            connection.transport.send(JSON.stringify(createJsonRpcErrorResponse(null, -32700, 'Parse error', {
-                details: error.message
-            })));
-            return;
+        if (!connection.harnessPromise) {
+            connection.harnessPromise = resolveHarness().catch((error) => {
+                connection.harnessPromise = null;
+                throw error;
+            });
         }
-
-        const getHarness = async () => {
-            if (!connection.harnessPromise) {
-                // Reset the per-connection cache after transient init failures so later
-                // requests on the same websocket can retry runtime bootstrap.
-                connection.harnessPromise = resolveHarness().catch((error) => {
-                    connection.harnessPromise = null;
-                    throw error;
-                });
+        const harness = await connection.harnessPromise;
+        const response = await dispatchJsonRpc({
+            ...parsed,
+            harness,
+            inject: (request) => injectConnectionContext(request, connection.context, options),
+            onNotificationError: (error) => {
+                logTransportError(stderr, '[MCPTransport] Notification handling failed', error);
             }
-            return connection.harnessPromise;
-        };
-        const dispatchRequest = async (requestItem, errorData) => {
-            if (!isPlainObject(requestItem)) {
-                return createInvalidRequestError(errorData);
-            }
-
-            const requestWithContext = injectConnectionContext(requestItem, connection.context, options);
-            const expectsResponse = hasOwn(requestWithContext, 'id');
-            const harness = await getHarness();
-
-            try {
-                const response = await harness.handleRequest(requestWithContext);
-                return expectsResponse && response ? response : null;
-            } catch (error) {
-                if (!expectsResponse) {
-                    logTransportError(stderr, '[MCPTransport] Notification handling failed', error);
-                    return null;
-                }
-
-                return createJsonRpcErrorResponse(
-                    requestWithContext.id,
-                    -32603,
-                    'Internal error',
-                    { details: error.message }
-                );
-            }
-        };
-
-        if (Array.isArray(request)) {
-            if (request.length === 0) {
-                connection.transport.send(JSON.stringify(createInvalidRequestError({
-                    field: 'request',
-                    reason: 'empty_batch'
-                })));
-                return;
-            }
-
-            if (request.length > maxBatchSize) {
-                connection.transport.send(JSON.stringify(createInvalidRequestError({
-                    field: 'request',
-                    reason: 'batch_limit_exceeded',
-                    limit: maxBatchSize,
-                    actual: request.length
-                })));
-                return;
-            }
-
-            const responses = [];
-            for (let index = 0; index < request.length; index += 1) {
-                const response = await dispatchRequest(request[index], {
-                    field: 'request',
-                    reason: 'invalid_batch_member',
-                    batchIndex: index
-                });
-                if (response) {
-                    responses.push(response);
-                }
-            }
-
-            if (responses.length > 0) {
-                connection.transport.send(JSON.stringify(responses));
-            }
-            return;
-        }
-
-        if (!isPlainObject(request)) {
-            connection.transport.send(JSON.stringify(createInvalidRequestError({
-                field: 'request'
-            })));
-            return;
-        }
-
-        const response = await dispatchRequest(request, {
-            field: 'request'
         });
         if (response) {
             connection.transport.send(JSON.stringify(response));
@@ -502,17 +395,16 @@ function createMcpWebSocketServer(options = {}) {
             cleanedUp: false,
             cleanupPromise: null,
             heartbeatTimer: null,
+            idleTimer: null,
+            lastActivityAt: Date.now(),
             queue: Promise.resolve(),
             harnessPromise: null,
-            rateLimit: {
-                limit: rateLimitMessages,
-                windowMs: rateLimitWindowMs,
-                timestamps: []
-            }
+            rateLimit: createSlidingWindowRateLimit({ limit: rateLimitMessages, windowMs: rateLimitWindowMs })
         };
 
         connections.set(connection.connectionId, connection);
         startHeartbeat(connection);
+        touchConnection(connection);
 
         transport.setErrorHandler((error) => {
             logTransportError(stderr, '[MCPTransport] WebSocket transport error', error);
@@ -520,6 +412,7 @@ function createMcpWebSocketServer(options = {}) {
         });
 
         transport.setMessageHandler((message) => {
+            touchConnection(connection);
             const rateLimitResult = checkRateLimit(connection);
             if (!rateLimitResult.allowed) {
                 const payload = buildRateLimitRejectionPayload(message, rateLimitResult);
@@ -542,6 +435,7 @@ function createMcpWebSocketServer(options = {}) {
 
         ws.on('pong', () => {
             connection.isAlive = true;
+            touchConnection(connection);
         });
 
         ws.on('close', () => {
@@ -683,7 +577,8 @@ function createMcpWebSocketServer(options = {}) {
                 wss.close(() => resolve());
             });
 
-            if (ownsRuntime && options.shutdownOnClose !== false) {
+            const injectedRuntime = options.backendClient || options.backendUrl || options.initializeRuntime;
+            if (ownsRuntime && (options.shutdownOnClose === true || typeof options.shutdownRuntime === 'function' || injectedRuntime)) {
                 try {
                     await shutdownRuntime();
                 } catch (error) {
