@@ -18,9 +18,6 @@ const {
     finishGatewayManagedOperation
 } = require('./operability');
 const {
-    normalizeDiaryCanonicalName
-} = require('../../policy/mcpAgentMemoryPolicy');
-const {
     MCP_RESOURCE_KINDS,
     MCP_GATEWAY_TOOL_NAMES,
     MCP_GATEWAY_PROMPT_NAMES,
@@ -47,6 +44,9 @@ const {
 const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
 const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
+const { getGatewayOperation } = require('./operations');
+const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError } = require('./inProcessOperations');
+const { createReadResourceHandler } = require('./resourceHandlers');
 
 function normalizeMcpString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
@@ -319,57 +319,6 @@ function buildManagedToolContextInput(input, args) {
     };
 }
 
-function buildBootstrapSummary(renderResult, agentId) {
-    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || 'unknown-agent';
-    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
-    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
-    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId}`];
-
-    if (renderedPrompt) {
-        fragments.push(`length=${renderedPrompt.length}`);
-    }
-    if (renderResult?.truncated) {
-        fragments.push('truncated=true');
-    }
-    if (warnings.length > 0) {
-        fragments.push(`warnings=${warnings.length}`);
-    }
-
-    return fragments.join('; ');
-}
-
-function buildBootstrapResult(renderResult, agentId) {
-    return {
-        ...renderResult,
-        agentId: normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId,
-        summary: buildBootstrapSummary(renderResult, agentId)
-    };
-}
-
-function mapAgentRegistryError(error, requestContext) {
-    if (error?.code === 'AGENT_NOT_FOUND') {
-        return {
-            success: false,
-            status: 404,
-            code: AGW_ERROR_CODES.NOT_FOUND,
-            error: error.message,
-            requestId: requestContext.requestId,
-            details: error.details || {}
-        };
-    }
-
-    return {
-        success: false,
-        status: 500,
-        code: AGW_ERROR_CODES.INTERNAL_ERROR,
-        error: 'Failed to render agent',
-        requestId: requestContext.requestId,
-        details: {
-            message: error?.message || 'Unknown render failure'
-        }
-    };
-}
-
 function buildMcpContexts(bundle, input = {}, defaultSource) {
     const requestInput = input.requestContext && typeof input.requestContext === 'object'
         ? input.requestContext
@@ -485,16 +434,6 @@ function ensureJobIdentity(requestContext, authContext, operation) {
             fields: ['agentId', 'sessionId', 'gatewayId']
         }
     );
-}
-
-function attachRequestId(result, requestId) {
-    if (!result || typeof result !== 'object') {
-        return result;
-    }
-    return {
-        ...result,
-        requestId: result.requestId || requestId || ''
-    };
 }
 
 async function executeGatewayManagedOperation({
@@ -643,289 +582,23 @@ async function executeGatewayManagedPromptGet({
 }
 
 async function executeGatewayManagedTool(bundle, name, args, input = {}) {
-    const source = {
-        [MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER]: 'mcp-agent-render',
-        [MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP]: 'mcp-agent-bootstrap',
-        [MCP_GATEWAY_TOOL_NAMES.JOB_GET]: 'mcp-job-get',
-        [MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL]: 'mcp-job-cancel',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH]: 'mcp-memory-search',
-        [MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE]: 'mcp-context-assemble',
-        [MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE]: 'mcp-memory-write',
-        [MCP_GATEWAY_TOOL_NAMES.RECALL_RUN]: 'mcp-recall-run'
-    }[name] || 'mcp';
-
-    // Render remains the high-level MCP entry point and reuses the shared registry contract.
-    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'agents.render',
-            args,
-            input,
-            source,
-            requiresAgentOnly: true,
-            async execute({ requestContext }) {
-                try {
-                    const renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
-                        variables: args.variables,
-                        model: args.model,
-                        maxLength: args.maxLength,
-                        context: args.context,
-                        messages: args.messages
-                    });
-
-                    if (renderResult?.success && (renderResult.status === 'accepted' || renderResult.status === 'waiting_approval')) {
-                        return attachRequestId(renderResult, requestContext.requestId);
-                    }
-
-                    return {
-                        success: true,
-                        requestId: requestContext.requestId,
-                        data: renderResult,
-                        audit: {
-                            runtime: requestContext.runtime,
-                            source: requestContext.source
-                        }
-                    };
-                } catch (error) {
-                    return mapAgentRegistryError(error, requestContext);
-                }
-            }
+    const operation = getGatewayOperation(name);
+    const handler = operation && IN_PROCESS_OPERATION_HANDLERS[operation.executor];
+    if (!handler) {
+        throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
+            field: 'name',
+            name
         });
     }
 
-    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'agents.render',
-            args,
-            input,
-            source,
-            requiresAgentOnly: true,
-            async execute({ requestContext }) {
-                try {
-                    const renderResult = await bundle.agentRegistryService.renderAgent(requestContext.agentId, {
-                        variables: args.variables,
-                        model: args.model,
-                        maxLength: args.maxLength,
-                        context: args.context,
-                        messages: args.messages
-                    });
-
-                    if (renderResult?.success && (renderResult.status === 'accepted' || renderResult.status === 'waiting_approval')) {
-                        return attachRequestId(renderResult, requestContext.requestId);
-                    }
-
-                    return {
-                        success: true,
-                        requestId: requestContext.requestId,
-                        data: buildBootstrapResult(renderResult, requestContext.agentId),
-                        audit: {
-                            runtime: requestContext.runtime,
-                            source: requestContext.source
-                        }
-                    };
-                } catch (error) {
-                    return mapAgentRegistryError(error, requestContext);
-                }
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.JOB_GET) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'jobs.read',
-            args,
-            input,
-            source,
-            requiresJobIdentity: true,
-            async execute({ requestContext, authContext }) {
-                return attachRequestId(
-                    bundle.jobRuntimeService.pollJob(args.jobId, authContext),
-                    requestContext.requestId
-                );
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'jobs.cancel',
-            args,
-            input,
-            source,
-            requiresJobIdentity: true,
-            async execute({ requestContext, authContext }) {
-                return attachRequestId(
-                    bundle.jobRuntimeService.cancelJob(args.jobId, authContext),
-                    requestContext.requestId
-                );
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
-        const scoped = applyDiaryPolicyGate({ toolName: name, payload: args, input });
-        if (scoped.rejection) {
-            return mapGatewayManagedResultToMcp(name, scoped.rejection);
-        }
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'memory.search',
-            args: scoped.payload,
-            clientPayloadArgs: args,
-            input: { ...input, diaryPolicy: scoped.diaryPolicy },
-            source,
-            async execute({ body, diaryPolicy }) {
-                return bundle.contextRuntimeService.search({
-                    body,
-                    startedAt: Date.now(),
-                    defaultSource: source,
-                    diaryPolicy
-                });
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
-        const scoped = applyDiaryPolicyGate({ toolName: name, payload: args, input });
-        if (scoped.rejection) {
-            return mapGatewayManagedResultToMcp(name, scoped.rejection);
-        }
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'context.assemble',
-            args: scoped.payload,
-            clientPayloadArgs: args,
-            input: { ...input, diaryPolicy: scoped.diaryPolicy },
-            source,
-            async execute({ body, diaryPolicy }) {
-                return bundle.contextRuntimeService.buildRecallContext({
-                    body,
-                    startedAt: Date.now(),
-                    defaultSource: source,
-                    diaryPolicy
-                });
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'memory.write',
-            args,
-            input,
-            source,
-            async execute({ body }) {
-                const resolvedDiary = normalizeDiaryCanonicalName(
-                    normalizeMcpString(body.diary || body.target?.diary, 256)
-                );
-                return bundle.memoryRuntimeService.writeMemory({
-                    body: {
-                        ...body,
-                        ...(resolvedDiary ? { diary: resolvedDiary } : {}),
-                        ...(body.target ? {
-                            target: {
-                                ...body.target,
-                                ...(resolvedDiary ? { diary: resolvedDiary } : {})
-                            }
-                        } : {}),
-                        idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey,
-                        options: {
-                            ...body.options,
-                            idempotencyKey: body.options?.idempotencyKey || args.idempotencyKey || body.idempotencyKey
-                        }
-                    },
-                    startedAt: Date.now(),
-                    clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
-                    defaultSource: source
-                });
-            }
-        });
-    }
-
-    if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
-        return executeGatewayManagedOperation({
-            bundle,
-            name,
-            operationName: 'recall.run',
-            args,
-            input,
-            source,
-            async execute({ body, requestContext, authContext }) {
-                const agentId = normalizeMcpString(body.agentId || body.requestContext?.agentId || args.agentId);
-                const query = normalizeMcpString(body.query || args.query);
-                const profile = normalizeMcpString(body.profile || args.profile);
-
-                if (!agentId) {
-                    return {
-                        success: false,
-                        requestId: requestContext.requestId,
-                        status: 400,
-                        code: AGW_ERROR_CODES.VALIDATION_ERROR,
-                        error: 'agentId is required'
-                    };
-                }
-                if (!query) {
-                    return {
-                        success: false,
-                        requestId: requestContext.requestId,
-                        status: 400,
-                        code: AGW_ERROR_CODES.VALIDATION_ERROR,
-                        error: 'query is required'
-                    };
-                }
-
-                const result = await bundle.recallRuntimeService.executeRecall({
-                    agentId,
-                    query,
-                    profileName: profile,
-                    requestContext,
-                    authContext,
-                    agentPolicyResolver: bundle.agentPolicyResolver,
-                    messages: Array.isArray(body.messages) ? body.messages : undefined
-                });
-                const projected = bundle.recallProjectionService.projectFullResult(result, requestContext.requestId);
-
-                if (!projected.success) {
-                    return {
-                        success: false,
-                        requestId: requestContext.requestId,
-                        code: projected.code,
-                        error: projected.error,
-                        status: projected.status,
-                        audit: {
-                            runtime: requestContext.runtime,
-                            source: requestContext.source
-                        }
-                    };
-                }
-
-                return {
-                    success: true,
-                    requestId: requestContext.requestId,
-                    data: projected,
-                    audit: {
-                        runtime: requestContext.runtime,
-                        source: requestContext.source
-                    }
-                };
-            }
-        });
-    }
-
-    throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
-        field: 'name',
-        name
+    return handler({
+        bundle,
+        name,
+        args,
+        input,
+        operation,
+        executeManaged: executeGatewayManagedOperation,
+        mapManagedResult: mapGatewayManagedResultToMcp
     });
 }
 
@@ -947,6 +620,12 @@ function createMcpAdapter(pluginManager, options = {}) {
     } = bundle;
     const gatewayManagedTools = createGatewayManagedToolDescriptors();
     const gatewayManagedPrompts = createGatewayManagedPromptDescriptors();
+    const readResource = createReadResourceHandler(bundle, {
+        attachRequestId,
+        buildMcpContexts,
+        ensureAgentId,
+        ensureJobIdentity
+    });
 
     return {
         supportedResourceTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES,
@@ -1088,131 +767,7 @@ function createMcpAdapter(pluginManager, options = {}) {
             };
         },
 
-        async readResource(input = {}) {
-            const parsed = parseResourceUri(input.uri);
-            if (!parsed) {
-                throw createMcpError(
-                    MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
-                    'Unsupported resource URI',
-                    {
-                        uri: input.uri || '',
-                        supportedTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES
-                    }
-                );
-            }
-
-            const resourceAgentId = parsed.agentId || input.agentId || input.requestContext?.agentId;
-            const { kind, agentId, jobId } = parsed;
-            const { requestContext, authContext } = buildMcpContexts(bundle, {
-                ...input,
-                ...(resourceAgentId ? { agentId: resourceAgentId } : {})
-            }, 'mcp-resources-read');
-            if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
-                ensureJobIdentity(requestContext, authContext, 'resources/read');
-            } else {
-                ensureAgentId(requestContext, 'resources/read');
-            }
-
-            let payload;
-            try {
-                if (kind === MCP_RESOURCE_KINDS.CAPABILITIES) {
-                    payload = await capabilityService.getCapabilities({
-                        agentId,
-                        includeMemoryTargets: true,
-                        authContext
-                    });
-                } else if (kind === MCP_RESOURCE_KINDS.MEMORY_TARGETS) {
-                    payload = await capabilityService.getMemoryTargets({
-                        agentId,
-                        authContext
-                    });
-                } else if (kind === MCP_RESOURCE_KINDS.AGENT_PROFILE) {
-                    payload = await agentRegistryService.getAgentProfile(agentId, {
-                        authContext
-                    });
-                } else if (kind === MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE) {
-                    payload = await agentRegistryService.getPromptTemplatePreview(agentId, {
-                        authContext
-                    });
-                } else if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
-                    const jobResult = attachRequestId(
-                        jobRuntimeService.pollJob(jobId, authContext),
-                        requestContext.requestId
-                    );
-                    if (!jobResult.success) {
-                        throw createMcpError(
-                            mapGatewayFailureToMcpErrorCode(jobResult.code),
-                            jobResult.error || 'Failed to read Gateway job runtime events',
-                            {
-                                canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[jobResult.code] || jobResult.code || '',
-                                gatewayCode: jobResult.code || '',
-                                requestId: jobResult.requestId || requestContext.requestId,
-                                ...(jobResult.details && typeof jobResult.details === 'object' ? jobResult.details : {})
-                            }
-                        );
-                    }
-                    const eventResult = attachRequestId(
-                        jobRuntimeService.listEvents({
-                            authContext,
-                            filters: {
-                                jobId
-                            }
-                        }),
-                        requestContext.requestId
-                    );
-                    if (!eventResult.success) {
-                        throw createMcpError(
-                            mapGatewayFailureToMcpErrorCode(eventResult.code),
-                            eventResult.error || 'Failed to list Gateway job runtime events',
-                            {
-                                canonicalCode: OPENCLAW_TO_AGENT_GATEWAY_CODE[eventResult.code] || eventResult.code || '',
-                                gatewayCode: eventResult.code || '',
-                                requestId: eventResult.requestId || requestContext.requestId,
-                                ...(eventResult.details && typeof eventResult.details === 'object' ? eventResult.details : {})
-                            }
-                        );
-                    }
-                    payload = {
-                        jobId,
-                        job: jobResult.data?.job || null,
-                        events: eventResult.data?.events || []
-                    };
-                } else {
-                    throw createMcpError(
-                        MCP_ERROR_CODES.RESOURCE_UNSUPPORTED,
-                        'Unsupported resource URI',
-                        {
-                            uri: input.uri,
-                            supportedTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES
-                        }
-                    );
-                }
-            } catch (error) {
-                if (error?.code === 'AGENT_NOT_FOUND') {
-                    throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, error.message, {
-                        canonicalCode: AGW_ERROR_CODES.NOT_FOUND,
-                        requestId: requestContext.requestId,
-                        ...(error.details && typeof error.details === 'object' ? error.details : {})
-                    });
-                }
-                throw error;
-            }
-
-            return {
-                contents: [{
-                    uri: kind === MCP_RESOURCE_KINDS.JOB_EVENTS
-                        ? createJobEventsResource(jobId).uri
-                        : buildResourceUri(kind, agentId),
-                    mimeType: 'application/json',
-                    text: serializeMcpValue(payload)
-                }],
-                meta: {
-                    requestId: requestContext.requestId,
-                    ...(agentId ? { agentId } : {}),
-                    ...(jobId ? { jobId } : {})
-                }
-            };
-        }
+        readResource
     };
 }
 

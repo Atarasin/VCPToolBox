@@ -8,6 +8,8 @@ const legacyInProcess = require('../../../modules/agentGateway/adapters/mcpAdapt
 const canonicalInProcess = require('../../../modules/agentGateway/protocols/mcp/inProcessExecutor');
 const legacyBackendProxy = require('../../../modules/agentGateway/adapters/mcpBackendProxyAdapter');
 const canonicalBackendProxy = require('../../../modules/agentGateway/protocols/mcp/backendProxyExecutor');
+const { GATEWAY_OPERATIONS } = require('../../../modules/agentGateway/protocols/mcp/operations');
+const { IN_PROCESS_OPERATION_HANDLERS } = require('../../../modules/agentGateway/protocols/mcp/inProcessOperations');
 
 function createNoopAdapter() {
     return {
@@ -40,6 +42,16 @@ test('descriptor set is unchanged when callers pass the removed diaryRagLoopOnly
         descriptors.createGatewayManagedToolDescriptors({ diaryRagLoopOnly: true }),
         descriptors.createGatewayManagedToolDescriptors()
     );
+});
+
+test('every gateway operation has explicit in-process and backend executor bindings', () => {
+    const operations = Object.values(GATEWAY_OPERATIONS);
+    assert.equal(operations.length, 8);
+    for (const operation of operations) {
+        assert.equal(typeof IN_PROCESS_OPERATION_HANDLERS[operation.executor], 'function');
+        assert.equal(typeof operation.backendExecutor, 'string');
+        assert.notEqual(operation.backendExecutor, '');
+    }
 });
 
 test('shared MCP harness owns initialize and error sanitization semantics', async () => {

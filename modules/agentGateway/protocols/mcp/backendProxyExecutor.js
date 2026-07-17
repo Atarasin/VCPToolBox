@@ -27,6 +27,7 @@ const {
 const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
 const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
+const { getGatewayOperation } = require('./operations');
 
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
@@ -491,103 +492,102 @@ function createBackendProxyMcpAdapter({
                 });
             }
 
-            let response;
             const requestOptions = input.signal ? { signal: input.signal } : undefined;
-            if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_SEARCH) {
-                const scoped = applyDiaryPolicyGate({
-                    toolName: name,
-                    payload: buildBody(input, args, { defaultAgentId }),
-                    input,
-                    defaultAgentId
-                });
-                if (scoped.rejection) {
-                    return createFailureResult(scoped.rejection);
-                }
-                response = await backendClient.searchMemory(scoped.payload, requestOptions);
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.CONTEXT_ASSEMBLE) {
-                const scoped = applyDiaryPolicyGate({
-                    toolName: name,
-                    payload: buildBody(input, args, { defaultAgentId }),
-                    input,
-                    defaultAgentId
-                });
-                if (scoped.rejection) {
-                    return createFailureResult(scoped.rejection);
-                }
-                response = await backendClient.assembleContext(scoped.payload, requestOptions);
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.MEMORY_WRITE) {
-                const writeBody = buildBody(input, args, { defaultAgentId });
-                const idempotencyKey = normalizeMcpString(
-                    writeBody.options?.idempotencyKey ||
-                    writeBody.target?.idempotencyKey ||
-                    args.idempotencyKey ||
-                    writeBody.idempotencyKey,
-                    256
-                );
-                const resolvedDiary = normalizeDiaryCanonicalName(
-                    normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
-                );
-                if (resolvedDiary) {
-                    writeBody.diary = resolvedDiary;
-                    if (writeBody.target && typeof writeBody.target === 'object') {
-                        writeBody.target.diary = resolvedDiary;
-                    }
-                }
-                if (idempotencyKey) {
-                    writeBody.idempotencyKey = idempotencyKey;
-                    writeBody.options = {
-                        ...(writeBody.options || {}),
-                        idempotencyKey
-                    };
-                }
-                response = await backendClient.writeMemory(writeBody, requestOptions);
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
-                const recallBody = buildBody(input, args, {
-                    requireSession: false,
-                    defaultAgentId
-                });
-                if (!normalizeMcpString(recallBody.query, 4096)) {
-                    throw createMcpError(
-                        MCP_ERROR_CODES.INVALID_ARGUMENTS,
-                        'gateway_recall_run requires query',
-                        { field: 'query' }
-                    );
-                }
-                response = await backendClient.runRecall(recallBody, requestOptions);
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
-                response = await backendClient.renderAgent(
-                    ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
-                    buildBody(input, args, {
-                        requireSession: false,
-                        defaultAgentId
-                    }),
-                    requestOptions
-                );
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.JOB_GET) {
-                ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
-                response = await backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId), requestOptions);
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.JOB_CANCEL) {
-                ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
-                response = await backendClient.cancelJob(args.jobId, buildBody(input, args, {
-                    requireSession: false,
-                    defaultAgentId
-                }), requestOptions);
-            } else if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER) {
-                throw createMcpError(
-                    MCP_ERROR_CODES.NOT_FOUND,
-                    'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
-                    {
-                        field: 'name',
-                        name,
-                        primarySurface: 'prompts/get'
-                    }
-                );
-            } else {
+            const operation = getGatewayOperation(name);
+            if (!operation) {
                 throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
                     field: 'name',
                     name
                 });
             }
+
+            const executeDiaryOperation = async (methodName) => {
+                const scoped = applyDiaryPolicyGate({
+                    toolName: name,
+                    payload: buildBody(input, args, { defaultAgentId }),
+                    input,
+                    defaultAgentId
+                });
+                if (scoped.rejection) {
+                    return { finalResult: createFailureResult(scoped.rejection) };
+                }
+                return {
+                    response: await backendClient[methodName](scoped.payload, requestOptions)
+                };
+            };
+
+            const handlers = {
+                memorySearch: () => executeDiaryOperation('searchMemory'),
+                contextAssemble: () => executeDiaryOperation('assembleContext'),
+                memoryWrite: async () => {
+                    const writeBody = buildBody(input, args, { defaultAgentId });
+                    const idempotencyKey = normalizeMcpString(
+                        writeBody.options?.idempotencyKey || writeBody.target?.idempotencyKey ||
+                        args.idempotencyKey || writeBody.idempotencyKey,
+                        256
+                    );
+                    const resolvedDiary = normalizeDiaryCanonicalName(
+                        normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
+                    );
+                    if (resolvedDiary) {
+                        writeBody.diary = resolvedDiary;
+                        if (writeBody.target && typeof writeBody.target === 'object') {
+                            writeBody.target.diary = resolvedDiary;
+                        }
+                    }
+                    if (idempotencyKey) {
+                        writeBody.idempotencyKey = idempotencyKey;
+                        writeBody.options = { ...(writeBody.options || {}), idempotencyKey };
+                    }
+                    return backendClient.writeMemory(writeBody, requestOptions);
+                },
+                recallRun: async () => {
+                    const recallBody = buildBody(input, args, { requireSession: false, defaultAgentId });
+                    if (!normalizeMcpString(recallBody.query, 4096)) {
+                        throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_recall_run requires query', {
+                            field: 'query'
+                        });
+                    }
+                    return backendClient.runRecall(recallBody, requestOptions);
+                },
+                render: () => backendClient.renderAgent(
+                    ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
+                    buildBody(input, args, { requireSession: false, defaultAgentId }),
+                    requestOptions
+                ),
+                jobGet: () => {
+                    ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
+                    return backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId), requestOptions);
+                },
+                jobCancel: () => {
+                    ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
+                    return backendClient.cancelJob(
+                        args.jobId,
+                        buildBody(input, args, { requireSession: false, defaultAgentId }),
+                        requestOptions
+                    );
+                },
+                removedRender: () => {
+                    throw createMcpError(
+                        MCP_ERROR_CODES.NOT_FOUND,
+                        'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
+                        { field: 'name', name, primarySurface: 'prompts/get' }
+                    );
+                }
+            };
+
+            const handler = handlers[operation.backendExecutor];
+            if (!handler) {
+                throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
+                    field: 'name',
+                    name
+                });
+            }
+            const execution = await handler();
+            if (execution?.finalResult) {
+                return execution.finalResult;
+            }
+            const response = execution?.response ?? execution;
 
             const result = normalizeNativeResult(response);
             if (!result.success) {

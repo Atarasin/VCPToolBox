@@ -7,5 +7,6 @@ module.exports = {
     ...require('./harness'),
     ...require('./inProcessExecutor'),
     ...require('./operability'),
+    ...require('./operations'),
     ...require('./resultShapes')
 };
