@@ -22,6 +22,44 @@ function sanitizeHeaderValue(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
+function resolvePositiveInteger(value, fallback) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function createRequestSignal(externalSignal, timeoutMs) {
+    const controller = new AbortController();
+    let externalAbortHandler = null;
+    let timeout = null;
+
+    if (externalSignal?.aborted) {
+        controller.abort(externalSignal.reason);
+    } else if (externalSignal && typeof externalSignal.addEventListener === 'function') {
+        externalAbortHandler = () => controller.abort(externalSignal.reason);
+        externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+    }
+
+    if (!controller.signal.aborted) {
+        timeout = setTimeout(() => {
+            const error = new Error(`Gateway backend request timed out after ${timeoutMs}ms`);
+            error.name = 'TimeoutError';
+            controller.abort(error);
+        }, timeoutMs);
+    }
+
+    return {
+        signal: controller.signal,
+        cleanup() {
+            if (timeout) {
+                clearTimeout(timeout);
+            }
+            if (externalAbortHandler) {
+                externalSignal.removeEventListener('abort', externalAbortHandler);
+            }
+        }
+    };
+}
+
 function parseSsePayload(bodyText) {
     const events = [];
     const blocks = String(bodyText || '').split(/\n\n+/);
@@ -68,7 +106,8 @@ class GatewayBackendClient {
         gatewayId,
         bearerToken,
         defaultHeaders,
-        fetchImpl
+        fetchImpl,
+        timeoutMs
     } = {}) {
         if (!baseUrl) {
             throw new Error('Gateway backend baseUrl is required');
@@ -82,6 +121,10 @@ class GatewayBackendClient {
             ? { ...defaultHeaders }
             : {};
         this.fetchImpl = fetchImpl || globalThis.fetch;
+        this.timeoutMs = resolvePositiveInteger(
+            timeoutMs ?? process.env.VCP_MCP_BACKEND_TIMEOUT_MS,
+            30000
+        );
 
         if (typeof this.fetchImpl !== 'function') {
             throw new Error('A fetch implementation is required for GatewayBackendClient');
@@ -109,58 +152,68 @@ class GatewayBackendClient {
     }
 
     async requestJson(method, routePath, { query, body, headers, signal } = {}) {
-        const response = await this.fetchImpl(
-            `${this.baseUrl}${routePath}${buildQueryString(query)}`,
-            {
-                method,
-                headers: this.createHeaders({
-                    ...(body ? { 'content-type': 'application/json' } : {}),
-                    ...(headers || {})
-                }),
-                body: body ? JSON.stringify(body) : undefined,
-                signal
-            }
-        );
-        const responseText = await response.text();
-        let payload = null;
+        const requestSignal = createRequestSignal(signal, this.timeoutMs);
+        try {
+            const response = await this.fetchImpl(
+                `${this.baseUrl}${routePath}${buildQueryString(query)}`,
+                {
+                    method,
+                    headers: this.createHeaders({
+                        ...(body ? { 'content-type': 'application/json' } : {}),
+                        ...(headers || {})
+                    }),
+                    body: body ? JSON.stringify(body) : undefined,
+                    signal: requestSignal.signal
+                }
+            );
+            const responseText = await response.text();
+            let payload = null;
 
-        if (responseText) {
-            try {
-                payload = JSON.parse(responseText);
-            } catch (error) {
-                throw new Error(`Gateway backend returned invalid JSON for ${routePath}: ${error.message}`);
+            if (responseText) {
+                try {
+                    payload = JSON.parse(responseText);
+                } catch (error) {
+                    throw new Error(`Gateway backend returned invalid JSON for ${routePath}: ${error.message}`);
+                }
             }
+
+            return {
+                ok: response.ok,
+                httpStatus: response.status,
+                headers: Object.fromEntries(response.headers.entries()),
+                payload
+            };
+        } finally {
+            requestSignal.cleanup();
         }
-
-        return {
-            ok: response.ok,
-            httpStatus: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-            payload
-        };
     }
 
     async requestEventStream(routePath, { query, headers, signal } = {}) {
-        const response = await this.fetchImpl(
-            `${this.baseUrl}${routePath}${buildQueryString(query)}`,
-            {
-                method: 'GET',
-                headers: this.createHeaders({
-                    accept: 'text/event-stream',
-                    ...(headers || {})
-                }),
-                signal
-            }
-        );
+        const requestSignal = createRequestSignal(signal, this.timeoutMs);
+        try {
+            const response = await this.fetchImpl(
+                `${this.baseUrl}${routePath}${buildQueryString(query)}`,
+                {
+                    method: 'GET',
+                    headers: this.createHeaders({
+                        accept: 'text/event-stream',
+                        ...(headers || {})
+                    }),
+                    signal: requestSignal.signal
+                }
+            );
 
-        const responseText = await response.text();
-        return {
-            ok: response.ok,
-            httpStatus: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-            events: parseSsePayload(responseText),
-            rawText: responseText
-        };
+            const responseText = await response.text();
+            return {
+                ok: response.ok,
+                httpStatus: response.status,
+                headers: Object.fromEntries(response.headers.entries()),
+                events: parseSsePayload(responseText),
+                rawText: responseText
+            };
+        } finally {
+            requestSignal.cleanup();
+        }
     }
 
     renderAgent(agentId, body, requestOptions) {

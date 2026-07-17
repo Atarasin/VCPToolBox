@@ -74,3 +74,39 @@ test('backend proxy adapter forwards gateway_recall_run to backendClient.runReca
     assert.equal(result.structuredContent.result.items[0].content, 'Recall result from backend proxy');
 });
 
+test('backend proxy adapter preserves canonical recall error categories', async () => {
+    const expectations = [
+        ['AGW_RECALL_NO_PROFILE', 'MCP_NOT_FOUND', 404],
+        ['AGW_RECALL_FORBIDDEN', 'MCP_FORBIDDEN', 403],
+        ['AGW_RECALL_INVALID_RULE', 'MCP_INVALID_ARGUMENTS', 400],
+        ['AGW_RECALL_EXECUTION_ERROR', 'MCP_RUNTIME_ERROR', 500]
+    ];
+
+    for (const [gatewayCode, mcpCode, httpStatus] of expectations) {
+        const adapter = createBackendProxyMcpAdapter({
+            defaultAgentId: 'Ariadne',
+            backendClient: {
+                async runRecall() {
+                    return {
+                        httpStatus,
+                        payload: {
+                            success: false,
+                            code: gatewayCode,
+                            error: 'recall failed',
+                            meta: { requestId: `req-${gatewayCode}` }
+                        }
+                    };
+                }
+            }
+        });
+
+        const result = await adapter.callTool({
+            name: 'gateway_recall_run',
+            arguments: { agentId: 'Ariadne', query: 'test recall error mapping' }
+        });
+
+        assert.equal(result.isError, true);
+        assert.equal(result.error.code, mcpCode);
+        assert.equal(result.error.details.canonicalCode, gatewayCode);
+    }
+});

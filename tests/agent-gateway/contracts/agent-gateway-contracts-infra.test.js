@@ -211,6 +211,20 @@ test('protocolGovernance resolves dedicated auth, native request context and ide
     assert.equal(dedicatedAuth.authMode, AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY);
     assert.equal(dedicatedAuth.gatewayId, 'vcp-test-gateway');
 
+    for (const gatewayKey of ['', 'x', '密钥-安全-测试', 'gw-secret-extra']) {
+        const auth = resolveDedicatedGatewayAuth({
+            headers: {
+                [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: gatewayKey
+            },
+            pluginManager: {
+                agentGatewayProtocolConfig: {
+                    gatewayKey: 'gw-secret'
+                }
+            }
+        });
+        assert.equal(auth.authenticated, false);
+    }
+
     const requestContext = resolveNativeRequestContext({
         agentId: 'Ariadne'
     }, {

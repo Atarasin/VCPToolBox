@@ -1,7 +1,15 @@
+const crypto = require('node:crypto');
+
 const {
     normalizeRequestContext,
     sanitizeRequestContextValue
 } = require('./requestContext');
+
+function timingSafeStringEqual(left, right) {
+    const leftDigest = crypto.createHash('sha256').update(String(left), 'utf8').digest();
+    const rightDigest = crypto.createHash('sha256').update(String(right), 'utf8').digest();
+    return crypto.timingSafeEqual(leftDigest, rightDigest);
+}
 
 const NATIVE_GATEWAY_VERSION = 'v1';
 const NATIVE_GATEWAY_VERSION_KEY = 'gatewayVersion';
@@ -160,7 +168,7 @@ function resolveDedicatedGatewayAuth({ headers, pluginManager } = {}) {
 
     return {
         provided: true,
-        authenticated: Boolean(config.gatewayKey) && providedGatewayKey === config.gatewayKey,
+        authenticated: Boolean(config.gatewayKey) && timingSafeStringEqual(providedGatewayKey, config.gatewayKey),
         authMode: AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY,
         authSource: authSource || config.gatewayKeyHeader,
         gatewayId: providedGatewayId || 'vcp-gateway',
