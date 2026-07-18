@@ -1,69 +1,60 @@
-# M0-M7 implementation closure
+# M0-M7 实现闭合报告
 
-## Final status
+## 最终状态
 
-The M0-M7 implementation is **compliant with the target architecture and automated release gates**.
-The only remaining release limitation is the real Codex MCP smoke test, which requires external
-authentication and remains the documented manual pre-release gate. M8 is still out of scope.
+M0-M7 的实现已**符合目标架构及自动化发布门禁要求**。
+目前唯一的发布限制是真实 Codex MCP 冒烟测试；该测试依赖外部认证，继续作为文档约定的发布前人工门禁。M8 仍不在本轮范围内。
 
-| Milestone | Status | Evidence |
+| 里程碑 | 状态 | 证据 |
 | --- | --- | --- |
-| M0 | Complete | `npm run test:agent-gateway`: 731/731; CI aggregate runner |
-| M1 | Complete | timeout/auth/discovery regression suites |
-| M2 | Complete | canonical MCP semantics, executors and parity suites |
-| M3 | Complete | shared codec/context/rate limit; split HTTP/WS runtimes |
-| M4 | Complete | frozen narrow ports; host/private API access and config extraction confined to `composition/`; partial enabled RAG bindings fail fast |
-| M5 | Complete | six physical stage modules, short orchestrator, identity compatibility test and serial shared-backend test |
-| M6 | Complete | canonical operations/schemas, deterministic generation and eight-operation AJV compatibility corpus |
-| M7 | Complete | shared audit sinks and a real HTTP MCP → backend proxy → Native route → service → audit trace test |
+| M0 | 已完成 | `npm run test:agent-gateway`：731/731；CI 聚合测试运行器 |
+| M1 | 已完成 | 超时、认证和 discovery 回归测试套件 |
+| M2 | 已完成 | 统一的 MCP 语义、执行器和一致性测试套件 |
+| M3 | 已完成 | 共享 codec/context/rate limit；拆分后的 HTTP/WS runtime |
+| M4 | 已完成 | 冻结的窄端口；宿主/私有 API 访问及配置提取收口于 `composition/`；部分启用但绑定不完整的 RAG 会快速失败 |
+| M5 | 已完成 | 六个独立 stage 模块、短编排器、函数身份兼容测试及共享后端串行测试 |
+| M6 | 已完成 | 统一的 operation/schema、确定性生成流程及覆盖八个操作的 AJV 兼容语料 |
+| M7 | 已完成 | 共享审计 sink，以及真实 HTTP MCP → backend proxy → Native route → service → audit 链路追踪测试 |
 
-## M4 closure evidence
+## M4 闭合证据
 
-- `composition/vcpPortBindings.js` is the only module that knows host fields, RAG private APIs,
-  the historical `1.33` search coefficient, root-level host modules and legacy fixture adaptation.
-- Core, service, policy, protocol and route code receive ports or frozen configuration/readiness
-  snapshots; scans find no direct host-property or RAG-private-API access outside composition.
-- The RAG port exposes methods and capability flags, not `knowledgeBaseManager` or `ragPlugin`.
-- A partially enabled RAG host without `searchDiary` fails during binding instead of exposing a
-  lazy wrapper that fails only during an operation.
-- Memory write idempotency state is service-local and the diary writer port returns a DTO rather
-  than a raw plugin object.
+- `composition/vcpPortBindings.js` 是唯一了解宿主字段、RAG 私有 API、历史 `1.33` 搜索系数、根级宿主模块及旧测试夹具适配逻辑的模块。
+- Core、service、policy、protocol 和 route 代码仅接收端口或冻结的配置/就绪状态快照；扫描确认 composition 之外不存在直接访问宿主属性或 RAG 私有 API 的代码。
+- RAG 端口仅暴露方法和能力标志，不暴露 `knowledgeBaseManager` 或 `ragPlugin`。
+- 对于已部分启用但缺少 `searchDiary` 的 RAG 宿主，绑定阶段会立即失败，不会提供直到实际操作时才报错的延迟包装器。
+- 记忆写入幂等状态由 service 自身维护，日记写入端口返回 DTO，而不是原始插件对象。
 
-## M5 closure evidence
+## M5 闭合证据
 
-- `core/recall/pipeline.js` is a short orchestrator and re-exports the exact function objects from:
-  `resolveProfile`, `precomputeVector`, `executeRules`, `mergeResults`, `applyBudget` and `applyAiMemo`.
-- `executeRulesStage` uses a serial `for` loop with `await executeRuleStage(...)`; no rule-level
-  `Promise.all` was introduced.
-- Legacy recall service/projection paths remain CommonJS identity re-exports.
-- S01-S05 fixtures and the full aggregate suite preserve items, diagnostics, ordering and errors.
+- `core/recall/pipeline.js` 是短编排器，并从以下模块重导出完全相同的函数对象：`resolveProfile`、`precomputeVector`、`executeRules`、`mergeResults`、`applyBudget` 和 `applyAiMemo`。
+- `executeRulesStage` 使用串行 `for` 循环并执行 `await executeRuleStage(...)`；未引入规则级 `Promise.all`。
+- 旧 recall service/projection 路径继续保持 CommonJS 函数身份重导出。
+- S01-S05 夹具及完整聚合测试套件证明 items、diagnostics、执行顺序和错误语义保持不变。
 
-## Compatibility and release notes
+## 兼容性与发布说明
 
-- The 15 REST paths, eight MCP operations, response envelopes and environment variables are preserved.
-- HTTP and stdio batch requests remain rejected; WebSocket batch remains capped at 20.
-- Recall rules remain serial and retain stable output ordering.
-- SSE backpressure is bounded at 30 seconds by default.
-- Discovery sessions use an independent bounded LRU pool with a 60-second TTL.
-- WebSocket idle cleanup is opt-in and remains disabled by default.
-- `AGENT_GATEWAY_AUDIT_FILE` enables an append-only file sink. Rotation remains delegated to
-  container logging or external `logrotate`.
-- D5 is waived: jobs remain process-local until a cross-process state model is separately designed.
-- M8 remains out of scope; rule concurrency and HTTP/stdio batch behavior require a separate
-  compatibility decision.
+- 保留原有 15 个 REST 路径、8 个 MCP 操作、响应 envelope 和环境变量。
+- HTTP 和 stdio 仍拒绝 batch 请求；WebSocket batch 上限仍为 20。
+- Recall 规则继续串行执行，并保持稳定的输出顺序。
+- SSE 背压默认限制为 30 秒。
+- Discovery session 使用独立且有界的 LRU 池，TTL 为 60 秒。
+- WebSocket idle 清理仍为可选功能，默认关闭。
+- `AGENT_GATEWAY_AUDIT_FILE` 用于启用只追加文件 sink；日志轮转继续交由容器日志系统或外部 `logrotate` 负责。
+- D5 已按设计豁免：在单独设计跨进程状态模型之前，job 继续保留在进程内。
+- M8 仍不在本轮范围内；规则并发以及 HTTP/stdio batch 行为需要单独进行兼容性决策。
 
-## Verification
+## 验证结果
 
-| Check | Result |
+| 检查项 | 结果 |
 | --- | --- |
-| `npm run test:agent-gateway` | 731/731, 0 fail |
-| S01-S05 | 424/424, 0 fail |
-| OpenAPI/MCP generation | regenerated with zero diff |
-| REST/MCP publication | 15 REST paths; 8 MCP operations |
-| Function size | zero functions over 150 lines |
-| File size | zero scoped files over 800 lines; maximum 798 |
-| Host/private API scan | zero matches outside `composition/` |
-| Deep root require scan | zero matches outside `composition/` |
-| Real Codex smoke | not run; external authentication required |
+| `npm run test:agent-gateway` | 731/731，0 项失败 |
+| S01-S05 | 424/424，0 项失败 |
+| OpenAPI/MCP 生成 | 重新生成后零差异 |
+| REST/MCP 发布集合 | 15 个 REST 路径；8 个 MCP 操作 |
+| 函数规模 | 没有函数超过 150 行 |
+| 文件规模 | 范围内没有文件超过 800 行；最大为 798 行 |
+| 宿主/私有 API 扫描 | `composition/` 之外零命中 |
+| 深层根级 require 扫描 | `composition/` 之外零命中 |
+| 真实 Codex 冒烟测试 | 未运行；需要外部认证 |
 
-Implementation closure commit: `5f42fc12`.
+实现闭合提交：`5f42fc12`。
