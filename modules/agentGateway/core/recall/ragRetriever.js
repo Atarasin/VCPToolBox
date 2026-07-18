@@ -7,9 +7,6 @@ const {
 } = require('../../contracts/errorCodes');
 const { resolveDiaryAccess } = require('./diaryAccess');
 const {
-    createAuditLogger
-} = require('../../infra/auditLogger');
-const {
     projectSearchItems,
     projectContextBlocks,
     projectBudgetedContextBlocks,

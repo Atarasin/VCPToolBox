@@ -45,7 +45,7 @@ const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
 const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
-const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError } = require('./inProcessOperations');
+const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError, callMcpTool } = require('./inProcessOperations');
 const { createReadResourceHandler } = require('./resourceHandlers');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -708,50 +708,22 @@ function createMcpAdapter(pluginManager, options = {}) {
             });
         },
 
-        async callTool(input = {}) {
-            const name = normalizeMcpString(input.name);
-            const args = normalizeMcpArguments(input.arguments);
-
-            if (!name) {
-                throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'tools/call requires tool name', {
-                    field: 'name'
-                });
-            }
-            if (!args) {
-                throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'tools/call requires an arguments object', {
-                    field: 'arguments'
-                });
-            }
-            if (isGatewayManagedTool(name)) {
-                return executeGatewayManagedTool({
-                    ...bundle,
-                    agentRegistryService,
-                    contextRuntimeService,
-                    memoryRuntimeService,
-                    jobRuntimeService,
-                    recallRuntimeService,
-                    recallProjectionService
-                }, name, args, input);
-            }
-
-            const { requestContext, authContext } = buildMcpContexts(bundle, input, 'mcp-tools-call');
-            ensureAgentAndSession(requestContext, 'tools/call');
-
-            const result = await toolRuntimeService.invokeTool({
-                toolName: name,
-                body: {
-                    args,
-                    requestContext,
-                    authContext,
-                    options: input.options
-                },
-                startedAt: Date.now(),
-                clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
-                defaultSource: 'mcp'
-            });
-
-            return mapToolRuntimeResultToMcp(result);
-        },
+        callTool: (input) => callMcpTool({
+            bundle,
+            agentRegistryService,
+            contextRuntimeService,
+            memoryRuntimeService,
+            jobRuntimeService,
+            recallRuntimeService,
+            recallProjectionService,
+            toolRuntimeService,
+            executeGatewayManagedTool,
+            buildMcpContexts,
+            ensureAgentAndSession,
+            mapToolRuntimeResultToMcp,
+            normalizeMcpArguments,
+            isGatewayManagedTool
+        }, input),
 
         async listResources(input = {}) {
             const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, agentDirectoryPort));

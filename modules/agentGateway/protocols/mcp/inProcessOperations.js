@@ -2,6 +2,8 @@ const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('../../contracts/requestContext');
 const { normalizeDiaryCanonicalName } = require('../../policy/mcpAgentMemoryPolicy');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
+const { createMcpError } = require('./resultShapes');
+const { MCP_ERROR_CODES } = require('./constants');
 
 function normalizeMcpString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
@@ -197,9 +199,70 @@ const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     recallRun: executeRecallRun
 });
 
+async function callMcpTool({
+    bundle,
+    agentRegistryService,
+    contextRuntimeService,
+    memoryRuntimeService,
+    jobRuntimeService,
+    recallRuntimeService,
+    recallProjectionService,
+    toolRuntimeService,
+    executeGatewayManagedTool,
+    buildMcpContexts,
+    ensureAgentAndSession,
+    mapToolRuntimeResultToMcp,
+    normalizeMcpArguments,
+    isGatewayManagedTool
+}, input = {}) {
+    const name = normalizeMcpString(input.name);
+    const args = normalizeMcpArguments(input.arguments);
+
+    if (!name) {
+        throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'tools/call requires tool name', {
+            field: 'name'
+        });
+    }
+    if (!args) {
+        throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'tools/call requires an arguments object', {
+            field: 'arguments'
+        });
+    }
+    if (isGatewayManagedTool(name)) {
+        return executeGatewayManagedTool({
+            ...bundle,
+            agentRegistryService,
+            contextRuntimeService,
+            memoryRuntimeService,
+            jobRuntimeService,
+            recallRuntimeService,
+            recallProjectionService
+        }, name, args, input);
+    }
+
+    const { requestContext, authContext } = buildMcpContexts(bundle, input, 'mcp-tools-call');
+    ensureAgentAndSession(requestContext, 'tools/call');
+
+    const result = await toolRuntimeService.invokeTool({
+        toolName: name,
+        body: {
+            args,
+            requestContext,
+            authContext,
+            options: input.options
+        },
+        startedAt: Date.now(),
+        clientIp: normalizeMcpString(input.clientIp, 64) || '127.0.0.1',
+        defaultSource: 'mcp'
+    });
+
+    return mapToolRuntimeResultToMcp(result);
+}
+
 module.exports = {
     IN_PROCESS_OPERATION_HANDLERS,
     attachRequestId,
     buildBootstrapResult,
+    callMcpTool,
     mapAgentRegistryError
 };
