@@ -270,7 +270,8 @@ function assertVcpHostReady(pluginManager) {
     if (!pluginManager?.plugins || !(pluginManager.plugins instanceof Map)) {
         throw new Error('[AgentGatewayBootstrap] plugin host is not ready: plugins are not loaded');
     }
-    if (!pluginManager.agentManager) {
+    // 与 bindVcpPorts 的回退顺序保持一致：宿主未挂载时回退到 agentManager 单例
+    if (!pluginManager.agentManager && !defaultAgentManager) {
         throw new Error('[AgentGatewayBootstrap] plugin host is not ready: agentManager is unavailable');
     }
 }
