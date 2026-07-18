@@ -8,8 +8,10 @@ const {
     resolveAuthContext
 } = require('../../../modules/agentGateway/policy/authContextResolver');
 const {
-    createAgentPolicyResolver
+    createAgentPolicyResolver: createCanonicalAgentPolicyResolver
 } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+const { adaptLegacyGatewayDeps } = require('../../../modules/agentGateway/composition/vcpPortBindings');
+const createAgentPolicyResolver = (deps) => createCanonicalAgentPolicyResolver(adaptLegacyGatewayDeps(deps));
 const {
     ensureToolAllowed
 } = require('../../../modules/agentGateway/policy/toolScopeGuard');
@@ -37,6 +39,7 @@ test('authContextResolver builds canonical transitional auth context', () => {
     assert.equal(authContext.agentId, 'agent.nova');
     assert.equal(authContext.authMode, 'admin_transition');
     assert.equal(authContext.isTransitionalAuth, true);
+    assert.deepEqual(authContext.roles, ['admin_transition']);
     assert.deepEqual(authContext.agentIdentity.aliases.includes('agent.nova'), true);
     assert.equal(authContext.gatewayIdentity.adapter, 'native');
 });

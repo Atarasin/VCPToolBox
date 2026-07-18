@@ -1,7 +1,16 @@
+const crypto = require('node:crypto');
+
 const {
     normalizeRequestContext,
     sanitizeRequestContextValue
 } = require('./requestContext');
+const { resolveTraceId } = require('../infra/trace');
+
+function timingSafeStringEqual(left, right) {
+    const leftDigest = crypto.createHash('sha256').update(String(left), 'utf8').digest();
+    const rightDigest = crypto.createHash('sha256').update(String(right), 'utf8').digest();
+    return crypto.timingSafeEqual(leftDigest, rightDigest);
+}
 
 const NATIVE_GATEWAY_VERSION = 'v1';
 const NATIVE_GATEWAY_VERSION_KEY = 'gatewayVersion';
@@ -75,11 +84,7 @@ function getBearerToken(headers = {}) {
     return matched ? normalizeGovernanceString(matched[1]) : '';
 }
 
-function getProtocolGovernanceConfig(pluginManager) {
-    const config = pluginManager?.agentGatewayProtocolConfig ||
-        pluginManager?.agentGatewayAuthConfig ||
-        pluginManager?.openClawBridgeConfig?.agentGateway ||
-        {};
+function getProtocolGovernanceConfig(config = {}) {
     const authConfig = config.auth && typeof config.auth === 'object' ? config.auth : {};
 
     return {
@@ -112,7 +117,7 @@ function resolveNativeRequestContext(input, options = {}) {
     const headers = options.headers && typeof options.headers === 'object' ? options.headers : {};
     const context = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
 
-    return normalizeRequestContext({
+    const normalized = normalizeRequestContext({
         requestId: context.requestId || query.requestId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.REQUEST_ID),
         sessionId: context.sessionId || query.sessionId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.SESSION_ID),
         agentId: context.agentId || query.agentId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.AGENT_ID),
@@ -123,29 +128,34 @@ function resolveNativeRequestContext(input, options = {}) {
         defaultRuntime: options.defaultRuntime || 'native',
         requestIdPrefix: options.requestIdPrefix || 'agw'
     });
+    normalized.traceId = resolveTraceId(
+        context.traceId || query.traceId || getHeaderValue(headers, AGENT_GATEWAY_HEADERS.TRACE_ID),
+        'agwop'
+    );
+    return normalized;
 }
 
-function resolveGovernedIdempotencyKey({ body, headers, pluginManager } = {}) {
+function resolveGovernedIdempotencyKey({ body, headers, config } = {}) {
     const normalizedBody = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
     const options = normalizedBody.options && typeof normalizedBody.options === 'object'
         ? normalizedBody.options
         : {};
-    const config = getProtocolGovernanceConfig(pluginManager);
+    const governanceConfig = getProtocolGovernanceConfig(config);
 
     return normalizeGovernanceString(
         options.idempotencyKey ||
         normalizedBody.idempotencyKey ||
-        getHeaderValue(headers, config.idempotencyHeader)
+        getHeaderValue(headers, governanceConfig.idempotencyHeader)
     );
 }
 
-function resolveDedicatedGatewayAuth({ headers, pluginManager } = {}) {
-    const config = getProtocolGovernanceConfig(pluginManager);
-    const providedGatewayKey = getHeaderValue(headers, config.gatewayKeyHeader) || getBearerToken(headers);
-    const authSource = getHeaderValue(headers, config.gatewayKeyHeader)
-        ? config.gatewayKeyHeader
+function resolveDedicatedGatewayAuth({ headers, config } = {}) {
+    const governanceConfig = getProtocolGovernanceConfig(config);
+    const providedGatewayKey = getHeaderValue(headers, governanceConfig.gatewayKeyHeader) || getBearerToken(headers);
+    const authSource = getHeaderValue(headers, governanceConfig.gatewayKeyHeader)
+        ? governanceConfig.gatewayKeyHeader
         : (getBearerToken(headers) ? 'authorization-bearer' : '');
-    const providedGatewayId = getHeaderValue(headers, AGENT_GATEWAY_HEADERS.GATEWAY_ID) || config.gatewayId;
+    const providedGatewayId = getHeaderValue(headers, AGENT_GATEWAY_HEADERS.GATEWAY_ID) || governanceConfig.gatewayId;
 
     if (!providedGatewayKey) {
         return {
@@ -160,9 +170,9 @@ function resolveDedicatedGatewayAuth({ headers, pluginManager } = {}) {
 
     return {
         provided: true,
-        authenticated: Boolean(config.gatewayKey) && providedGatewayKey === config.gatewayKey,
+        authenticated: Boolean(governanceConfig.gatewayKey) && timingSafeStringEqual(providedGatewayKey, governanceConfig.gatewayKey),
         authMode: AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY,
-        authSource: authSource || config.gatewayKeyHeader,
+        authSource: authSource || governanceConfig.gatewayKeyHeader,
         gatewayId: providedGatewayId || 'vcp-gateway',
         roles: ['gateway_client']
     };

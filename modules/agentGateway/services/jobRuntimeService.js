@@ -155,10 +155,7 @@ function createEventSnapshot(event) {
  * JobRuntimeService 在 M8 扩展为正式的共享 runtime contract，
  * 负责统一 job 状态、poll/cancel 行为与最小 runtime event 语义。
  */
-function createJobRuntimeService(deps = {}) {
-    const store = deps.store || new Map();
-    const eventStore = deps.eventStore || [];
-
+function createJobStoreApi(store, eventStore) {
     function appendJobEvent(job, extraData = {}) {
         const eventType = mapStatusToEventType(job.status);
         if (!eventType) {
@@ -249,6 +246,11 @@ function createJobRuntimeService(deps = {}) {
         };
     }
 
+    return { createJob, updateJob };
+}
+
+function createJobRuntimeApi(store, eventStore, jobStore) {
+    const { createJob, updateJob } = jobStore;
     return {
         createAcceptedJob({ operation, authContext, metadata, target }) {
             return createJob({
@@ -344,6 +346,12 @@ function createJobRuntimeService(deps = {}) {
             };
         }
     };
+}
+
+function createJobRuntimeService() {
+    const store = new Map();
+    const eventStore = [];
+    return createJobRuntimeApi(store, eventStore, createJobStoreApi(store, eventStore));
 }
 
 module.exports = {

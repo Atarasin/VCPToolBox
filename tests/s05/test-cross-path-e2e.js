@@ -10,8 +10,14 @@ const {
 
 // ── Clear module cache and mock collectRagItems ─────────────────────────────
 const contextRuntimeServicePath = require.resolve('../../modules/agentGateway/services/contextRuntimeService');
+const ragRetrieverPath = require.resolve('../../modules/agentGateway/core/recall/ragRetriever');
+const recallPipelinePath = require.resolve('../../modules/agentGateway/core/recall/pipeline');
+const canonicalRecallRuntimeServicePath = require.resolve('../../modules/agentGateway/core/recall/recallRuntimeService');
 const recallRuntimeServicePath = require.resolve('../../modules/agentGateway/services/recallRuntimeService');
 delete require.cache[contextRuntimeServicePath];
+delete require.cache[ragRetrieverPath];
+delete require.cache[recallPipelinePath];
+delete require.cache[canonicalRecallRuntimeServicePath];
 delete require.cache[recallRuntimeServicePath];
 
 let mockCollectRagItemsCalls = [];
@@ -25,27 +31,24 @@ let mockCollectRagItemsResult = {
     coreTags: []
 };
 
-require.cache[contextRuntimeServicePath] = {
-    id: contextRuntimeServicePath,
-    filename: contextRuntimeServicePath,
+const actualRagRetriever = require(ragRetrieverPath);
+require.cache[ragRetrieverPath] = {
+    id: ragRetrieverPath,
+    filename: ragRetrieverPath,
     loaded: true,
     exports: {
+        ...actualRagRetriever,
         collectRagItems: async (args) => {
             mockCollectRagItemsCalls.push(args);
             return { ...mockCollectRagItemsResult };
-        },
-        createContextRuntimeService: (deps) => {
-            // When createContextRuntimeService is called, it needs the real module
-            // but we only need to mock collectRagItems for recallRuntimeService
-            delete require.cache[contextRuntimeServicePath];
-            const actual = require(contextRuntimeServicePath);
-            return actual.createContextRuntimeService(deps);
         }
     }
 };
 
 const { createContextRuntimeService } = require('../../modules/agentGateway/services/contextRuntimeService');
-const { createRecallRuntimeService } = require('../../modules/agentGateway/services/recallRuntimeService');
+const { createRecallRuntimeService: createCanonicalRecallRuntimeService } = require('../../modules/agentGateway/services/recallRuntimeService');
+const { adaptLegacyGatewayDeps } = require('../../modules/agentGateway/composition/vcpPortBindings');
+const createRecallRuntimeService = (deps) => createCanonicalRecallRuntimeService(adaptLegacyGatewayDeps(deps));
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 

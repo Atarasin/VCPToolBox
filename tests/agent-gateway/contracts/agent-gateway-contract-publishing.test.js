@@ -17,8 +17,10 @@ function readYaml(filePath) {
     return yaml.load(fs.readFileSync(filePath, 'utf8'));
 }
 
-function extractNativeRoutePaths(routeFilePath) {
-    const routeSource = fs.readFileSync(routeFilePath, 'utf8');
+function extractNativeRoutePaths(routeFilePaths) {
+    const routeSource = (Array.isArray(routeFilePaths) ? routeFilePaths : [routeFilePaths])
+        .map((filePath) => fs.readFileSync(filePath, 'utf8'))
+        .join('\n');
     const routePattern = /router\.(get|post)\('([^']+)'/g;
     const paths = new Set();
     let matched = routePattern.exec(routeSource);
@@ -47,10 +49,13 @@ test('published Agent Gateway OpenAPI YAML and JSON stay equivalent to the canon
 test('published Agent Gateway OpenAPI covers the full native route surface', () => {
     const rootDir = path.resolve(__dirname, '..', '..', '..');
     const yamlPath = path.join(rootDir, 'mydoc', 'export', 'agent-gateway.openapi.yaml');
-    const routeFilePath = path.join(rootDir, 'routes', 'agentGatewayRoutes.js');
+    const routeDir = path.join(rootDir, 'routes', 'agentGateway');
+    const routeFilePaths = [path.join(rootDir, 'routes', 'agentGatewayRoutes.js'),
+        ...fs.readdirSync(routeDir).filter((name) => name.endsWith('Routes.js'))
+            .map((name) => path.join(routeDir, name))];
     const yamlDocument = readYaml(yamlPath);
     const publishedPaths = Object.keys(yamlDocument.paths).sort();
-    const routePaths = extractNativeRoutePaths(routeFilePath);
+    const routePaths = extractNativeRoutePaths(routeFilePaths);
 
     assert.deepEqual(publishedPaths, Array.from(PUBLISHED_NATIVE_GATEWAY_PATHS).sort());
     assert.deepEqual(routePaths, Array.from(PUBLISHED_NATIVE_GATEWAY_PATHS).sort());

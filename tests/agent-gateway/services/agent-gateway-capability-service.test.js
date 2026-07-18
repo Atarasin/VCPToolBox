@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createCapabilityService } = require('../../../modules/agentGateway/services/capabilityService');
+const { createCapabilityService: createCanonicalCapabilityService } = require('../../../modules/agentGateway/services/capabilityService');
+const { adaptLegacyGatewayDeps } = require('../../../modules/agentGateway/composition/vcpPortBindings');
+const createCapabilityService = (deps) => createCanonicalCapabilityService({
+    packageJson: require('../../../package.json'),
+    ...adaptLegacyGatewayDeps(deps)
+});
 const { createSchemaRegistry } = require('../../../modules/agentGateway/infra/schemaRegistry');
 const {
     createKnowledgeBaseManager,
@@ -23,7 +28,8 @@ test('CapabilityService builds compatible capabilities and scope-filtered target
     const service = createCapabilityService({
         pluginManager,
         bridgeVersion: 'v1',
-        schemaRegistry
+        schemaRegistry,
+        packageJson: { version: '7.1.2' }
     });
 
     const capabilities = await service.getCapabilities({
@@ -53,6 +59,13 @@ test('CapabilityService builds compatible capabilities and scope-filtered target
     assert.equal(Array.isArray(chromeBridge.inputSchema.oneOf), true);
     assert.equal(chromeBridge.inputSchema.oneOf.length, 2);
     assert.equal(chromeBridge.invocationCommands.length, 2);
+});
+
+test('CapabilityService defaults to the root package version', async () => {
+    const service = createCapabilityService({ pluginManager: createPluginManager() });
+    const capabilities = await service.getCapabilities({ includeMemoryTargets: false });
+
+    assert.equal(capabilities.server.version, require('../../../package.json').version);
 });
 
 test('CapabilityService derives memory targets from direct agentId mappings when explicit policy exists', async () => {

@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { createMemoryRuntimeService } = require('../../../modules/agentGateway/services/memoryRuntimeService');
+const { bindVcpPorts } = require('../../../modules/agentGateway/composition/vcpPortBindings');
 const {
     createPluginManager
 } = require('../helpers/agent-gateway-test-helpers');
@@ -28,6 +29,14 @@ function createDailyNotePlugin() {
             ]
         }
     };
+}
+
+function createMemoryService(pluginManager) {
+    const ports = bindVcpPorts(pluginManager);
+    return createMemoryRuntimeService({
+        diaryStorePort: ports.diaryStore,
+        ragConfig: ports.configuration.rag
+    });
 }
 
 async function withTempMemoryPolicy(policy, callback) {
@@ -71,7 +80,7 @@ test('MemoryRuntimeService persists durable memory through DailyNote', async () 
                 };
             }
         });
-        const service = createMemoryRuntimeService({ pluginManager });
+        const service = createMemoryService(pluginManager);
 
         const result = await service.writeMemory({
             body: {
@@ -152,7 +161,7 @@ test('MemoryRuntimeService skips duplicate writes by idempotency key', async () 
                 };
             }
         });
-        const service = createMemoryRuntimeService({ pluginManager });
+        const service = createMemoryService(pluginManager);
         const request = {
             body: {
                 target: {
@@ -211,7 +220,7 @@ test('MemoryRuntimeService rejects writes when memory policy lacks configured ma
                 return { status: 'success' };
             }
         });
-        const service = createMemoryRuntimeService({ pluginManager });
+        const service = createMemoryService(pluginManager);
 
         const result = await service.writeMemory({
             body: {
@@ -262,7 +271,7 @@ test('MemoryRuntimeService rejects forbidden diary targets', async () => {
             return { status: 'success' };
         }
     });
-    const service = createMemoryRuntimeService({ pluginManager });
+    const service = createMemoryService(pluginManager);
 
     const result = await service.writeMemory({
         body: {

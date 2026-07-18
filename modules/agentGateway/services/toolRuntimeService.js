@@ -7,9 +7,6 @@ const {
 const {
     mapOpenClawToolExecutionError
 } = require('../infra/errorMapper');
-const {
-    createAuditLogger
-} = require('../infra/auditLogger');
 
 const DEFAULT_MEMORY_BRIDGE_TOOL_NAME = 'vcp_memory_write';
 
@@ -122,13 +119,6 @@ function createAgentGatewayContext(requestContext, extra = {}) {
     };
 }
 
-function getToolInvocationStore(pluginManager) {
-    if (!pluginManager.__agentGatewayToolInvocationStore) {
-        pluginManager.__agentGatewayToolInvocationStore = new Map();
-    }
-    return pluginManager.__agentGatewayToolInvocationStore;
-}
-
 function createToolInvocationStoreKey(toolName, idempotencyKey) {
     const normalizedToolName = normalizeToolRuntimeString(toolName);
     const normalizedIdempotencyKey = normalizeToolRuntimeString(idempotencyKey);
@@ -175,14 +165,8 @@ function createBridgeRequestBody(args, requestContext, bridgeToolName) {
     };
 }
 
-/**
- * ToolRuntimeService 统一接管普通 tool invoke 与 memory bridge 的执行入口。
- */
-function createToolRuntimeService(deps = {}) {
-    const pluginManager = deps.pluginManager;
-    if (!pluginManager) {
-        throw new Error('[ToolRuntimeService] pluginManager is required');
-    }
+function createToolRuntimeContext(deps = {}) {
+    const toolInvokerPort = deps.toolInvokerPort;
     const schemaRegistry = deps.schemaRegistry;
     if (!schemaRegistry || typeof schemaRegistry.getToolInputSchema !== 'function') {
         throw new Error('[ToolRuntimeService] schemaRegistry is required');
@@ -194,7 +178,7 @@ function createToolRuntimeService(deps = {}) {
 
     const auditLogger = deps.auditLogger && typeof deps.auditLogger.logToolInvoke === 'function'
         ? deps.auditLogger
-        : createAuditLogger();
+        : { logToolInvoke() {} };
     const mapToolExecutionError = typeof deps.mapToolExecutionError === 'function'
         ? deps.mapToolExecutionError
         : mapOpenClawToolExecutionError;
@@ -209,284 +193,178 @@ function createToolRuntimeService(deps = {}) {
     const toolScopeGuard = typeof deps.toolScopeGuard === 'function'
         ? deps.toolScopeGuard
         : null;
-    const jobRuntimeService = deps.jobRuntimeService || null;
-
     return {
-        async invokeTool({ toolName, body, startedAt, clientIp, defaultSource }) {
-            const normalizedToolName = normalizeToolRuntimeString(toolName);
-            const args = body?.args;
-            const requestContext = normalizeToolRuntimeRequestContext(body?.requestContext, defaultSource);
-            const authContext = authContextResolver
-                ? authContextResolver({
-                    authContext: body?.authContext,
-                    requestContext,
-                    adapter: requestContext.runtime
-                })
-                : requestContext;
-            const requestId = requestContext.requestId;
-            const agentId = requestContext.agentId;
-            const sessionId = requestContext.sessionId;
-            const source = requestContext.source;
-            const options = body?.options && typeof body.options === 'object' ? body.options : {};
-            const idempotencyKey = normalizeToolRuntimeString(options.idempotencyKey || body?.idempotencyKey);
-            const invocationStore = getToolInvocationStore(pluginManager);
-            const invocationStoreKey = createToolInvocationStoreKey(normalizedToolName, idempotencyKey);
-
-            if (!normalizedToolName) {
-                return {
-                    success: false,
-                    status: 'failed',
-                    requestId,
-                    httpStatus: 400,
-                    code: OPENCLAW_ERROR_CODES.INVALID_REQUEST,
-                    error: 'toolName is required',
-                    details: { field: 'toolName' }
-                };
-            }
-            if (!args || typeof args !== 'object' || Array.isArray(args)) {
-                return {
-                    success: false,
-                    status: 'failed',
-                    requestId,
-                    httpStatus: 400,
-                    code: OPENCLAW_ERROR_CODES.TOOL_INVALID_ARGS,
-                    error: 'args must be an object',
-                    details: { toolName: normalizedToolName }
-                };
-            }
-            if (!agentId || !sessionId) {
-                return {
-                    success: false,
-                    status: 'failed',
-                    requestId,
-                    httpStatus: 400,
-                    code: OPENCLAW_ERROR_CODES.INVALID_REQUEST,
-                    error: 'requestContext.agentId and requestContext.sessionId are required',
-                    details: { toolName: normalizedToolName }
-                };
-            }
-
-            if (invocationStoreKey && invocationStore.has(invocationStoreKey)) {
-                const previousResult = invocationStore.get(invocationStoreKey);
-                auditLogger.logToolInvoke('invoke.duplicate', {
-                    requestId,
-                    toolName: normalizedToolName,
-                    source,
-                    agentId,
-                    sessionId
-                }, startedAt);
-                return cloneToolInvocationResult(previousResult, requestId);
-            }
-
-            if (normalizedToolName === memoryBridgeToolName) {
-                const bridgeResult = await memoryRuntimeService.writeMemory({
-                    body: createBridgeRequestBody(args, requestContext, memoryBridgeToolName),
-                    startedAt,
-                    clientIp,
-                    defaultSource: 'openclaw-memory-write'
-                });
-
-                if (!bridgeResult.success) {
-                    return {
-                        success: false,
-                        status: 'failed',
-                        requestId: bridgeResult.requestId,
-                        httpStatus: bridgeResult.status,
-                        code: bridgeResult.code,
-                        error: bridgeResult.error,
-                        details: bridgeResult.details
-                    };
-                }
-
-                return {
-                    success: true,
-                    status: 'completed',
-                    requestId: bridgeResult.requestId,
-                    data: {
-                        toolName: normalizedToolName,
-                        result: bridgeResult.data,
-                        audit: {
-                            approvalUsed: false,
-                            distributed: false
-                        }
-                    }
-                };
-            }
-
-            const plugin = pluginManager.getPlugin?.(normalizedToolName) || pluginManager.plugins?.get?.(normalizedToolName);
-            if (!plugin || !isBridgeablePlugin(plugin)) {
-                return {
-                    success: false,
-                    status: 'failed',
-                    requestId,
-                    httpStatus: 404,
-                    code: OPENCLAW_ERROR_CODES.TOOL_NOT_FOUND,
-                    error: 'Tool not found',
-                    details: { toolName: normalizedToolName }
-                };
-            }
-
-            if (agentPolicyResolver && toolScopeGuard) {
-                try {
-                    const policy = await agentPolicyResolver.resolvePolicy({
-                        authContext
-                    });
-                    toolScopeGuard({
-                        policy,
-                        toolName: normalizedToolName,
-                        authContext
-                    });
-                } catch (error) {
-                    return {
-                        success: false,
-                        status: 'failed',
-                        requestId,
-                        httpStatus: 403,
-                        code: OPENCLAW_ERROR_CODES.TOOL_FORBIDDEN,
-                        error: 'Requested tool is not allowed for this agent',
-                        details: {
-                            toolName: normalizedToolName,
-                            canonicalCode: error.code || ''
-                        }
-                    };
-                }
-            }
-
-            if (pluginManager.toolApprovalManager?.shouldApprove?.(normalizedToolName)) {
-                const approvalJob = jobRuntimeService
-                    ? jobRuntimeService.createWaitingApprovalJob({
-                        operation: 'tool.invoke',
-                        authContext,
-                        target: {
-                            type: 'tool',
-                            id: normalizedToolName
-                        },
-                        metadata: {
-                            toolName: normalizedToolName
-                        }
-                    })
-                    : null;
-                auditLogger.logToolInvoke('approval_required', {
-                    requestId,
-                    toolName: normalizedToolName,
-                    source,
-                    agentId,
-                    sessionId
-                });
-                return {
-                    success: true,
-                    status: 'waiting_approval',
-                    requestId,
-                    httpStatus: 202,
-                    data: {
-                        toolName: normalizedToolName,
-                        job: approvalJob,
-                        runtime: {
-                            deferred: true,
-                            status: 'waiting_approval'
-                        },
-                        audit: {
-                            approvalUsed: true,
-                            distributed: Boolean(plugin.isDistributed)
-                        }
-                    },
-                    details: {
-                        toolName: normalizedToolName,
-                        job: approvalJob
-                    },
-                    code: OPENCLAW_ERROR_CODES.TOOL_APPROVAL_REQUIRED,
-                    error: 'Tool approval required'
-                };
-            }
-
-            const inputSchema = schemaRegistry.getToolInputSchema(plugin);
-            const validationErrors = validateToolSchemaValue(inputSchema, args);
-            if (validationErrors.length > 0) {
-                return {
-                    success: false,
-                    status: 'failed',
-                    requestId,
-                    httpStatus: 400,
-                    code: OPENCLAW_ERROR_CODES.TOOL_INVALID_ARGS,
-                    error: 'Tool arguments do not match input schema',
-                    details: {
-                        toolName: normalizedToolName,
-                        issues: validationErrors
-                    }
-                };
-            }
-
-            auditLogger.logToolInvoke('invoke.started', {
-                requestId,
-                toolName: normalizedToolName,
-                source,
-                agentId,
-                sessionId,
-                distributed: Boolean(plugin.isDistributed)
-            });
-
-            const agentGatewayContext = createAgentGatewayContext(requestContext, {
-                toolName: normalizedToolName
-            });
-            const openClawContext = createLegacyOpenClawContext(requestContext);
-
-            try {
-                const result = await pluginManager.processToolCall(normalizedToolName, {
-                    ...args,
-                    __agentGatewayContext: agentGatewayContext,
-                    __openclawContext: openClawContext
-                }, clientIp);
-
-                auditLogger.logToolInvoke('invoke.completed', {
-                    requestId,
-                    toolName: normalizedToolName,
-                    source,
-                    agentId,
-                    sessionId,
-                    distributed: Boolean(plugin.isDistributed)
-                }, startedAt);
-
-                const completedResult = {
-                    success: true,
-                    status: 'completed',
-                    requestId,
-                    data: {
-                        toolName: normalizedToolName,
-                        result,
-                        audit: {
-                            approvalUsed: false,
-                            distributed: Boolean(plugin.isDistributed)
-                        }
-                    }
-                };
-                if (invocationStoreKey) {
-                    invocationStore.set(invocationStoreKey, completedResult);
-                }
-                return completedResult;
-            } catch (error) {
-                const mappedError = mapToolExecutionError(normalizedToolName, error);
-                auditLogger.logToolInvoke('invoke.failed', {
-                    requestId,
-                    toolName: normalizedToolName,
-                    source,
-                    agentId,
-                    sessionId,
-                    distributed: Boolean(plugin.isDistributed),
-                    code: mappedError.code
-                }, startedAt);
-
-                return {
-                    success: false,
-                    status: 'failed',
-                    requestId,
-                    httpStatus: mappedError.status,
-                    code: mappedError.code,
-                    error: mappedError.error,
-                    details: mappedError.details
-                };
-            }
-        }
+        toolInvokerPort,
+        schemaRegistry,
+        memoryRuntimeService,
+        auditLogger,
+        mapToolExecutionError,
+        memoryBridgeToolName,
+        authContextResolver,
+        agentPolicyResolver,
+        toolScopeGuard,
+        jobRuntimeService: deps.jobRuntimeService || null,
+        invocationStore: new Map()
     };
+}
+
+function normalizeToolInvocation(state, input) {
+    const { toolName, body, startedAt, clientIp, defaultSource } = input;
+    const normalizedToolName = normalizeToolRuntimeString(toolName);
+    const requestContext = normalizeToolRuntimeRequestContext(body?.requestContext, defaultSource);
+    const authContext = state.authContextResolver
+        ? state.authContextResolver({ authContext: body?.authContext, requestContext, adapter: requestContext.runtime })
+        : requestContext;
+    const options = body?.options && typeof body.options === 'object' ? body.options : {};
+    const idempotencyKey = normalizeToolRuntimeString(options.idempotencyKey || body?.idempotencyKey);
+    const invocationStore = state.invocationStore;
+    return {
+        state, body, startedAt, clientIp, normalizedToolName, args: body?.args,
+        requestContext, authContext, requestId: requestContext.requestId,
+        agentId: requestContext.agentId, sessionId: requestContext.sessionId,
+        source: requestContext.source, invocationStore,
+        invocationStoreKey: createToolInvocationStoreKey(normalizedToolName, idempotencyKey)
+    };
+}
+
+function invalidInvocation(ctx) {
+    if (!ctx.normalizedToolName) {
+        return { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 400,
+            code: OPENCLAW_ERROR_CODES.INVALID_REQUEST, error: 'toolName is required', details: { field: 'toolName' } };
+    }
+    if (!ctx.args || typeof ctx.args !== 'object' || Array.isArray(ctx.args)) {
+        return { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 400,
+            code: OPENCLAW_ERROR_CODES.TOOL_INVALID_ARGS, error: 'args must be an object',
+            details: { toolName: ctx.normalizedToolName } };
+    }
+    if (!ctx.agentId || !ctx.sessionId) {
+        return { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 400,
+            code: OPENCLAW_ERROR_CODES.INVALID_REQUEST,
+            error: 'requestContext.agentId and requestContext.sessionId are required',
+            details: { toolName: ctx.normalizedToolName } };
+    }
+    return null;
+}
+
+function replayInvocation(ctx) {
+    if (!ctx.invocationStoreKey || !ctx.invocationStore.has(ctx.invocationStoreKey)) return null;
+    ctx.state.auditLogger.logToolInvoke('invoke.duplicate', {
+        requestId: ctx.requestId, toolName: ctx.normalizedToolName, source: ctx.source,
+        agentId: ctx.agentId, sessionId: ctx.sessionId
+    }, ctx.startedAt);
+    return cloneToolInvocationResult(ctx.invocationStore.get(ctx.invocationStoreKey), ctx.requestId);
+}
+
+async function invokeMemoryBridge(ctx) {
+    if (ctx.normalizedToolName !== ctx.state.memoryBridgeToolName) return null;
+    const bridgeResult = await ctx.state.memoryRuntimeService.writeMemory({
+        body: createBridgeRequestBody(ctx.args, ctx.requestContext, ctx.state.memoryBridgeToolName),
+        startedAt: ctx.startedAt, clientIp: ctx.clientIp, defaultSource: 'openclaw-memory-write'
+    });
+    if (!bridgeResult.success) {
+        return { success: false, status: 'failed', requestId: bridgeResult.requestId,
+            httpStatus: bridgeResult.status, code: bridgeResult.code, error: bridgeResult.error,
+            details: bridgeResult.details };
+    }
+    return { success: true, status: 'completed', requestId: bridgeResult.requestId,
+        data: { toolName: ctx.normalizedToolName, result: bridgeResult.data,
+            audit: { approvalUsed: false, distributed: false } } };
+}
+
+function resolveInvocationPlugin(ctx) {
+    const plugin = ctx.state.toolInvokerPort?.getTool?.(ctx.normalizedToolName) || null;
+    if (plugin && isBridgeablePlugin(plugin)) return { plugin };
+    return { failure: { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 404,
+        code: OPENCLAW_ERROR_CODES.TOOL_NOT_FOUND, error: 'Tool not found',
+        details: { toolName: ctx.normalizedToolName } } };
+}
+
+async function authorizeInvocation(ctx) {
+    if (!ctx.state.agentPolicyResolver || !ctx.state.toolScopeGuard) return null;
+    try {
+        const policy = await ctx.state.agentPolicyResolver.resolvePolicy({ authContext: ctx.authContext });
+        ctx.state.toolScopeGuard({ policy, toolName: ctx.normalizedToolName, authContext: ctx.authContext });
+        return null;
+    } catch (error) {
+        return { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 403,
+            code: OPENCLAW_ERROR_CODES.TOOL_FORBIDDEN,
+            error: 'Requested tool is not allowed for this agent',
+            details: { toolName: ctx.normalizedToolName, canonicalCode: error.code || '' } };
+    }
+}
+
+function buildApprovalResult(ctx, plugin) {
+    const requiresApproval = ctx.state.toolInvokerPort?.requiresApproval?.(ctx.normalizedToolName) || false;
+    if (!requiresApproval) return null;
+    const job = ctx.state.jobRuntimeService?.createWaitingApprovalJob({
+        operation: 'tool.invoke', authContext: ctx.authContext,
+        target: { type: 'tool', id: ctx.normalizedToolName }, metadata: { toolName: ctx.normalizedToolName }
+    }) || null;
+    ctx.state.auditLogger.logToolInvoke('approval_required', {
+        requestId: ctx.requestId, toolName: ctx.normalizedToolName, source: ctx.source,
+        agentId: ctx.agentId, sessionId: ctx.sessionId
+    });
+    return { success: true, status: 'waiting_approval', requestId: ctx.requestId, httpStatus: 202,
+        data: { toolName: ctx.normalizedToolName, job,
+            runtime: { deferred: true, status: 'waiting_approval' },
+            audit: { approvalUsed: true, distributed: Boolean(plugin.isDistributed) } },
+        details: { toolName: ctx.normalizedToolName, job },
+        code: OPENCLAW_ERROR_CODES.TOOL_APPROVAL_REQUIRED, error: 'Tool approval required' };
+}
+
+function validateInvocationSchema(ctx, plugin) {
+    const issues = validateToolSchemaValue(ctx.state.schemaRegistry.getToolInputSchema(plugin), ctx.args);
+    if (issues.length === 0) return null;
+    return { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 400,
+        code: OPENCLAW_ERROR_CODES.TOOL_INVALID_ARGS, error: 'Tool arguments do not match input schema',
+        details: { toolName: ctx.normalizedToolName, issues } };
+}
+
+async function executeInvocation(ctx, plugin) {
+    const audit = { requestId: ctx.requestId, toolName: ctx.normalizedToolName, source: ctx.source,
+        agentId: ctx.agentId, sessionId: ctx.sessionId, distributed: Boolean(plugin.isDistributed) };
+    ctx.state.auditLogger.logToolInvoke('invoke.started', audit);
+    const invocationArgs = { ...ctx.args,
+        __agentGatewayContext: createAgentGatewayContext(ctx.requestContext, { toolName: ctx.normalizedToolName }),
+        __openclawContext: createLegacyOpenClawContext(ctx.requestContext) };
+    try {
+        const result = await ctx.state.toolInvokerPort.invoke(
+            ctx.normalizedToolName, invocationArgs, ctx.clientIp
+        );
+        ctx.state.auditLogger.logToolInvoke('invoke.completed', audit, ctx.startedAt);
+        const completed = { success: true, status: 'completed', requestId: ctx.requestId,
+            data: { toolName: ctx.normalizedToolName, result,
+                audit: { approvalUsed: false, distributed: Boolean(plugin.isDistributed) } } };
+        if (ctx.invocationStoreKey) ctx.invocationStore.set(ctx.invocationStoreKey, completed);
+        return completed;
+    } catch (error) {
+        const mapped = ctx.state.mapToolExecutionError(ctx.normalizedToolName, error);
+        ctx.state.auditLogger.logToolInvoke('invoke.failed', { ...audit, code: mapped.code }, ctx.startedAt);
+        return { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: mapped.status,
+            code: mapped.code, error: mapped.error, details: mapped.details };
+    }
+}
+
+async function invokeTool(state, input) {
+    const ctx = normalizeToolInvocation(state, input);
+    const immediate = invalidInvocation(ctx) || replayInvocation(ctx);
+    if (immediate) return immediate;
+    const bridgeResult = await invokeMemoryBridge(ctx);
+    if (bridgeResult) return bridgeResult;
+    const { plugin, failure } = resolveInvocationPlugin(ctx);
+    if (failure) return failure;
+    const forbidden = await authorizeInvocation(ctx);
+    if (forbidden) return forbidden;
+    const approval = buildApprovalResult(ctx, plugin);
+    if (approval) return approval;
+    const invalidArgs = validateInvocationSchema(ctx, plugin);
+    return invalidArgs || executeInvocation(ctx, plugin);
+}
+
+/** ToolRuntimeService 统一接管普通 tool invoke 与 memory bridge 的执行入口。 */
+function createToolRuntimeService(deps = {}) {
+    const state = createToolRuntimeContext(deps);
+    return { invokeTool: (input) => invokeTool(state, input) };
 }
 
 module.exports = {

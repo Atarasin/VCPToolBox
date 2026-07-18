@@ -7,14 +7,22 @@ const WebSocket = require('ws');
 const {
     AGW_ERROR_CODES
 } = require('./contracts/errorCodes');
-const { normalizeRequestContext, sanitizeRequestContextValue } = require('./contracts/requestContext');
+const { sanitizeRequestContextValue } = require('./contracts/requestContext');
 const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance');
+const { createProtocolConfigSnapshot } = require('./composition/vcpPortBindings');
 const { WebSocketTransport, validateMcpTransport } = require('./transport');
 const {
     createJsonRpcErrorResponse,
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime
 } = require('./mcpStdioServer');
+const {
+    checkSlidingWindowRateLimit,
+    createSlidingWindowRateLimit,
+    dispatchJsonRpc,
+    injectMcpContext,
+    parseJsonRpcPayload
+} = require('./transport/shared');
 
 const DEFAULT_ENDPOINT_PATH = '/mcp';
 const DEFAULT_PING_INTERVAL_MS = 30000;
@@ -30,6 +38,7 @@ const MAX_PAYLOAD_BYTES_ENV = 'VCP_MCP_WS_MAX_PAYLOAD_BYTES';
 const UPGRADE_AUTH_TIMEOUT_MS_ENV = 'VCP_MCP_WS_UPGRADE_AUTH_TIMEOUT_MS';
 const RATE_LIMIT_MESSAGES_ENV = 'VCP_MCP_WS_RATE_LIMIT_MESSAGES';
 const RATE_LIMIT_WINDOW_MS_ENV = 'VCP_MCP_WS_RATE_LIMIT_WINDOW_MS';
+const IDLE_TIMEOUT_MS_ENV = 'VCP_MCP_WS_IDLE_TIMEOUT_MS';
 const DEFAULT_SOURCE = 'agent-gateway-mcp-ws';
 const DEFAULT_RUNTIME = 'mcp-websocket';
 const JSON_RPC_SERVER_ERROR_CODE = -32000;
@@ -164,155 +173,65 @@ function buildRateLimitRejectionPayload(rawMessage, rateLimit) {
 }
 
 function checkRateLimit(connection, timestamp = Date.now()) {
-    const rateLimit = connection.rateLimit;
-    if (!rateLimit || rateLimit.limit <= 0 || rateLimit.windowMs <= 0) {
-        return { allowed: true };
-    }
-
-    const cutoff = timestamp - rateLimit.windowMs;
-    connection.rateLimit.timestamps = connection.rateLimit.timestamps.filter((entry) => entry > cutoff);
-
-    if (connection.rateLimit.timestamps.length >= rateLimit.limit) {
-        return {
-            allowed: false,
-            retryAfterMs: Math.max(0, connection.rateLimit.timestamps[0] + rateLimit.windowMs - timestamp),
-            limit: rateLimit.limit,
-            windowMs: rateLimit.windowMs
-        };
-    }
-
-    connection.rateLimit.timestamps.push(timestamp);
-    return { allowed: true };
+    return checkSlidingWindowRateLimit(connection.rateLimit, timestamp);
 }
 
 function injectConnectionContext(request, connectionContext, options = {}) {
-    const requestObject = isPlainObject(request) ? request : {};
-    const params = isPlainObject(requestObject.params) ? { ...requestObject.params } : {};
-    const clientRequestContext = isPlainObject(params.requestContext) ? params.requestContext : {};
-    const requestIdPrefix = sanitizeRequestContextValue(options.requestIdPrefix, 16) || 'agwmcp';
-    const topLevelAgentId = sanitizeRequestContextValue(params.agentId, 256);
-
-    const normalizedRequestContext = normalizeRequestContext({
-        requestId: clientRequestContext.requestId,
-        agentId: clientRequestContext.agentId || topLevelAgentId,
-        source: clientRequestContext.source || connectionContext.source,
-        runtime: clientRequestContext.runtime || connectionContext.runtime,
-        sessionId: connectionContext.sessionId
-    }, {
-        defaultSource: connectionContext.source,
-        defaultRuntime: connectionContext.runtime,
-        requestIdPrefix
-    });
-
-    return {
-        ...requestObject,
-        params: {
-            ...params,
-            ...(topLevelAgentId || normalizedRequestContext.agentId
-                ? { agentId: topLevelAgentId || normalizedRequestContext.agentId }
-                : {}),
-            // The canonical websocket session identity always comes from the server.
-            sessionId: connectionContext.sessionId,
-            requestContext: {
-                ...normalizedRequestContext,
-                ...(connectionContext.gatewayId ? { gatewayId: connectionContext.gatewayId } : {})
-            },
-            authContext: {
-                ...(connectionContext.gatewayId ? { gatewayId: connectionContext.gatewayId } : {}),
-                sessionId: connectionContext.sessionId,
-                ...(connectionContext.authMode ? { authMode: connectionContext.authMode } : {}),
-                ...(connectionContext.authSource ? { authSource: connectionContext.authSource } : {}),
-                ...(connectionContext.roles.length > 0 ? { roles: [...connectionContext.roles] } : {})
-            }
-        }
-    };
+    return injectMcpContext(request, connectionContext, options);
 }
 
-function createMcpWebSocketServer(options = {}) {
-    const stderr = options.stderr || process.stderr;
-    const endpointPath = sanitizeRequestContextValue(options.path, 128) || DEFAULT_ENDPOINT_PATH;
-    const pingIntervalMs = Number.isFinite(options.pingIntervalMs) && options.pingIntervalMs > 0
-        ? options.pingIntervalMs
-        : DEFAULT_PING_INTERVAL_MS;
-    const maxBatchSize = resolveMaxBatchSize(options);
-    const maxConnections = resolveConfiguredPositiveInteger(
-        options.maxConnections,
-        MAX_CONNECTIONS_ENV,
-        DEFAULT_MAX_CONNECTIONS
-    );
-    const maxPayloadBytes = resolveConfiguredPositiveInteger(
-        options.maxPayloadBytes,
-        MAX_PAYLOAD_BYTES_ENV,
-        DEFAULT_MAX_PAYLOAD_BYTES
-    );
-    const upgradeAuthTimeoutMs = resolveConfiguredPositiveInteger(
-        options.upgradeAuthTimeoutMs,
-        UPGRADE_AUTH_TIMEOUT_MS_ENV,
-        DEFAULT_UPGRADE_AUTH_TIMEOUT_MS
-    );
-    const rateLimitMessages = resolveConfiguredPositiveInteger(
-        options.rateLimitMessages,
-        RATE_LIMIT_MESSAGES_ENV,
-        DEFAULT_RATE_LIMIT_MESSAGES
-    );
-    const rateLimitWindowMs = resolveConfiguredPositiveInteger(
-        options.rateLimitWindowMs,
-        RATE_LIMIT_WINDOW_MS_ENV,
-        DEFAULT_RATE_LIMIT_WINDOW_MS
-    );
-    const initializeRuntime = options.initializeRuntime || initializeBackendProxyMcpRuntime;
-    const shutdownRuntime = options.shutdownRuntime || shutdownBackendProxyMcpRuntime;
-    const resolveAuth = options.resolveAuth || resolveDedicatedGatewayAuth;
-    const wss = new WebSocket.Server({
-        noServer: true,
-        clientTracking: false,
-        maxPayload: maxPayloadBytes
-    });
+function createWebSocketState(options) {
+    options = {
+        ...options,
+        protocolConfig: options.protocolConfig || createProtocolConfigSnapshot(options.pluginManager)
+    };
+    const maxPayloadBytes = resolveConfiguredPositiveInteger(options.maxPayloadBytes, MAX_PAYLOAD_BYTES_ENV,
+        DEFAULT_MAX_PAYLOAD_BYTES);
+    const state = { options, stderr: options.stderr || process.stderr,
+        endpointPath: sanitizeRequestContextValue(options.path, 128) || DEFAULT_ENDPOINT_PATH,
+        pingIntervalMs: Number.isFinite(options.pingIntervalMs) && options.pingIntervalMs > 0
+            ? options.pingIntervalMs : DEFAULT_PING_INTERVAL_MS,
+        maxBatchSize: resolveMaxBatchSize(options),
+        maxConnections: resolveConfiguredPositiveInteger(options.maxConnections, MAX_CONNECTIONS_ENV,
+            DEFAULT_MAX_CONNECTIONS), maxPayloadBytes,
+        upgradeAuthTimeoutMs: resolveConfiguredPositiveInteger(options.upgradeAuthTimeoutMs,
+            UPGRADE_AUTH_TIMEOUT_MS_ENV, DEFAULT_UPGRADE_AUTH_TIMEOUT_MS),
+        rateLimitMessages: resolveConfiguredPositiveInteger(options.rateLimitMessages, RATE_LIMIT_MESSAGES_ENV,
+            DEFAULT_RATE_LIMIT_MESSAGES),
+        rateLimitWindowMs: resolveConfiguredPositiveInteger(options.rateLimitWindowMs, RATE_LIMIT_WINDOW_MS_ENV,
+            DEFAULT_RATE_LIMIT_WINDOW_MS),
+        idleTimeoutMs: resolvePositiveInteger(options.idleTimeoutMs) ||
+            resolvePositiveInteger(process.env[IDLE_TIMEOUT_MS_ENV]) || 0,
+        initializeRuntime: options.initializeRuntime || initializeBackendProxyMcpRuntime,
+        shutdownRuntime: options.shutdownRuntime || shutdownBackendProxyMcpRuntime,
+        resolveAuth: options.resolveAuth || resolveDedicatedGatewayAuth,
+        wss: new WebSocket.Server({ noServer: true, clientTracking: false, maxPayload: maxPayloadBytes }),
+        connections: new Map(), attachedServer: null, upgradeListener: null, closePromise: null,
+        runtimeContext: null, runtimePromise: null, ownsRuntime: false };
+    state.wss.on('error', (error) => logTransportError(state.stderr, '[MCPTransport] WebSocket server error', error));
+    return state;
+}
 
-    wss.on('error', (error) => {
-        logTransportError(stderr, '[MCPTransport] WebSocket server error', error);
-    });
-
-    const connections = new Map();
-    let attachedServer = null;
-    let upgradeListener = null;
-    let closePromise = null;
-    let runtimeContext = null;
-    let runtimePromise = null;
-    let ownsRuntime = false;
-
-    async function resolveHarness() {
-        if (options.harness && typeof options.harness.handleRequest === 'function') {
-            return options.harness;
-        }
-
-        if (runtimeContext?.harness && typeof runtimeContext.harness.handleRequest === 'function') {
-            return runtimeContext.harness;
-        }
-
-        if (!runtimePromise) {
-            runtimePromise = Promise.resolve(initializeRuntime(options))
-                .then((context) => {
-                    runtimeContext = context || null;
-
-                    if (!runtimeContext?.harness || typeof runtimeContext.harness.handleRequest !== 'function') {
-                        throw new Error('MCP websocket transport requires a harness with handleRequest(request).');
-                    }
-
-                    ownsRuntime = true;
-                    return runtimeContext;
-                })
-                .catch((error) => {
-                    runtimePromise = null;
-                    throw error;
-                });
-        }
-
-        const context = await runtimePromise;
-        return context.harness;
+async function resolveHarness(state) {
+    if (state.options.harness?.handleRequest) return state.options.harness;
+    if (state.runtimeContext?.harness?.handleRequest) return state.runtimeContext.harness;
+    if (!state.runtimePromise) {
+        state.runtimePromise = Promise.resolve(state.initializeRuntime(state.options)).then((context) => {
+            state.runtimeContext = context || null;
+            if (!state.runtimeContext?.harness?.handleRequest) {
+                throw new Error('MCP websocket transport requires a harness with handleRequest(request).');
+            }
+            state.ownsRuntime = true;
+            return state.runtimeContext;
+        }).catch((error) => {
+            state.runtimePromise = null;
+            throw error;
+        });
     }
+    return (await state.runtimePromise).harness;
+}
 
-    function startHeartbeat(connection) {
+function startHeartbeat(state, connection) {
         connection.isAlive = true;
         connection.heartbeatTimer = setInterval(() => {
             if (connection.cleanedUp) {
@@ -320,13 +239,13 @@ function createMcpWebSocketServer(options = {}) {
             }
 
             if (connection.ws.readyState !== WebSocket.OPEN) {
-                void cleanupConnection(connection, 'socket-not-open');
+                void cleanupConnection(state, connection, 'socket-not-open');
                 return;
             }
 
             if (!connection.isAlive) {
                 connection.ws.terminate();
-                void cleanupConnection(connection, 'heartbeat-timeout');
+                void cleanupConnection(state, connection, 'heartbeat-timeout');
                 return;
             }
 
@@ -334,17 +253,28 @@ function createMcpWebSocketServer(options = {}) {
             try {
                 connection.ws.ping();
             } catch (error) {
-                logTransportError(stderr, '[MCPTransport] WebSocket ping failed', error);
-                void cleanupConnection(connection, 'heartbeat-ping-failed');
+                logTransportError(state.stderr, '[MCPTransport] WebSocket ping failed', error);
+                void cleanupConnection(state, connection, 'heartbeat-ping-failed');
             }
-        }, pingIntervalMs);
+        }, state.pingIntervalMs);
 
         if (typeof connection.heartbeatTimer.unref === 'function') {
             connection.heartbeatTimer.unref();
         }
-    }
+}
 
-    async function cleanupConnection(connection, _reason = 'cleanup') {
+function touchConnection(state, connection) {
+        connection.lastActivityAt = Date.now();
+        if (connection.idleTimer) clearTimeout(connection.idleTimer);
+        if (state.idleTimeoutMs <= 0) return;
+        connection.idleTimer = setTimeout(() => {
+            connection.ws.terminate();
+            void cleanupConnection(state, connection, 'idle-timeout');
+        }, state.idleTimeoutMs);
+        if (typeof connection.idleTimer.unref === 'function') connection.idleTimer.unref();
+}
+
+async function cleanupConnection(state, connection, _reason = 'cleanup') {
         if (!connection) {
             return;
         }
@@ -354,11 +284,15 @@ function createMcpWebSocketServer(options = {}) {
         }
 
         connection.cleanedUp = true;
-        connections.delete(connection.connectionId);
+        state.connections.delete(connection.connectionId);
 
         if (connection.heartbeatTimer) {
             clearInterval(connection.heartbeatTimer);
             connection.heartbeatTimer = null;
+        }
+        if (connection.idleTimer) {
+            clearTimeout(connection.idleTimer);
+            connection.idleTimer = null;
         }
 
         connection.cleanupPromise = (async () => {
@@ -382,117 +316,41 @@ function createMcpWebSocketServer(options = {}) {
         })();
 
         return connection.cleanupPromise;
-    }
+}
 
-    async function handleClientMessage(connection, rawMessage) {
-        const messageText = typeof rawMessage === 'string' ? rawMessage.trim() : '';
-        if (!messageText) {
+async function handleClientMessage(state, connection, rawMessage) {
+        const parsed = parseJsonRpcPayload(rawMessage, {
+            batchPolicy: 'allow',
+            maxBatchSize: state.maxBatchSize
+        });
+        if (parsed.error) {
+            connection.transport.send(JSON.stringify(parsed.error));
             return;
         }
 
-        let request;
-        try {
-            request = JSON.parse(messageText);
-        } catch (error) {
-            connection.transport.send(JSON.stringify(createJsonRpcErrorResponse(null, -32700, 'Parse error', {
-                details: error.message
-            })));
-            return;
+        if (!connection.harnessPromise) {
+            connection.harnessPromise = resolveHarness(state).catch((error) => {
+                connection.harnessPromise = null;
+                throw error;
+            });
         }
-
-        const getHarness = async () => {
-            if (!connection.harnessPromise) {
-                // Reset the per-connection cache after transient init failures so later
-                // requests on the same websocket can retry runtime bootstrap.
-                connection.harnessPromise = resolveHarness().catch((error) => {
-                    connection.harnessPromise = null;
-                    throw error;
-                });
+        const harness = await connection.harnessPromise;
+        const response = await dispatchJsonRpc({
+            ...parsed,
+            harness,
+            inject: (request) => injectConnectionContext(request, connection.context, state.options),
+            onNotificationError: (error) => {
+                logTransportError(state.stderr, '[MCPTransport] Notification handling failed', error);
             }
-            return connection.harnessPromise;
-        };
-        const dispatchRequest = async (requestItem, errorData) => {
-            if (!isPlainObject(requestItem)) {
-                return createInvalidRequestError(errorData);
-            }
-
-            const requestWithContext = injectConnectionContext(requestItem, connection.context, options);
-            const expectsResponse = hasOwn(requestWithContext, 'id');
-            const harness = await getHarness();
-
-            try {
-                const response = await harness.handleRequest(requestWithContext);
-                return expectsResponse && response ? response : null;
-            } catch (error) {
-                if (!expectsResponse) {
-                    logTransportError(stderr, '[MCPTransport] Notification handling failed', error);
-                    return null;
-                }
-
-                return createJsonRpcErrorResponse(
-                    requestWithContext.id,
-                    -32603,
-                    'Internal error',
-                    { details: error.message }
-                );
-            }
-        };
-
-        if (Array.isArray(request)) {
-            if (request.length === 0) {
-                connection.transport.send(JSON.stringify(createInvalidRequestError({
-                    field: 'request',
-                    reason: 'empty_batch'
-                })));
-                return;
-            }
-
-            if (request.length > maxBatchSize) {
-                connection.transport.send(JSON.stringify(createInvalidRequestError({
-                    field: 'request',
-                    reason: 'batch_limit_exceeded',
-                    limit: maxBatchSize,
-                    actual: request.length
-                })));
-                return;
-            }
-
-            const responses = [];
-            for (let index = 0; index < request.length; index += 1) {
-                const response = await dispatchRequest(request[index], {
-                    field: 'request',
-                    reason: 'invalid_batch_member',
-                    batchIndex: index
-                });
-                if (response) {
-                    responses.push(response);
-                }
-            }
-
-            if (responses.length > 0) {
-                connection.transport.send(JSON.stringify(responses));
-            }
-            return;
-        }
-
-        if (!isPlainObject(request)) {
-            connection.transport.send(JSON.stringify(createInvalidRequestError({
-                field: 'request'
-            })));
-            return;
-        }
-
-        const response = await dispatchRequest(request, {
-            field: 'request'
         });
         if (response) {
             connection.transport.send(JSON.stringify(response));
         }
-    }
+}
 
-    function registerConnection(ws, auth) {
-        const context = createConnectionContext(auth, options);
-        const transport = validateMcpTransport(new WebSocketTransport(ws, options.transportOptions));
+function registerConnection(state, ws, auth) {
+        const context = createConnectionContext(auth, state.options);
+        const transport = validateMcpTransport(new WebSocketTransport(ws, state.options.transportOptions));
         const connection = {
             ws,
             transport,
@@ -502,24 +360,24 @@ function createMcpWebSocketServer(options = {}) {
             cleanedUp: false,
             cleanupPromise: null,
             heartbeatTimer: null,
+            idleTimer: null,
+            lastActivityAt: Date.now(),
             queue: Promise.resolve(),
             harnessPromise: null,
-            rateLimit: {
-                limit: rateLimitMessages,
-                windowMs: rateLimitWindowMs,
-                timestamps: []
-            }
+            rateLimit: createSlidingWindowRateLimit({ limit: state.rateLimitMessages, windowMs: state.rateLimitWindowMs })
         };
 
-        connections.set(connection.connectionId, connection);
-        startHeartbeat(connection);
+        state.connections.set(connection.connectionId, connection);
+        startHeartbeat(state, connection);
+        touchConnection(state, connection);
 
         transport.setErrorHandler((error) => {
-            logTransportError(stderr, '[MCPTransport] WebSocket transport error', error);
-            void cleanupConnection(connection, 'transport-error');
+            logTransportError(state.stderr, '[MCPTransport] WebSocket transport error', error);
+            void cleanupConnection(state, connection, 'transport-error');
         });
 
         transport.setMessageHandler((message) => {
+            touchConnection(state, connection);
             const rateLimitResult = checkRateLimit(connection);
             if (!rateLimitResult.allowed) {
                 const payload = buildRateLimitRejectionPayload(message, rateLimitResult);
@@ -530,10 +388,10 @@ function createMcpWebSocketServer(options = {}) {
             }
 
             connection.queue = connection.queue
-                .then(() => handleClientMessage(connection, message))
+                .then(() => handleClientMessage(state, connection, message))
                 .catch((error) => {
                     try {
-                        logTransportError(stderr, '[MCPTransport] Request handling failed', error);
+                        logTransportError(state.stderr, '[MCPTransport] Request handling failed', error);
                     } catch (_logError) {
                         // Logging itself failed — swallow to avoid killing the queue.
                     }
@@ -542,86 +400,69 @@ function createMcpWebSocketServer(options = {}) {
 
         ws.on('pong', () => {
             connection.isAlive = true;
+            touchConnection(state, connection);
         });
 
         ws.on('close', () => {
-            void cleanupConnection(connection, 'close');
+            void cleanupConnection(state, connection, 'close');
         });
 
         ws.on('error', (error) => {
-            logTransportError(stderr, '[MCPTransport] WebSocket connection error', error);
-            void cleanupConnection(connection, 'error');
+            logTransportError(state.stderr, '[MCPTransport] WebSocket connection error', error);
+            void cleanupConnection(state, connection, 'error');
         });
-    }
+}
 
-    async function handleUpgrade(request, socket, head) {
-        if (buildPathname(request.url) !== endpointPath) {
+async function resolveUpgradeAuth(state, request, socket) {
+    let timeout = null;
+    let cleanup = null;
+    const aborted = new Promise((_, reject) => {
+        const rejectOnAbort = () => { const error = new Error('Socket closed before websocket upgrade authentication completed');
+            error.code = 'MCP_WS_UPGRADE_SOCKET_ABORTED'; reject(error); };
+        socket.once('close', rejectOnAbort); socket.once('error', rejectOnAbort);
+        cleanup = () => { socket.off('close', rejectOnAbort); socket.off('error', rejectOnAbort); };
+    });
+    try {
+        return await Promise.race([
+            Promise.resolve().then(() => state.resolveAuth({ headers: request.headers,
+                config: state.options.protocolConfig })), aborted,
+            new Promise((_, reject) => { timeout = setTimeout(() => { const error = new Error(
+                `WebSocket upgrade authentication timed out after ${state.upgradeAuthTimeoutMs}ms`);
+                error.code = 'MCP_WS_UPGRADE_TIMEOUT'; reject(error); }, state.upgradeAuthTimeoutMs);
+            if (typeof timeout.unref === 'function') timeout.unref(); })
+        ]);
+    } finally {
+        if (timeout) clearTimeout(timeout);
+        if (cleanup) cleanup();
+    }
+}
+
+async function handleUpgrade(state, request, socket, head) {
+        if (buildPathname(request.url) !== state.endpointPath) {
             return;
         }
 
-        if (connections.size >= maxConnections) {
+        if (state.connections.size >= state.maxConnections) {
             destroySocket(socket);
-            writeStderr(stderr, `[MCPTransport] Connection rejected: maxConnections (${maxConnections}) reached.`);
+            writeStderr(state.stderr, `[MCPTransport] Connection rejected: maxConnections (${state.maxConnections}) reached.`);
             return;
         }
 
         let auth;
-        let upgradeTimeout = null;
-        let cleanupSocketAbortListeners = null;
-        const socketAbortPromise = new Promise((_, reject) => {
-            const rejectOnAbort = () => {
-                const error = new Error('Socket closed before websocket upgrade authentication completed');
-                error.code = 'MCP_WS_UPGRADE_SOCKET_ABORTED';
-                reject(error);
-            };
-
-            socket.once('close', rejectOnAbort);
-            socket.once('error', rejectOnAbort);
-            cleanupSocketAbortListeners = () => {
-                socket.off('close', rejectOnAbort);
-                socket.off('error', rejectOnAbort);
-            };
-        });
-
         try {
-            auth = await Promise.race([
-                Promise.resolve().then(() => resolveAuth({
-                    headers: request.headers,
-                    pluginManager: options.pluginManager
-                })),
-                socketAbortPromise,
-                new Promise((_, reject) => {
-                    // Bound the full auth resolution path so a stalled upgrade cannot pin a socket forever.
-                    upgradeTimeout = setTimeout(() => {
-                        const error = new Error(`WebSocket upgrade authentication timed out after ${upgradeAuthTimeoutMs}ms`);
-                        error.code = 'MCP_WS_UPGRADE_TIMEOUT';
-                        reject(error);
-                    }, upgradeAuthTimeoutMs);
-
-                    if (typeof upgradeTimeout.unref === 'function') {
-                        upgradeTimeout.unref();
-                    }
-                })
-            ]);
+            auth = await resolveUpgradeAuth(state, request, socket);
         } catch (error) {
             if (error?.code === 'MCP_WS_UPGRADE_SOCKET_ABORTED') {
                 return;
             }
 
             if (error?.code === 'MCP_WS_UPGRADE_TIMEOUT') {
-                writeStderr(stderr, `[MCPTransport] ${error.message}`);
+                writeStderr(state.stderr, `[MCPTransport] ${error.message}`);
             } else {
-                logTransportError(stderr, '[MCPTransport] Upgrade authentication failed', error);
+                logTransportError(state.stderr, '[MCPTransport] Upgrade authentication failed', error);
             }
             destroySocket(socket);
             return;
-        } finally {
-            if (upgradeTimeout) {
-                clearTimeout(upgradeTimeout);
-            }
-            if (typeof cleanupSocketAbortListeners === 'function') {
-                cleanupSocketAbortListeners();
-            }
         }
 
         if (!auth.provided || !auth.authenticated) {
@@ -630,81 +471,86 @@ function createMcpWebSocketServer(options = {}) {
         }
 
         try {
-            wss.handleUpgrade(request, socket, head, (ws) => {
-                registerConnection(ws, auth);
+            state.wss.handleUpgrade(request, socket, head, (ws) => {
+                registerConnection(state, ws, auth);
             });
         } catch (error) {
-            logTransportError(stderr, '[MCPTransport] WebSocket upgrade failed', error);
+            logTransportError(state.stderr, '[MCPTransport] WebSocket upgrade failed', error);
             destroySocket(socket);
         }
-    }
+}
 
-    function attach(httpServer) {
+function attach(state, httpServer) {
         if (!httpServer || typeof httpServer.on !== 'function') {
             throw new Error('createMcpWebSocketServer.attach(httpServer) requires an HTTP server instance.');
         }
 
-        if (attachedServer === httpServer && upgradeListener) {
+        if (state.attachedServer === httpServer && state.upgradeListener) {
             return;
         }
 
-        if (attachedServer && upgradeListener) {
-            attachedServer.off('upgrade', upgradeListener);
+        if (state.attachedServer && state.upgradeListener) {
+            state.attachedServer.off('upgrade', state.upgradeListener);
         }
 
-        attachedServer = httpServer;
-        upgradeListener = (request, socket, head) => {
-            Promise.resolve(handleUpgrade(request, socket, head)).catch((error) => {
-                logTransportError(stderr, '[MCPTransport] Upgrade handling failed', error);
+        state.attachedServer = httpServer;
+        state.upgradeListener = (request, socket, head) => {
+            Promise.resolve(handleUpgrade(state, request, socket, head)).catch((error) => {
+                logTransportError(state.stderr, '[MCPTransport] Upgrade handling failed', error);
                 socket.destroy();
             });
         };
 
         // Keep `/mcp` on an isolated upgrade path instead of mixing it into the legacy mesh.
-        attachedServer.on('upgrade', upgradeListener);
-    }
+        state.attachedServer.on('upgrade', state.upgradeListener);
+}
 
-    async function close() {
-        if (closePromise) {
-            return closePromise;
+async function close(state) {
+        if (state.closePromise) {
+            return state.closePromise;
         }
 
-        closePromise = (async () => {
-            if (attachedServer && upgradeListener) {
-                attachedServer.off('upgrade', upgradeListener);
+        state.closePromise = (async () => {
+            if (state.attachedServer && state.upgradeListener) {
+                state.attachedServer.off('upgrade', state.upgradeListener);
             }
 
-            attachedServer = null;
-            upgradeListener = null;
+            state.attachedServer = null;
+            state.upgradeListener = null;
 
-            await Promise.all(Array.from(connections.values(), (connection) => cleanupConnection(connection, 'server-close')));
+            await Promise.all(Array.from(state.connections.values(),
+                (connection) => cleanupConnection(state, connection, 'server-close')));
 
             await new Promise((resolve) => {
-                wss.close(() => resolve());
+                state.wss.close(() => resolve());
             });
 
-            if (ownsRuntime && options.shutdownOnClose !== false) {
+            const options = state.options;
+            const injectedRuntime = options.backendClient || options.backendUrl || options.initializeRuntime;
+            if (state.ownsRuntime && (options.shutdownOnClose === true || typeof options.shutdownRuntime === 'function' || injectedRuntime)) {
                 try {
-                    await shutdownRuntime();
+                    await state.shutdownRuntime();
                 } catch (error) {
-                    logTransportError(stderr, '[MCPTransport] Shutdown failed', error);
+                    logTransportError(state.stderr, '[MCPTransport] Shutdown failed', error);
                 }
             }
 
-            runtimeContext = null;
-            runtimePromise = null;
-            ownsRuntime = false;
+            state.runtimeContext = null;
+            state.runtimePromise = null;
+            state.ownsRuntime = false;
         })();
 
-        return closePromise;
-    }
+        return state.closePromise;
+}
 
+function createMcpWebSocketServer(options = {}) {
+    const state = createWebSocketState(options);
     return {
-        attach,
-        initialize: attach,
-        close,
+        attach: (server) => attach(state, server),
+        initialize: (server) => attach(state, server),
+        close: () => close(state),
         getConnectionCount() {
-            return connections.size;
+            return state.connections.size;
         }
     };
 }

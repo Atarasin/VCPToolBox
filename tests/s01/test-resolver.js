@@ -9,6 +9,7 @@ const {
     ALLOWED_MODIFIERS_S01,
     ALLOWED_RULE_TYPES
 } = require('../../modules/agentGateway/policy/recallProfileResolver');
+const fixturePath = path.join(__dirname, '..', 'fixtures', 'agent-gateway', 'recall_profiles.json');
 
 function createTempConfig(payload) {
     const tmpFile = path.join(os.tmpdir(), `recall-profiles-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
@@ -27,7 +28,7 @@ function cleanupTempConfig(tmpFile) {
 describe('RecallProfileResolver', () => {
     it('loads config and resolves default profile for Nexus', () => {
         const resolver = new RecallProfileResolver({
-            configPath: path.join(__dirname, '../../modules/agentGateway/config/recall_profiles.json')
+            configPath: fixturePath
         });
         const result = resolver.resolveForAgent('Nexus');
         assert.strictEqual(result.resolved, true);
@@ -44,7 +45,7 @@ describe('RecallProfileResolver', () => {
 
     it('resolves explicit profile for Aemeath', () => {
         const resolver = new RecallProfileResolver({
-            configPath: path.join(__dirname, '../../modules/agentGateway/config/recall_profiles.json')
+            configPath: fixturePath
         });
         const result = resolver.resolveForAgent('Aemeath', 'aemeath-gated');
         assert.strictEqual(result.resolved, true);

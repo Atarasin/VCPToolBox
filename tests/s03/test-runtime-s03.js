@@ -18,9 +18,9 @@ let mockFullTextImpl = async (args) => {
     return { ...mockFullTextResult };
 };
 
-require.cache[require.resolve('../../modules/agentGateway/services/contextRuntimeService')] = {
-    id: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
-    filename: require.resolve('../../modules/agentGateway/services/contextRuntimeService'),
+require.cache[require.resolve('../../modules/agentGateway/core/recall/ragRetriever')] = {
+    id: require.resolve('../../modules/agentGateway/core/recall/ragRetriever'),
+    filename: require.resolve('../../modules/agentGateway/core/recall/ragRetriever'),
     loaded: true,
     exports: {
         collectRagItems: async (args) => mockCollectRagItemsImpl(args),
@@ -29,11 +29,14 @@ require.cache[require.resolve('../../modules/agentGateway/services/contextRuntim
 };
 
 const {
-    createRecallRuntimeService,
+    createRecallRuntimeService: createCanonicalRecallRuntimeService,
     applyS02Modifiers,
     applyTruncate,
     createRecallBlock
 } = require('../../modules/agentGateway/services/recallRuntimeService');
+const { adaptLegacyGatewayDeps } = require('../../modules/agentGateway/composition/vcpPortBindings');
+
+const createRecallRuntimeService = (deps) => createCanonicalRecallRuntimeService(adaptLegacyGatewayDeps(deps));
 
 function makeItems(count, baseScore = 1.0) {
     return Array.from({ length: count }, (_, i) => ({
@@ -114,6 +117,10 @@ function createTestService(overrides = {}) {
         contextRuntimeService: createMockContextRuntimeService(),
         embeddingUtilsLoader: () => ({}),
         fullTextRetriever: async (args) => mockFullTextImpl(args),
+        llmCompletionPort: {
+            available: true,
+            complete: (_config, payload) => axios.post('http://test/v1/chat/completions', payload)
+        },
         ...overrides
     });
 }
@@ -411,6 +418,10 @@ describe('S03 — Per-rule aiMemo semantic governance', () => {
                 contextRuntimeService: createMockContextRuntimeService(),
                 embeddingUtilsLoader: () => ({}),
                 fullTextRetriever: async (args) => mockFullTextImpl(args),
+                llmCompletionPort: {
+                    available: true,
+                    complete: (_config, payload) => axios.post('http://test/v1/chat/completions', payload)
+                },
                 recallProfileResolver: {
                     resolveForAgent: () => ({
                         resolved: true,

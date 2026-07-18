@@ -178,6 +178,8 @@ async function createFixture(options = {}) {
         ...(options.rateLimitMessages ? { rateLimitMessages: options.rateLimitMessages } : {}),
         ...(options.rateLimitWindowMs ? { rateLimitWindowMs: options.rateLimitWindowMs } : {}),
         ...(options.sessionIdleMs ? { sessionIdleMs: options.sessionIdleMs } : {}),
+        ...(options.discoveryMaxSessions ? { discoveryMaxSessions: options.discoveryMaxSessions } : {}),
+        ...(options.discoverySessionTtlMs ? { discoverySessionTtlMs: options.discoverySessionTtlMs } : {}),
         ...(options.heartbeatIntervalMs ? { heartbeatIntervalMs: options.heartbeatIntervalMs } : {}),
         ...(options.resolveAuth ? { resolveAuth: options.resolveAuth } : {}),
         stderr: options.stderr || null
@@ -677,6 +679,63 @@ test('streamable HTTP self-heals discovery requests that present an unknown sess
         assert.equal(fixture.httpManager.getSessionCount(), 1);
         assert.equal(fixture.requests.length, 1);
         assert.equal(fixture.requests[0].params.sessionId, response.headers['mcp-session-id']);
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP discovery sessions use an independent bounded LRU pool', async () => {
+    const fixture = await createFixture({
+        maxSessions: 1,
+        discoveryMaxSessions: 2,
+        discoverySessionTtlMs: 1000
+    });
+
+    try {
+        const standard = await postJson(`${fixture.baseUrl}/mcp`, createInitializePayload(1), {
+            headers: createGatewayAuthHeaders()
+        });
+        assert.equal(standard.status, 200);
+
+        const discoveryIds = [];
+        for (let index = 0; index < 3; index += 1) {
+            const discovery = await postJson(`${fixture.baseUrl}/mcp`, {
+                jsonrpc: '2.0',
+                id: index + 2,
+                method: 'tools/list'
+            }, {
+                headers: createGatewayAuthHeaders()
+            });
+            assert.equal(discovery.status, 200);
+            discoveryIds.push(discovery.headers['mcp-session-id']);
+        }
+
+        assert.equal(fixture.httpManager.getStandardSessionCount(), 1);
+        assert.equal(fixture.httpManager.getDiscoverySessionCount(), 2);
+
+        const evicted = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 5,
+            method: 'ping'
+        }, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'MCP-Session-Id': discoveryIds[0]
+            }
+        });
+        assert.equal(evicted.status, 404);
+
+        const normalFollowUp = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 6,
+            method: 'ping'
+        }, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'MCP-Session-Id': standard.headers['mcp-session-id']
+            }
+        });
+        assert.equal(normalFollowUp.status, 200);
     } finally {
         await fixture.close();
     }

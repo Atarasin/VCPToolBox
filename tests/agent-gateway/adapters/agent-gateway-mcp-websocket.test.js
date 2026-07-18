@@ -156,6 +156,7 @@ async function createFixture(options = {}) {
         ...(options.upgradeAuthTimeoutMs ? { upgradeAuthTimeoutMs: options.upgradeAuthTimeoutMs } : {}),
         ...(options.rateLimitMessages ? { rateLimitMessages: options.rateLimitMessages } : {}),
         ...(options.rateLimitWindowMs ? { rateLimitWindowMs: options.rateLimitWindowMs } : {}),
+        ...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
         ...(options.initializeRuntime ? { initializeRuntime: options.initializeRuntime } : {}),
         ...(options.shutdownRuntime ? { shutdownRuntime: options.shutdownRuntime } : {}),
         ...(options.resolveAuth ? { resolveAuth: options.resolveAuth } : {}),
@@ -860,7 +861,7 @@ test('websocket backend proxy preserves result-level MCP tool failures for diary
     assert.equal(response.result.error.details.diary, 'ProjectAlpha');
 });
 
-test('websocket backend proxy routes gateway_recall_run through backend tool execution instead of MCP_NOT_FOUND', async (t) => {
+test('websocket backend proxy preserves the canonical no-profile recall failure', async (t) => {
     const { client } = await createBackendProxyClient(t);
 
     client.send(JSON.stringify({
@@ -880,7 +881,8 @@ test('websocket backend proxy routes gateway_recall_run through backend tool exe
     const response = await waitForJsonMessage(client);
     assert.equal(response.error, undefined);
     assert.ok(response.result, 'Expected tools/call to return a result envelope');
-    assert.notEqual(response.result.error?.code, 'MCP_NOT_FOUND');
+    assert.equal(response.result.error?.code, 'MCP_NOT_FOUND');
+    assert.equal(response.result.error?.details?.canonicalCode, 'AGW_RECALL_NO_PROFILE');
 });
 
 test('websocket backend proxy maps unsupported tool and resource requests to MCP-standard JSON-RPC errors', async (t) => {
@@ -997,6 +999,22 @@ test('keeps healthy websocket clients connected across native ping/pong heartbea
 
     assert.equal(client.readyState, WebSocket.OPEN);
     assert.equal(fixture.manager.getConnectionCount(), 1);
+});
+
+test('websocket idle cleanup is opt-in and closes inactive connections when configured', async (t) => {
+    const fixture = await createFixture({ pingIntervalMs: 500, idleTimeoutMs: 25 });
+    t.after(async () => fixture.close());
+
+    const client = await connectClient(fixture.wsUrl, {
+        headers: { [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: 'gw-secret' }
+    });
+    t.after(() => client.terminate());
+
+    await Promise.race([
+        once(client, 'close'),
+        new Promise((_resolve, reject) => setTimeout(() => reject(new Error('Timed out waiting for idle cleanup')), 1000))
+    ]);
+    assert.equal(fixture.manager.getConnectionCount(), 0);
 });
 
 test('terminates stale websocket clients that stop answering native pings', async (t) => {

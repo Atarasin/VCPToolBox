@@ -2,9 +2,12 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createSchemaRegistry } = require('../../../modules/agentGateway/infra/schemaRegistry');
-const { createToolRuntimeService } = require('../../../modules/agentGateway/services/toolRuntimeService');
+const { createToolRuntimeService: createCanonicalToolRuntimeService } = require('../../../modules/agentGateway/services/toolRuntimeService');
 const { createJobRuntimeService } = require('../../../modules/agentGateway/services/jobRuntimeService');
-const { createAgentPolicyResolver } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+const { createAgentPolicyResolver: createCanonicalAgentPolicyResolver } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+const { adaptLegacyGatewayDeps } = require('../../../modules/agentGateway/composition/vcpPortBindings');
+const createToolRuntimeService = (deps) => createCanonicalToolRuntimeService(adaptLegacyGatewayDeps(deps));
+const createAgentPolicyResolver = (deps) => createCanonicalAgentPolicyResolver(adaptLegacyGatewayDeps(deps));
 const { resolveAuthContext } = require('../../../modules/agentGateway/policy/authContextResolver');
 const { ensureToolAllowed } = require('../../../modules/agentGateway/policy/toolScopeGuard');
 const {

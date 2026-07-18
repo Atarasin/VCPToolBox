@@ -8,6 +8,9 @@ module.exports = {
     infra: require('./infra'),
     mcpHttpServer: require('./mcpHttpServer'),
     mcpWebSocketServer: require('./mcpWebSocketServer'),
+    protocols: {
+        mcp: require('./protocols/mcp')
+    },
     policy: require('./policy'),
     services: require('./services')
 };

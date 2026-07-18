@@ -1,31 +1,23 @@
-const fs = require('fs');
 const path = require('path');
 
 const {
     buildAgentAliases
 } = require('./authContextResolver');
+const { createHotJsonConfigLoader } = require('./shared/hotJsonConfigLoader');
+const { normalizeString, normalizeStringArray } = require('./shared/normalize');
 
 const DEFAULT_POLICY_PATH = path.join(__dirname, '..', 'config', 'mcp_agent_memory_policy.json');
 
-let cachedPolicyPath = '';
-let cachedPolicyMtimeMs = -1;
-let cachedPolicyPayload = Object.freeze({
-    agents: {}
+const normalizePolicyString = normalizeString;
+const normalizePolicyStringArray = normalizeStringArray;
+const loadPolicyFile = createHotJsonConfigLoader({
+    fallback: { agents: {} },
+    normalize(parsed) {
+        const agents = parsed?.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents)
+            ? parsed.agents : {};
+        return { agents };
+    }
 });
-
-function normalizePolicyString(value) {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizePolicyStringArray(value) {
-    if (Array.isArray(value)) {
-        return value.map((item) => normalizePolicyString(item)).filter(Boolean);
-    }
-    if (typeof value === 'string') {
-        return value.split(',').map((item) => item.trim()).filter(Boolean);
-    }
-    return [];
-}
 
 function normalizeDiaryCanonicalName(value) {
     const normalizedValue = normalizePolicyString(value);
@@ -116,38 +108,7 @@ function getPolicyFilePath() {
 }
 
 function loadAgentMemoryPolicyConfig() {
-    const policyPath = getPolicyFilePath();
-    let stat;
-    try {
-        stat = fs.statSync(policyPath);
-    } catch (error) {
-        cachedPolicyPath = policyPath;
-        cachedPolicyMtimeMs = -1;
-        cachedPolicyPayload = Object.freeze({ agents: {} });
-        return cachedPolicyPayload;
-    }
-
-    if (cachedPolicyPath === policyPath && cachedPolicyMtimeMs === stat.mtimeMs) {
-        return cachedPolicyPayload;
-    }
-
-    try {
-        const rawText = fs.readFileSync(policyPath, 'utf8');
-        const parsed = JSON.parse(rawText);
-        const agents = parsed?.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents)
-            ? parsed.agents
-            : {};
-
-        cachedPolicyPath = policyPath;
-        cachedPolicyMtimeMs = stat.mtimeMs;
-        cachedPolicyPayload = Object.freeze({ agents });
-        return cachedPolicyPayload;
-    } catch (error) {
-        cachedPolicyPath = policyPath;
-        cachedPolicyMtimeMs = stat.mtimeMs;
-        cachedPolicyPayload = Object.freeze({ agents: {} });
-        return cachedPolicyPayload;
-    }
+    return loadPolicyFile(getPolicyFilePath());
 }
 
 function resolveConfiguredAgentMemoryPolicy({ agentId } = {}) {

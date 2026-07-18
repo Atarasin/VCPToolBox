@@ -46,6 +46,23 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Run Agent Gateway baseline tests
+      env:
+        AGENT_GATEWAY_TEST_REPORT: artifacts/agent-gateway-tests.tap
+      run: npm run test:agent-gateway
+
+    - name: Upload Agent Gateway test report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: agent-gateway-tests-node-20
+        path: artifacts/agent-gateway-tests.tap
+        if-no-files-found: error
+
+    - name: Diagnose Agent Gateway test isolation in parallel
+      continue-on-error: true
+      run: npm run test:agent-gateway -- --test-concurrency=4
+
   # ============================================================
   # Job 2: Docker 构建 & 发布
   # ============================================================
