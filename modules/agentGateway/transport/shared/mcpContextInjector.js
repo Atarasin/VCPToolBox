@@ -1,4 +1,5 @@
 const { normalizeRequestContext, sanitizeRequestContextValue } = require('../../contracts/requestContext');
+const { resolveTraceId } = require('../../infra/trace');
 
 function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -20,6 +21,7 @@ function injectMcpContext(request, context, options = {}) {
         defaultRuntime: context.runtime,
         requestIdPrefix: sanitizeRequestContextValue(options.requestIdPrefix, 16) || 'agwmcp'
     });
+    normalized.traceId = resolveTraceId(clientContext.traceId, 'agwop');
     return {
         ...requestObject,
         params: {

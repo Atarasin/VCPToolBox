@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { OPERATION_CATALOG, REST_OPERATIONS } = require('../../../modules/agentGateway/contracts/operations');
+const { OPERATION_CATALOG, REST_OPERATIONS, gatewayToolSchemas } = require('../../../modules/agentGateway/contracts/operations');
 const { generateMcpDescriptors, generateOpenApiDocument } = require('../../../modules/agentGateway/contracts/generate');
 const { createGatewayManagedToolDescriptors } = require('../../../modules/agentGateway/protocols/mcp/descriptors');
 const legacyOperations = require('../../../modules/agentGateway/protocols/mcp/operations');
@@ -52,6 +52,31 @@ test('AJV validation does not coerce, default, or remove fields', () => {
     const before = structuredClone(invalid);
     assert.ok(validateGatewayToolArguments('gateway_job_get', invalid).length > 0);
     assert.deepEqual(invalid, before);
+});
+
+test('all managed operations preserve the historical AJV acceptance corpus', () => {
+    const corpus = {
+        gateway_agent_render: { valid: { agentId: 'Ariadne', maxLength: '2048', unknown: true }, invalid: { agentId: null } },
+        gateway_agent_bootstrap: { valid: { agentId: 'Ariadne', maxLength: '2048', unknown: true }, invalid: {} },
+        gateway_job_get: { valid: { jobId: 'job-1', unknown: true }, invalid: { jobId: null } },
+        gateway_job_cancel: { valid: { jobId: 'job-1', unknown: true }, invalid: {} },
+        gateway_memory_search: { valid: { query: 'memory', k: '5', mode: 'auto', unknown: true },
+            invalid: { query: 'memory', mode: 'unsupported' } },
+        gateway_context_assemble: { valid: { query: 'context', tokenBudget: '1024', minScore: '0.5', unknown: true },
+            invalid: { query: 'context', tokenBudget: null } },
+        gateway_memory_write: { valid: { target: { diary: 'Nova' }, memory: { text: 'entry' },
+            timestamp: 123, unknown: true }, invalid: { target: null, memory: { text: 'entry' } } },
+        gateway_recall_run: { valid: { agentId: 'Ariadne', query: 'recall', unknown: true },
+            invalid: { agentId: 'Ariadne', query: null } }
+    };
+
+    assert.deepEqual(Object.keys(corpus).sort(), Object.keys(gatewayToolSchemas).sort());
+    for (const [operation, cases] of Object.entries(corpus)) {
+        const before = structuredClone(cases.valid);
+        assert.deepEqual(validateGatewayToolArguments(operation, cases.valid), [], `${operation} valid corpus`);
+        assert.deepEqual(cases.valid, before, `${operation} input remains unchanged`);
+        assert.ok(validateGatewayToolArguments(operation, cases.invalid).length > 0, `${operation} invalid corpus`);
+    }
 });
 
 test('JSON Schema conversion handles nullable, examples, const, and unsupported keywords for OpenAPI 3.0', () => {

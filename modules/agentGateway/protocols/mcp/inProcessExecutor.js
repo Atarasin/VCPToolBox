@@ -790,7 +790,6 @@ function createMcpServerHarness(pluginManager, options = {}) {
     const adapter = options.adapter || createMcpAdapter(pluginManager, options);
     return createMcpHarness({ adapter });
 }
-
 module.exports = {
     MCP_ERROR_CODES,
     MCP_RESOURCE_KINDS,
