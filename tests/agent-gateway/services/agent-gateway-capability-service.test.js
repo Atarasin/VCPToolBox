@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createCapabilityService } = require('../../../modules/agentGateway/services/capabilityService');
+const { createCapabilityService: createCanonicalCapabilityService } = require('../../../modules/agentGateway/services/capabilityService');
+const { adaptLegacyGatewayDeps } = require('../../../modules/agentGateway/composition/vcpPortBindings');
+const createCapabilityService = (deps) => createCanonicalCapabilityService({
+    packageJson: require('../../../package.json'),
+    ...adaptLegacyGatewayDeps(deps)
+});
 const { createSchemaRegistry } = require('../../../modules/agentGateway/infra/schemaRegistry');
 const {
     createKnowledgeBaseManager,

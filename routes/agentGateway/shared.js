@@ -305,13 +305,13 @@ function buildNativeAuthContext({
     });
 }
 
-function createGovernedRequestBody(req, pluginManager, requestContext) {
+function createGovernedRequestBody(req, protocolConfig, requestContext) {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const options = body.options && typeof body.options === 'object' ? body.options : {};
     const idempotencyKey = resolveGovernedIdempotencyKey({
         body,
         headers: req.headers,
-        pluginManager
+        config: protocolConfig
     });
 
     return {
@@ -340,17 +340,9 @@ function writeNativeSseEvent(res, eventName, payload) {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function buildNativeHealthSnapshot(pluginManager) {
-    const pluginManagerReady = Boolean(
-        pluginManager &&
-        pluginManager.plugins &&
-        typeof pluginManager.getPlugin === 'function'
-    );
-    const knowledgeBaseReady = Boolean(
-        pluginManager &&
-        pluginManager.vectorDBManager &&
-        typeof pluginManager.vectorDBManager.listDiaryNames === 'function'
-    );
+function buildNativeHealthSnapshot(readiness = {}) {
+    const pluginManagerReady = readiness.pluginManagerReady === true;
+    const knowledgeBaseReady = readiness.knowledgeBaseReady === true;
 
     return {
         status: pluginManagerReady && knowledgeBaseReady ? 'ok' : 'degraded',

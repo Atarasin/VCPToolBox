@@ -1,4 +1,3 @@
-const packageJson = require('../composition/packageMetadata');
 const { createSchemaRegistry } = require('../infra/schemaRegistry');
 
 function normalizeCapabilityString(value) {
@@ -54,68 +53,6 @@ function parseCapabilityJsonObject(value, fallbackValue = {}) {
     } catch (error) {
         return fallbackValue;
     }
-}
-
-function getBridgeConfig(pluginManager) {
-    return pluginManager?.openClawBridgeConfig ||
-        pluginManager?.openClawBridge?.config ||
-        pluginManager?.openClawBridge ||
-        {};
-}
-
-function getRagConfig(pluginManager) {
-    const bridgeConfig = getBridgeConfig(pluginManager);
-    const ragConfig = parseCapabilityJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
-    const configuredAgentDiaryMap = parseCapabilityJsonObject(ragConfig.agentDiaryMap, {});
-    const envAgentDiaryMap = parseCapabilityJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
-    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
-        ? ragConfig.allowCrossRoleAccess
-        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
-    const defaultDiaries = normalizeCapabilityStringArray(
-        ragConfig.defaultDiaries !== undefined
-            ? ragConfig.defaultDiaries
-            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
-    );
-    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
-        ? configuredAgentDiaryMap
-        : envAgentDiaryMap;
-
-    return {
-        agentDiaryMap,
-        defaultDiaries,
-        allowCrossRoleAccess: parseCapabilityBoolean(rawAllowCrossRoleAccess, false),
-        hasExplicitPolicy: (
-            Object.keys(agentDiaryMap).length > 0 ||
-            defaultDiaries.length > 0 ||
-            rawAllowCrossRoleAccess !== undefined
-        )
-    };
-}
-
-function getKnowledgeBaseManager(pluginManager, ragRetrieverPort) {
-    if (ragRetrieverPort?.knowledgeBaseManager) return ragRetrieverPort.knowledgeBaseManager;
-    if (pluginManager?.vectorDBManager) {
-        return pluginManager.vectorDBManager;
-    }
-    if (pluginManager?.knowledgeBaseManager) {
-        return pluginManager.knowledgeBaseManager;
-    }
-    if (pluginManager?.openClawBridge?.knowledgeBaseManager) {
-        return pluginManager.openClawBridge.knowledgeBaseManager;
-    }
-    return null;
-}
-
-function getRagPlugin(pluginManager, ragRetrieverPort) {
-    if (ragRetrieverPort?.ragPlugin) return ragRetrieverPort.ragPlugin;
-    const pluginManagerRagPlugin = pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
-    if (pluginManagerRagPlugin) {
-        return pluginManagerRagPlugin;
-    }
-    if (pluginManager?.openClawBridge?.ragPlugin) {
-        return pluginManager.openClawBridge.ragPlugin;
-    }
-    return null;
 }
 
 function isBridgeablePlugin(plugin) {
@@ -199,24 +136,6 @@ function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
     return normalizedDiaries;
 }
 
-async function listDiaryTargets(knowledgeBaseManager) {
-    if (typeof knowledgeBaseManager?.listDiaryNames === 'function') {
-        const diaryNames = await Promise.resolve(knowledgeBaseManager.listDiaryNames());
-        return normalizeCapabilityStringArray(diaryNames);
-    }
-    if (!knowledgeBaseManager?.db?.prepare) {
-        return [];
-    }
-
-    const rows = knowledgeBaseManager.db
-        .prepare('SELECT DISTINCT diary_name FROM files ORDER BY diary_name COLLATE NOCASE')
-        .all();
-
-    return rows
-        .map((row) => normalizeCapabilityString(row.diary_name))
-        .filter(Boolean);
-}
-
 function createTargetDescriptor(diaryName) {
     return {
         id: diaryName,
@@ -226,11 +145,8 @@ function createTargetDescriptor(diaryName) {
     };
 }
 
-function getMemoryWriterInfo(pluginManager) {
-    const resolvePlugin = (pluginName) =>
-        pluginManager?.getPlugin?.(pluginName) || pluginManager?.plugins?.get?.(pluginName) || null;
-
-    const dailyNotePlugin = resolvePlugin('DailyNote');
+function getMemoryWriterInfo(diaryStorePort) {
+    const dailyNotePlugin = diaryStorePort?.getWriter?.();
     if (dailyNotePlugin) {
         return {
             name: 'DailyNote',
@@ -241,15 +157,16 @@ function getMemoryWriterInfo(pluginManager) {
     return null;
 }
 
-function createContextDescriptor({ ragPlugin, knowledgeBaseManager }) {
+function createContextDescriptor(ragRetrieverPort) {
+    const features = ragRetrieverPort?.capabilities?.() || {};
     return {
         features: {
             queryFromMessages: true,
-            retrieval: Boolean(knowledgeBaseManager?.search),
-            timeAware: Boolean(ragPlugin?.timeParser?.parse),
-            groupAware: Boolean(ragPlugin?.semanticGroups?.getEnhancedVector),
-            rerank: Boolean(ragPlugin?._rerankDocuments),
-            tagMemo: Boolean(knowledgeBaseManager?.applyTagBoost),
+            retrieval: Boolean(ragRetrieverPort?.available),
+            timeAware: Boolean(features.parseTimeRanges),
+            groupAware: Boolean(features.enhanceSemanticGroups),
+            rerank: Boolean(features.rerank),
+            tagMemo: Boolean(features.applyTagBoost),
             tokenBudget: true,
             minScore: true,
             truncation: true
@@ -257,26 +174,27 @@ function createContextDescriptor({ ragPlugin, knowledgeBaseManager }) {
     };
 }
 
-function createMemoryDescriptor({ includeTargets, targets, ragPlugin, knowledgeBaseManager, pluginManager }) {
+function createMemoryDescriptor({ includeTargets, targets, ragRetrieverPort, diaryStorePort }) {
+    const features = ragRetrieverPort?.capabilities?.() || {};
     return {
         targets: includeTargets ? targets : [],
         features: {
-            timeAware: Boolean(ragPlugin?.timeParser?.parse),
-            groupAware: Boolean(ragPlugin?.semanticGroups?.getEnhancedVector),
-            rerank: Boolean(ragPlugin?._rerankDocuments),
-            tagMemo: Boolean(knowledgeBaseManager?.applyTagBoost),
-            writeBack: Boolean(getMemoryWriterInfo(pluginManager))
+            timeAware: Boolean(features.parseTimeRanges),
+            groupAware: Boolean(features.enhanceSemanticGroups),
+            rerank: Boolean(features.rerank),
+            tagMemo: Boolean(features.applyTagBoost),
+            writeBack: Boolean(getMemoryWriterInfo(diaryStorePort))
         }
     };
 }
 
-function createToolDescriptor(plugin, pluginManager, schemaRegistry) {
+function createToolDescriptor(plugin, toolInvokerPort, schemaRegistry) {
     return {
         name: plugin.name,
         displayName: plugin.displayName || plugin.name,
         pluginType: plugin.pluginType || (plugin.isDistributed ? 'distributed' : 'unknown'),
         distributed: Boolean(plugin.isDistributed),
-        approvalRequired: Boolean(pluginManager?.toolApprovalManager?.shouldApprove?.(plugin.name)),
+        approvalRequired: Boolean(toolInvokerPort?.requiresApproval?.(plugin.name)),
         timeoutMs: getToolTimeoutMs(plugin),
         description: schemaRegistry.getToolDescription(plugin),
         inputSchema: schemaRegistry.getToolInputSchema(plugin),
@@ -289,15 +207,11 @@ function createToolDescriptor(plugin, pluginManager, schemaRegistry) {
  * adapter 只负责协议适配，不再直接拼装这些 payload。
  */
 function createCapabilityService(deps = {}) {
-    const pluginManager = deps.pluginManager;
-    if (!pluginManager) {
-        throw new Error('[CapabilityService] pluginManager is required');
-    }
 
     const schemaRegistry = deps.schemaRegistry || createSchemaRegistry();
     const serverName = deps.serverName || 'VCPToolBox';
     const bridgeVersion = deps.bridgeVersion || 'v1';
-    const resolvedPackageJson = deps.packageJson || packageJson;
+    const resolvedPackageJson = deps.packageJson || {};
     const authContextResolver = typeof deps.authContextResolver === 'function'
         ? deps.authContextResolver
         : null;
@@ -305,11 +219,16 @@ function createCapabilityService(deps = {}) {
         typeof deps.agentPolicyResolver.resolvePolicy === 'function'
         ? deps.agentPolicyResolver
         : null;
+    const ragRetrieverPort = deps.ragRetrieverPort || deps.ports?.ragRetriever;
+    const diaryStorePort = deps.diaryStorePort || deps.ports?.diaryStore;
+    const toolInvokerPort = deps.toolInvokerPort || deps.ports?.toolInvoker;
+    const ragConfig = deps.ragConfig || deps.ports?.configuration?.rag || {};
 
     return {
         async getMemoryTargets({ agentId, authContext }) {
-            const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, deps.ragRetrieverPort);
-            const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
+            const availableDiaries = normalizeCapabilityStringArray(
+                await Promise.resolve(ragRetrieverPort?.listDiaries?.() || [])
+            );
             const resolvedAuthContext = authContextResolver
                 ? authContextResolver({
                     authContext,
@@ -329,7 +248,7 @@ function createCapabilityService(deps = {}) {
                 : resolveAllowedDiaries({
                     agentId,
                     availableDiaries,
-                    ragConfig: getRagConfig(pluginManager)
+                    ragConfig
                 });
 
             return allowedDiaries
@@ -338,8 +257,6 @@ function createCapabilityService(deps = {}) {
                 .map((diaryName) => createTargetDescriptor(diaryName));
         },
         async getCapabilities({ agentId, includeMemoryTargets = true, authContext }) {
-            const ragPlugin = getRagPlugin(pluginManager, deps.ragRetrieverPort);
-            const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, deps.ragRetrieverPort);
             const resolvedAuthContext = authContextResolver
                 ? authContextResolver({
                     authContext,
@@ -360,11 +277,11 @@ function createCapabilityService(deps = {}) {
                 ? await this.getMemoryTargets({ agentId, authContext: resolvedAuthContext })
                 : [];
 
-            const tools = Array.from(pluginManager.plugins.values())
+            const tools = Array.from(toolInvokerPort?.listTools?.() || [])
                 .filter((plugin) => isBridgeablePlugin(plugin))
                 .filter((plugin) => !resolvedPolicy || resolvedPolicy.allowedToolNames.includes(plugin.name))
                 .sort((left, right) => left.name.localeCompare(right.name))
-                .map((plugin) => createToolDescriptor(plugin, pluginManager, schemaRegistry));
+                .map((plugin) => createToolDescriptor(plugin, toolInvokerPort, schemaRegistry));
 
             return {
                 server: {
@@ -376,14 +293,10 @@ function createCapabilityService(deps = {}) {
                 memory: createMemoryDescriptor({
                     includeTargets: includeMemoryTargets,
                     targets: memoryTargets,
-                    ragPlugin,
-                    knowledgeBaseManager,
-                    pluginManager
+                    ragRetrieverPort,
+                    diaryStorePort
                 }),
-                context: createContextDescriptor({
-                    ragPlugin,
-                    knowledgeBaseManager
-                }),
+                context: createContextDescriptor(ragRetrieverPort),
                 jobs: {
                     supported: true,
                     states: ['accepted', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'],

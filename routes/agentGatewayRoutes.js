@@ -19,7 +19,11 @@ module.exports = function createAgentGatewayRoutes(pluginManager) {
     if (!pluginManager) throw new Error('[AgentGatewayRoutes] pluginManager is required');
     const router = express.Router();
     const services = getGatewayServiceBundle(pluginManager, { gatewayVersion: NATIVE_GATEWAY_VERSION });
-    const context = { pluginManager, ...services };
+    const context = {
+        ...services,
+        protocolConfig: services.ports?.configuration?.protocol || {},
+        healthSnapshot: services.ports?.configuration?.health || {}
+    };
     ROUTE_REGISTRARS.forEach((register) => register(router, context));
     return router;
 };

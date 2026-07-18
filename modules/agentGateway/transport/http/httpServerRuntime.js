@@ -121,7 +121,7 @@ class HttpServerRuntime {
         });
         try {
             const auth = await Promise.race([Promise.resolve(this.resolveAuth({ headers: req.headers,
-                pluginManager: this.options.pluginManager })), timeoutPromise, abortPromise]);
+                config: this.options.protocolConfig })), timeoutPromise, abortPromise]);
             if (!auth?.provided || !auth?.authenticated) {
                 return { ok: false, statusCode: 401,
                     payload: createUnauthorizedErrorResponse(requestId,

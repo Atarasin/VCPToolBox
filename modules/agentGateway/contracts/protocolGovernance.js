@@ -84,11 +84,7 @@ function getBearerToken(headers = {}) {
     return matched ? normalizeGovernanceString(matched[1]) : '';
 }
 
-function getProtocolGovernanceConfig(pluginManager) {
-    const config = pluginManager?.agentGatewayProtocolConfig ||
-        pluginManager?.agentGatewayAuthConfig ||
-        pluginManager?.openClawBridgeConfig?.agentGateway ||
-        {};
+function getProtocolGovernanceConfig(config = {}) {
     const authConfig = config.auth && typeof config.auth === 'object' ? config.auth : {};
 
     return {
@@ -139,27 +135,27 @@ function resolveNativeRequestContext(input, options = {}) {
     return normalized;
 }
 
-function resolveGovernedIdempotencyKey({ body, headers, pluginManager } = {}) {
+function resolveGovernedIdempotencyKey({ body, headers, config } = {}) {
     const normalizedBody = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
     const options = normalizedBody.options && typeof normalizedBody.options === 'object'
         ? normalizedBody.options
         : {};
-    const config = getProtocolGovernanceConfig(pluginManager);
+    const governanceConfig = getProtocolGovernanceConfig(config);
 
     return normalizeGovernanceString(
         options.idempotencyKey ||
         normalizedBody.idempotencyKey ||
-        getHeaderValue(headers, config.idempotencyHeader)
+        getHeaderValue(headers, governanceConfig.idempotencyHeader)
     );
 }
 
-function resolveDedicatedGatewayAuth({ headers, pluginManager } = {}) {
-    const config = getProtocolGovernanceConfig(pluginManager);
-    const providedGatewayKey = getHeaderValue(headers, config.gatewayKeyHeader) || getBearerToken(headers);
-    const authSource = getHeaderValue(headers, config.gatewayKeyHeader)
-        ? config.gatewayKeyHeader
+function resolveDedicatedGatewayAuth({ headers, config } = {}) {
+    const governanceConfig = getProtocolGovernanceConfig(config);
+    const providedGatewayKey = getHeaderValue(headers, governanceConfig.gatewayKeyHeader) || getBearerToken(headers);
+    const authSource = getHeaderValue(headers, governanceConfig.gatewayKeyHeader)
+        ? governanceConfig.gatewayKeyHeader
         : (getBearerToken(headers) ? 'authorization-bearer' : '');
-    const providedGatewayId = getHeaderValue(headers, AGENT_GATEWAY_HEADERS.GATEWAY_ID) || config.gatewayId;
+    const providedGatewayId = getHeaderValue(headers, AGENT_GATEWAY_HEADERS.GATEWAY_ID) || governanceConfig.gatewayId;
 
     if (!providedGatewayKey) {
         return {
@@ -174,9 +170,9 @@ function resolveDedicatedGatewayAuth({ headers, pluginManager } = {}) {
 
     return {
         provided: true,
-        authenticated: Boolean(config.gatewayKey) && timingSafeStringEqual(providedGatewayKey, config.gatewayKey),
+        authenticated: Boolean(governanceConfig.gatewayKey) && timingSafeStringEqual(providedGatewayKey, governanceConfig.gatewayKey),
         authMode: AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY,
-        authSource: authSource || config.gatewayKeyHeader,
+        authSource: authSource || governanceConfig.gatewayKeyHeader,
         gatewayId: providedGatewayId || 'vcp-gateway',
         roles: ['gateway_client']
     };

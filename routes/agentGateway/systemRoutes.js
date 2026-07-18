@@ -3,13 +3,13 @@
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
 
 function registerAuthMiddleware(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.use((req, res, next) => {
         const dedicatedAuth = req.agentGatewayAuth || resolveDedicatedGatewayAuth({
             headers: req.headers,
-            pluginManager
+            config: protocolConfig
         });
 
         req.agentGatewayDedicatedAuth = dedicatedAuth;
@@ -40,7 +40,7 @@ function registerAuthMiddleware(router, context) {
 }
 
 function registerHealthRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/health', async (req, res) => {
@@ -75,7 +75,7 @@ function registerHealthRoute(router, context) {
             return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
-                data: buildNativeHealthSnapshot(pluginManager),
+                data: buildNativeHealthSnapshot(healthSnapshot),
                 authContext,
                 operationControl
             });
@@ -95,7 +95,7 @@ function registerHealthRoute(router, context) {
 }
 
 function registerCapabilitiesRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/capabilities', async (req, res) => {
@@ -182,7 +182,7 @@ function registerCapabilitiesRoute(router, context) {
 }
 
 function registerMetricsRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/metrics', async (req, res) => {

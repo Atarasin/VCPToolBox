@@ -81,11 +81,13 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
     if (auditFile) auditSinks.push(createFileAuditSink(auditFile));
     const auditLogger = createAuditLogger({ prefix: options.auditPrefix || DEFAULT_AUDIT_PREFIX, sinks: auditSinks });
     const agentPolicyResolver = createAgentPolicyResolver({
-        pluginManager
+        ports,
+        ragConfig: ports.configuration.rag,
+        policyConfig: ports.configuration.policy,
+        toolInvokerPort: ports.toolInvoker
     });
     const jobRuntimeService = createJobRuntimeService();
     const capabilityService = createCapabilityService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,
@@ -99,13 +101,13 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         agentPolicyResolver
     });
     const memoryRuntimeService = createMemoryRuntimeService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,
         toolInvokerPort: ports.toolInvoker,
         agentDirectoryPort: ports.agentDirectory,
         llmCompletionPort: ports.llmCompletion,
+        ragConfig: ports.configuration.rag,
         auditLogger,
         mapMemoryWriteError: mapOpenClawMemoryWriteError,
         authContextResolver: resolveAuthContext,
@@ -114,7 +116,6 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
     });
     let recallRuntimeService;
     const contextRuntimeService = createContextRuntimeService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,
@@ -128,7 +129,6 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         getRecallRuntimeService: () => recallRuntimeService
     });
     const toolRuntimeService = createToolRuntimeService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,
@@ -146,24 +146,22 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         jobRuntimeService
     });
     const operabilityService = createOperabilityService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,
         toolInvokerPort: ports.toolInvoker,
         agentDirectoryPort: ports.agentDirectory,
         llmCompletionPort: ports.llmCompletion,
+        operabilityConfig: ports.configuration.operability,
         auditLogger
     });
     const agentRegistryService = createAgentRegistryService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,
         toolInvokerPort: ports.toolInvoker,
         agentDirectoryPort: ports.agentDirectory,
         llmCompletionPort: ports.llmCompletion,
-        agentManager: ports.agentDirectory.agentManager,
         renderPrompt: ports.agentDirectory.renderPrompt,
         schemaRegistry,
         authContextResolver: resolveAuthContext,
@@ -172,7 +170,6 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
     });
     const recallProfileResolver = new RecallProfileResolver();
     recallRuntimeService = createRecallRuntimeService({
-        pluginManager,
         ports,
         ragRetrieverPort: ports.ragRetriever,
         diaryStorePort: ports.diaryStore,

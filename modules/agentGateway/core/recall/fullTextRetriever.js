@@ -15,19 +15,18 @@ function buildFullTextItem({ diaryName, content, rank }) {
 }
 
 async function defaultFullTextRetriever({
-    deps,
-    pluginManager,
+    ragRetrieverPort,
+    ragConfig,
     requestedDiaries,
     agentId,
     authContext,
     agentPolicyResolver,
     adapterAppliedDefaultDiaryPolicy
 }) {
-    const knowledgeBaseManager = support.getKnowledgeBaseManager(deps, pluginManager);
-    const ragPlugin = support.getRagPlugin(deps, pluginManager);
-    const availableDiaries = await support.listDiaryTargets(knowledgeBaseManager);
+    const availableDiaries = support.normalizeStringArray(
+        await Promise.resolve(ragRetrieverPort?.listDiaries?.() || [])
+    );
     const policyAuthContext = support.resolvePolicyAuthContext(authContext, agentId);
-    const ragConfig = support.getRagConfig(pluginManager);
     const access = await resolveDiaryAccess({
         requestedDiaries,
         availableDiaries,
@@ -39,7 +38,7 @@ async function defaultFullTextRetriever({
         forbiddenCode: AGW_ERROR_CODES.RECALL_FORBIDDEN
     });
     if (!access.success) return access;
-    if (typeof ragPlugin?.getDiaryContent !== 'function') {
+    if (!ragRetrieverPort?.available || typeof ragRetrieverPort.getDiaryContent !== 'function') {
         return {
             success: false,
             status: 500,
@@ -51,7 +50,7 @@ async function defaultFullTextRetriever({
     const items = [];
     for (let index = 0; index < access.targetDiaries.length; index += 1) {
         const diaryName = access.targetDiaries[index];
-        const content = await ragPlugin.getDiaryContent(diaryName);
+        const content = await ragRetrieverPort.getDiaryContent(diaryName);
         if (normalizeString(content)) {
             items.push(buildFullTextItem({ diaryName, content, rank: Math.max(0.1, 1 - (index * 0.01)) }));
         }

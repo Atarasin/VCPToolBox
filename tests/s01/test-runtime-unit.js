@@ -20,7 +20,7 @@ require.cache[require.resolve('../../modules/agentGateway/core/recall/ragRetriev
 };
 
 const {
-    createRecallRuntimeService,
+    createRecallRuntimeService: createCanonicalRecallRuntimeService,
     buildRagOptionsFromModifiers,
     computeCosineSimilarity,
     evaluateGate,
@@ -31,6 +31,9 @@ const {
     buildRecallResult,
     MODIFIER_PIPELINE_ORDER
 } = require('../../modules/agentGateway/services/recallRuntimeService');
+const { adaptLegacyGatewayDeps } = require('../../modules/agentGateway/composition/vcpPortBindings');
+
+const createRecallRuntimeService = (deps) => createCanonicalRecallRuntimeService(adaptLegacyGatewayDeps(deps));
 
 function createMockResolver(rules, profileName = 'default') {
     return {

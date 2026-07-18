@@ -25,17 +25,9 @@ function computeCosineSimilarity(vectorA, vectorB) {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-async function getQueryVector(query, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
-    if (ragPlugin?.getSingleEmbeddingCached) {
-        return await ragPlugin.getSingleEmbeddingCached(query);
-    }
-    const { getEmbeddingsBatch } = embeddingUtilsLoader();
-    const [vector] = await getEmbeddingsBatch([query], {
-        apiKey: knowledgeBaseManager?.config?.apiKey,
-        apiUrl: knowledgeBaseManager?.config?.apiUrl,
-        model: knowledgeBaseManager?.config?.model
-    });
-    return vector || null;
+async function getQueryVector(query, ragRetrieverPort) {
+    if (!ragRetrieverPort?.available || typeof ragRetrieverPort.embedQuery !== 'function') return null;
+    return ragRetrieverPort.embedQuery(query);
 }
 
 function extractCoreTags(boostInfo) {
@@ -80,42 +72,12 @@ function deriveTimestampFromPath(sourcePath) {
     return Number.isNaN(timestamp) ? null : new Date(timestamp).toISOString();
 }
 
-async function getFileMetadata(knowledgeBaseManager, sourcePath) {
-    if (!sourcePath) {
-        return null;
-    }
-    if (typeof knowledgeBaseManager?.getOpenClawFileMetadata === 'function') {
-        return await Promise.resolve(knowledgeBaseManager.getOpenClawFileMetadata(sourcePath));
-    }
-    if (!knowledgeBaseManager?.db?.prepare) {
-        return null;
-    }
-    const row = knowledgeBaseManager.db.prepare(`
-        SELECT
-            f.diary_name AS sourceDiary,
-            f.path AS sourcePath,
-            f.updated_at AS updatedAt,
-            GROUP_CONCAT(t.name, '||') AS tags
-        FROM files f
-        LEFT JOIN file_tags ft ON ft.file_id = f.id
-        LEFT JOIN tags t ON t.id = ft.tag_id
-        WHERE f.path = ?
-        GROUP BY f.id
-    `).get(sourcePath);
-
-    if (!row) {
-        return null;
-    }
-
-    return {
-        sourceDiary: normalizeContextString(row.sourceDiary),
-        sourcePath: normalizeContextString(row.sourcePath),
-        updatedAt: row.updatedAt,
-        tags: row.tags ? row.tags.split('||').filter(Boolean) : []
-    };
+async function getFileMetadata(ragRetrieverPort, sourcePath) {
+    if (!sourcePath || typeof ragRetrieverPort?.getFileMetadata !== 'function') return null;
+    return ragRetrieverPort.getFileMetadata(sourcePath);
 }
 
-async function getCachedFileMetadata(metadataCache, knowledgeBaseManager, sourcePath) {
+async function getCachedFileMetadata(metadataCache, ragRetrieverPort, sourcePath) {
     const cacheKey = normalizeContextString(sourcePath);
     if (!cacheKey) {
         return null;
@@ -123,12 +85,12 @@ async function getCachedFileMetadata(metadataCache, knowledgeBaseManager, source
     if (metadataCache.has(cacheKey)) {
         return metadataCache.get(cacheKey);
     }
-    const metadata = await getFileMetadata(knowledgeBaseManager, cacheKey);
+    const metadata = await getFileMetadata(ragRetrieverPort, cacheKey);
     metadataCache.set(cacheKey, metadata);
     return metadata;
 }
 
-async function normalizeRagItem(result, fallbackDiary, knowledgeBaseManager, metadataCache) {
+async function normalizeRagItem(result, fallbackDiary, ragRetrieverPort, metadataCache) {
     const sourcePath = normalizeContextString(
         result?.fullPath ||
         result?.sourcePath ||
@@ -136,7 +98,7 @@ async function normalizeRagItem(result, fallbackDiary, knowledgeBaseManager, met
         result?.sourceFile
     );
     const metadata = sourcePath
-        ? await getCachedFileMetadata(metadataCache, knowledgeBaseManager, sourcePath)
+        ? await getCachedFileMetadata(metadataCache, ragRetrieverPort, sourcePath)
         : null;
     const timestamp = normalizeTimestampValue(
         result?.timestamp ||
@@ -180,9 +142,11 @@ module.exports = {
     deriveTimestampFromPath,
     extractCoreTags,
     getCachedFileMetadata,
+    getCachedPortFileMetadata: getCachedFileMetadata,
     getFileMetadata,
     getQueryVector,
+    getQueryVectorFromPort: getQueryVector,
     normalizeRagItem,
+    normalizeRagItemFromPort: normalizeRagItem,
     normalizeTimestampValue
 };
-

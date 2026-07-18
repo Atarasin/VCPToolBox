@@ -11,7 +11,7 @@ function createReadyHost() {
         plugins: new Map(),
         messagePreprocessors: new Map(),
         agentManager: { agentMap: new Map() },
-        vectorDBManager: { listDiaryNames: () => [] },
+        vectorDBManager: { listDiaryNames: () => [], search: async () => [] },
         processToolCall: async () => ({}),
         getPlugin: () => null
     };
@@ -50,4 +50,17 @@ test('optional host capabilities expose typed unavailable ports', () => {
     const ports = bindVcpPorts(pluginManager, { knowledgeBaseManager: null, ragPlugin: null });
     assert.equal(ports.diaryStore.available, false);
     assert.throws(() => ports.diaryStore.assertAvailable(), /diaryStore is unavailable/);
+});
+
+test('partial enabled RAG host fails binding instead of exposing a lazy unavailable search wrapper', () => {
+    const pluginManager = createReadyHost();
+    pluginManager.messagePreprocessors.set('RAGDiaryPlugin', {
+        getSingleEmbeddingCached: async () => [1, 0]
+    });
+    pluginManager.vectorDBManager = { listDiaryNames: () => ['Diary'] };
+
+    assert.throws(
+        () => bindVcpPorts(pluginManager),
+        /missing required bindings: searchDiary/
+    );
 });

@@ -20,9 +20,6 @@ const {
     GATED_RULE_TYPES,
     buildRagOptionsFromModifiers,
     evaluateGate,
-    getKnowledgeBaseManager,
-    getQueryVector,
-    getRagPlugin,
     normalizeString,
     parseModifierValue,
     resolveRoleValveMessages,
@@ -107,8 +104,7 @@ function mapResolvedRecallFailure(resolved, normalizedAgentId, requestedProfileN
  * Recall Runtime Service — 编译并执行预置召回配置。
  *
  * 工厂函数接收依赖注入：
- *   - pluginManager          插件总线（用于 collectRagItems 定位 RAGDiaryPlugin / KnowledgeBaseManager）
- *   - contextRuntimeService   上下文运行时服务（提供 collectRagItems）
+ *   - ragRetrieverPort       RAG 检索窄端口
  *   - recallProfileResolver   配置文件解析器（resolveForAgent）
  *   - embeddingUtilsLoader    Embedding 工具加载器（可选，用于 gated_rag 向量计算）
  */
@@ -119,14 +115,18 @@ function createRecallRuntimeService(deps = {}) {
     }
     const dependencies = {
         deps,
-        pluginManager: deps.pluginManager,
+        ragRetrieverPort: deps.ragRetrieverPort,
+        ragConfig: deps.ragConfig || deps.ports?.configuration?.rag || {},
         profileResolver,
         defaultAgentPolicyResolver: deps.agentPolicyResolver || null,
-        embeddingUtilsLoader: deps.embeddingUtilsLoader || deps.ragRetrieverPort?.embeddingUtilsLoader,
         aiMemoConfigLoader: deps.aiMemoConfigLoader || defaultAiMemoConfigLoader,
         fullTextRetriever: typeof deps.fullTextRetriever === 'function'
             ? deps.fullTextRetriever
-            : (params) => defaultFullTextRetriever({ ...params, deps }),
+            : (params) => defaultFullTextRetriever({
+                ...params,
+                ragRetrieverPort: deps.ragRetrieverPort,
+                ragConfig: deps.ragConfig || deps.ports?.configuration?.rag || {}
+            }),
         collectRagItems: typeof deps.collectRagItems === 'function' ? deps.collectRagItems : collectRagItems,
         buildRecallResult,
         mapResolvedRecallFailure

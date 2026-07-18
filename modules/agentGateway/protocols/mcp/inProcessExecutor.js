@@ -362,19 +362,16 @@ function ensureAgentId(requestContext, operation) {
     }
 }
 
-function getSinglePublishedAgentId(pluginManager) {
-    if (!(pluginManager?.agentManager?.agentMap instanceof Map)) {
-        return '';
-    }
-
-    const aliases = Array.from(pluginManager.agentManager.agentMap.keys())
-        .map((alias) => normalizeMcpString(alias))
+function getSinglePublishedAgentId(agentDirectoryPort) {
+    if (!agentDirectoryPort?.available) return '';
+    const aliases = agentDirectoryPort.listAgents()
+        .map((entry) => normalizeMcpString(entry?.alias))
         .filter(Boolean);
 
     return aliases.length === 1 ? aliases[0] : '';
 }
 
-function resolveDiscoveryAgentId(input, pluginManager) {
+function resolveDiscoveryAgentId(input, agentDirectoryPort) {
     const explicitAgentId = normalizeMcpString(input?.agentId || input?.requestContext?.agentId);
     if (explicitAgentId) {
         return explicitAgentId;
@@ -385,7 +382,7 @@ function resolveDiscoveryAgentId(input, pluginManager) {
         return configuredAgentId;
     }
 
-    return getSinglePublishedAgentId(pluginManager);
+    return getSinglePublishedAgentId(agentDirectoryPort);
 }
 
 function applyDiscoveryAgentId(input, agentId) {
@@ -623,6 +620,7 @@ function createMcpAdapter(pluginManager, options = {}) {
     }
 
     const bundle = options.gatewayServiceBundle || getGatewayServiceBundle(pluginManager);
+    const agentDirectoryPort = bundle.ports?.agentDirectory;
     const {
         capabilityService,
         agentRegistryService,
@@ -646,7 +644,7 @@ function createMcpAdapter(pluginManager, options = {}) {
         supportedResourceTemplates: MCP_SUPPORTED_RESOURCE_TEMPLATES,
         supportedPromptNames: gatewayManagedPrompts.map((prompt) => prompt.name),
         async listTools(input = {}) {
-            const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, pluginManager));
+            const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, agentDirectoryPort));
             const { requestContext, authContext } = buildMcpContexts(bundle, scopedInput, 'mcp-tools-list');
             let publishedTools = [...gatewayManagedTools];
 
@@ -756,7 +754,7 @@ function createMcpAdapter(pluginManager, options = {}) {
         },
 
         async listResources(input = {}) {
-            const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, pluginManager));
+            const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, agentDirectoryPort));
             const { requestContext } = buildMcpContexts(bundle, scopedInput, 'mcp-resources-list');
 
             if (!requestContext.agentId) {

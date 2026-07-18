@@ -5,12 +5,28 @@ const legacyRuntime = require('../../../modules/agentGateway/services/recallRunt
 const canonicalRuntime = require('../../../modules/agentGateway/core/recall/recallRuntimeService');
 const legacyProjection = require('../../../modules/agentGateway/services/recallProjectionService');
 const canonicalProjection = require('../../../modules/agentGateway/core/recall/recallProjectionService');
+const pipeline = require('../../../modules/agentGateway/core/recall/pipeline');
+const resolveProfile = require('../../../modules/agentGateway/core/recall/stages/resolveProfile');
+const precomputeVector = require('../../../modules/agentGateway/core/recall/stages/precomputeVector');
+const executeRules = require('../../../modules/agentGateway/core/recall/stages/executeRules');
+const mergeResults = require('../../../modules/agentGateway/core/recall/stages/mergeResults');
+const applyBudget = require('../../../modules/agentGateway/core/recall/stages/applyBudget');
+const applyAiMemo = require('../../../modules/agentGateway/core/recall/stages/applyAiMemo');
 
 test('legacy recall entrypoints preserve canonical export identity', () => {
     assert.deepEqual(Object.keys(legacyRuntime).sort(), Object.keys(canonicalRuntime).sort());
     assert.equal(legacyRuntime.createRecallRuntimeService, canonicalRuntime.createRecallRuntimeService);
     assert.deepEqual(Object.keys(legacyProjection).sort(), Object.keys(canonicalProjection).sort());
     assert.equal(legacyProjection.createRecallProjectionService, canonicalProjection.createRecallProjectionService);
+});
+
+test('recall pipeline exports the physical stage function identities', () => {
+    assert.equal(pipeline.resolveProfileStage, resolveProfile.resolveProfileStage);
+    assert.equal(pipeline.precomputeVectorStage, precomputeVector.precomputeVectorStage);
+    assert.equal(pipeline.executeRulesStage, executeRules.executeRulesStage);
+    assert.equal(pipeline.mergeResultsStage, mergeResults.mergeResultsStage);
+    assert.equal(pipeline.applyBudgetStage, applyBudget.applyBudgetStage);
+    assert.equal(pipeline.applyAiMemoStage, applyAiMemo.applyAiMemoStage);
 });
 
 test('recall rules continue to execute serially against one shared backend', async () => {

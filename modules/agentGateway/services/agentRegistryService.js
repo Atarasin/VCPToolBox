@@ -1,14 +1,8 @@
 const crypto = require('crypto');
 const fs = require('fs').promises;
-const path = require('path');
-const agentManagerSingleton = require('../../agentManager');
-const messageProcessor = require('../../messageProcessor');
-const { createCapabilityService } = require('./capabilityService');
 
 const DEFAULT_SUMMARY_LENGTH = 160;
 const DEFAULT_RENDER_MAX_LENGTH = 12000;
-const DEFAULT_RENDER_VARIABLE_PASSES = 3;
-const DEFAULT_RENDER_QUERY_LENGTH = 1200;
 
 function normalizeRegistryString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -52,20 +46,11 @@ function normalizeRenderVariables(variables) {
     }, {});
 }
 
-function applyRenderVariables(text, variables) {
-    let renderedText = String(text || '');
-    for (const [key, value] of Object.entries(variables)) {
-        const placeholder = `{{${key}}}`;
-        renderedText = renderedText.replaceAll(placeholder, value);
-    }
-    return renderedText;
-}
-
 function collectPlaceholderMatches(text, pattern) {
     return [...String(text || '').matchAll(pattern)];
 }
 
-function buildPlaceholderSummary(text, agentManager) {
+function buildPlaceholderSummary(text, agentDirectoryPort) {
     const genericPlaceholders = collectPlaceholderMatches(text, /\{\{([^{}]+)\}\}/g)
         .map((match) => normalizeRegistryString(match[1]))
         .filter(Boolean);
@@ -82,7 +67,7 @@ function buildPlaceholderSummary(text, agentManager) {
         const normalizedAgentName = value.startsWith('agent:')
             ? normalizeRegistryString(value.slice('agent:'.length))
             : value;
-        if (normalizedAgentName && typeof agentManager?.isAgent === 'function' && agentManager.isAgent(normalizedAgentName)) {
+        if (normalizedAgentName && agentDirectoryPort.isAgent(normalizedAgentName)) {
             agentRefs.add(normalizedAgentName);
             return;
         }
@@ -114,8 +99,8 @@ function buildPlaceholderSummary(text, agentManager) {
     };
 }
 
-function collectPromptDependencies(text, agentManager) {
-    const placeholderSummary = buildPlaceholderSummary(text, agentManager);
+function collectPromptDependencies(text, agentDirectoryPort) {
+    const placeholderSummary = buildPlaceholderSummary(text, agentDirectoryPort);
     return {
         agents: placeholderSummary.agents,
         toolboxes: placeholderSummary.toolboxes,
@@ -184,137 +169,6 @@ async function getFileStatOrNull(filePath) {
     }
 }
 
-function createDefaultRenderContext(pluginManager, overrides = {}) {
-    return {
-        pluginManager,
-        cachedEmojiLists: overrides.cachedEmojiLists || new Map(),
-        detectors: overrides.detectors || [],
-        superDetectors: overrides.superDetectors || [],
-        DEBUG_MODE: Boolean(overrides.DEBUG_MODE),
-        messages: Array.isArray(overrides.messages) ? overrides.messages : [],
-        expandedAgentName: null,
-        expandedToolboxes: new Set()
-    };
-}
-
-function extractMessageText(message) {
-    if (!message || typeof message !== 'object') {
-        return '';
-    }
-    if (typeof message.content === 'string') {
-        return message.content;
-    }
-    if (!Array.isArray(message.content)) {
-        return '';
-    }
-    return message.content
-        .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
-        .map((part) => part.text)
-        .join('\n')
-        .trim();
-}
-
-function findLatestMessageText(messages, role) {
-    if (!Array.isArray(messages)) {
-        return '';
-    }
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
-        if (message?.role !== role) {
-            continue;
-        }
-        const text = extractMessageText(message);
-        if (text) {
-            return text;
-        }
-    }
-    return '';
-}
-
-function stripPromptControlSyntax(text) {
-    return String(text || '')
-        .replace(/\{\{[^{}]+\}\}/g, ' ')
-        .replace(/\[\[[^\]]+\]\]/g, ' ')
-        .replace(/<<[^>]+>>/g, ' ')
-        .replace(/《《[^》]+》》/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function unwrapMultilineBracePayloads(text) {
-    // Some legacy static placeholders may expand into rich multiline text while
-    // still being wrapped by outer {{...}} braces. Multiline payloads are never
-    // valid VCP placeholder identifiers, so unwrap them before unresolved checks.
-    return String(text || '').replace(/\{\{([\s\S]*?\n[\s\S]*?)\}\}/g, '$1');
-}
-
-function buildFallbackRenderQuery(text, agentId) {
-    const normalized = stripPromptControlSyntax(text);
-    if (normalized) {
-        return normalized.slice(0, DEFAULT_RENDER_QUERY_LENGTH);
-    }
-    return `Render the canonical prompt for agent ${normalizeRegistryString(agentId) || 'unknown-agent'}.`;
-}
-
-async function renderVariablePasses(text, model, renderContext) {
-    let currentText = String(text || '');
-    for (let pass = 0; pass < DEFAULT_RENDER_VARIABLE_PASSES; pass += 1) {
-        const nextText = unwrapMultilineBracePayloads(
-            await messageProcessor.replaceAgentVariables(currentText, model, 'system', renderContext)
-        );
-        if (nextText === currentText) {
-            return nextText;
-        }
-        currentText = nextText;
-    }
-    return unwrapMultilineBracePayloads(currentText);
-}
-
-function buildRagRenderMessages(renderedText, renderContext, agentId) {
-    const sourceMessages = Array.isArray(renderContext?.messages) ? renderContext.messages : [];
-    const latestUserText = findLatestMessageText(sourceMessages, 'user');
-    const latestAssistantText = findLatestMessageText(sourceMessages, 'assistant');
-    const messages = [{
-        role: 'system',
-        content: renderedText
-    }];
-
-    // When host-side prompts/get has no conversation context yet, use a synthetic
-    // query so diary recall and meta-thinking can still compile into final prompt text.
-    messages.push({
-        role: 'user',
-        content: latestUserText || buildFallbackRenderQuery(renderedText, agentId)
-    });
-
-    if (latestAssistantText) {
-        messages.push({
-            role: 'assistant',
-            content: latestAssistantText
-        });
-    }
-
-    return messages;
-}
-
-async function renderRagPromptPass(renderedText, renderContext, agentId) {
-    const ragPlugin = renderContext?.pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
-    if (!ragPlugin || typeof ragPlugin.processMessages !== 'function') {
-        return renderedText;
-    }
-    if (!/(\[\[.*日记本.*\]\]|<<.*日记本.*>>|《《.*日记本.*》》|\{\{.*日记本.*\}\}|\[\[VCP元思考.*\]\]|\[\[AIMemo=True\]\])/.test(renderedText)) {
-        return renderedText;
-    }
-
-    const processedMessages = await ragPlugin.processMessages(
-        buildRagRenderMessages(renderedText, renderContext, agentId),
-        {}
-    );
-    const systemMessage = Array.isArray(processedMessages) ? processedMessages[0] : null;
-    return typeof systemMessage?.content === 'string'
-        ? systemMessage.content
-        : renderedText;
-}
-
 function buildAgentProfile(detail) {
     return {
         agentId: detail.agentId,
@@ -360,22 +214,14 @@ function buildPromptTemplatePreview(detail) {
     };
 }
 
-function createAgentRegistryContext({ agentManager, capabilityService }) {
+function createAgentRegistryContext({ agentDirectoryPort, capabilityService }) {
     async function ensureAgentState() {
-        if (agentManager?.agentMap instanceof Map && agentManager.agentMap.size === 0 && typeof agentManager.loadMap === 'function') {
-            await agentManager.loadMap();
-        }
-        if (typeof agentManager.getAllAgentFiles === 'function') {
-            await agentManager.getAllAgentFiles();
-        } else if (Array.isArray(agentManager?.agentFiles) && !agentManager.agentFiles.length && typeof agentManager.scanAgentFiles === 'function') {
-            await agentManager.scanAgentFiles();
-        }
+        await agentDirectoryPort.ensureLoaded();
     }
 
     function getAgentEntries() {
-        if (!(agentManager?.agentMap instanceof Map)) return [];
-        return Array.from(agentManager.agentMap.entries())
-            .map(([alias, sourceFile]) => ({ alias: normalizeRegistryString(alias), sourceFile: normalizeRegistryString(sourceFile) }))
+        return agentDirectoryPort.listAgents()
+            .map(({ alias, sourceFile }) => ({ alias: normalizeRegistryString(alias), sourceFile: normalizeRegistryString(sourceFile) }))
             .filter((entry) => entry.alias && entry.sourceFile)
             .sort((left, right) => left.alias.localeCompare(right.alias));
     }
@@ -383,14 +229,14 @@ function createAgentRegistryContext({ agentManager, capabilityService }) {
     async function loadAgentSource(agentId) {
         await ensureAgentState();
         const normalizedAgentId = normalizeRegistryString(agentId);
-        if (!normalizedAgentId || typeof agentManager?.isAgent !== 'function' || !agentManager.isAgent(normalizedAgentId)) {
+        if (!normalizedAgentId || !agentDirectoryPort.isAgent(normalizedAgentId)) {
             throw createNotFoundError(normalizedAgentId || agentId);
         }
-        const sourceFile = normalizeRegistryString(agentManager.agentMap.get(normalizedAgentId));
-        const agentDir = normalizeRegistryString(agentManager?.agentDir) || path.join(__dirname, '..', '..', '..', 'Agent');
-        const absoluteSourcePath = path.join(agentDir, sourceFile.replace(/\//g, path.sep));
+        const source = agentDirectoryPort.getAgentSourcePath(normalizedAgentId);
+        const sourceFile = normalizeRegistryString(source.sourceFile);
+        const absoluteSourcePath = normalizeRegistryString(source.absoluteSourcePath);
         const stat = await getFileStatOrNull(absoluteSourcePath);
-        const rawPrompt = await agentManager.getAgentPrompt(normalizedAgentId);
+        const rawPrompt = await agentDirectoryPort.getAgentPrompt(normalizedAgentId);
         return {
             agentId: normalizedAgentId, alias: normalizedAgentId, sourceFile, absoluteSourcePath,
             exists: Boolean(stat), stat, rawPrompt: typeof rawPrompt === 'string' ? rawPrompt : String(rawPrompt || '')
@@ -426,11 +272,11 @@ function createAgentRegistryContext({ agentManager, capabilityService }) {
         };
     }
 
-    return { agentManager, buildCapabilityMetadata, buildListRecord, ensureAgentState, getAgentEntries, loadAgentSource };
+    return { agentDirectoryPort, buildCapabilityMetadata, buildListRecord, ensureAgentState, getAgentEntries, loadAgentSource };
 }
 
-function createAgentRegistryApi(context, renderPrompt, pluginManager) {
-    const { agentManager, buildCapabilityMetadata, buildListRecord, ensureAgentState, getAgentEntries, loadAgentSource } = context;
+function createAgentRegistryApi(context, renderPrompt) {
+    const { agentDirectoryPort, buildCapabilityMetadata, buildListRecord, ensureAgentState, getAgentEntries, loadAgentSource } = context;
     const api = {
         async listAgents(options = {}) {
             await ensureAgentState();
@@ -444,8 +290,8 @@ function createAgentRegistryApi(context, renderPrompt, pluginManager) {
                 defaultPolicies: metadata.defaultPolicies, capabilityHints: metadata.capabilityHints,
                 prompt: {
                     raw: source.rawPrompt, size: source.rawPrompt.length,
-                    placeholderSummary: buildPlaceholderSummary(source.rawPrompt, agentManager),
-                    dependencies: collectPromptDependencies(source.rawPrompt, agentManager)
+                    placeholderSummary: buildPlaceholderSummary(source.rawPrompt, agentDirectoryPort),
+                    dependencies: collectPromptDependencies(source.rawPrompt, agentDirectoryPort)
                 },
                 accessibleTools: metadata.accessibleTools, accessibleMemoryTargets: metadata.accessibleMemoryTargets
             };
@@ -459,18 +305,18 @@ function createAgentRegistryApi(context, renderPrompt, pluginManager) {
             const renderVariables = normalizeRenderVariables(options.variables);
             const model = normalizeRegistryString(options.model);
             const maxLength = Number.isFinite(options.maxLength) ? options.maxLength : DEFAULT_RENDER_MAX_LENGTH;
-            const renderContext = createDefaultRenderContext(pluginManager, { ...options.context, messages: options.messages });
             const rendered = await renderPrompt({
                 agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile,
-                rawPrompt: source.rawPrompt, renderVariables, model, renderContext
+                rawPrompt: source.rawPrompt, renderVariables, model,
+                renderOptions: { ...options.context, messages: options.messages }
             });
             const normalized = typeof rendered === 'string' ? rendered : String(rendered || '');
             const unresolved = collectUnresolvedConstructs(normalized);
             const renderedPrompt = truncateRegistryText(normalized, maxLength);
             const truncated = renderedPrompt.length !== normalized.length;
             const warnings = [];
-            const dependencies = collectPromptDependencies(source.rawPrompt, agentManager);
-            const renderedDependencies = collectPromptDependencies(normalized, agentManager);
+            const dependencies = collectPromptDependencies(source.rawPrompt, agentDirectoryPort);
+            const renderedDependencies = collectPromptDependencies(normalized, agentDirectoryPort);
             if (unresolved.length) warnings.push('render output still contains unresolved prompt constructs');
             if (truncated) warnings.push('render output was truncated to the requested maxLength');
             return {
@@ -488,28 +334,21 @@ function createAgentRegistryApi(context, renderPrompt, pluginManager) {
  * AgentRegistryService 以 agent-first 视角导出定义信息，不暴露后台目录管理语义。
  */
 function createAgentRegistryService(deps = {}) {
-    const agentManager = deps.agentManager || agentManagerSingleton;
-    const pluginManager = deps.pluginManager;
-    const capabilityService = deps.capabilityService || (
-        pluginManager ? createCapabilityService({
-            pluginManager,
-            schemaRegistry: deps.schemaRegistry
-        }) : null
-    );
+    const agentDirectoryPort = deps.agentDirectoryPort;
+    const capabilityService = deps.capabilityService;
+    if (!agentDirectoryPort?.available) {
+        throw new Error('[AgentRegistryService] available agentDirectoryPort is required');
+    }
     if (!capabilityService || typeof capabilityService.getCapabilities !== 'function') {
         throw new Error('[AgentRegistryService] capabilityService is required');
     }
 
     const renderPrompt = typeof deps.renderPrompt === 'function'
         ? deps.renderPrompt
-        : async ({ agentId, rawPrompt, model, renderVariables, renderContext }) => {
-            const promptWithVariables = applyRenderVariables(rawPrompt, renderVariables);
-            const variableRenderedPrompt = await renderVariablePasses(promptWithVariables, model, renderContext);
-            return renderRagPromptPass(variableRenderedPrompt, renderContext, agentId);
-        };
+        : agentDirectoryPort.renderPrompt;
 
-    const context = createAgentRegistryContext({ agentManager, capabilityService });
-    return createAgentRegistryApi(context, renderPrompt, pluginManager);
+    const context = createAgentRegistryContext({ agentDirectoryPort, capabilityService });
+    return createAgentRegistryApi(context, renderPrompt);
 }
 
 module.exports = {

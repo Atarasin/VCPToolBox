@@ -35,25 +35,16 @@ const {
     parseContextBoolean,
     parseContextInteger,
     parseContextJsonObject,
-    getBridgeConfig,
-    getRagConfig,
     buildAgentAliases,
     collectConfiguredDiaries,
     resolveAllowedDiaries,
     resolveDiarySelection,
-    getKnowledgeBaseManager,
-    getRagPlugin,
-    listDiaryTargets,
     normalizeRagMode,
     extractRagOptions,
     computeCosineSimilarity,
-    getQueryVector,
     extractCoreTags,
     normalizeTimestampValue,
     deriveTimestampFromPath,
-    getFileMetadata,
-    getCachedFileMetadata,
-    normalizeRagItem,
     deduplicateRagCandidates,
     normalizeConversationMessages,
     buildRecallQuery,
@@ -104,7 +95,6 @@ function adaptRecallResult(recallResult, requestedDiaries) {
 }
 
 function createContextRuntimeState(deps) {
-    if (!deps.pluginManager) throw new Error('[ContextRuntimeService] pluginManager is required');
     if (typeof deps.getRecallRuntimeService !== 'function') {
         throw new Error('[ContextRuntimeService] getRecallRuntimeService is required');
     }

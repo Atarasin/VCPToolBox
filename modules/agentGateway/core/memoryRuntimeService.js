@@ -110,42 +110,6 @@ function createMemoryAgentGatewayContext(requestContext, extra = {}) {
     };
 }
 
-function getBridgeConfig(pluginManager) {
-    return pluginManager?.openClawBridgeConfig ||
-        pluginManager?.openClawBridge?.config ||
-        pluginManager?.openClawBridge ||
-        {};
-}
-
-function getRagConfig(pluginManager) {
-    const bridgeConfig = getBridgeConfig(pluginManager);
-    const ragConfig = parseMemoryJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
-    const configuredAgentDiaryMap = parseMemoryJsonObject(ragConfig.agentDiaryMap, {});
-    const envAgentDiaryMap = parseMemoryJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
-    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
-        ? ragConfig.allowCrossRoleAccess
-        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
-    const defaultDiaries = normalizeMemoryStringArray(
-        ragConfig.defaultDiaries !== undefined
-            ? ragConfig.defaultDiaries
-            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
-    );
-    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
-        ? configuredAgentDiaryMap
-        : envAgentDiaryMap;
-
-    return {
-        agentDiaryMap,
-        defaultDiaries,
-        allowCrossRoleAccess: parseMemoryBoolean(rawAllowCrossRoleAccess, false),
-        hasExplicitPolicy: (
-            Object.keys(agentDiaryMap).length > 0 ||
-            defaultDiaries.length > 0 ||
-            rawAllowCrossRoleAccess !== undefined
-        )
-    };
-}
-
 function buildAgentAliases(agentId) {
     const aliases = new Set();
     const addAlias = (value) => {
@@ -201,29 +165,6 @@ function isDiaryAllowed({ diaryName, agentId, ragConfig }) {
         return agentAliases.has(normalizedDiaryName);
     }
     return true;
-}
-
-function getMemoryWritePluginInfo(pluginManager) {
-    const resolvePlugin = (pluginName) =>
-        pluginManager?.getPlugin?.(pluginName) || pluginManager?.plugins?.get?.(pluginName) || null;
-    const dailyNotePlugin = resolvePlugin('DailyNote');
-    if (dailyNotePlugin) {
-        return {
-            name: 'DailyNote',
-            executionMode: 'tool'
-        };
-    }
-    return null;
-}
-
-function getMemoryWriteStore(pluginManager) {
-    if (!pluginManager.__openClawMemoryWriteStore) {
-        pluginManager.__openClawMemoryWriteStore = {
-            entriesByIdempotencyKey: new Map(),
-            entriesByFingerprint: new Map()
-        };
-    }
-    return pluginManager.__openClawMemoryWriteStore;
 }
 
 function normalizeMemoryTags(tags) {
@@ -438,7 +379,7 @@ async function authorizeWrite(state, ctx) {
             });
             state.diaryScopeGuard({ policy, diaryName: ctx.targetDiary, authContext: ctx.authContext });
         } else if (!isDiaryAllowed({
-            diaryName: ctx.targetDiary, agentId: ctx.agentId, ragConfig: getRagConfig(state.pluginManager)
+            diaryName: ctx.targetDiary, agentId: ctx.agentId, ragConfig: state.ragConfig
         })) {
             throw new Error('Requested diary target is not allowed for this agent');
         }
@@ -454,7 +395,7 @@ async function authorizeWrite(state, ctx) {
 }
 
 function prepareWrite(state, ctx) {
-    const memoryWriter = state.diaryStorePort?.getWriter?.() || getMemoryWritePluginInfo(state.pluginManager);
+    const memoryWriter = state.diaryStorePort.available ? state.diaryStorePort.getWriter() : null;
     if (!memoryWriter) {
         return { failure: {
             success: false, requestId: ctx.requestId, status: 500,
@@ -467,7 +408,7 @@ function prepareWrite(state, ctx) {
         diaryName: ctx.targetDiary, text: ctx.memoryText, tags: ctx.tags,
         agentId: ctx.agentId, source: ctx.source, metadata: ctx.metadata
     });
-    const memoryStore = getMemoryWriteStore(state.pluginManager);
+    const memoryStore = state.memoryStore;
     const duplicate = resolveMemoryDuplicate(memoryStore, {
         idempotencyKey: ctx.idempotencyKey, fingerprint, deduplicate: ctx.deduplicate
     });
@@ -512,9 +453,7 @@ async function persistWrite(state, ctx) {
             source: ctx.source, agentId: ctx.agentId, sessionId: ctx.sessionId, requestId: ctx.requestId
         }
     };
-    const writeResult = state.diaryStorePort?.available
-        ? await state.diaryStorePort.invoke(writeArgs, ctx.clientIp)
-        : await state.pluginManager.processToolCall('DailyNote', writeArgs, ctx.clientIp);
+    const writeResult = await state.diaryStorePort.invoke(writeArgs, ctx.clientIp);
     const filePath = extractMemoryWritePath(writeResult);
     const entryId = createMemoryEntryId({
         diaryName: ctx.targetDiary, filePath, fingerprint: ctx.fingerprint, timestamp: ctx.timestamp
@@ -561,10 +500,16 @@ async function writeMemory(state, input) {
 }
 
 function createMemoryRuntimeService(deps = {}) {
-    if (!deps.pluginManager) throw new Error('[MemoryRuntimeService] pluginManager is required');
+    if (!deps.diaryStorePort || typeof deps.diaryStorePort.available !== 'boolean') {
+        throw new Error('[MemoryRuntimeService] diaryStorePort is required');
+    }
     const state = {
-        pluginManager: deps.pluginManager,
         diaryStorePort: deps.diaryStorePort,
+        ragConfig: deps.ragConfig || {},
+        memoryStore: {
+            entriesByIdempotencyKey: new Map(),
+            entriesByFingerprint: new Map()
+        },
         auditLogger: deps.auditLogger || { logMemory() {} },
         mapWriteError: deps.mapMemoryWriteError || mapOpenClawMemoryWriteError,
         authContextResolver: typeof deps.authContextResolver === 'function' ? deps.authContextResolver : null,

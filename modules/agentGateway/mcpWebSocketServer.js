@@ -9,6 +9,7 @@ const {
 } = require('./contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('./contracts/requestContext');
 const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance');
+const { createProtocolConfigSnapshot } = require('./composition/vcpPortBindings');
 const { WebSocketTransport, validateMcpTransport } = require('./transport');
 const {
     createJsonRpcErrorResponse,
@@ -180,6 +181,10 @@ function injectConnectionContext(request, connectionContext, options = {}) {
 }
 
 function createWebSocketState(options) {
+    options = {
+        ...options,
+        protocolConfig: options.protocolConfig || createProtocolConfigSnapshot(options.pluginManager)
+    };
     const maxPayloadBytes = resolveConfiguredPositiveInteger(options.maxPayloadBytes, MAX_PAYLOAD_BYTES_ENV,
         DEFAULT_MAX_PAYLOAD_BYTES);
     const state = { options, stderr: options.stderr || process.stderr,
@@ -420,7 +425,7 @@ async function resolveUpgradeAuth(state, request, socket) {
     try {
         return await Promise.race([
             Promise.resolve().then(() => state.resolveAuth({ headers: request.headers,
-                pluginManager: state.options.pluginManager })), aborted,
+                config: state.options.protocolConfig })), aborted,
             new Promise((_, reject) => { timeout = setTimeout(() => { const error = new Error(
                 `WebSocket upgrade authentication timed out after ${state.upgradeAuthTimeoutMs}ms`);
                 error.code = 'MCP_WS_UPGRADE_TIMEOUT'; reject(error); }, state.upgradeAuthTimeoutMs);

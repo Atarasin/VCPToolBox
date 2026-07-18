@@ -7,6 +7,8 @@ const test = require('node:test');
 const {
     createAgentRegistryService
 } = require('../../../modules/agentGateway/services/agentRegistryService');
+const { createAgentDirectoryPort } = require('../../../modules/agentGateway/ports/agentDirectory');
+const { createHostPromptRenderer } = require('../../../modules/agentGateway/composition/agentPromptRenderer');
 
 async function createTempAgentDir() {
     return fs.mkdtemp(path.join(os.tmpdir(), 'agw-agent-registry-'));
@@ -37,6 +39,27 @@ function createAgentManager(agentDir, mappings) {
             };
         }
     };
+}
+
+function createAgentDirectory(agentManager, renderPrompt) {
+    return createAgentDirectoryPort({
+        ensureLoaded: () => agentManager.getAllAgentFiles(),
+        listAgents: () => Array.from(agentManager.agentMap.entries()).map(([alias, sourceFile]) => ({ alias, sourceFile })),
+        isAgent: (agentId) => agentManager.isAgent(agentId),
+        getAgentPrompt: (agentId) => agentManager.getAgentPrompt(agentId),
+        getAgentSourcePath: (agentId) => {
+            const sourceFile = agentManager.agentMap.get(agentId) || '';
+            return { sourceFile, absoluteSourcePath: path.join(agentManager.agentDir, sourceFile) };
+        },
+        renderPrompt
+    });
+}
+
+function createRegistryService({ agentManager, capabilityService, renderPrompt }) {
+    return createAgentRegistryService({
+        agentDirectoryPort: createAgentDirectory(agentManager, renderPrompt),
+        capabilityService
+    });
 }
 
 function createCapabilityServiceStub() {
@@ -86,7 +109,7 @@ test('AgentRegistryService lists agents with stable metadata and policy hints', 
     await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt\nsecond line');
     await writeAgentFile(agentDir, 'roles/Bard.md', 'Bard prompt');
 
-    const service = createAgentRegistryService({
+    const service = createRegistryService({
         agentManager: createAgentManager(agentDir, {
             Bard: 'roles/Bard.md',
             Ariadne: 'Ariadne.md'
@@ -131,7 +154,7 @@ test('AgentRegistryService returns detail with prompt dependencies and accessibl
     );
     await writeAgentFile(agentDir, 'roles/Bard.md', 'Bard prompt');
 
-    const service = createAgentRegistryService({
+    const service = createRegistryService({
         agentManager: createAgentManager(agentDir, {
             Ariadne: 'Ariadne.md',
             Bard: 'roles/Bard.md'
@@ -166,7 +189,7 @@ test('AgentRegistryService derives governed profile and prompt-template preview 
     );
     await writeAgentFile(agentDir, 'roles/Bard.md', 'Bard prompt');
 
-    const service = createAgentRegistryService({
+    const service = createRegistryService({
         agentManager: createAgentManager(agentDir, {
             Ariadne: 'Ariadne.md',
             Bard: 'roles/Bard.md'
@@ -197,7 +220,7 @@ test('AgentRegistryService renders agents with variables, unresolved warnings, a
         'Hello {{VarUserName}} and {{UnknownPlaceholder}} from Ariadne'
     );
 
-    const service = createAgentRegistryService({
+    const service = createRegistryService({
         agentManager: createAgentManager(agentDir, {
             Ariadne: 'Ariadne.md'
         }),
@@ -237,7 +260,7 @@ test('AgentRegistryService marks memory recall applied only after render consume
         'Hello {{VarUserName}}\n[[阿里阿德涅日记本::Time::TagMemo]]'
     );
 
-    const service = createAgentRegistryService({
+    const service = createRegistryService({
         agentManager: createAgentManager(agentDir, {
             Ariadne: 'Ariadne.md'
         }),
@@ -296,12 +319,17 @@ test('AgentRegistryService default render resolves nested variables and passes p
         }
     };
 
-    const service = createAgentRegistryService({
-        pluginManager,
-        agentManager: createAgentManager(agentDir, {
-            Nexus: 'Nexus.md'
-        }),
-        capabilityService: createCapabilityServiceStub()
+    const agentManager = createAgentManager(agentDir, {
+        Nexus: 'Nexus.md'
+    });
+    const renderPrompt = createHostPromptRenderer(pluginManager, {
+        capabilities: () => ({ processMessages: true }),
+        processMessages: (...args) => ragPlugin.processMessages(...args)
+    });
+    const service = createRegistryService({
+        agentManager,
+        capabilityService: createCapabilityServiceStub(),
+        renderPrompt
     });
     const previousTarSysPrompt = process.env.TarSysPrompt;
 
@@ -325,9 +353,24 @@ test('AgentRegistryService default render resolves nested variables and passes p
     }
 });
 
+test('host custom renderer receives the legacy renderContext shape', async () => {
+    const pluginManager = { marker: 'host' };
+    const renderPrompt = createHostPromptRenderer(pluginManager, null, async (input) => {
+        assert.equal(input.renderContext.pluginManager, pluginManager);
+        assert.deepEqual(input.renderContext.messages, [{ role: 'user', content: 'hello' }]);
+        return input.rawPrompt;
+    });
+    const rendered = await renderPrompt({
+        agentId: 'Ariadne',
+        rawPrompt: 'prompt',
+        renderOptions: { messages: [{ role: 'user', content: 'hello' }] }
+    });
+    assert.equal(rendered, 'prompt');
+});
+
 test('AgentRegistryService throws AGENT_NOT_FOUND for unknown aliases', async () => {
     const agentDir = await createTempAgentDir();
-    const service = createAgentRegistryService({
+    const service = createRegistryService({
         agentManager: createAgentManager(agentDir, {
             Ariadne: 'Ariadne.md'
         }),

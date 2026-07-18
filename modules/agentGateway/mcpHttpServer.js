@@ -8,6 +8,7 @@ const {
 } = require('./contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('./contracts/requestContext');
 const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance');
+const { createProtocolConfigSnapshot } = require('./composition/vcpPortBindings');
 const {
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime
@@ -114,6 +115,10 @@ function createSessionContext(auth, options = {}, profile = {}) {
 }
 
 function createMcpHttpServer(options = {}) {
+    options = {
+        ...options,
+        protocolConfig: options.protocolConfig || createProtocolConfigSnapshot(options.pluginManager)
+    };
     const maxPayloadBytes = resolveConfiguredPositiveInteger(options.maxPayloadBytes,
         MAX_PAYLOAD_BYTES_ENV, DEFAULT_MAX_PAYLOAD_BYTES);
     const runtime = new HttpServerRuntime({

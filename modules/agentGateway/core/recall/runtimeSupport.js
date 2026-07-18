@@ -1,4 +1,5 @@
 const { collectRagItems } = require('./ragRetriever');
+const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { estimateTokenCount, truncateTextByTokens } = require('./recallProjectionService');
 const {
     aggregateDeduplicateItems,
@@ -123,42 +124,6 @@ function resolveRuleTargetMode(rule) {
     };
 }
 
-function getBridgeConfig(pluginManager) {
-    return pluginManager?.openClawBridgeConfig ||
-        pluginManager?.openClawBridge?.config ||
-        pluginManager?.openClawBridge ||
-        {};
-}
-
-function getRagConfig(pluginManager) {
-    const bridgeConfig = getBridgeConfig(pluginManager);
-    const ragConfig = parseJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
-    const configuredAgentDiaryMap = parseJsonObject(ragConfig.agentDiaryMap, {});
-    const envAgentDiaryMap = parseJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
-    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
-        ? ragConfig.allowCrossRoleAccess
-        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
-    const defaultDiaries = normalizeStringArray(
-        ragConfig.defaultDiaries !== undefined
-            ? ragConfig.defaultDiaries
-            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
-    );
-    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
-        ? configuredAgentDiaryMap
-        : envAgentDiaryMap;
-
-    return {
-        agentDiaryMap,
-        defaultDiaries,
-        allowCrossRoleAccess: parseBoolean(rawAllowCrossRoleAccess, false),
-        hasExplicitPolicy: (
-            Object.keys(agentDiaryMap).length > 0 ||
-            defaultDiaries.length > 0 ||
-            rawAllowCrossRoleAccess !== undefined
-        )
-    };
-}
-
 function buildAgentAliases(agentId) {
     const aliases = new Set();
     const normalizedAgentId = normalizeString(agentId);
@@ -204,44 +169,6 @@ function resolveAllowedDiaries({ agentId, availableDiaries, ragConfig }) {
     }
 
     return [];
-}
-
-function getKnowledgeBaseManager(deps, pluginManager) {
-    if (deps.ragRetrieverPort?.knowledgeBaseManager) return deps.ragRetrieverPort.knowledgeBaseManager;
-    const ctxService = deps.contextRuntimeService;
-    if (ctxService?.getKnowledgeBaseManager) {
-        return ctxService.getKnowledgeBaseManager(pluginManager);
-    }
-    return pluginManager?.vectorDBManager ||
-        pluginManager?.knowledgeBaseManager ||
-        pluginManager?.openClawBridge?.knowledgeBaseManager ||
-        null;
-}
-
-function getRagPlugin(deps, pluginManager) {
-    if (deps.ragRetrieverPort?.ragPlugin) return deps.ragRetrieverPort.ragPlugin;
-    const ctxService = deps.contextRuntimeService;
-    if (ctxService?.getRagPlugin) {
-        return ctxService.getRagPlugin(pluginManager);
-    }
-    return pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin') ||
-        pluginManager?.openClawBridge?.ragPlugin ||
-        null;
-}
-
-async function listDiaryTargets(knowledgeBaseManager) {
-    if (typeof knowledgeBaseManager?.listDiaryNames === 'function') {
-        return normalizeStringArray(await Promise.resolve(knowledgeBaseManager.listDiaryNames()));
-    }
-    if (!knowledgeBaseManager?.db?.prepare) {
-        return [];
-    }
-    const rows = knowledgeBaseManager.db
-        .prepare('SELECT DISTINCT diary_name FROM files ORDER BY diary_name COLLATE NOCASE')
-        .all();
-    return rows
-        .map((row) => normalizeString(row.diary_name))
-        .filter(Boolean);
 }
 
 function parseModifierValue(key, value) {
@@ -434,69 +361,23 @@ function computeCosineSimilarity(vectorA, vectorB) {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-async function getQueryVector(query, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader) {
-    if (ragPlugin?.getSingleEmbeddingCached) {
-        return await ragPlugin.getSingleEmbeddingCached(query);
-    }
-    const { getEmbeddingsBatch } = embeddingUtilsLoader();
-    const [vector] = await getEmbeddingsBatch([query], {
-        apiKey: knowledgeBaseManager?.config?.apiKey,
-        apiUrl: knowledgeBaseManager?.config?.apiUrl,
-        model: knowledgeBaseManager?.config?.model
-    });
-    return vector || null;
-}
-
-function getDiaryConceptVectors(ragPlugin, diaries) {
-    const vectors = [];
-    const cache = ragPlugin?.enhancedVectorCache;
-    if (!cache || typeof cache !== 'object') {
-        return vectors;
-    }
-    for (const diary of normalizeStringArray(diaries)) {
-        const vec = cache[diary];
-        if (Array.isArray(vec) && vec.length > 0) {
-            vectors.push({ diary, vector: vec });
-        }
-    }
-    return vectors;
-}
-
-function evaluateGate(rule, queryVector, ragPlugin) {
+function evaluateGateWithPort(rule, queryVector, ragRetrieverPort) {
     const ruleType = resolveRuleType(rule);
-    if (!GATED_RULE_TYPES.has(ruleType)) {
-        return { passed: true, similarity: null };
-    }
+    if (!GATED_RULE_TYPES.has(ruleType)) return { passed: true, similarity: null };
     if (typeof rule.gateThreshold !== 'number' || !Number.isFinite(rule.gateThreshold)) {
         return { passed: true, similarity: null };
     }
-    if (!Array.isArray(queryVector) || queryVector.length === 0) {
-        return { passed: false, similarity: 0 };
-    }
-
-    const conceptVectors = getDiaryConceptVectors(ragPlugin, resolveRuleDiaries(rule));
-    if (conceptVectors.length === 0) {
-        // No concept vectors available — gate cannot block, pass through
-        return { passed: true, similarity: null };
-    }
-
-    let maxSimilarity = 0;
-    for (const { vector } of conceptVectors) {
-        const similarity = computeCosineSimilarity(queryVector, vector);
-        if (similarity > maxSimilarity) {
-            maxSimilarity = similarity;
-        }
-    }
-
-    return {
-        passed: maxSimilarity >= rule.gateThreshold,
-        similarity: maxSimilarity
-    };
+    if (!Array.isArray(queryVector) || queryVector.length === 0) return { passed: false, similarity: 0 };
+    const vectors = ragRetrieverPort?.getConceptVectors?.(resolveRuleDiaries(rule)) || [];
+    if (!Array.isArray(vectors) || vectors.length === 0) return { passed: true, similarity: null };
+    const maxSimilarity = Math.max(...vectors.map((vector) => computeCosineSimilarity(queryVector, vector)));
+    return { passed: maxSimilarity >= rule.gateThreshold, similarity: maxSimilarity };
 }
 
 // --- S02 Post-Processing Modifiers ---
 
 module.exports = {
+    AGW_ERROR_CODES,
     MODIFIER_TO_RAG_OPTION,
     MODIFIER_PIPELINE_ORDER,
     GATED_RULE_TYPES,
@@ -512,13 +393,8 @@ module.exports = {
     resolveRuleTargetMode,
     parseBoolean,
     parseJsonObject,
-    getBridgeConfig,
-    getRagConfig,
     buildAgentAliases,
     resolveAllowedDiaries,
-    getKnowledgeBaseManager,
-    getRagPlugin,
-    listDiaryTargets,
     parseModifierValue,
     parseTimeDecayConfig,
     normalizeConversationMessages,
@@ -528,7 +404,6 @@ module.exports = {
     evaluateRoleValveExpression,
     buildRagOptionsFromModifiers,
     computeCosineSimilarity,
-    getQueryVector,
-    getDiaryConceptVectors,
-    evaluateGate
+    evaluateGate: evaluateGateWithPort,
+    evaluateGateWithPort
 };

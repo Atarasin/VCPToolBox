@@ -37,11 +37,7 @@ function normalizeBoolean(value, fallbackValue = false) {
     return fallbackValue;
 }
 
-function getOperationalConfig(pluginManager) {
-    const config = pluginManager?.agentGatewayOperationalConfig ||
-        pluginManager?.agentGatewayOperabilityConfig ||
-        pluginManager?.openClawBridgeConfig?.agentGateway?.operability ||
-        {};
+function normalizeOperationalConfig(config = {}) {
     const defaults = config.defaults && typeof config.defaults === 'object' ? config.defaults : {};
     const operations = config.operations && typeof config.operations === 'object' ? config.operations : {};
 
@@ -176,11 +172,10 @@ function createRecentRejectionEntry({
  * 第一阶段保持实例内存实现，先为 Native Gateway 提供统一的限流、并发和观测语义。
  */
 function createOperabilityService(deps = {}) {
-    if (!deps.pluginManager) throw new Error('[OperabilityService] pluginManager is required');
     const audit = deps.auditLogger && typeof deps.auditLogger.logGatewayOperation === 'function'
         ? deps.auditLogger : { logGatewayOperation() {} };
     return createOperabilityRuntime({
-        config: getOperationalConfig(deps.pluginManager),
+        config: normalizeOperationalConfig(deps.operabilityConfig),
         now: typeof deps.now === 'function' ? deps.now : () => Date.now(),
         audit,
         helpers: {
@@ -196,6 +191,7 @@ function createOperabilityService(deps = {}) {
 
 module.exports = {
     createOperabilityService,
-    getOperationalConfig,
+    getOperationalConfig: normalizeOperationalConfig,
+    normalizeOperationalConfig,
     resolveOperationPolicy
 };

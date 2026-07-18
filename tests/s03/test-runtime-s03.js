@@ -29,11 +29,14 @@ require.cache[require.resolve('../../modules/agentGateway/core/recall/ragRetriev
 };
 
 const {
-    createRecallRuntimeService,
+    createRecallRuntimeService: createCanonicalRecallRuntimeService,
     applyS02Modifiers,
     applyTruncate,
     createRecallBlock
 } = require('../../modules/agentGateway/services/recallRuntimeService');
+const { adaptLegacyGatewayDeps } = require('../../modules/agentGateway/composition/vcpPortBindings');
+
+const createRecallRuntimeService = (deps) => createCanonicalRecallRuntimeService(adaptLegacyGatewayDeps(deps));
 
 function makeItems(count, baseScore = 1.0) {
     return Array.from({ length: count }, (_, i) => ({

@@ -126,6 +126,9 @@ const cors = require('cors'); // 引入 cors 模块
 const {
     resolveDedicatedGatewayAuth
 } = require('./modules/agentGateway/contracts/protocolGovernance');
+const {
+    createProtocolConfigSnapshot
+} = require('./modules/agentGateway/composition/vcpPortBindings');
 
 const BLACKLIST_FILE = path.join(__dirname, 'ip_blacklist.json');
 const MAX_API_ERRORS = 5;
@@ -559,6 +562,7 @@ app.use(cors({ origin: '*' })); // 启用 CORS，允许所有来源的跨域请�
 // `/mcp` 路由需要独立的 payload 限制与原始 JSON 解析，因此在全局 body parser 之前挂载。
 const mcpHttpServer = createMcpHttpServer({
     pluginManager,
+    protocolConfig: createProtocolConfigSnapshot(pluginManager),
     stderr: process.stderr,
     maxSessions: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_MAX_SESSIONS', 100),
     maxPayloadBytes: resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_MAX_PAYLOAD_BYTES', 4 * 1024 * 1024),
@@ -721,7 +725,7 @@ const adminAuth = (req, res, next) => {
         if (isAgentGatewayPath) {
             const dedicatedGatewayAuth = resolveDedicatedGatewayAuth({
                 headers: req.headers,
-                pluginManager
+                config: createProtocolConfigSnapshot(pluginManager)
             });
 
             if (dedicatedGatewayAuth.provided) {
@@ -874,7 +878,7 @@ const adminAuth = (req, res, next) => {
         }
         if (isAgentGatewayPath) {
             req.agentGatewayAuth = {
-                ...resolveDedicatedGatewayAuth({ headers: {}, pluginManager }),
+                ...resolveDedicatedGatewayAuth({ headers: {}, config: createProtocolConfigSnapshot(pluginManager) }),
                 outerAuthenticated: true
             };
         }
@@ -1786,6 +1790,7 @@ async function startServer() {
         // 这些环境变量保持生产资源保护显式可调，避免只依赖测试构造参数。
         mcpWebSocketServer = createMcpWebSocketServer({
             pluginManager,
+            protocolConfig: createProtocolConfigSnapshot(pluginManager),
             stderr: process.stderr,
             maxConnections: resolvePositiveIntegerEnvValue('VCP_MCP_WS_MAX_CONNECTIONS', 100),
             maxPayloadBytes: resolvePositiveIntegerEnvValue('VCP_MCP_WS_MAX_PAYLOAD_BYTES', 4 * 1024 * 1024),

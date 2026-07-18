@@ -17,7 +17,8 @@ function createMockPluginManager() {
         },
         agentRegistryRenderPrompt: () => '',
         vectorDBManager: {
-            listDiaryNames: () => []
+            listDiaryNames: () => [],
+            search: async () => []
         }
     };
 }
@@ -168,7 +169,9 @@ describe('AgentGatewayRoutes /recall/run', () => {
             ...baseBundle,
             recallProfileResolver: resolver,
             recallRuntimeService: createRecallRuntimeService({
-                pluginManager: freshPluginManager,
+                ports: baseBundle.ports,
+                ragRetrieverPort: baseBundle.ports.ragRetriever,
+                ragConfig: baseBundle.ports.configuration.rag,
                 contextRuntimeService: baseBundle.contextRuntimeService,
                 recallProfileResolver: resolver
             }),

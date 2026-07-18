@@ -3,7 +3,7 @@
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
 
 function registerAgentListRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/agents', async (req, res) => {
@@ -61,7 +61,7 @@ function registerAgentListRoute(router, context) {
 }
 
 function registerAgentDetailRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/agents/:agentId', async (req, res) => {
@@ -132,7 +132,7 @@ function registerAgentDetailRoute(router, context) {
 }
 
 function registerAgentRenderRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/agents/:agentId/render', async (req, res) => {

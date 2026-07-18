@@ -8,8 +8,10 @@ const {
     resolveAuthContext
 } = require('../../../modules/agentGateway/policy/authContextResolver');
 const {
-    createAgentPolicyResolver
+    createAgentPolicyResolver: createCanonicalAgentPolicyResolver
 } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+const { adaptLegacyGatewayDeps } = require('../../../modules/agentGateway/composition/vcpPortBindings');
+const createAgentPolicyResolver = (deps) => createCanonicalAgentPolicyResolver(adaptLegacyGatewayDeps(deps));
 const {
     ensureToolAllowed
 } = require('../../../modules/agentGateway/policy/toolScopeGuard');

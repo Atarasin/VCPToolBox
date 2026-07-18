@@ -17,7 +17,9 @@ function cosineSimilarity(vectorA, vectorB) {
 }
 
 const { createContextRuntimeService } = require('../../../modules/agentGateway/services/contextRuntimeService');
-const { createRecallRuntimeService } = require('../../../modules/agentGateway/services/recallRuntimeService');
+const { createRecallRuntimeService: createCanonicalRecallRuntimeService } = require('../../../modules/agentGateway/services/recallRuntimeService');
+const { adaptLegacyGatewayDeps } = require('../../../modules/agentGateway/composition/vcpPortBindings');
+const createRecallRuntimeService = (deps) => createCanonicalRecallRuntimeService(adaptLegacyGatewayDeps(deps));
 
 function createContextServiceWithRecall(overrides = {}, deps = {}, recallOverrides = {}) {
     const pluginManager = createPluginManager(overrides);

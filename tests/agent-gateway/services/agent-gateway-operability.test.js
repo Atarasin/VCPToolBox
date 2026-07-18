@@ -7,6 +7,16 @@ const {
 const {
     createPluginManager
 } = require('../helpers/agent-gateway-test-helpers');
+const {
+    createOperabilityConfigSnapshot
+} = require('../../../modules/agentGateway/composition/vcpPortBindings');
+
+function createService(pluginManager, options = {}) {
+    return createOperabilityService({
+        operabilityConfig: createOperabilityConfigSnapshot(pluginManager),
+        ...options
+    });
+}
 
 test('OperabilityService rejects excess rate and records a metrics snapshot', () => {
     let currentTime = Date.parse('2026-04-20T10:00:00.000Z');
@@ -22,8 +32,7 @@ test('OperabilityService rejects excess rate and records a metrics snapshot', ()
             }
         }
     });
-    const service = createOperabilityService({
-        pluginManager,
+    const service = createService(pluginManager, {
         now: () => currentTime
     });
     const baseRequest = {
@@ -75,9 +84,7 @@ test('OperabilityService rejects excess concurrency until the active request fin
             }
         }
     });
-    const service = createOperabilityService({
-        pluginManager
-    });
+    const service = createService(pluginManager);
     const firstControl = service.beginRequest({
         operationName: 'memory.write',
         requestContext: {
@@ -142,9 +149,7 @@ test('OperabilityService rejects payloads above the configured limit', () => {
             }
         }
     });
-    const service = createOperabilityService({
-        pluginManager
-    });
+    const service = createService(pluginManager);
     const control = service.beginRequest({
         operationName: 'context.assemble',
         requestContext: {

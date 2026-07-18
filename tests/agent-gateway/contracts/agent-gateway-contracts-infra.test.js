@@ -199,11 +199,7 @@ test('protocolGovernance resolves dedicated auth, native request context and ide
             [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: 'gw-secret',
             [AGENT_GATEWAY_HEADERS.GATEWAY_ID]: 'vcp-test-gateway'
         },
-        pluginManager: {
-            agentGatewayProtocolConfig: {
-                gatewayKey: 'gw-secret'
-            }
-        }
+        config: { gatewayKey: 'gw-secret' }
     });
 
     assert.equal(dedicatedAuth.provided, true);
@@ -216,11 +212,7 @@ test('protocolGovernance resolves dedicated auth, native request context and ide
             headers: {
                 [AGENT_GATEWAY_HEADERS.GATEWAY_KEY]: gatewayKey
             },
-            pluginManager: {
-                agentGatewayProtocolConfig: {
-                    gatewayKey: 'gw-secret'
-                }
-            }
+            config: { gatewayKey: 'gw-secret' }
         });
         assert.equal(auth.authenticated, false);
     }
@@ -255,7 +247,7 @@ test('protocolGovernance resolves dedicated auth, native request context and ide
             }
         },
         headers: {},
-        pluginManager: {}
+        config: {}
     });
 
     assert.equal(idempotencyKey, 'tool-idem-001');

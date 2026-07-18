@@ -3,13 +3,13 @@
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
 
 function registerToolRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/tools/:toolName/invoke', async (req, res) => {
         const startedAt = Date.now();
         const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-tool');
-        const governedBody = createGovernedRequestBody(req, pluginManager, requestContext);
+        const governedBody = createGovernedRequestBody(req, protocolConfig, requestContext);
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
@@ -94,7 +94,7 @@ function registerToolRoute(router, context) {
 }
 
 function registerJobReadRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/jobs/:jobId', async (req, res) => {
@@ -166,7 +166,7 @@ function registerJobReadRoute(router, context) {
 }
 
 function registerJobCancelRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/jobs/:jobId/cancel', async (req, res) => {
@@ -230,7 +230,7 @@ function registerJobCancelRoute(router, context) {
 }
 
 function registerEventsRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/events/stream', async (req, res) => {

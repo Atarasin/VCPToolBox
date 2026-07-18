@@ -21,67 +21,6 @@ function normalizePolicyStringArray(value) {
     return [];
 }
 
-function parsePolicyJsonObject(value, fallbackValue = {}) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-        return value;
-    }
-    if (typeof value !== 'string' || !value.trim()) {
-        return fallbackValue;
-    }
-    try {
-        const parsedValue = JSON.parse(value);
-        return parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
-            ? parsedValue
-            : fallbackValue;
-    } catch (error) {
-        return fallbackValue;
-    }
-}
-
-function getBridgeConfig(pluginManager) {
-    return pluginManager?.openClawBridgeConfig ||
-        pluginManager?.openClawBridge?.config ||
-        pluginManager?.openClawBridge ||
-        {};
-}
-
-function getRagConfig(pluginManager) {
-    const bridgeConfig = getBridgeConfig(pluginManager);
-    const ragConfig = parsePolicyJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
-    const configuredAgentDiaryMap = parsePolicyJsonObject(ragConfig.agentDiaryMap, {});
-    const envAgentDiaryMap = parsePolicyJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
-    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
-        ? ragConfig.allowCrossRoleAccess
-        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
-    const defaultDiaries = normalizePolicyStringArray(
-        ragConfig.defaultDiaries !== undefined
-            ? ragConfig.defaultDiaries
-            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
-    );
-    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
-        ? configuredAgentDiaryMap
-        : envAgentDiaryMap;
-
-    return {
-        agentDiaryMap,
-        defaultDiaries,
-        allowCrossRoleAccess: rawAllowCrossRoleAccess === true || rawAllowCrossRoleAccess === 'true',
-        hasExplicitPolicy: (
-            Object.keys(agentDiaryMap).length > 0 ||
-            defaultDiaries.length > 0 ||
-            rawAllowCrossRoleAccess !== undefined
-        )
-    };
-}
-
-function getPolicyConfig(pluginManager) {
-    const bridgeConfig = getBridgeConfig(pluginManager);
-    return parsePolicyJsonObject(
-        pluginManager?.agentGatewayPolicyConfig || bridgeConfig.policy,
-        pluginManager?.agentGatewayPolicyConfig || bridgeConfig.policy || {}
-    );
-}
-
 function isBridgeablePlugin(plugin) {
     if (!plugin || typeof plugin !== 'object') {
         return false;
@@ -138,9 +77,7 @@ function filterAvailableDiaries(availableDiaries, allowedDiaryNames) {
         .filter((diaryName, index, array) => array.indexOf(diaryName) === index);
 }
 
-function resolveDiaryScopes({ authContext, availableDiaries, pluginManager }) {
-    const ragConfig = getRagConfig(pluginManager);
-    const policyConfig = getPolicyConfig(pluginManager);
+function resolveDiaryScopes({ authContext, availableDiaries, ragConfig, policyConfig }) {
     const agentAliases = buildAgentAliases(authContext.agentId);
     const configuredMemoryPolicy = resolveConfiguredAgentMemoryPolicy({
         agentId: authContext.agentId
@@ -211,8 +148,7 @@ function resolveDiaryScopes({ authContext, availableDiaries, pluginManager }) {
     };
 }
 
-function resolveToolScopes({ authContext, pluginManager }) {
-    const policyConfig = getPolicyConfig(pluginManager);
+function resolveToolScopes({ authContext, policyConfig, toolInvokerPort }) {
     const agentAliases = buildAgentAliases(authContext.agentId);
     const explicitToolScopes = normalizePolicyStringArray(
         resolveAliasValue(policyConfig.agentPolicyMap, agentAliases, 'toolScopes')
@@ -233,7 +169,7 @@ function resolveToolScopes({ authContext, pluginManager }) {
     }
 
     return {
-        allowedToolNames: Array.from(pluginManager?.plugins?.values?.() || [])
+        allowedToolNames: Array.from(toolInvokerPort?.listTools?.() || [])
             .filter((plugin) => isBridgeablePlugin(plugin))
             .map((plugin) => plugin.name)
             .sort((left, right) => left.localeCompare(right)),
@@ -242,10 +178,9 @@ function resolveToolScopes({ authContext, pluginManager }) {
 }
 
 function createAgentPolicyResolver(deps = {}) {
-    const pluginManager = deps.pluginManager;
-    if (!pluginManager) {
-        throw new Error('[AgentPolicyResolver] pluginManager is required');
-    }
+    const ragConfig = deps.ragConfig || deps.ports?.configuration?.rag || {};
+    const policyConfig = deps.policyConfig || deps.ports?.configuration?.policy || {};
+    const toolInvokerPort = deps.toolInvokerPort || deps.ports?.toolInvoker;
 
     return {
         async resolvePolicy({ authContext, availableDiaries }) {
@@ -253,11 +188,13 @@ function createAgentPolicyResolver(deps = {}) {
             const diaryScopeResult = resolveDiaryScopes({
                 authContext: resolvedAuthContext,
                 availableDiaries,
-                pluginManager
+                ragConfig,
+                policyConfig
             });
             const toolScopeResult = resolveToolScopes({
                 authContext: resolvedAuthContext,
-                pluginManager
+                policyConfig,
+                toolInvokerPort
             });
 
             return {
@@ -277,6 +214,5 @@ function createAgentPolicyResolver(deps = {}) {
 }
 
 module.exports = {
-    createAgentPolicyResolver,
-    getPolicyConfig
+    createAgentPolicyResolver
 };

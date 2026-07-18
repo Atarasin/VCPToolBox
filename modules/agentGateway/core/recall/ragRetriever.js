@@ -147,42 +147,6 @@ function parseContextJsonObject(value, fallbackValue = {}) {
     }
 }
 
-function getBridgeConfig(pluginManager) {
-    return pluginManager?.openClawBridgeConfig ||
-        pluginManager?.openClawBridge?.config ||
-        pluginManager?.openClawBridge ||
-        {};
-}
-
-function getRagConfig(pluginManager) {
-    const bridgeConfig = getBridgeConfig(pluginManager);
-    const ragConfig = parseContextJsonObject(bridgeConfig.rag, bridgeConfig.rag || {});
-    const configuredAgentDiaryMap = parseContextJsonObject(ragConfig.agentDiaryMap, {});
-    const envAgentDiaryMap = parseContextJsonObject(process.env.OPENCLAW_RAG_AGENT_DIARY_MAP, {});
-    const rawAllowCrossRoleAccess = ragConfig.allowCrossRoleAccess !== undefined
-        ? ragConfig.allowCrossRoleAccess
-        : process.env.OPENCLAW_RAG_ALLOW_CROSS_ROLE_ACCESS;
-    const defaultDiaries = normalizeContextStringArray(
-        ragConfig.defaultDiaries !== undefined
-            ? ragConfig.defaultDiaries
-            : process.env.OPENCLAW_RAG_DEFAULT_DIARIES
-    );
-    const agentDiaryMap = Object.keys(configuredAgentDiaryMap).length > 0
-        ? configuredAgentDiaryMap
-        : envAgentDiaryMap;
-
-    return {
-        agentDiaryMap,
-        defaultDiaries,
-        allowCrossRoleAccess: parseContextBoolean(rawAllowCrossRoleAccess, false),
-        hasExplicitPolicy: (
-            Object.keys(agentDiaryMap).length > 0 ||
-            defaultDiaries.length > 0 ||
-            rawAllowCrossRoleAccess !== undefined
-        )
-    };
-}
-
 function buildAgentAliases(agentId) {
     const aliases = new Set();
     const addAlias = (value) => {
@@ -255,50 +219,6 @@ function resolveDiarySelection(body) {
     };
 }
 
-function getKnowledgeBaseManager(pluginManager, ragRetrieverPort) {
-    if (ragRetrieverPort?.knowledgeBaseManager) return ragRetrieverPort.knowledgeBaseManager;
-    if (pluginManager?.vectorDBManager) {
-        return pluginManager.vectorDBManager;
-    }
-    if (pluginManager?.knowledgeBaseManager) {
-        return pluginManager.knowledgeBaseManager;
-    }
-    if (pluginManager?.openClawBridge?.knowledgeBaseManager) {
-        return pluginManager.openClawBridge.knowledgeBaseManager;
-    }
-    return null;
-}
-
-function getRagPlugin(pluginManager, ragRetrieverPort) {
-    if (ragRetrieverPort?.ragPlugin) return ragRetrieverPort.ragPlugin;
-    const pluginManagerRagPlugin = pluginManager?.messagePreprocessors?.get?.('RAGDiaryPlugin');
-    if (pluginManagerRagPlugin) {
-        return pluginManagerRagPlugin;
-    }
-    if (pluginManager?.openClawBridge?.ragPlugin) {
-        return pluginManager.openClawBridge.ragPlugin;
-    }
-    return null;
-}
-
-async function listDiaryTargets(knowledgeBaseManager) {
-    if (typeof knowledgeBaseManager?.listDiaryNames === 'function') {
-        const diaryNames = await Promise.resolve(knowledgeBaseManager.listDiaryNames());
-        return normalizeContextStringArray(diaryNames);
-    }
-    if (!knowledgeBaseManager?.db?.prepare) {
-        return [];
-    }
-
-    const rows = knowledgeBaseManager.db
-        .prepare('SELECT DISTINCT diary_name FROM files ORDER BY diary_name COLLATE NOCASE')
-        .all();
-
-    return rows
-        .map((row) => normalizeContextString(row.diary_name))
-        .filter(Boolean);
-}
-
 function normalizeRagMode(mode) {
     const normalizedMode = normalizeContextString(mode).toLowerCase();
     if (!normalizedMode) {
@@ -337,7 +257,9 @@ const {
     getCachedFileMetadata,
     getFileMetadata,
     getQueryVector,
+    getQueryVectorFromPort,
     normalizeRagItem,
+    normalizeRagItemFromPort,
     normalizeTimestampValue
 } = require('./ragItemNormalizer');
 
@@ -420,8 +342,10 @@ function summarizeScoreStats(values) {
     };
 }
 
-async function resolveRagAccess(params, knowledgeBaseManager) {
-    const availableDiaries = await listDiaryTargets(knowledgeBaseManager);
+async function resolveRagAccess(params, ragRetrieverPort) {
+    const availableDiaries = normalizeContextStringArray(
+        await Promise.resolve(ragRetrieverPort.listDiaries())
+    );
     const policyAuthContext = resolvePolicyAuthContext(params.authContext, null, params.agentId);
     return resolveDiaryAccess({
         requestedDiaries: params.requestedDiaries,
@@ -432,28 +356,28 @@ async function resolveRagAccess(params, knowledgeBaseManager) {
         fallbackAllowedDiaries: resolveAllowedDiaries({
             agentId: params.agentId,
             availableDiaries,
-            ragConfig: getRagConfig(params.pluginManager)
+            ragConfig: params.ragConfig || {}
         }),
         appliedDefaultPolicy: params.adapterAppliedDefaultDiaryPolicy,
         forbiddenCode: OPENCLAW_ERROR_CODES.RAG_TARGET_FORBIDDEN
     });
 }
 
-async function prepareRagVectors({ query, ragOptions, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader }) {
-    const queryVector = await getQueryVector(query, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader);
+async function prepareRagVectors({ query, ragOptions, ragRetrieverPort }) {
+    const queryVector = await getQueryVectorFromPort(query, ragRetrieverPort);
     if (!Array.isArray(queryVector) || !queryVector.length) throw new Error('Failed to build query embedding');
     let finalQueryVector = queryVector;
     let activatedGroups = new Map();
-    if (ragOptions.groupAware && ragPlugin?.semanticGroups?.detectAndActivateGroups && ragPlugin?.semanticGroups?.getEnhancedVector) {
-        activatedGroups = ragPlugin.semanticGroups.detectAndActivateGroups(query);
-        const enhanced = await ragPlugin.semanticGroups.getEnhancedVector(query, activatedGroups, queryVector);
-        if (Array.isArray(enhanced) && enhanced.length) finalQueryVector = enhanced;
+    if (ragOptions.groupAware && ragRetrieverPort.enhanceSemanticGroups) {
+        const enhanced = await ragRetrieverPort.enhanceSemanticGroups(query, queryVector);
+        activatedGroups = enhanced?.groups instanceof Map ? enhanced.groups : new Map();
+        if (Array.isArray(enhanced?.vector) && enhanced.vector.length) finalQueryVector = enhanced.vector;
     }
     let scoringVector = finalQueryVector;
     let coreTags = [];
     const effectiveTagBoost = ragOptions.tagMemoWeight || TAG_BOOST;
-    if (ragOptions.tagMemo && typeof knowledgeBaseManager?.applyTagBoost === 'function') {
-        const boost = knowledgeBaseManager.applyTagBoost(new Float32Array(finalQueryVector), effectiveTagBoost);
+    if (ragOptions.tagMemo && ragRetrieverPort.applyTagBoost) {
+        const boost = await ragRetrieverPort.applyTagBoost(finalQueryVector, effectiveTagBoost);
         if (boost?.vector) scoringVector = Array.from(boost.vector);
         coreTags = extractCoreTags(boost?.info);
     }
@@ -464,36 +388,32 @@ async function prepareRagVectors({ query, ragOptions, ragPlugin, knowledgeBaseMa
  * 共享 search/context 的检索主流程，避免在 adapter 内复制实现。
  */
 async function collectRagItems(params) {
-    const { pluginManager, query, ragOptions, embeddingUtilsLoader, ragRetrieverPort } = params;
-    const knowledgeBaseManager = getKnowledgeBaseManager(pluginManager, ragRetrieverPort);
-    const ragPlugin = getRagPlugin(pluginManager, ragRetrieverPort);
+    const { query, ragOptions, ragRetrieverPort } = params;
+    if (!ragRetrieverPort?.available) {
+        return { success: false, status: 500, code: OPENCLAW_ERROR_CODES.RAG_SEARCH_ERROR,
+            error: 'RAG retrieval is not available' };
+    }
     // Diary selectors are access-control inputs, not existence checks. VCP can
     // lazily materialize a diary later, so unresolved-but-allowed targets should
     // continue as empty search/context results instead of failing with not-found.
-    const access = await resolveRagAccess(params, knowledgeBaseManager);
+    const access = await resolveRagAccess(params, ragRetrieverPort);
     if (!access.success) return access;
     const targetDiaries = access.targetDiaries;
-    const vectors = await prepareRagVectors({ query, ragOptions, ragPlugin, knowledgeBaseManager, embeddingUtilsLoader });
+    const vectors = await prepareRagVectors({ query, ragOptions, ragRetrieverPort });
     const { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector } = vectors;
 
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
         : Math.max(ragOptions.k, DEFAULT_RAG_K);
-    const semanticSearchOptions = ragOptions.tagMemoGeodesic
-        ? { geodesicRerank: true }
-        : null;
     const semanticResults = await Promise.all(
         targetDiaries.map(async (targetDiary) => {
             const results = await Promise.resolve(
-                knowledgeBaseManager.search(
-                    targetDiary,
-                    finalQueryVector,
-                    semanticSearchK,
-                    ragOptions.tagMemo ? effectiveTagBoost : 0,
+                ragRetrieverPort.searchDiary(targetDiary, finalQueryVector, {
+                    k: semanticSearchK,
+                    tagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
                     coreTags,
-                    1.33,
-                    semanticSearchOptions
-                )
+                    geodesicRerank: ragOptions.tagMemoGeodesic === true
+                })
             );
             return Array.isArray(results)
                 ? results.map((result) => ({
@@ -506,33 +426,35 @@ async function collectRagItems(params) {
     );
 
     let timeRanges = [];
-    if (ragOptions.timeAware && ragPlugin?.timeParser?.parse) {
-        timeRanges = ragPlugin.timeParser.parse(query);
+    if (ragOptions.timeAware && ragRetrieverPort.parseTimeRanges) {
+        timeRanges = await Promise.resolve(ragRetrieverPort.parseTimeRanges(query));
     }
 
     let timeResults = [];
     if (
         timeRanges.length > 0 &&
-        ragPlugin?._getTimeRangeFilePaths &&
-        typeof knowledgeBaseManager?.getChunksByFilePaths === 'function'
+        ragRetrieverPort.getTimeRangeFilePaths &&
+        ragRetrieverPort.getChunksByFilePaths
     ) {
         const targetFilePathGroups = await Promise.all(
             targetDiaries.map(async (targetDiary) => {
                 const filePaths = await Promise.all(
-                    timeRanges.map((timeRange) => Promise.resolve(ragPlugin._getTimeRangeFilePaths(targetDiary, timeRange)))
+                    timeRanges.map((timeRange) => Promise.resolve(
+                        ragRetrieverPort.getTimeRangeFilePaths(targetDiary, timeRange)
+                    ))
                 );
                 return filePaths.flat();
             })
         );
         const timeFilePaths = [...new Set(targetFilePathGroups.flat())];
         const timeChunks = timeFilePaths.length > 0
-            ? await Promise.resolve(knowledgeBaseManager.getChunksByFilePaths(timeFilePaths))
+            ? await Promise.resolve(ragRetrieverPort.getChunksByFilePaths(timeFilePaths))
             : [];
         timeResults = Array.isArray(timeChunks)
             ? timeChunks.map((chunk) => ({
                 ...chunk,
-                score: ragPlugin?.cosineSimilarity
-                    ? ragPlugin.cosineSimilarity(scoringVector, Array.from(chunk.vector || []))
+                score: ragRetrieverPort.cosineSimilarity
+                    ? ragRetrieverPort.cosineSimilarity(scoringVector, Array.from(chunk.vector || []))
                     : computeCosineSimilarity(scoringVector, Array.from(chunk.vector || [])),
                 sourceDiary: normalizeContextString(
                     chunk.sourceDiary || normalizeContextString(chunk.sourceFile).split('/')[0]
@@ -543,17 +465,17 @@ async function collectRagItems(params) {
     }
 
     let candidates = deduplicateRagCandidates([...semanticResults.flat(), ...timeResults]);
-    if (typeof knowledgeBaseManager?.deduplicateResults === 'function' && candidates.length > 1) {
-        candidates = await Promise.resolve(knowledgeBaseManager.deduplicateResults(candidates, finalQueryVector));
+    if (ragRetrieverPort.deduplicateResults && candidates.length > 1) {
+        candidates = await Promise.resolve(ragRetrieverPort.deduplicateResults(candidates, finalQueryVector));
     }
     const scoredCandidates = candidates.filter((candidate) => typeof candidate?.score === 'number' && Number.isFinite(candidate.score));
 
     let rerankApplied = false;
-    if (ragOptions.rerank && candidates.length > 0 && ragPlugin?._rerankDocuments) {
+    if (ragOptions.rerank && candidates.length > 0 && ragRetrieverPort.rerank) {
         const rrfOptions = typeof ragOptions.rerankWeight === 'number' && Number.isFinite(ragOptions.rerankWeight)
             ? { weight: ragOptions.rerankWeight }
             : null;
-        candidates = await Promise.resolve(ragPlugin._rerankDocuments(query, candidates, ragOptions.k, rrfOptions));
+        candidates = await Promise.resolve(ragRetrieverPort.rerank(query, candidates, ragOptions.k, rrfOptions));
         rerankApplied = true;
     } else {
         candidates.sort((left, right) => (right.score || 0) - (left.score || 0));
@@ -565,18 +487,16 @@ async function collectRagItems(params) {
         candidates
             .filter((candidate) => normalizeContextString(candidate?.text))
             .slice(0, ragOptions.k)
-            .map((candidate) => normalizeRagItem(
+            .map((candidate) => normalizeRagItemFromPort(
                 candidate,
                 normalizeContextString(candidate?.sourceDiary),
-                knowledgeBaseManager,
+                ragRetrieverPort,
                 metadataCache
             ))
     );
 
     return {
         success: true,
-        knowledgeBaseManager,
-        ragPlugin,
         targetDiaries,
         items,
         activatedGroups,
@@ -608,15 +528,10 @@ module.exports = {
     parseContextBoolean,
     parseContextInteger,
     parseContextJsonObject,
-    getBridgeConfig,
-    getRagConfig,
     buildAgentAliases,
     collectConfiguredDiaries,
     resolveAllowedDiaries,
     resolveDiarySelection,
-    getKnowledgeBaseManager,
-    getRagPlugin,
-    listDiaryTargets,
     normalizeRagMode,
     extractRagOptions,
     computeCosineSimilarity,

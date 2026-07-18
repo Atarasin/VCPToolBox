@@ -3,7 +3,7 @@
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
 
 function registerMemoryTargetsRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.get('/memory/targets', async (req, res) => {
@@ -88,7 +88,7 @@ function registerMemoryTargetsRoute(router, context) {
 }
 
 function registerMemorySearchRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/memory/search', async (req, res) => {
@@ -146,13 +146,13 @@ function registerMemorySearchRoute(router, context) {
 }
 
 function registerMemoryWriteRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/memory/write', async (req, res) => {
         const startedAt = Date.now();
         const requestContext = createNativeRequestContext(req, req.body?.requestContext, 'agent-gateway-memory-write');
-        const governedBody = createGovernedRequestBody(req, pluginManager, requestContext);
+        const governedBody = createGovernedRequestBody(req, protocolConfig, requestContext);
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
@@ -211,7 +211,7 @@ function registerMemoryWriteRoute(router, context) {
 }
 
 function registerContextRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/context/assemble', async (req, res) => {
@@ -269,7 +269,7 @@ function registerContextRoute(router, context) {
 }
 
 function registerRecallRoute(router, context) {
-    const { pluginManager, authContextResolver, capabilityService, agentRegistryService,
+    const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
         jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
         operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
     router.post('/recall/run', async (req, res) => {

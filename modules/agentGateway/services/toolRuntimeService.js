@@ -119,13 +119,6 @@ function createAgentGatewayContext(requestContext, extra = {}) {
     };
 }
 
-function getToolInvocationStore(pluginManager) {
-    if (!pluginManager.__agentGatewayToolInvocationStore) {
-        pluginManager.__agentGatewayToolInvocationStore = new Map();
-    }
-    return pluginManager.__agentGatewayToolInvocationStore;
-}
-
 function createToolInvocationStoreKey(toolName, idempotencyKey) {
     const normalizedToolName = normalizeToolRuntimeString(toolName);
     const normalizedIdempotencyKey = normalizeToolRuntimeString(idempotencyKey);
@@ -173,10 +166,6 @@ function createBridgeRequestBody(args, requestContext, bridgeToolName) {
 }
 
 function createToolRuntimeContext(deps = {}) {
-    const pluginManager = deps.pluginManager;
-    if (!pluginManager) {
-        throw new Error('[ToolRuntimeService] pluginManager is required');
-    }
     const toolInvokerPort = deps.toolInvokerPort;
     const schemaRegistry = deps.schemaRegistry;
     if (!schemaRegistry || typeof schemaRegistry.getToolInputSchema !== 'function') {
@@ -205,7 +194,6 @@ function createToolRuntimeContext(deps = {}) {
         ? deps.toolScopeGuard
         : null;
     return {
-        pluginManager,
         toolInvokerPort,
         schemaRegistry,
         memoryRuntimeService,
@@ -215,7 +203,8 @@ function createToolRuntimeContext(deps = {}) {
         authContextResolver,
         agentPolicyResolver,
         toolScopeGuard,
-        jobRuntimeService: deps.jobRuntimeService || null
+        jobRuntimeService: deps.jobRuntimeService || null,
+        invocationStore: new Map()
     };
 }
 
@@ -228,7 +217,7 @@ function normalizeToolInvocation(state, input) {
         : requestContext;
     const options = body?.options && typeof body.options === 'object' ? body.options : {};
     const idempotencyKey = normalizeToolRuntimeString(options.idempotencyKey || body?.idempotencyKey);
-    const invocationStore = getToolInvocationStore(state.pluginManager);
+    const invocationStore = state.invocationStore;
     return {
         state, body, startedAt, clientIp, normalizedToolName, args: body?.args,
         requestContext, authContext, requestId: requestContext.requestId,
@@ -283,9 +272,7 @@ async function invokeMemoryBridge(ctx) {
 }
 
 function resolveInvocationPlugin(ctx) {
-    const plugin = ctx.state.toolInvokerPort?.getTool?.(ctx.normalizedToolName) ||
-        ctx.state.pluginManager.getPlugin?.(ctx.normalizedToolName) ||
-        ctx.state.pluginManager.plugins?.get?.(ctx.normalizedToolName);
+    const plugin = ctx.state.toolInvokerPort?.getTool?.(ctx.normalizedToolName) || null;
     if (plugin && isBridgeablePlugin(plugin)) return { plugin };
     return { failure: { success: false, status: 'failed', requestId: ctx.requestId, httpStatus: 404,
         code: OPENCLAW_ERROR_CODES.TOOL_NOT_FOUND, error: 'Tool not found',
@@ -307,8 +294,7 @@ async function authorizeInvocation(ctx) {
 }
 
 function buildApprovalResult(ctx, plugin) {
-    const requiresApproval = ctx.state.toolInvokerPort?.requiresApproval?.(ctx.normalizedToolName) ||
-        ctx.state.pluginManager.toolApprovalManager?.shouldApprove?.(ctx.normalizedToolName);
+    const requiresApproval = ctx.state.toolInvokerPort?.requiresApproval?.(ctx.normalizedToolName) || false;
     if (!requiresApproval) return null;
     const job = ctx.state.jobRuntimeService?.createWaitingApprovalJob({
         operation: 'tool.invoke', authContext: ctx.authContext,
@@ -342,9 +328,9 @@ async function executeInvocation(ctx, plugin) {
         __agentGatewayContext: createAgentGatewayContext(ctx.requestContext, { toolName: ctx.normalizedToolName }),
         __openclawContext: createLegacyOpenClawContext(ctx.requestContext) };
     try {
-        const result = ctx.state.toolInvokerPort?.available
-            ? await ctx.state.toolInvokerPort.invoke(ctx.normalizedToolName, invocationArgs, ctx.clientIp)
-            : await ctx.state.pluginManager.processToolCall(ctx.normalizedToolName, invocationArgs, ctx.clientIp);
+        const result = await ctx.state.toolInvokerPort.invoke(
+            ctx.normalizedToolName, invocationArgs, ctx.clientIp
+        );
         ctx.state.auditLogger.logToolInvoke('invoke.completed', audit, ctx.startedAt);
         const completed = { success: true, status: 'completed', requestId: ctx.requestId,
             data: { toolName: ctx.normalizedToolName, result,
