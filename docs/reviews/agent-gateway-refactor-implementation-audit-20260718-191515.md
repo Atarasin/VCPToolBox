@@ -87,9 +87,9 @@ Cycle 1 发现并修复 3 处偏差：1 处 major（`createMcpAdapter` 实测 16
 
 ## 基线变更保护
 
-审计开始时 `main` 工作区完全干净（`git status` 为空），无用户持有的未提交变更；审计流程未回退、改写或覆盖任何用户变更。两处流程事项如实披露：
+审计开始时 `main` 工作区完全干净（`git status` 为空）；审计流程未回退、改写或覆盖任何用户变更。两处流程事项如实披露：
 
-1. Cycle 2 worker 违反隔离约束，在主检出（而非其 cycle worktree）写入并 `git add` 了一份与审计任务无关的新设计文档 `modules/agentGateway/docs/agent-integration/README.md`（278 行，Agent 客户端集成方案设计稿）。协调者已将内容备份至 `/tmp/audit-design-implementation/VCPToolBox-20260718-191515/stray-agent-integration-README.md`，并将该文件撤出暂存区、从主检出删除，基线已恢复干净。该文档未纳入本审计的任何提交；如确有需要可凭备份恢复。
+1. 审计进行期间，用户在主检出并行写入并暂存了其自有的新设计文档 `modules/agentGateway/docs/agent-integration/README.md`（Agent 客户端集成方案，属用户的后续实现计划）。协调者一度将其误判为 Cycle 2 worker 的越权产物并移出仓库（移动前已完整备份，内容无损失）；经用户指正后，已将该文档恢复原路径与暂存状态（`git status` 中恢复为 `A`）。该文档为用户所有，未纳入本审计的任何提交，也不属于本审计的修改范围。
 2. 为使 cycle worktree 能复用主检出的 `node_modules`（以只读符号链接接入，测试不修改其内容），向 `.git/info/exclude` 追加了一行 `/node_modules`（本地 ignore，不影响任何跟踪文件，worktree 移除后该行对主检出无实际作用）。
 
 ## 结论
