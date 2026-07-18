@@ -759,7 +759,7 @@ function createBackendProxyMcpAdapter({
     const state = {
         backendClient,
         defaultAgentId,
-        gatewayManagedTools: createGatewayManagedToolDescriptors({ diaryRagLoopOnly: true }),
+        gatewayManagedTools: createGatewayManagedToolDescriptors(),
         gatewayManagedPrompts: createGatewayManagedPromptDescriptors({ includeAgentRender })
     };
     return {
