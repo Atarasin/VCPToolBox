@@ -67,14 +67,38 @@ function finishRequest(state, control, outcome, code) {
     control.metric.lastOutcome = outcome === 'success' ? 'success' : 'failure';
     state.audit.logGatewayOperation(`request.${outcome === 'success' ? 'completed' : 'failed'}`, {
         requestId: control.requestId, traceId: control.traceId,
-        operationName: control.operationName, code: state.helpers.normalizeString(code, 64)
+        operationName: control.operationName, code: state.helpers.normalizeString(code, 64),
+        ...(control.auditIdentity || {})
     });
+}
+
+function buildAuditIdentityFields(state, requestContext, authContext) {
+    // M1 门禁第 6 条：审计事件包含 credential 身份链（不含 token/digest/pepper）。
+    const fields = {};
+    const identitySource = authContext || {};
+    for (const [auditKey, sourceKey] of [
+        ['credentialId', 'credentialId'],
+        ['credentialRevision', 'credentialRevision'],
+        ['credentialSubject', 'credentialSubject'],
+        ['effectiveAgentId', 'effectiveAgentId'],
+        ['targetAgentId', 'targetAgentId']
+    ]) {
+        const value = state.helpers.normalizeString(identitySource[sourceKey], 256);
+        if (value) fields[auditKey] = value;
+    }
+    const boundAgent = state.helpers.normalizeString(
+        identitySource.credentialRecord?.boundAgentId || identitySource.boundAgentId, 256);
+    if (boundAgent) fields.boundAgentId = boundAgent;
+    const agentId = state.helpers.normalizeString(identitySource.agentId || requestContext?.agentId, 256);
+    if (agentId && !fields.effectiveAgentId) fields.effectiveAgentId = agentId;
+    return fields;
 }
 
 function beginRequest(state, { operationName, requestContext, authContext, payloadBytes } = {}) {
     const name = state.helpers.normalizeString(operationName) || 'unknown';
     const requestId = state.helpers.normalizeString(requestContext?.requestId, 128);
     const traceId = resolveTraceId(requestContext?.traceId, 'agwop');
+    const auditIdentity = buildAuditIdentityFields(state, requestContext, authContext);
     const timestamp = state.now();
     const subjectKey = createSubjectKey(state, name, requestContext, authContext);
     const policy = state.helpers.resolvePolicy(state.config, name);
@@ -115,14 +139,14 @@ function beginRequest(state, { operationName, requestContext, authContext, paylo
     state.active.set(subjectKey, activeCount + 1);
     metric.active += 1;
     metric.lastOutcome = 'started';
-    state.audit.logGatewayOperation('request.started', { requestId, traceId, operationName: name, payloadBytes: bytes });
+    state.audit.logGatewayOperation('request.started', { requestId, traceId, operationName: name, payloadBytes: bytes, ...auditIdentity });
     let finished = false;
     return {
         allowed: true, traceId, operationName: name,
         finish({ outcome, code } = {}) {
             if (finished) return;
             finished = true;
-            finishRequest(state, { subjectKey, metric, traceId, requestId, operationName: name }, outcome, code);
+            finishRequest(state, { subjectKey, metric, traceId, requestId, operationName: name, auditIdentity }, outcome, code);
         }
     };
 }

@@ -76,10 +76,20 @@ function createAuthInjectionMiddleware(context) {
         const credentialPresented = Boolean(dedicatedAuth.provided) || Boolean(adminSessionId);
 
         if (credentialPresented && gatewayCredentialService && !isBridgeRequest) {
+            // §3.2：path/query/body 多来源 target candidate 全部提取，
+            // 冲突 → AGW_INVALID_REQUEST；绑定不一致 → AGW_FORBIDDEN。
+            // router-level 中间件拿不到 req.params，从 URL 提取 path candidate。
+            const pathMatch = req.path.match(/^\/agents\/([^/]+)/);
+            const targetCandidates = {
+                ...(pathMatch ? { path: decodeURIComponent(pathMatch[1]) } : {}),
+                ...(typeof req.query?.agentId === 'string' ? { query: req.query.agentId } : {}),
+                ...(typeof req.body?.agentId === 'string' ? { body: req.body.agentId } : {}),
+                ...(typeof req.body?.target?.agentId === 'string' ? { bodyTarget: req.body.target.agentId } : {})
+            };
             const credentialContext = await gatewayCredentialService.buildGatewayRequestContext({
                 headers: req.headers,
                 clientIp: req.ip || req.socket?.remoteAddress || '',
-                targetCandidates: {},
+                targetCandidates,
                 requiresAgent: false,
                 entry: 'native-rest'
             });
