@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "shared": {
+    "workflow": [
+      "任务依赖历史决策、bug、策略研究或用户偏好时，先调用 gateway_recall_run。",
+      "已知日记本、确切名称或窄范围历史问题才使用 gateway_memory_search。",
+      "召回为空或失败时继续使用本地仓库上下文，不中断任务。"
+    ],
+    "memoryWritePolicy": {
+      "write": ["用户偏好与纠正", "架构或工作流决策", "非显然 bug 根因", "已验证结论"],
+      "skip": ["密钥和敏感数据", "临时日志", "琐碎 git 可查修改", "未经确认的推测"]
+    }
+  },
+  "agents": {
+    "MCPMidas": {
+      "displayName": "Midas",
+      "memoryDefaults": {
+        "tags": ["codex", "select-stock-pro"],
+        "metadata": { "project": "quant-select-stock-pro", "source": "codex" }
+      }
+    }
+  }
+}

@@ -22,11 +22,11 @@
 
 依赖：无。
 
-- [ ] T1 新增 `config/agent_guidance.json` schema 与 example（§4.2：shared workflow / memoryWritePolicy / per-agent displayName、memoryDefaults）。
-- [ ] T2 新增 credential 文件 schema 与不含 secret 的 `.example`（§4.4：credentialId、pepperKid、tokenDigest、boundAgentId、allowedAgents、scopes、status、expiresAt）。
-- [ ] T3 新增 pepper keyring schema（§4.4：`{ keys: { kid: base64-secret } }`，256 bit 最小熵校验）。
-- [ ] T4 `agentGuidanceResolver` 骨架：经窄端口读取 agent directory 快照，合成只读 integration snapshot（§4.1；displayName 来自 guidance 配置，不来自目录）。
-- [ ] T5 验收：schema 校验用例（有效配置、未知 agent、default diary 非 allowed、损坏 JSON、未知 pepperKid）。
+- [x] T1 新增 `config/agent_guidance.json` schema 与 example（§4.2：shared workflow / memoryWritePolicy / per-agent displayName、memoryDefaults）。
+- [x] T2 新增 credential 文件 schema 与不含 secret 的 `.example`（§4.4：credentialId、pepperKid、tokenDigest、boundAgentId、allowedAgents、scopes、status、expiresAt）。
+- [x] T3 新增 pepper keyring schema（§4.4：`{ keys: { kid: base64-secret } }`，256 bit 最小熵校验）。
+- [x] T4 `agentGuidanceResolver` 骨架：经窄端口读取 agent directory 快照，合成只读 integration snapshot（§4.1；displayName 来自 guidance 配置，不来自目录）。
+- [x] T5 验收：schema 校验用例（有效配置、未知 agent、default diary 非 allowed、损坏 JSON、未知 pepperKid）。
 
 ### M0.S2 Auth policy catalog
 
