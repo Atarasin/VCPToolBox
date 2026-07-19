@@ -169,10 +169,11 @@ test('job runtime fixes owner snapshot and enforces ownership on read', () => {
     const jobId = accepted.jobId;
     assert.ok(jobId);
 
-    // 同 credential 可读
+    // 同 credential 可读；owner snapshot（含 tokenDigest）不进响应
     const sameCredential = service.pollJob(jobId, ownerAuth);
     assert.equal(sameCredential.success, true);
-    assert.equal(sameCredential.data.job.authContext.owner.credentialSubject, 'cred-a');
+    assert.equal(sameCredential.data.job.authContext.owner, undefined);
+    assert.equal(sameCredential.data.job.authContext.adoptionAudit, undefined);
 
     // 不同 credential subject 403（不折叠为同一主体）
     const strangerAuth = {
@@ -223,16 +224,53 @@ test('job adoption after normal session termination replaces owner atomically wi
     const otherSession = { ...ownerAuth, trustedSessionId: 'sess-http-2', ownerSessionState: 'alive' };
     assert.equal(service.pollJob(accepted.jobId, otherSession).success, false);
 
-    // 正常终止后同 subject 收养成功
+    // 正常终止后同 subject 收养成功；收养后 owner/adoptionAudit 仍不出站，
+    // 收养生效由「新 session 继续可读、第三方仍拒绝」行为验证
     const adopter = { ...ownerAuth, trustedSessionId: 'sess-http-2', ownerSessionState: 'terminated-normally' };
     const adopted = service.pollJob(accepted.jobId, adopter);
     assert.equal(adopted.success, true);
-    assert.equal(adopted.data.job.authContext.owner.trustedSessionId, 'sess-http-2');
-    assert.ok(adopted.data.job.authContext.adoptionAudit);
+    assert.equal(adopted.data.job.authContext.owner, undefined);
+    assert.equal(adopted.data.job.authContext.adoptionAudit, undefined);
+    const adopterAgain = service.pollJob(accepted.jobId, { ...adopter, ownerSessionState: 'alive' });
+    assert.equal(adopterAgain.success, true, 'adopted session remains the owner');
 
     // 吊销销毁不适用收养
     const revokedAdopter = { ...ownerAuth, trustedSessionId: 'sess-http-3', ownerSessionState: 'destroyed-revoked' };
     assert.equal(service.pollJob(accepted.jobId, revokedAdopter).success, false);
+});
+
+test('event stream authorizes via job owner snapshot; same gatewayId does not leak across credentials', () => {
+    const service = createJobRuntimeService();
+    const baseRecord = {
+        credentialSubject: 'cred-a', boundAgentId: 'MCPMidas',
+        scopes: ['gateway:execute'], status: 'active', expiresAt: null
+    };
+    const ownerA = {
+        requestId: 'req-a', sessionId: 'sess-a', agentId: 'MCPMidas', gatewayId: 'vcp-gateway',
+        credentialSubject: 'cred-a', credentialId: 'cred-a', credentialRevision: 'rev-1',
+        credentialRecord: { ...baseRecord, credentialId: 'cred-a', tokenDigest: 'hmac-sha256:aaaa' }
+    };
+    const ownerB = {
+        requestId: 'req-b', sessionId: 'sess-b', agentId: 'Nexus', gatewayId: 'vcp-gateway',
+        credentialSubject: 'cred-b', credentialId: 'cred-b', credentialRevision: 'rev-1',
+        credentialRecord: {
+            ...baseRecord, credentialId: 'cred-b', credentialSubject: 'cred-b',
+            tokenDigest: 'hmac-sha256:bbbb', boundAgentId: 'Nexus'
+        }
+    };
+    const jobA = service.createAcceptedJob({ operation: 'tool.invoke', authContext: ownerA, metadata: {} });
+    service.createAcceptedJob({ operation: 'tool.invoke', authContext: ownerB, metadata: {} });
+
+    // 两把 credential 的 gatewayId 相同（默认 vcp-gateway），事件不得互见
+    const eventsForA = service.listEvents({ authContext: ownerA });
+    assert.equal(eventsForA.success, true);
+    assert.ok(eventsForA.data.events.length > 0);
+    assert.ok(eventsForA.data.events.every((event) => event.jobId === jobA.jobId),
+        'credential A must only see events of its own jobs');
+
+    // 无凭据身份看不到有 owner 的 job 的事件
+    const legacyView = service.listEvents({ authContext: { gatewayId: 'vcp-gateway' } });
+    assert.equal(legacyView.data.events.length, 0);
 });
 
 test('revocation watcher: periodic recheck fires revoked/unavailable within one interval', async () => {

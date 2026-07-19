@@ -130,15 +130,22 @@ function cloneJob(job) {
     if (!job || typeof job !== 'object') {
         return job;
     }
+    // 出站快照：owner（含 credentialRecord.tokenDigest、原始 trustedSessionId）
+    // 与 adoptionAudit 只存在于服务端 store，绝不进客户端响应（§3.4 / 05 第 6 条）。
+    let authContext = job.authContext;
+    if (authContext && typeof authContext === 'object') {
+        const { owner: _owner, adoptionAudit: _adoptionAudit, ...publicAuthContext } = authContext;
+        authContext = publicAuthContext;
+    }
     return {
         ...job,
         target: job.target && typeof job.target === 'object' ? { ...job.target } : job.target,
         metadata: job.metadata && typeof job.metadata === 'object' ? { ...job.metadata } : job.metadata,
-        authContext: job.authContext && typeof job.authContext === 'object' ? { ...job.authContext } : job.authContext
+        authContext
     };
 }
 
-function canAccessJob(job, authContext) {
+function canAccessJob(job, authContext, { allowAdoption = true } = {}) {
     if (!authContext || typeof authContext !== 'object') {
         return true;
     }
@@ -152,7 +159,7 @@ function canAccessJob(job, authContext) {
             requesterSessionId: normalizeJobRuntimeString(authContext.trustedSessionId) || null,
             ownerSessionState: authContext.ownerSessionState || SESSION_STATES.UNKNOWN
         });
-        if (decision.allowed && decision.adoption) {
+        if (decision.allowed && decision.adoption && allowAdoption) {
             // 首次收养：原子替换 owner 的 trustedSessionId 并留下审计标记
             job.authContext.owner = { ...applyAdoption(owner, decision.adoption) };
             job.authContext.adoptionAudit = {
@@ -390,16 +397,26 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
             });
         },
         listEvents({ authContext, filters } = {}) {
-            // 事件可见性与 job ownership 先绑定到同一 canonical identity 语义。
+            // §3.4 / M1.S6.T1：事件可见性从关联 job 的服务端 owner snapshot 决议
+            // （先 lookup owner 再授权），不使用事件弱字段（agentId/sessionId/
+            // gatewayId）合成身份——两侧 gatewayId 同值会导致跨 credential 泄漏。
+            // 事件流授权不触发收养（收养只发生在显式 job poll/cancel）。
             const normalizedFilters = filters && typeof filters === 'object' ? filters : {};
             const visibleEvents = filterRuntimeEvents(eventStore, normalizedFilters)
-                .filter((event) => canAccessJob({
-                    authContext: {
-                        agentId: event.agentId,
-                        sessionId: event.sessionId,
-                        gatewayId: event.gatewayId
+                .filter((event) => {
+                    const job = event.jobId ? store.get(event.jobId) : null;
+                    if (job) {
+                        return canAccessJob(job, authContext, { allowAdoption: false });
                     }
-                }, authContext))
+                    // 无关联 job 的孤儿事件退回弱比较（仅限旧数据；新事件均带 jobId）
+                    return canAccessJob({
+                        authContext: {
+                            agentId: event.agentId,
+                            sessionId: event.sessionId,
+                            gatewayId: event.gatewayId
+                        }
+                    }, authContext);
+                })
                 .map(createEventSnapshot);
 
             return {
