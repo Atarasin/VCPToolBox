@@ -77,13 +77,13 @@
 
 依赖：S1、M0.S2。
 
-- [ ] T1 `buildGatewayRequestContext()`:实现 §3.2 决议树(bound/unbound/admin-unbound-only),写回 `requestContext`/`authContext` 全部身份字段,丢弃客户端 body 同名字段。
-- [ ] T2 target candidate 冲突检测:path/query/body/URI 多来源规范化后必须相等,冲突 → `AGW_INVALID_REQUEST`(§3.2)。
-- [ ] T3 `authorizeTarget()` 两层授权:credentialScopes 与 agentPolicyScopes 串联交集(§3.5);scope 不足统一 `AGW_FORBIDDEN`。
-- [ ] T4 双通道呈现不一致 → 401(§3.3,替代现状 `gatewayKeyHeader || Bearer` 静默选边)。
-- [ ] T5 新增 `MCP_UNAUTHORIZED` 与 `AGW_UNAUTHORIZED → MCP_UNAUTHORIZED` 映射(§3.7)。
-- [ ] T6 认证失败限速:按 IP 滑动窗口、429 + `Retry-After`、结构化审计与 `authFailure` 指标(§3.3)。
-- [ ] T7 验收:§8「身份」「scope」行用例。
+- [x] T1 `buildGatewayRequestContext()`:实现 §3.2 决议树(bound/unbound/admin-unbound-only),写回 `requestContext`/`authContext` 全部身份字段,丢弃客户端 body 同名字段。
+- [x] T2 target candidate 冲突检测:path/query/body/URI 多来源规范化后必须相等,冲突 → `AGW_INVALID_REQUEST`(§3.2)。
+- [x] T3 `authorizeTarget()` 两层授权:credentialScopes 与 agentPolicyScopes 串联交集(§3.5);scope 不足统一 `AGW_FORBIDDEN`。
+- [x] T4 双通道呈现不一致 → 401(§3.3,替代现状 `gatewayKeyHeader || Bearer` 静默选边)。
+- [x] T5 新增 `MCP_UNAUTHORIZED` 与 `AGW_UNAUTHORIZED → MCP_UNAUTHORIZED` 映射(§3.7)。
+- [x] T6 认证失败限速:按 IP 滑动窗口、429 + `Retry-After`、结构化审计与 `authFailure` 指标(§3.3)。
+- [x] T7 验收:§8「身份」「scope」行用例。
 
 ### M1.S3 Legacy 归一化与 admin session 子系统
 
