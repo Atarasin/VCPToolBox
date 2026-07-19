@@ -1,5 +1,6 @@
 const { AGW_ERROR_CODES } = require('../contracts/errorCodes');
 const { resolveTraceId } = require('../infra/trace');
+const { OPERATION_CREDENTIAL_ACTIONS } = require('../contracts/authPolicyCatalog');
 
 function getMetricEntry(state, operationName) {
     const normalized = state.helpers.normalizeString(operationName) || 'unknown';
@@ -72,8 +73,9 @@ function finishRequest(state, control, outcome, code) {
     });
 }
 
-function buildAuditIdentityFields(state, requestContext, authContext) {
-    // M1 门禁第 6 条：审计事件包含 credential 身份链（不含 token/digest/pepper）。
+function buildAuditIdentityFields(state, requestContext, authContext, operationName) {
+    // M1 门禁第 6 条：审计事件包含 credential 身份链（不含 token/digest/pepper）、
+    // credentialAction、indirect owner、targetAgentId 与配置 revision。
     const fields = {};
     const identitySource = authContext || {};
     for (const [auditKey, sourceKey] of [
@@ -91,6 +93,17 @@ function buildAuditIdentityFields(state, requestContext, authContext) {
     if (boundAgent) fields.boundAgentId = boundAgent;
     const agentId = state.helpers.normalizeString(identitySource.agentId || requestContext?.agentId, 256);
     if (agentId && !fields.effectiveAgentId) fields.effectiveAgentId = agentId;
+    // credentialAction：按 canonical catalog 从 operationName 决议。
+    const credentialAction = OPERATION_CREDENTIAL_ACTIONS[state.helpers.normalizeString(operationName)];
+    if (credentialAction) fields.credentialAction = credentialAction;
+    // indirect owner subject（job/event 授权主体，与 credentialSubject 区分）。
+    const indirectOwner = state.helpers.normalizeString(
+        identitySource.owner?.credentialSubject, 256);
+    if (indirectOwner) fields.indirectOwnerSubject = indirectOwner;
+    // 配置 revision（安全快照一致性追踪）。
+    const configRevision = state.helpers.normalizeString(
+        identitySource.snapshotRevision || requestContext?.configRevision, 256);
+    if (configRevision) fields.configRevision = configRevision;
     return fields;
 }
 
@@ -98,7 +111,7 @@ function beginRequest(state, { operationName, requestContext, authContext, paylo
     const name = state.helpers.normalizeString(operationName) || 'unknown';
     const requestId = state.helpers.normalizeString(requestContext?.requestId, 128);
     const traceId = resolveTraceId(requestContext?.traceId, 'agwop');
-    const auditIdentity = buildAuditIdentityFields(state, requestContext, authContext);
+    const auditIdentity = buildAuditIdentityFields(state, requestContext, authContext, name);
     const timestamp = state.now();
     const subjectKey = createSubjectKey(state, name, requestContext, authContext);
     const policy = state.helpers.resolvePolicy(state.config, name);

@@ -167,7 +167,7 @@ test('dual channel presentation: mismatch 401, agreement or single channel ok', 
 
     const failures = [];
     const builder = makeBuilder({
-        auditLogger: { logGatewayOperation: (event) => failures.push(event) }
+        auditLogger: { logGatewayOperation: (event, payload) => failures.push({ event, payload }) }
     });
     const result = await builder.buildGatewayRequestContext({
         headers: { authorization: 'Bearer token-bound', 'x-agent-gateway-key': 'token-admin' },
@@ -175,7 +175,9 @@ test('dual channel presentation: mismatch 401, agreement or single channel ok', 
     });
     assert.equal(result.ok, false);
     assert.equal(result.code, AGW_ERROR_CODES.UNAUTHORIZED);
-    assert.equal(failures[0].category, 'dual-channel-mismatch');
+    // 审计签名 (event, payload)：event 为字符串，最终产出 gateway.auth.failure
+    assert.equal(failures[0].event, 'auth.failure');
+    assert.equal(failures[0].payload.category, 'dual-channel-mismatch');
 });
 
 test('client body identity fields are discarded, not merged into the context', async () => {

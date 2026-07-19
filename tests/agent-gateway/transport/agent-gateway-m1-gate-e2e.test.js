@@ -76,11 +76,11 @@ async function createNativeBackend(t, auditEvents) {
     app.use(express.json());
     app.use('/agent_gateway', createAgentGatewayRoutes(pluginManager));
     const services = getGatewayServiceBundle(pluginManager);
-    // 审计钩子：捕获 credential 主体
+    // 审计钩子：捕获 (event, payload)——含 credential 身份链
     const originalLog = services.auditLogger.logGatewayOperation.bind(services.auditLogger);
-    services.auditLogger.logGatewayOperation = (event) => {
-        auditEvents.push(event);
-        return originalLog(event);
+    services.auditLogger.logGatewayOperation = (event, payload, startedAt) => {
+        auditEvents.push({ event, ...(payload && typeof payload === 'object' ? payload : {}) });
+        return originalLog(event, payload, startedAt);
     };
     const server = await new Promise((resolve) => {
         const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
@@ -111,9 +111,11 @@ test('Native REST: bound credentials cannot reach each other\'s agent; audit sub
     const backend = await createNativeBackend(t, auditEvents);
 
     // 各自访问所绑 agent：认证与决议通过（业务层可能因 fixture 数据返回其他结果，
-    // 但不得是 401/403 决议拒绝）
+    // 但不得是 401/403 决议拒绝）——两把 credential 各自产生 request 审计事件
     const ariadneOwn = await callNative(backend.baseUrl, TOKEN_ARIADNE, 'Ariadne');
     assert.ok(![401, 403].includes(ariadneOwn.status), `expected non-auth failure, got ${ariadneOwn.status}`);
+    const nexusOwn = await callNative(backend.baseUrl, TOKEN_NEXUS, 'Nexus');
+    assert.ok(![401, 403].includes(nexusOwn.status), `expected non-auth failure, got ${nexusOwn.status}`);
 
     // 跨 agent：403，不折叠
     const ariadneCross = await callNative(backend.baseUrl, TOKEN_ARIADNE, 'Nexus');
@@ -124,6 +126,33 @@ test('Native REST: bound credentials cannot reach each other\'s agent; audit sub
     // 无效 token：401
     const unknownToken = await callNative(backend.baseUrl, 'token-unknown-x', 'Ariadne');
     assert.equal(unknownToken.status, 401);
+
+    // 门禁：审计主体不折叠——两把 credential 各自的 request 事件
+    // 携带独立 credentialSubject/credentialId，且不含 token/digest/pepper。
+    const identityEvents = auditEvents.filter((event) => event.credentialSubject);
+    const subjects = new Set(identityEvents.map((event) => event.credentialSubject));
+    assert.ok(subjects.has('cred-ariadne'), 'Ariadne credential subject present in audit');
+    assert.ok(subjects.has('cred-nexus'), 'Nexus credential subject present in audit');
+    for (const event of identityEvents) {
+        // credentialId 与 credentialSubject 一一对应，不折叠为同一主体
+        if (event.credentialSubject === 'cred-ariadne') {
+            assert.equal(event.credentialId, 'cred-ariadne');
+        }
+        if (event.credentialSubject === 'cred-nexus') {
+            assert.equal(event.credentialId, 'cred-nexus');
+        }
+    }
+    // 敏感值绝不进审计
+    const serialized = JSON.stringify(auditEvents);
+    assert.ok(!serialized.includes(TOKEN_ARIADNE), 'raw token must not appear in audit');
+    assert.ok(!serialized.includes(TOKEN_NEXUS), 'raw token must not appear in audit');
+    assert.ok(!serialized.includes(PEPPER.toString('base64')), 'pepper must not appear in audit');
+    assert.ok(!/hmac-sha256:/.test(serialized), 'token digest must not appear in audit');
+    // request 事件携带 credentialAction（read/execute）
+    const startedEvents = identityEvents.filter((event) => event.event === 'gateway.request.started'
+        || event.event === 'request.started');
+    assert.ok(startedEvents.some((event) => event.credentialAction),
+        'audit request.started carries credentialAction');
 });
 
 test('HTTP MCP transport end-to-end: per-credential passthrough isolates agents', async (t) => {

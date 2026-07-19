@@ -163,7 +163,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         policyConfig: ports.configuration.policy,
         toolInvokerPort: ports.toolInvoker
     });
-    const jobRuntimeService = createJobRuntimeService();
+    const jobRuntimeService = createJobRuntimeService({ auditLogger });
     const capabilityService = createCapabilityService({
         ports,
         ragRetrieverPort: ports.ragRetriever,

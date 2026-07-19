@@ -111,8 +111,9 @@ function createGatewayRequestContextBuilder({
 
     function recordAuthFailure({ clientIp, entry, category, credentialId }) {
         metrics?.recordAuthFailure?.({ entry, category });
-        auditLogger?.logGatewayOperation?.({
-            event: 'gateway.auth.failure',
+        // logGatewayOperation(event, payload)：event 为字符串，最终产出
+        // `gateway.auth.failure` 结构化事件。
+        auditLogger?.logGatewayOperation?.('auth.failure', {
             entry,
             category,
             clientIp: normalizeString(clientIp) || 'unknown',

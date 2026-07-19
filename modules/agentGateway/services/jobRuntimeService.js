@@ -2,6 +2,15 @@ const crypto = require('crypto');
 const {
     AGW_ERROR_CODES
 } = require('../contracts/errorCodes');
+
+// 审计不得含 admin session 原始标识（05 第 6 条）——session id 一律脱敏为摘要。
+function digestSessionId(sessionId) {
+    const normalized = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!normalized) {
+        return null;
+    }
+    return `sha256:${crypto.createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 16)}`;
+}
 const {
     JOB_EVENT_TYPES,
     createRuntimeEvent,
@@ -145,7 +154,7 @@ function cloneJob(job) {
     };
 }
 
-function canAccessJob(job, authContext, { allowAdoption = true } = {}) {
+function canAccessJob(job, authContext, { allowAdoption = true, auditLogger = null } = {}) {
     if (!authContext || typeof authContext !== 'object') {
         return true;
     }
@@ -167,6 +176,14 @@ function canAccessJob(job, authContext, { allowAdoption = true } = {}) {
                 newTrustedSessionId: decision.adoption.newTrustedSessionId,
                 at: new Date().toISOString()
             };
+            // §3.4：收养产生结构化审计事件（session id 只记摘要）
+            auditLogger?.logGatewayOperation?.('job.adopted', {
+                jobId: job.jobId,
+                credentialSubject: owner.credentialSubject,
+                credentialId: owner.credentialId,
+                previousTrustedSessionDigest: digestSessionId(decision.adoption.previousTrustedSessionId),
+                newTrustedSessionDigest: digestSessionId(decision.adoption.newTrustedSessionId)
+            });
         }
         return decision.allowed;
     }
@@ -320,7 +337,7 @@ function createJobStoreApi(store, eventStore) {
     return { createJob, updateJob };
 }
 
-function createJobRuntimeApi(store, eventStore, jobStore) {
+function createJobRuntimeApi(store, eventStore, jobStore, { auditLogger = null } = {}) {
     const { createJob, updateJob } = jobStore;
     return {
         createAcceptedJob({ operation, authContext, metadata, target }) {
@@ -360,7 +377,7 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
             if (!job) {
                 return createMissingJobResult(normalizedJobId);
             }
-            if (!canAccessJob(job, authContext)) {
+            if (!canAccessJob(job, authContext, { auditLogger })) {
                 return createForbiddenJobResult(normalizedJobId);
             }
             return {
@@ -376,7 +393,7 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
             if (!job) {
                 return createMissingJobResult(normalizedJobId);
             }
-            if (!canAccessJob(job, authContext)) {
+            if (!canAccessJob(job, authContext, { auditLogger })) {
                 return createForbiddenJobResult(normalizedJobId);
             }
             if (!CANCELLABLE_JOB_STATUSES.has(job.status)) {
@@ -429,10 +446,10 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
     };
 }
 
-function createJobRuntimeService() {
+function createJobRuntimeService({ auditLogger = null } = {}) {
     const store = new Map();
     const eventStore = [];
-    return createJobRuntimeApi(store, eventStore, createJobStoreApi(store, eventStore));
+    return createJobRuntimeApi(store, eventStore, createJobStoreApi(store, eventStore), { auditLogger });
 }
 
 module.exports = {
