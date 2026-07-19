@@ -129,6 +129,9 @@ const {
 const {
     createProtocolConfigSnapshot
 } = require('./modules/agentGateway/composition/vcpPortBindings');
+const {
+    getGatewayServiceBundle
+} = require('./modules/agentGateway/composition/createGatewayServiceBundle');
 
 const BLACKLIST_FILE = path.join(__dirname, 'ip_blacklist.json');
 const MAX_API_ERRORS = 5;
@@ -559,6 +562,10 @@ const app = express();
 app.set('trust proxy', true); // 新增：信任代理，以便正确解析 X-Forwarded-For 头，解决本地IP识别为127.0.0.1的问题
 app.use(cors({ origin: '*' })); // 启用 CORS，允许所有来源的跨域请求，方便本地文件调试
 
+// M1 修复：生产 /mcp 接线 credentialService，启用文件 credential 认证
+const mcpGatewayBundle = getGatewayServiceBundle(pluginManager);
+const gatewayCredentialService = mcpGatewayBundle.gatewayCredentialService;
+
 // `/mcp` 路由需要独立的 payload 限制与原始 JSON 解析，因此在全局 body parser 之前挂载。
 const mcpHttpServer = createMcpHttpServer({
     pluginManager,
@@ -574,7 +581,8 @@ const mcpHttpServer = createMcpHttpServer({
         const val = resolvePositiveIntegerEnvValue('VCP_MCP_HTTP_SESSION_IDLE_MS', 10 * 60 * 1000);
         console.log(`[MCP] sessionIdleMs loaded: ${val}ms (env: ${process.env.VCP_MCP_HTTP_SESSION_IDLE_MS || 'not set'})`);
         return val;
-    })()
+    })(),
+    credentialService: gatewayCredentialService
 });
 mcpHttpServer.attach(app);
 
@@ -1796,7 +1804,21 @@ async function startServer() {
             maxPayloadBytes: resolvePositiveIntegerEnvValue('VCP_MCP_WS_MAX_PAYLOAD_BYTES', 4 * 1024 * 1024),
             upgradeAuthTimeoutMs: resolvePositiveIntegerEnvValue('VCP_MCP_WS_UPGRADE_AUTH_TIMEOUT_MS', 5000),
             rateLimitMessages: resolvePositiveIntegerEnvValue('VCP_MCP_WS_RATE_LIMIT_MESSAGES', 60),
-            rateLimitWindowMs: resolvePositiveIntegerEnvValue('VCP_MCP_WS_RATE_LIMIT_WINDOW_MS', 1000)
+            rateLimitWindowMs: resolvePositiveIntegerEnvValue('VCP_MCP_WS_RATE_LIMIT_WINDOW_MS', 1000),
+            // M1 修复：统一决议入口与吊销传播
+            resolveAuth: async ({ headers }) => {
+                const credentialContext = await gatewayCredentialService.buildGatewayRequestContext({
+                    headers,
+                    clientIp: '',
+                    targetCandidates: {},
+                    requiresAgent: false,
+                    entry: 'mcp-ws'
+                });
+                return credentialContext.ok
+                    ? { provided: true, authenticated: true, gatewayId: 'vcp-gateway', roles: ['gateway_client'], credentialContext }
+                    : { provided: true, authenticated: false };
+            },
+            checkConnectionCredential: (credentialId) => gatewayCredentialService.credentialResolver.checkCredentialStatus(credentialId)
         });
         mcpWebSocketServer.attach(server);
 
