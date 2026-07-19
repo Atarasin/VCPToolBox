@@ -50,6 +50,8 @@ test('REST operations carry credentialAction except fixed adminAuth exclusions',
     for (const operation of REST_OPERATIONS) {
         if (operation.authExclusion === 'adminAuth') {
             assert.equal(operation.credentialAction, undefined);
+        } else if (operation.authMechanism === 'adminAuthBridge') {
+            assert.equal(operation.credentialAction, undefined);
         } else {
             assert.ok(CREDENTIAL_ACTIONS.includes(operation.credentialAction), operation.operationId);
         }
@@ -64,12 +66,12 @@ test('surface registry covers initialize, discovery, resource read, skill downlo
         'mcp.resources/list',
         'mcp.prompts/list',
         'mcp.resources/read',
-        'rest.integration/skill',
-        'rest.auth/admin-session'
+        'rest.integration/skill'
     ]) {
         assert.ok(surfaces.includes(required), `missing surface ${required}`);
     }
-    const bridge = SURFACE_ENTRIES.find((entry) => entry.surface === 'rest.auth/admin-session');
+    // admin session bridge 自 M1.S3 起由真实 REST binding 登记
+    const bridge = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/auth/admin-session');
     assert.equal(bridge.authMechanism, 'adminAuthBridge');
     assert.equal(bridge.credentialAction, undefined);
 });

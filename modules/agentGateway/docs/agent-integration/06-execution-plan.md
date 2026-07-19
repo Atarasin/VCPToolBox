@@ -89,14 +89,14 @@
 
 依赖：S2。
 
-- [ ] T1 `AGENT_GATEWAY_KEY` 合成内置 legacy credential(`legacy-gateway-key`,unbound,admin scope;阶段 A 保留全量权限是有意为之,§3.3)。
-- [ ] T2 共享 `adminGatewaySessionStore`:多 worker 原子共享、按 expiry 清理、无生产 store 时创建返回 503(§3.3)。
-- [ ] T3 `POST/DELETE /agent_gateway/auth/admin-session`:adminAuth 前置验证、≥256 bit CSPRNG opaque id、HttpOnly cookie、session-bound CSRF token、`AGENT_GATEWAY_ADMIN_SUBJECT_KEY` 派生 subject(§3.3)。
-- [ ] T4 Origin 部署形态二选一:主端口同源反代,或 `AGENT_GATEWAY_ADMIN_ORIGINS` allowlist + 凭据 CORS + `SameSite=Lax` + Origin/CSRF 双校验;缺配置时 503(§3.3)。
-- [ ] T5 admin-session 映射为内置 credential(`admin-session`,unbound,admin),surface 限制:仅 Native 业务入口,`/mcp` 三 transport 拒绝;pre-credential bridge 只允许 session POST(§3.3)。
-- [ ] T6 三个独立开关 `AGENT_GATEWAY_LEGACY_KEY_DISABLED` / `AGENT_GATEWAY_ADMIN_FALLBACK_DISABLED` / `AGENT_GATEWAY_LEGACY_SCOPE_NAMES_DISABLED` 与 `authMigration` 指标(§3.3、§4.4)。
-- [ ] T7 收编 `req.agentGatewayAuth` / `req.agentGatewayDedicatedAuth` 命名裂缝:统一为单一注入点,消除 `ROUTE_REGISTRARS` 注册顺序依赖。
-- [ ] T8 验收:§8「REST」(admin session 部分)「迁移」行用例。
+- [x] T1 `AGENT_GATEWAY_KEY` 合成内置 legacy credential(`legacy-gateway-key`,unbound,admin scope;阶段 A 保留全量权限是有意为之,§3.3)。
+- [x] T2 共享 `adminGatewaySessionStore`:多 worker 原子共享、按 expiry 清理、无生产 store 时创建返回 503(§3.3)。
+- [x] T3 `POST/DELETE /agent_gateway/auth/admin-session`:adminAuth 前置验证、≥256 bit CSPRNG opaque id、HttpOnly cookie、session-bound CSRF token、`AGENT_GATEWAY_ADMIN_SUBJECT_KEY` 派生 subject(§3.3)。
+- [x] T4 Origin 部署形态二选一:主端口同源反代,或 `AGENT_GATEWAY_ADMIN_ORIGINS` allowlist + 凭据 CORS + `SameSite=Lax` + Origin/CSRF 双校验;缺配置时 503(§3.3)。
+- [x] T5 admin-session 映射为内置 credential(`admin-session`,unbound,admin),surface 限制:仅 Native 业务入口,`/mcp` 三 transport 拒绝;pre-credential bridge 只允许 session POST(§3.3)。
+- [x] T6 三个独立开关 `AGENT_GATEWAY_LEGACY_KEY_DISABLED` / `AGENT_GATEWAY_ADMIN_FALLBACK_DISABLED` / `AGENT_GATEWAY_LEGACY_SCOPE_NAMES_DISABLED` 与 `authMigration` 指标(§3.3、§4.4)。
+- [x] T7 收编 `req.agentGatewayAuth` / `req.agentGatewayDedicatedAuth` 命名裂缝:统一为单一注入点,消除 `ROUTE_REGISTRARS` 注册顺序依赖。
+- [x] T8 验收:§8「REST」(admin session 部分)「迁移」行用例。
 
 ### M1.S4 Backend-proxy 凭据透传与 trusted context
 

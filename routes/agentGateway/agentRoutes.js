@@ -16,7 +16,7 @@ function registerAgentListRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'agents.list',
@@ -74,7 +74,7 @@ function registerAgentDetailRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'agents.detail',
@@ -142,7 +142,7 @@ function registerAgentRenderRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'agents.render',

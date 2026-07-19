@@ -654,6 +654,71 @@
           }
         }
       }
+    },
+    "/agent_gateway/auth/admin-session": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "创建 Gateway admin session（唯一 pre-credential bridge，需既有 adminAuth 前置验证）",
+        "operationId": "createAgentGatewayAdminSession",
+        "responses": {
+          "201": {
+            "description": "Session created; CSRF token returned once in the body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "Origin policy or session store not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "撤销 Gateway admin session（cookie + CSRF + Origin 校验）",
+        "operationId": "deleteAgentGatewayAdminSession",
+        "responses": {
+          "200": {
+            "description": "Session revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
     }
   },
   "components": {

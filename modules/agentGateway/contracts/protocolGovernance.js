@@ -30,7 +30,8 @@ const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
     '/agent_gateway/tools/{toolName}/invoke',
     '/agent_gateway/jobs/{jobId}',
     '/agent_gateway/jobs/{jobId}/cancel',
-    '/agent_gateway/events/stream'
+    '/agent_gateway/events/stream',
+    '/agent_gateway/auth/admin-session'
 ]);
 
 const AGENT_GATEWAY_HEADERS = Object.freeze({

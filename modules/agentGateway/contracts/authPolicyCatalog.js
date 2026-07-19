@@ -31,8 +31,9 @@ const SURFACE_ENTRIES = Object.freeze([
     { surface: 'mcp.prompts/get', kind: 'mcp-discovery', credentialAction: 'read' },
     { surface: 'mcp.resources/read', kind: 'mcp-resource', credentialAction: 'read' },
     { surface: 'rest.integration', kind: 'rest-integration', credentialAction: 'read' },
-    { surface: 'rest.integration/skill', kind: 'rest-integration', credentialAction: 'read' },
-    { surface: 'rest.auth/admin-session', kind: 'admin-session-bridge', authMechanism: 'adminAuthBridge' }
+    { surface: 'rest.integration/skill', kind: 'rest-integration', credentialAction: 'read' }
+    // admin session bridge 自 M1.S3 起由 restOperations.json 的
+    // createAgentGatewayAdminSession（authMechanism: adminAuthBridge）登记。
 ].map(Object.freeze));
 
 // canonical operation 在两套 binding 中的对应关系；两侧 action 必须一致。

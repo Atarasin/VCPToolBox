@@ -22,7 +22,7 @@ function registerMemoryTargetsRoute(router, context) {
                 ...requestContext,
                 agentId
             },
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -98,7 +98,7 @@ function registerMemorySearchRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.body?.maid,
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -157,7 +157,7 @@ function registerMemoryWriteRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: governedBody.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: governedBody.target?.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -221,7 +221,7 @@ function registerContextRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.body?.maid,
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -279,7 +279,7 @@ function registerRecallRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.body?.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {

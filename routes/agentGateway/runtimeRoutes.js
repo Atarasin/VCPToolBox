@@ -14,7 +14,7 @@ function registerToolRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: governedBody.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: governedBody.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -109,7 +109,7 @@ function registerJobReadRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.query.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -176,7 +176,7 @@ function registerJobCancelRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.body?.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -245,7 +245,7 @@ function registerEventsRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.query.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {

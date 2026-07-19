@@ -2,42 +2,8 @@
 
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
 
-function registerAuthMiddleware(router, context) {
-    const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
-        jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
-        operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
-    router.use((req, res, next) => {
-        const dedicatedAuth = req.agentGatewayAuth || resolveDedicatedGatewayAuth({
-            headers: req.headers,
-            config: protocolConfig
-        });
-
-        req.agentGatewayDedicatedAuth = dedicatedAuth;
-
-        if (dedicatedAuth.provided && !dedicatedAuth.authenticated) {
-            const requestContext = createNativeRequestContext(
-                req,
-                req.body?.requestContext || req.query,
-                'agent-gateway-auth'
-            );
-
-            return sendNativeError(res, {
-                status: 401,
-                requestId: requestContext.requestId,
-                startedAt: Date.now(),
-                code: AGW_ERROR_CODES.UNAUTHORIZED,
-                error: 'Invalid agent gateway credentials',
-                details: {
-                    authSource: dedicatedAuth.authSource
-                },
-                extraHeaders: { [AGENT_GATEWAY_HEADERS.TRACE_ID]: requestContext.traceId },
-                extraMeta: buildNativeResponseMeta(dedicatedAuth, { traceId: requestContext.traceId })
-            });
-        }
-
-        return next();
-    });
-}
+// 认证注入已收编到 routes/agentGateway/authInjection.js 的单一注入点，
+// 由 createAgentGatewayRoutes 在所有 registrar 之前显式挂载（M1.S3.T7）。
 
 function registerHealthRoute(router, context) {
     const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
@@ -53,7 +19,7 @@ function registerHealthRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'health.read',
@@ -114,7 +80,7 @@ function registerCapabilitiesRoute(router, context) {
                 ...requestContext,
                 agentId
             },
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid
         });
         const includeMemoryTargets = parseNativeBoolean(req.query.includeMemoryTargets, true);
@@ -195,7 +161,7 @@ function registerMetricsRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'metrics.read',
@@ -246,4 +212,4 @@ function registerMetricsRoute(router, context) {
     });
 }
 
-module.exports = { registerAuthMiddleware, registerHealthRoute, registerCapabilitiesRoute, registerMetricsRoute };
+module.exports = { registerHealthRoute, registerCapabilitiesRoute, registerMetricsRoute };
