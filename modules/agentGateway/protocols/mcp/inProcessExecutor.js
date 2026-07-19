@@ -50,6 +50,7 @@ const {
     isTrustedCredentialContext,
     sanitizeUntrustedAuthContext
 } = require('../../policy/trustedCredentialContext');
+const { ACTION_SCOPES } = require('../../contracts/authPolicyCatalog');
 const { createReadResourceHandler } = require('./resourceHandlers');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -597,6 +598,23 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             field: 'name',
             name
         });
+    }
+    // §3.5 两层授权（M1.S2.T3）：trusted context 携带 resolver 产出的
+    // scopes 时按 catalog credentialAction 检查；scope 不足统一 FORBIDDEN。
+    // 未携带（阶段 A admin_transition）与 authenticated 动作跳过凭据层。
+    const credentialAction = operation.credentialAction;
+    if (credentialAction && credentialAction !== 'authenticated'
+        && isTrustedCredentialContext(input.authContext)
+        && Array.isArray(input.authContext.scopes)) {
+        const requiredScopes = ACTION_SCOPES[credentialAction] || [];
+        const granted = input.authContext.scopes.some((scope) => requiredScopes.includes(scope));
+        if (!granted) {
+            throw createMcpError(MCP_ERROR_CODES.FORBIDDEN, `Credential lacks scope for "${credentialAction}"`, {
+                field: 'credentialAction',
+                name,
+                credentialAction
+            });
+        }
     }
     const validationErrors = validateGatewayToolArguments(name, {
         ...args,

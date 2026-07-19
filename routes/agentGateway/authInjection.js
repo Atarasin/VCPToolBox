@@ -9,6 +9,7 @@ const {
     buildNativeResponseMeta
 } = require('./shared');
 const { ADMIN_SESSION_COOKIE, CSRF_HEADER, parseCookies } = require('./authSessionRoutes');
+const { resolveRestCredentialAction } = require('../../modules/agentGateway/policy/restCredentialActions');
 
 /**
  * 单一认证注入点（§3.3 / M1.S3.T7 / M1.S5）。
@@ -100,6 +101,22 @@ function createAuthInjectionMiddleware(context) {
                 return sendAuthError(status, credentialContext.code, 'Agent gateway authentication failed', {
                     ...(credentialContext.retryAfterMs ? { retryAfterMs: credentialContext.retryAfterMs } : {})
                 });
+            }
+            // §3.5 两层授权（M1.S2.T3）：按 canonical REST catalog 决议
+            // credentialAction，凭据层 scope 不足统一 AGW_FORBIDDEN。
+            // agent 策略层（allowed agents/diaries）继续由 service 层执行。
+            const operationAuth = resolveRestCredentialAction(req.method, req.path);
+            if (operationAuth.matched && operationAuth.credentialAction && !operationAuth.authExclusion) {
+                const authorization = gatewayCredentialService.authorizeTarget(credentialContext, {
+                    credentialAction: operationAuth.credentialAction
+                });
+                if (!authorization.ok) {
+                    return sendAuthError(authorization.httpStatus || 403, authorization.code,
+                        'Credential lacks required scope for this operation', {
+                            operationId: operationAuth.operationId,
+                            credentialAction: operationAuth.credentialAction
+                        });
+                }
             }
             unifiedAuth.credentialContext = credentialContext;
             unifiedAuth.authenticated = true;
