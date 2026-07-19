@@ -29,6 +29,12 @@ const TERMINAL_JOB_STATUSES = new Set([
     JOB_STATUS.CANCELLED
 ]);
 
+const {
+    SESSION_STATES,
+    applyAdoption,
+    authorizeIndirectAccess
+} = require('../policy/indirectObjectOwnership');
+
 function normalizeJobRuntimeString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -41,7 +47,7 @@ function createJobId() {
 }
 
 function buildAuthSnapshot(authContext) {
-    return {
+    const snapshot = {
         requestId: normalizeJobRuntimeString(authContext?.requestId),
         sessionId: normalizeJobRuntimeString(authContext?.sessionId),
         agentId: normalizeJobRuntimeString(authContext?.agentId),
@@ -50,6 +56,39 @@ function buildAuthSnapshot(authContext) {
         gatewayId: normalizeJobRuntimeString(authContext?.gatewayId),
         authMode: normalizeJobRuntimeString(authContext?.authMode),
         authSource: normalizeJobRuntimeString(authContext?.authSource)
+    };
+    // §3.4 / M1.S6.T1：创建时固化服务端 owner snapshot（不信任调用方声明）。
+    const credentialSubject = normalizeJobRuntimeString(authContext?.credentialSubject);
+    if (credentialSubject) {
+        snapshot.owner = {
+            credentialSubject,
+            credentialId: normalizeJobRuntimeString(authContext?.credentialId),
+            credentialRevision: normalizeJobRuntimeString(authContext?.credentialRevision),
+            effectiveAgentId: normalizeJobRuntimeString(authContext?.effectiveAgentId || authContext?.agentId) || null,
+            trustedSessionId: normalizeJobRuntimeString(authContext?.trustedSessionId) || null,
+            credentialRecord: authContext?.credentialRecord && typeof authContext.credentialRecord === 'object'
+                ? { ...authContext.credentialRecord }
+                : null
+        };
+    }
+    return snapshot;
+}
+
+function buildRequesterContextFromAuth(authContext) {
+    const credentialSubject = normalizeJobRuntimeString(authContext?.credentialSubject);
+    if (!credentialSubject) {
+        return null;
+    }
+    const record = authContext?.credentialRecord && typeof authContext.credentialRecord === 'object'
+        ? authContext.credentialRecord
+        : null;
+    return {
+        ok: true,
+        credentialSubject,
+        credentialId: normalizeJobRuntimeString(authContext?.credentialId),
+        credentialRevision: normalizeJobRuntimeString(authContext?.credentialRevision),
+        credential: record,
+        isAdmin: Array.isArray(record?.scopes) && record.scopes.includes('admin')
     };
 }
 
@@ -102,6 +141,31 @@ function cloneJob(job) {
 function canAccessJob(job, authContext) {
     if (!authContext || typeof authContext !== 'object') {
         return true;
+    }
+
+    const owner = job?.authContext?.owner;
+    const requesterContext = buildRequesterContextFromAuth(authContext);
+    if (owner && requesterContext) {
+        const decision = authorizeIndirectAccess({
+            owner,
+            requesterContext,
+            requesterSessionId: normalizeJobRuntimeString(authContext.trustedSessionId) || null,
+            ownerSessionState: authContext.ownerSessionState || SESSION_STATES.UNKNOWN
+        });
+        if (decision.allowed && decision.adoption) {
+            // 首次收养：原子替换 owner 的 trustedSessionId 并留下审计标记
+            job.authContext.owner = { ...applyAdoption(owner, decision.adoption) };
+            job.authContext.adoptionAudit = {
+                previousTrustedSessionId: decision.adoption.previousTrustedSessionId,
+                newTrustedSessionId: decision.adoption.newTrustedSessionId,
+                at: new Date().toISOString()
+            };
+        }
+        return decision.allowed;
+    }
+    if (owner && !requesterContext) {
+        // 有 owner 的对象不接受无凭据身份的访问
+        return false;
     }
 
     const requestedAgentId = normalizeJobRuntimeString(authContext.agentId);

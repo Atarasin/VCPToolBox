@@ -290,13 +290,35 @@ function buildNativeAuthContext({
     dedicatedAuth,
     maid
 }) {
+    // M1.S6：统一决议产生的 credential 身份随 authContext 下沉，
+    // 供 job/event owner snapshot 固化（§3.4）。客户端无法伪造——
+    // credentialContext 只由 authInjection 中间件写入。
+    const credentialContext = dedicatedAuth?.credentialContext;
+    const credentialIdentity = credentialContext?.ok ? {
+        credentialId: credentialContext.credentialId,
+        credentialSubject: credentialContext.credentialSubject,
+        credentialRevision: credentialContext.credentialRevision,
+        effectiveAgentId: credentialContext.effectiveAgentId,
+        trustedSessionId: credentialContext.credential?.trustedSessionId || null,
+        credentialRecord: credentialContext.credential ? {
+            credentialId: credentialContext.credential.credentialId,
+            credentialSubject: credentialContext.credentialSubject,
+            tokenDigest: credentialContext.credential.tokenDigest || null,
+            boundAgentId: credentialContext.credential.boundAgentId || null,
+            allowedAgents: credentialContext.credential.allowedAgents,
+            scopes: credentialContext.credential.scopes,
+            status: credentialContext.credential.status,
+            expiresAt: credentialContext.credential.expiresAt || null
+        } : null
+    } : {};
     return authContextResolver({
         authContext: {
             ...(providedAuthContext && typeof providedAuthContext === 'object' ? providedAuthContext : {}),
             authMode: dedicatedAuth?.authMode,
             authSource: dedicatedAuth?.authSource,
             gatewayId: dedicatedAuth?.gatewayId,
-            roles: dedicatedAuth?.roles
+            roles: dedicatedAuth?.roles,
+            ...credentialIdentity
         },
         requestContext,
         agentId: requestContext.agentId,

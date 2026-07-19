@@ -96,6 +96,16 @@ function resolveAuthContext(input = {}, options = {}) {
         providedAuthContext.roles || input.roles || options.roles || defaultRoles
     );
 
+    // M1.S6：服务端注入的 credential 身份字段透传（由 authInjection/transport
+    // 组装根写入 providedAuthContext；客户端 body 中的同名字段在统一决议入口
+    // 已被丢弃，见 gatewayRequestContext）。
+    const credentialIdentity = {};
+    for (const field of ['credentialId', 'credentialSubject', 'credentialRevision', 'effectiveAgentId', 'trustedSessionId', 'credentialRecord', 'ownerSessionState']) {
+        if (providedAuthContext[field] !== undefined) {
+            credentialIdentity[field] = providedAuthContext[field];
+        }
+    }
+
     return {
         requestId,
         sessionId,
@@ -107,6 +117,7 @@ function resolveAuthContext(input = {}, options = {}) {
         authMode,
         authSource,
         roles,
+        ...credentialIdentity,
         isTransitionalAuth: authMode === AGENT_GATEWAY_AUTH_MODES.ADMIN_TRANSITION,
         isDedicatedGatewayAuth: authMode === AGENT_GATEWAY_AUTH_MODES.GATEWAY_KEY,
         gatewayIdentity: {

@@ -124,14 +124,14 @@
 
 依赖：S1、S2。
 
-- [ ] T1 job/event owner snapshot 固化:`{ credentialSubject, credentialId, credentialRevision, effectiveAgentId, trustedSessionId }`;所有 poll/cancel/resource/SSE 入口先 lookup owner 再授权(§3.4)。
-- [ ] T2 owner revision compatibility:仅同 token digest 的 `active -> rotating` 可继承;credentialId 重用/新 token 拒绝(§3.4)。
-- [ ] T3 trusted session 两情形校验与**收养**:session 存活不匹配 → 403;正常终止 → 同 subject + revision 兼容原子收养 + adoption 审计;吊销销毁不适用收养(§3.4)。
-- [ ] T4 HTTP session 所有权升级:从 gatewayId 比较改为 credential snapshot + 每请求 `isSessionCredentialCompatible()`(§3.6)。
-- [ ] T5 WS 吊销传播:逐消息校验 + 空闲连接 30s 周期重校验,`close(4401)`/`close(1013)`,≤60s 承诺(§3.6)。
-- [ ] T6 Native SSE 吊销传播:每事件写出前校验 + 空闲流 30s 周期重校验,≤60s 终止(§3.6)。
-- [ ] T7 security snapshot 不可用时的分域拒绝:HTTP 503、WS `close(1013)`、stdio `MCP_SERVICE_UNAVAILABLE`(§3.6)。
-- [ ] T8 验收:§8「session/job」行用例(含收养正反例)与「REST」行 SSE 用例。
+- [x] T1 job/event owner snapshot 固化:`{ credentialSubject, credentialId, credentialRevision, effectiveAgentId, trustedSessionId }`;所有 poll/cancel/resource/SSE 入口先 lookup owner 再授权(§3.4)。
+- [x] T2 owner revision compatibility:仅同 token digest 的 `active -> rotating` 可继承;credentialId 重用/新 token 拒绝(§3.4)。
+- [x] T3 trusted session 两情形校验与**收养**:session 存活不匹配 → 403;正常终止 → 同 subject + revision 兼容原子收养 + adoption 审计;吊销销毁不适用收养(§3.4)。
+- [x] T4 HTTP session 所有权升级:从 gatewayId 比较改为 credential snapshot + 每请求 `isSessionCredentialCompatible()`(§3.6)。
+- [x] T5 WS 吊销传播:逐消息校验 + 空闲连接 30s 周期重校验,`close(4401)`/`close(1013)`,≤60s 承诺(§3.6)。
+- [x] T6 Native SSE 吊销传播:每事件写出前校验 + 空闲流 30s 周期重校验,≤60s 终止(§3.6)。
+- [x] T7 security snapshot 不可用时的分域拒绝:HTTP 503、WS `close(1013)`、stdio `MCP_SERVICE_UNAVAILABLE`(§3.6)。
+- [x] T8 验收:§8「session/job」行用例(含收养正反例)与「REST」行 SSE 用例。
 
 ### M1 里程碑门禁
 
