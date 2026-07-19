@@ -1,6 +1,7 @@
  'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const { once } = require('node:events');
@@ -629,6 +630,104 @@ test('streamable HTTP DELETE /mcp terminates the session and invalidates follow-
 
         assert.equal(followUp.status, 404);
         assert.equal(followUp.body.error.data.reason, 'unknown_session');
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP resurrects an idle-expired session transparently', async () => {
+    const fixture = await createFixture({ sessionIdleMs: 50 });
+
+    try {
+        const initialize = await postJson(`${fixture.baseUrl}/mcp`, createInitializePayload(1), {
+            headers: createGatewayAuthHeaders()
+        });
+        const sessionId = initialize.headers['mcp-session-id'];
+
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        assert.equal(fixture.httpManager.getStandardSessionCount(), 0);
+
+        const followUp = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/call',
+            params: { name: 'gateway_memory_write', arguments: {} }
+        }, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'MCP-Session-Id': sessionId
+            }
+        });
+
+        assert.equal(followUp.status, 200);
+        assert.equal(followUp.body.result.method, 'tools/call');
+        assert.equal(followUp.headers['mcp-session-id'], sessionId);
+        assert.equal(fixture.httpManager.getStandardSessionCount(), 1);
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP resurrects a well-formed session id lost to a gateway restart', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const lostSessionId = `mcphttp_${crypto.randomUUID()}`;
+        const response = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'gateway_memory_search', arguments: { query: 'x' } }
+        }, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'MCP-Session-Id': lostSessionId
+            }
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal(response.body.result.method, 'tools/call');
+        assert.equal(response.headers['mcp-session-id'], lostSessionId);
+    } finally {
+        await fixture.close();
+    }
+}, INTEGRATION_TEST_TIMEOUT_MS);
+
+test('streamable HTTP refuses to resurrect malformed or explicitly terminated session ids', async () => {
+    const fixture = await createFixture();
+
+    try {
+        const malformed = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'ping'
+        }, {
+            headers: {
+                ...createGatewayAuthHeaders(),
+                'MCP-Session-Id': 'not-a-gateway-session-id'
+            }
+        });
+        assert.equal(malformed.status, 404);
+        assert.equal(malformed.body.error.data.reason, 'unknown_session');
+
+        const initialize = await postJson(`${fixture.baseUrl}/mcp`, createInitializePayload(2), {
+            headers: createGatewayAuthHeaders()
+        });
+        const sessionId = initialize.headers['mcp-session-id'];
+        const deleted = await deleteRequest(`${fixture.baseUrl}/mcp`, {
+            headers: { ...createGatewayAuthHeaders(), 'MCP-Session-Id': sessionId }
+        });
+        assert.equal(deleted.status, 204);
+
+        const afterDelete = await postJson(`${fixture.baseUrl}/mcp`, {
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'ping'
+        }, {
+            headers: { ...createGatewayAuthHeaders(), 'MCP-Session-Id': sessionId }
+        });
+        assert.equal(afterDelete.status, 404);
+        assert.equal(afterDelete.body.error.data.reason, 'unknown_session');
     } finally {
         await fixture.close();
     }

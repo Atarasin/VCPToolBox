@@ -23,6 +23,11 @@ function hasOwn(object, key) {
     return Object.prototype.hasOwnProperty.call(object, key);
 }
 
+// Matches ids minted by createSessionContext: `${sanitizedPrefix}_${crypto.randomUUID()}`.
+// Resurrection only accepts this shape so clients cannot pin arbitrary session ids.
+const RESURRECTABLE_SESSION_ID_PATTERN =
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 function isSuccessfulInitializeResponse(response) {
     return Boolean(response && typeof response === 'object' && !response.error &&
         response.result && typeof response.result === 'object');
@@ -93,12 +98,24 @@ class HttpServerRuntime {
 
     createSession(auth, profile = {}) {
         const context = this.createSessionContext(auth, this.options, profile);
+        if (profile.sessionId) context.sessionId = profile.sessionId;
         const session = { cleanedUp: false, kind: profile.kind === 'discovery' ? 'discovery' : 'standard',
             context, createdAt: Date.now(), lastActivityAt: Date.now(),
             rateLimit: createSlidingWindowRateLimit({ limit: this.rateLimitMessages,
                 windowMs: this.rateLimitWindowMs }), inflightControllers: new Set(),
             activeStream: null, streamQueue: Promise.resolve(), idleTimer: null };
         return session.kind === 'discovery' ? session : this.sessionStore.add(session);
+    }
+
+    // Transparently rebuild a session whose id was lost to idle expiry, LRU eviction, or a
+    // gateway restart. Auth is verified per request, and explicitly terminated sessions stay
+    // dead via the store's tombstones, so this never widens access — it only removes the
+    // client-visible "unknown_session" failure on long-running tasks.
+    resurrectSession(providedId, auth, profile = {}) {
+        if (!RESURRECTABLE_SESSION_ID_PATTERN.test(providedId)) return null;
+        if (this.sessionStore.isTerminated(providedId)) return null;
+        if (this.sessionStore.standardSize >= this.maxSessions) return null;
+        return this.createSession(auth, { ...profile, sessionId: providedId });
     }
 
     async createDiscoverySession(auth, profile = {}) {
@@ -255,6 +272,10 @@ class HttpServerRuntime {
             return;
         }
         let session = this.sessionStore.find(providedId);
+        if (!session) {
+            session = this.resurrectSession(providedId, auth.auth,
+                { source: this.defaultSource, runtime: this.defaultRuntime });
+        }
         const ownershipError = this.ensureSessionOwnership(session, auth.auth, requestId);
         if (ownershipError) {
             if (!session && isDiscovery) {
@@ -276,7 +297,9 @@ class HttpServerRuntime {
             if (requestAcceptsEventStream(req)) return writeEmptyResponse(res, 405, { Allow: 'POST, GET, DELETE' });
             return writeJsonRpcResponse(res, 400, createSessionErrorResponse(null, 'missing_session_header'));
         }
-        const session = this.sessionStore.find(providedId);
+        const session = this.sessionStore.find(providedId)
+            || this.resurrectSession(providedId, auth.auth,
+                { source: this.defaultSource, runtime: this.defaultRuntime });
         const error = this.ensureSessionOwnership(session, auth.auth);
         if (error) return writeJsonRpcResponse(res, session ? 403 : 404, error);
         this.sseStreams.open(req, res, session, { touch: this.sessionStore.touch });
