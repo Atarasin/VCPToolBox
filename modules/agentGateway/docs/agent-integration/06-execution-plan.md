@@ -65,13 +65,13 @@
 
 依赖：M0.S1、M0.S3。
 
-- [ ] T1 content-hash credential resolver：每次授权读取对 credential 文件与 pepper keyring 原始字节计算 SHA-256,两者均相同才复用解析快照(§3.6)。
-- [ ] T2 热路径实现约束：异步 I/O(禁止请求路径 `readFileSync`)、in-flight 读取合并(promise coalescing,无时间窗缓存)(§3.6)。
-- [ ] T3 HMAC-SHA256 digest 匹配:presented token 长度上限、恒时比较、命中且仅命中一条记录、跨 kid 重复 token 认证时拒绝(§4.4)。
-- [ ] T4 credential 生成/轮换 CLI:CSPRNG ≥256 bit token、`AGENT_GATEWAY_CREDENTIAL_ACTIVE_PEPPER_KID` 仅供 CLI 选 kid(§4.4)。
-- [ ] T5 状态机 `active/rotating/revoked/expired` 与 credentialId 唯一性、tombstone(进程内尽早报错,正式防继承由 owner revision 承担,§4.4)。
-- [ ] T6 阶段 A 特例:`AGENT_GATEWAY_CREDENTIALS_PATH` 未设置 → 有效空 snapshot + migration warning;已设置但不可读 → fail-closed(§4.4)。
-- [ ] T7 验收:§8「credential」行全部用例 + 热路径基准(p99 附加延迟 < 5ms)。
+- [x] T1 content-hash credential resolver：每次授权读取对 credential 文件与 pepper keyring 原始字节计算 SHA-256,两者均相同才复用解析快照(§3.6)。
+- [x] T2 热路径实现约束：异步 I/O(禁止请求路径 `readFileSync`)、in-flight 读取合并(promise coalescing,无时间窗缓存)(§3.6)。
+- [x] T3 HMAC-SHA256 digest 匹配:presented token 长度上限、恒时比较、命中且仅命中一条记录、跨 kid 重复 token 认证时拒绝(§4.4)。
+- [x] T4 credential 生成/轮换 CLI:CSPRNG ≥256 bit token、`AGENT_GATEWAY_CREDENTIAL_ACTIVE_PEPPER_KID` 仅供 CLI 选 kid(§4.4)。
+- [x] T5 状态机 `active/rotating/revoked/expired` 与 credentialId 唯一性、tombstone(进程内尽早报错,正式防继承由 owner revision 承担,§4.4)。
+- [x] T6 阶段 A 特例:`AGENT_GATEWAY_CREDENTIALS_PATH` 未设置 → 有效空 snapshot + migration warning;已设置但不可读 → fail-closed(§4.4)。
+- [x] T7 验收:§8「credential」行全部用例 + 热路径基准(p99 附加延迟 < 5ms)。
 
 ### M1.S2 统一决议入口与错误映射
 
