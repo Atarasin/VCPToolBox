@@ -92,9 +92,6 @@ function validateAgentEntry(entry, fieldPath, errors) {
     if (memoryDefaults !== undefined) {
         normalized.memoryDefaults = memoryDefaults;
     }
-    if (entry.workflow !== undefined) {
-        normalized.workflow = validateStringArrayField(entry.workflow, `${fieldPath}.workflow`, errors);
-    }
     return normalized;
 }
 

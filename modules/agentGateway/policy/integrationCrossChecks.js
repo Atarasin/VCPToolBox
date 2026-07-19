@@ -53,7 +53,34 @@ function crossValidateMemoryPolicyDiaries({ agentId, allowedDiaries, defaultDiar
     return errors;
 }
 
+function crossValidateCredentialAgents(credentialConfig, directoryAgentIds) {
+    const errors = [];
+    const knownAgents = new Set(normalizeStringArray(directoryAgentIds));
+    const credentials = Array.isArray(credentialConfig?.credentials) ? credentialConfig.credentials : [];
+    credentials.forEach((record, index) => {
+        const boundAgentId = normalizeString(record?.boundAgentId);
+        if (boundAgentId && !knownAgents.has(boundAgentId)) {
+            errors.push({
+                path: `$.credentials[${index}].boundAgentId`,
+                message: `unknown agent "${boundAgentId}" (not present in agent directory)`
+            });
+        }
+        if (Array.isArray(record?.allowedAgents)) {
+            normalizeStringArray(record.allowedAgents).forEach((agentId) => {
+                if (!knownAgents.has(agentId)) {
+                    errors.push({
+                        path: `$.credentials[${index}].allowedAgents`,
+                        message: `unknown agent "${agentId}" (not present in agent directory)`
+                    });
+                }
+            });
+        }
+    });
+    return errors;
+}
+
 module.exports = {
+    crossValidateCredentialAgents,
     crossValidateCredentialPepperKids,
     crossValidateGuidanceAgents,
     crossValidateMemoryPolicyDiaries

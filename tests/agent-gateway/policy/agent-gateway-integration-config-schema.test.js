@@ -14,6 +14,7 @@ const {
     validatePepperKeyringConfig
 } = require('../../../modules/agentGateway/policy/credentialConfigSchema');
 const {
+    crossValidateCredentialAgents,
     crossValidateCredentialPepperKids,
     crossValidateGuidanceAgents,
     crossValidateMemoryPolicyDiaries
@@ -205,6 +206,23 @@ test('cross check flags guidance entries for unknown agents', () => {
     const errors = crossValidateGuidanceAgents(guidance, ['SomeoneElse']);
     assert.equal(errors.length, 1);
     assert.match(errors[0].message, /unknown agent "MCPMidas"/);
+});
+
+test('cross check flags credentials referencing unknown agents', () => {
+    assert.deepEqual(
+        crossValidateCredentialAgents(validCredentialConfig(), ['MCPMidas']),
+        []
+    );
+    const boundErrors = crossValidateCredentialAgents(validCredentialConfig(), ['SomeoneElse']);
+    assert.equal(boundErrors.length, 1);
+    assert.match(boundErrors[0].message, /unknown agent "MCPMidas"/);
+
+    const unboundConfig = validCredentialConfig();
+    unboundConfig.credentials[0].boundAgentId = null;
+    unboundConfig.credentials[0].allowedAgents = ['Nexus', 'Ghost'];
+    const allowedErrors = crossValidateCredentialAgents(unboundConfig, ['Nexus']);
+    assert.equal(allowedErrors.length, 1);
+    assert.match(allowedErrors[0].message, /unknown agent "Ghost"/);
 });
 
 test('cross check flags default diaries outside allowed diaries', () => {

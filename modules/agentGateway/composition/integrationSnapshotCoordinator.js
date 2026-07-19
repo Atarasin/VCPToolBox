@@ -7,6 +7,7 @@ const {
     parsePepperKeyringConfig
 } = require('../policy/credentialConfigSchema');
 const {
+    crossValidateCredentialAgents,
     crossValidateCredentialPepperKids,
     crossValidateGuidanceAgents,
     crossValidateMemoryPolicyDiaries
@@ -97,7 +98,11 @@ function createIntegrationSnapshotCoordinator({
      */
     async function refreshIntegrationSnapshot() {
         const candidate = await readFileCandidate(guidanceConfigPath);
-        const failure = { domain: 'guidance', at: new Date().toISOString() };
+        const failure = {
+            domain: 'guidance',
+            at: new Date().toISOString(),
+            currentRevision: state.lastGoodIntegrationRevision
+        };
 
         if (!candidate.present || candidate.error || candidate.bytes === null) {
             failure.reason = candidate.present ? `unreadable: ${candidate.error?.message}` : 'path not configured';
@@ -183,6 +188,8 @@ function createIntegrationSnapshotCoordinator({
         const credentialCandidate = await readFileCandidate(credentialsPath);
         const keyringCandidate = await readFileCandidate(pepperKeyringPath);
 
+        const catalogHash = `sha256:${sha256Hex(Buffer.from(JSON.stringify(catalogResult.catalog.entries), 'utf8'))}`;
+
         // 阶段 A 特例（§4.4）：legacy 启用且未设置 path → 有效空 snapshot + migration warning。
         if (!credentialCandidate.present) {
             if (!legacyCredentialEnabled) {
@@ -192,8 +199,8 @@ function createIntegrationSnapshotCoordinator({
                 return buildSecurityStatus();
             }
             logger.warn?.('[integrationSnapshotCoordinator] AGENT_GATEWAY_CREDENTIALS_PATH not set; publishing empty credential snapshot (migration phase A)');
-            const contentHashes = { credentials: 'sha256:empty', pepperKeyring: 'sha256:empty' };
-            const revision = computeSnapshotRevision({ ...contentHashes, catalog: 'builtin' });
+            const contentHashes = { credentials: null, pepperKeyring: null };
+            const revision = computeSnapshotRevision({ ...contentHashes, catalog: catalogHash });
             state.securitySnapshot = Object.freeze({
                 revision,
                 contentHashes: Object.freeze(contentHashes),
@@ -243,8 +250,16 @@ function createIntegrationSnapshotCoordinator({
             }
         }
 
-        if (credentialParsed?.valid && keyringParsed?.valid) {
-            const crossErrors = crossValidateCredentialPepperKids(credentialParsed.config, keyringParsed.config);
+        if (credentialParsed?.valid) {
+            const crossErrors = [];
+            if (keyringParsed?.valid) {
+                crossErrors.push(...crossValidateCredentialPepperKids(credentialParsed.config, keyringParsed.config));
+            }
+            // §4.3 第 3-4 条：credential 引用未知/未发布 agent 时对应安全域不可用。
+            const directoryAgentIds = (listAgents() || [])
+                .map((entry) => normalizeString(entry?.alias))
+                .filter(Boolean);
+            crossErrors.push(...crossValidateCredentialAgents(credentialParsed.config, directoryAgentIds));
             if (crossErrors.length > 0) {
                 failure.fields.credentialFile = { reason: 'cross-reference validation failed', errors: crossErrors };
             }
@@ -258,9 +273,9 @@ function createIntegrationSnapshotCoordinator({
 
         const contentHashes = {
             credentials: credentialCandidate.contentHash,
-            pepperKeyring: keyringCandidate.present ? keyringCandidate.contentHash : 'sha256:empty'
+            pepperKeyring: keyringCandidate.present ? keyringCandidate.contentHash : null
         };
-        const revision = computeSnapshotRevision({ ...contentHashes, catalog: 'builtin' });
+        const revision = computeSnapshotRevision({ ...contentHashes, catalog: catalogHash });
         state.securitySnapshot = Object.freeze({
             revision,
             contentHashes: Object.freeze(contentHashes),

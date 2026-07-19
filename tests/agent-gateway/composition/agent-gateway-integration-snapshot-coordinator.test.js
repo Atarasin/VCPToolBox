@@ -164,6 +164,46 @@ test('cross-reference errors reject the candidate: unknown pepperKid fail-closed
     assert.equal(coordinatorB.getIntegrationStatus().available, false);
 });
 
+test('credential bound to an agent missing from the directory fails the security domain closed', async () => {
+    const paths = await makeFixture();
+    const coordinator = makeCoordinator(paths, {
+        listAgents: () => [{ alias: 'SomeoneElse', sourceFile: 'SomeoneElse.txt' }]
+    });
+    await coordinator.refreshSecuritySnapshot();
+    const status = coordinator.getSecurityStatus();
+    assert.equal(status.available, false);
+    assert.ok(JSON.stringify(status.failure).includes('unknown agent'));
+});
+
+test('guidance hot-reload failure records the current effective revision', async () => {
+    const paths = await makeFixture();
+    const coordinator = makeCoordinator(paths);
+    await coordinator.refreshAll();
+    const goodRevision = coordinator.getIntegrationStatus().snapshot.revision;
+
+    await fs.writeFile(paths.guidance, '{ broken');
+    await coordinator.refreshIntegrationSnapshot();
+    assert.equal(coordinator.getIntegrationStatus().failure.currentRevision, goodRevision);
+});
+
+test('auth policy catalog content participates in the security revision', async () => {
+    const paths = await makeFixture();
+    const coordinatorA = makeCoordinator(paths);
+    await coordinatorA.refreshAll();
+
+    const { buildAuthPolicyCatalog } = require('../../../modules/agentGateway/contracts/authPolicyCatalog');
+    const altCatalog = buildAuthPolicyCatalog({
+        surfaceEntries: [{ surface: 'mcp.initialize', kind: 'mcp-protocol', credentialAction: 'authenticated' }]
+    });
+    const coordinatorB = makeCoordinator(paths, { buildCatalog: () => altCatalog });
+    await coordinatorB.refreshAll();
+
+    assert.notEqual(
+        coordinatorA.getSecurityStatus().snapshot.revision,
+        coordinatorB.getSecurityStatus().snapshot.revision
+    );
+});
+
 test('default diary outside allowed diaries rejects the guidance candidate', async () => {
     const paths = await makeFixture();
     const coordinator = makeCoordinator(paths, {
