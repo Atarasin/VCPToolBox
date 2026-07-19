@@ -1,6 +1,7 @@
 'use strict';
 
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
+const { computeVisibleAgents } = require('../../modules/agentGateway/policy/discoverySnapshot');
 
 function registerAgentListRoute(router, context) {
     const { protocolConfig, authContextResolver, capabilityService, agentRegistryService,
@@ -16,7 +17,7 @@ function registerAgentListRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'agents.list',
@@ -36,11 +37,23 @@ function registerAgentListRoute(router, context) {
 
         try {
             const agents = await agentRegistryService.listAgents();
+            // §3.4 / M1.S5.T5：/agents 只返回 credential 可见集合，不返回全 registry。
+            // 阶段 A 过渡（无 credential 呈现的 admin_transition）按 admin 全量可见。
+            const credentialContext = req.agentGatewayAuth?.credentialContext;
+            const visibleAgents = credentialContext?.ok
+                ? new Set(computeVisibleAgents(
+                    credentialContext.credential,
+                    agents.map((agent) => agent.agentId || agent.alias)
+                ))
+                : null;
+            const filteredAgents = visibleAgents
+                ? agents.filter((agent) => visibleAgents.has(agent.agentId || agent.alias))
+                : agents;
             return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
                 data: {
-                    agents
+                    agents: filteredAgents
                 },
                 authContext,
                 operationControl
@@ -74,7 +87,7 @@ function registerAgentDetailRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'agents.detail',
@@ -142,7 +155,7 @@ function registerAgentRenderRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth
+            dedicatedAuth: req.agentGatewayAuth
         });
         const operationControl = beginNativeOperation(operabilityService, {
             operationName: 'agents.render',

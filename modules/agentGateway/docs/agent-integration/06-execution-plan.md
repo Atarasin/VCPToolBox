@@ -65,73 +65,73 @@
 
 依赖：M0.S1、M0.S3。
 
-- [ ] T1 content-hash credential resolver：每次授权读取对 credential 文件与 pepper keyring 原始字节计算 SHA-256,两者均相同才复用解析快照(§3.6)。
-- [ ] T2 热路径实现约束：异步 I/O(禁止请求路径 `readFileSync`)、in-flight 读取合并(promise coalescing,无时间窗缓存)(§3.6)。
-- [ ] T3 HMAC-SHA256 digest 匹配:presented token 长度上限、恒时比较、命中且仅命中一条记录、跨 kid 重复 token 认证时拒绝(§4.4)。
-- [ ] T4 credential 生成/轮换 CLI:CSPRNG ≥256 bit token、`AGENT_GATEWAY_CREDENTIAL_ACTIVE_PEPPER_KID` 仅供 CLI 选 kid(§4.4)。
-- [ ] T5 状态机 `active/rotating/revoked/expired` 与 credentialId 唯一性、tombstone(进程内尽早报错,正式防继承由 owner revision 承担,§4.4)。
-- [ ] T6 阶段 A 特例:`AGENT_GATEWAY_CREDENTIALS_PATH` 未设置 → 有效空 snapshot + migration warning;已设置但不可读 → fail-closed(§4.4)。
-- [ ] T7 验收:§8「credential」行全部用例 + 热路径基准(p99 附加延迟 < 5ms)。
+- [x] T1 content-hash credential resolver：每次授权读取对 credential 文件与 pepper keyring 原始字节计算 SHA-256,两者均相同才复用解析快照(§3.6)。
+- [x] T2 热路径实现约束：异步 I/O(禁止请求路径 `readFileSync`)、in-flight 读取合并(promise coalescing,无时间窗缓存)(§3.6)。
+- [x] T3 HMAC-SHA256 digest 匹配:presented token 长度上限、恒时比较、命中且仅命中一条记录、跨 kid 重复 token 认证时拒绝(§4.4)。
+- [x] T4 credential 生成/轮换 CLI:CSPRNG ≥256 bit token、`AGENT_GATEWAY_CREDENTIAL_ACTIVE_PEPPER_KID` 仅供 CLI 选 kid(§4.4)。
+- [x] T5 状态机 `active/rotating/revoked/expired` 与 credentialId 唯一性、tombstone(进程内尽早报错,正式防继承由 owner revision 承担,§4.4)。
+- [x] T6 阶段 A 特例:`AGENT_GATEWAY_CREDENTIALS_PATH` 未设置 → 有效空 snapshot + migration warning;已设置但不可读 → fail-closed(§4.4)。
+- [x] T7 验收:§8「credential」行全部用例 + 热路径基准(p99 附加延迟 < 5ms)。
 
 ### M1.S2 统一决议入口与错误映射
 
 依赖：S1、M0.S2。
 
-- [ ] T1 `buildGatewayRequestContext()`:实现 §3.2 决议树(bound/unbound/admin-unbound-only),写回 `requestContext`/`authContext` 全部身份字段,丢弃客户端 body 同名字段。
-- [ ] T2 target candidate 冲突检测:path/query/body/URI 多来源规范化后必须相等,冲突 → `AGW_INVALID_REQUEST`(§3.2)。
-- [ ] T3 `authorizeTarget()` 两层授权:credentialScopes 与 agentPolicyScopes 串联交集(§3.5);scope 不足统一 `AGW_FORBIDDEN`。
-- [ ] T4 双通道呈现不一致 → 401(§3.3,替代现状 `gatewayKeyHeader || Bearer` 静默选边)。
-- [ ] T5 新增 `MCP_UNAUTHORIZED` 与 `AGW_UNAUTHORIZED → MCP_UNAUTHORIZED` 映射(§3.7)。
-- [ ] T6 认证失败限速:按 IP 滑动窗口、429 + `Retry-After`、结构化审计与 `authFailure` 指标(§3.3)。
-- [ ] T7 验收:§8「身份」「scope」行用例。
+- [x] T1 `buildGatewayRequestContext()`:实现 §3.2 决议树(bound/unbound/admin-unbound-only),写回 `requestContext`/`authContext` 全部身份字段,丢弃客户端 body 同名字段。
+- [x] T2 target candidate 冲突检测:path/query/body/URI 多来源规范化后必须相等,冲突 → `AGW_INVALID_REQUEST`(§3.2)。
+- [x] T3 `authorizeTarget()` 两层授权:credentialScopes 与 agentPolicyScopes 串联交集(§3.5);scope 不足统一 `AGW_FORBIDDEN`。
+- [x] T4 双通道呈现不一致 → 401(§3.3,替代现状 `gatewayKeyHeader || Bearer` 静默选边)。
+- [x] T5 新增 `MCP_UNAUTHORIZED` 与 `AGW_UNAUTHORIZED → MCP_UNAUTHORIZED` 映射(§3.7)。
+- [x] T6 认证失败限速:按 IP 滑动窗口、429 + `Retry-After`、结构化审计与 `authFailure` 指标(§3.3)。
+- [x] T7 验收:§8「身份」「scope」行用例。
 
 ### M1.S3 Legacy 归一化与 admin session 子系统
 
 依赖：S2。
 
-- [ ] T1 `AGENT_GATEWAY_KEY` 合成内置 legacy credential(`legacy-gateway-key`,unbound,admin scope;阶段 A 保留全量权限是有意为之,§3.3)。
-- [ ] T2 共享 `adminGatewaySessionStore`:多 worker 原子共享、按 expiry 清理、无生产 store 时创建返回 503(§3.3)。
-- [ ] T3 `POST/DELETE /agent_gateway/auth/admin-session`:adminAuth 前置验证、≥256 bit CSPRNG opaque id、HttpOnly cookie、session-bound CSRF token、`AGENT_GATEWAY_ADMIN_SUBJECT_KEY` 派生 subject(§3.3)。
-- [ ] T4 Origin 部署形态二选一:主端口同源反代,或 `AGENT_GATEWAY_ADMIN_ORIGINS` allowlist + 凭据 CORS + `SameSite=Lax` + Origin/CSRF 双校验;缺配置时 503(§3.3)。
-- [ ] T5 admin-session 映射为内置 credential(`admin-session`,unbound,admin),surface 限制:仅 Native 业务入口,`/mcp` 三 transport 拒绝;pre-credential bridge 只允许 session POST(§3.3)。
-- [ ] T6 三个独立开关 `AGENT_GATEWAY_LEGACY_KEY_DISABLED` / `AGENT_GATEWAY_ADMIN_FALLBACK_DISABLED` / `AGENT_GATEWAY_LEGACY_SCOPE_NAMES_DISABLED` 与 `authMigration` 指标(§3.3、§4.4)。
-- [ ] T7 收编 `req.agentGatewayAuth` / `req.agentGatewayDedicatedAuth` 命名裂缝:统一为单一注入点,消除 `ROUTE_REGISTRARS` 注册顺序依赖。
-- [ ] T8 验收:§8「REST」(admin session 部分)「迁移」行用例。
+- [x] T1 `AGENT_GATEWAY_KEY` 合成内置 legacy credential(`legacy-gateway-key`,unbound,admin scope;阶段 A 保留全量权限是有意为之,§3.3)。
+- [x] T2 共享 `adminGatewaySessionStore`:多 worker 原子共享、按 expiry 清理、无生产 store 时创建返回 503(§3.3)。
+- [x] T3 `POST/DELETE /agent_gateway/auth/admin-session`:adminAuth 前置验证、≥256 bit CSPRNG opaque id、HttpOnly cookie、session-bound CSRF token、`AGENT_GATEWAY_ADMIN_SUBJECT_KEY` 派生 subject(§3.3)。
+- [x] T4 Origin 部署形态二选一:主端口同源反代,或 `AGENT_GATEWAY_ADMIN_ORIGINS` allowlist + 凭据 CORS + `SameSite=Lax` + Origin/CSRF 双校验;缺配置时 503(§3.3)。
+- [x] T5 admin-session 映射为内置 credential(`admin-session`,unbound,admin),surface 限制:仅 Native 业务入口,`/mcp` 三 transport 拒绝;pre-credential bridge 只允许 session POST(§3.3)。
+- [x] T6 三个独立开关 `AGENT_GATEWAY_LEGACY_KEY_DISABLED` / `AGENT_GATEWAY_ADMIN_FALLBACK_DISABLED` / `AGENT_GATEWAY_LEGACY_SCOPE_NAMES_DISABLED` 与 `authMigration` 指标(§3.3、§4.4)。
+- [x] T7 收编 `req.agentGatewayAuth` / `req.agentGatewayDedicatedAuth` 命名裂缝:统一为单一注入点,消除 `ROUTE_REGISTRARS` 注册顺序依赖。
+- [x] T8 验收:§8「REST」(admin session 部分)「迁移」行用例。
 
 ### M1.S4 Backend-proxy 凭据透传与 trusted context
 
 依赖：S2。与 S3 并行。
 
-- [ ] T1 HTTP/WS transport 私有保存 presented token(不进 params/context/日志/审计;销毁时清引用,§3.3)。
-- [ ] T2 `GatewayBackendClient` request-scoped auth override,**改造 `createHeaders()` 覆盖顺序**:override 生效时互斥清除全部静态凭据通道(§3.3 点名陷阱)。
-- [ ] T3 HTTP/WS 生产路径禁止静态 backend key fallback,凭据丢失 fail-closed 401;静态 credential 仅限 stdio 单身份进程(§3.3)。
-- [ ] T4 backend 双侧解析一致性:`credentialId`/`credentialSubject`/`effectiveAgentId` 必须一致,revision 差异走 `isSessionCredentialCompatible()`(§5.1)。
-- [ ] T5 in-process adapter 只接受 resolver 构建的 `trustedCredentialContext`;MCP params 传入的 authContext 不得标记 trusted(§5.1;现状 `buildManagedToolContextInput` 合并 `args.requestContext` 的信任缺口在此关闭)。
-- [ ] T6 验收:§8「transport」行用例(含 override 与静态凭据并存组合)。
+- [x] T1 HTTP/WS transport 私有保存 presented token(不进 params/context/日志/审计;销毁时清引用,§3.3)。
+- [x] T2 `GatewayBackendClient` request-scoped auth override,**改造 `createHeaders()` 覆盖顺序**:override 生效时互斥清除全部静态凭据通道(§3.3 点名陷阱)。
+- [x] T3 HTTP/WS 生产路径禁止静态 backend key fallback,凭据丢失 fail-closed 401;静态 credential 仅限 stdio 单身份进程(§3.3)。
+- [x] T4 backend 双侧解析一致性:`credentialId`/`credentialSubject`/`effectiveAgentId` 必须一致,revision 差异走 `isSessionCredentialCompatible()`(§5.1)。
+- [x] T5 in-process adapter 只接受 resolver 构建的 `trustedCredentialContext`;MCP params 传入的 authContext 不得标记 trusted(§5.1;现状 `buildManagedToolContextInput` 合并 `args.requestContext` 的信任缺口在此关闭)。
+- [x] T6 验收:§8「transport」行用例(含 override 与静态凭据并存组合)。
 
 ### M1.S5 Discovery 确定规则与冻结快照
 
 依赖：S2。
 
-- [ ] T1 bound/unbound/admin 的 tools/resources/prompts list 确定规则(§3.4 补充规则;不依赖非标准 discovery agentId,越界返回空集合)。
-- [ ] T2 initialize-time 冻结 discovery snapshot:`{ discoveryRevision, tools, resources, prompts, visibleAgents }`,cursor 绑定 revision,保持 `listChanged:false`(§3.4)。
-- [ ] T3 HTTP 自愈 discovery 的短 TTL discovery session 同规则冻结。
-- [ ] T4 外部 HTTP/WS discovery 移除 `VCP_MCP_DEFAULT_AGENT_ID` 授权参与(仅保留 §5.5 stdio 开发兼容)。
-- [ ] T5 Native `/agents` 按相同可见集合过滤(§3.4)。
-- [ ] T6 验收:§8「discovery」行用例。
+- [x] T1 bound/unbound/admin 的 tools/resources/prompts list 确定规则(§3.4 补充规则;不依赖非标准 discovery agentId,越界返回空集合)。
+- [x] T2 initialize-time 冻结 discovery snapshot:`{ discoveryRevision, tools, resources, prompts, visibleAgents }`,cursor 绑定 revision,保持 `listChanged:false`(§3.4)。
+- [x] T3 HTTP 自愈 discovery 的短 TTL discovery session 同规则冻结。
+- [x] T4 外部 HTTP/WS discovery 移除 `VCP_MCP_DEFAULT_AGENT_ID` 授权参与(仅保留 §5.5 stdio 开发兼容)。
+- [x] T5 Native `/agents` 按相同可见集合过滤(§3.4)。
+- [x] T6 验收:§8「discovery」行用例。
 
 ### M1.S6 间接对象所有权与吊销传播
 
 依赖：S1、S2。
 
-- [ ] T1 job/event owner snapshot 固化:`{ credentialSubject, credentialId, credentialRevision, effectiveAgentId, trustedSessionId }`;所有 poll/cancel/resource/SSE 入口先 lookup owner 再授权(§3.4)。
-- [ ] T2 owner revision compatibility:仅同 token digest 的 `active -> rotating` 可继承;credentialId 重用/新 token 拒绝(§3.4)。
-- [ ] T3 trusted session 两情形校验与**收养**:session 存活不匹配 → 403;正常终止 → 同 subject + revision 兼容原子收养 + adoption 审计;吊销销毁不适用收养(§3.4)。
-- [ ] T4 HTTP session 所有权升级:从 gatewayId 比较改为 credential snapshot + 每请求 `isSessionCredentialCompatible()`(§3.6)。
-- [ ] T5 WS 吊销传播:逐消息校验 + 空闲连接 30s 周期重校验,`close(4401)`/`close(1013)`,≤60s 承诺(§3.6)。
-- [ ] T6 Native SSE 吊销传播:每事件写出前校验 + 空闲流 30s 周期重校验,≤60s 终止(§3.6)。
-- [ ] T7 security snapshot 不可用时的分域拒绝:HTTP 503、WS `close(1013)`、stdio `MCP_SERVICE_UNAVAILABLE`(§3.6)。
-- [ ] T8 验收:§8「session/job」行用例(含收养正反例)与「REST」行 SSE 用例。
+- [x] T1 job/event owner snapshot 固化:`{ credentialSubject, credentialId, credentialRevision, effectiveAgentId, trustedSessionId }`;所有 poll/cancel/resource/SSE 入口先 lookup owner 再授权(§3.4)。
+- [x] T2 owner revision compatibility:仅同 token digest 的 `active -> rotating` 可继承;credentialId 重用/新 token 拒绝(§3.4)。
+- [x] T3 trusted session 两情形校验与**收养**:session 存活不匹配 → 403;正常终止 → 同 subject + revision 兼容原子收养 + adoption 审计;吊销销毁不适用收养(§3.4)。
+- [x] T4 HTTP session 所有权升级:从 gatewayId 比较改为 credential snapshot + 每请求 `isSessionCredentialCompatible()`(§3.6)。
+- [x] T5 WS 吊销传播:逐消息校验 + 空闲连接 30s 周期重校验,`close(4401)`/`close(1013)`,≤60s 承诺(§3.6)。
+- [x] T6 Native SSE 吊销传播:每事件写出前校验 + 空闲流 30s 周期重校验,≤60s 终止(§3.6)。
+- [x] T7 security snapshot 不可用时的分域拒绝:HTTP 503、WS `close(1013)`、stdio `MCP_SERVICE_UNAVAILABLE`(§3.6)。
+- [x] T8 验收:§8「session/job」行用例(含收养正反例)与「REST」行 SSE 用例。
 
 ### M1 里程碑门禁
 

@@ -385,7 +385,14 @@ function assertNoTopologyLeak(response) {
 async function createBackendProxyClient(t, options = {}) {
     let backendServer = null;
     if (!options.backendUrl) {
-        backendServer = await createNativeServer(options.backendPluginManager || createPluginManager());
+        // M1.S4：backend-proxy 逐请求透传边缘 credential，backend 必须能认同一把 key
+        const backendPluginManager = options.backendPluginManager || createPluginManager();
+        backendPluginManager.agentGatewayProtocolConfig = {
+            ...(backendPluginManager.agentGatewayProtocolConfig || {}),
+            gatewayKey: 'gw-secret',
+            gatewayId: 'gw-websocket-test'
+        };
+        backendServer = await createNativeServer(backendPluginManager);
         t.after(async () => backendServer.close());
     }
 
@@ -1486,7 +1493,8 @@ test('preserves canonical request metadata on a follow-up real-harness websocket
     const tools = await waitForJsonMessage(client);
     assert.equal(tools.id, 'real-tools-list');
     assert.equal(tools.result.meta.requestId, 'req-real-tools-list');
-    assert.equal(tools.result.meta.agentId, 'Ariadne');
+    // M1.S5.T4：VCP_MCP_DEFAULT_AGENT_ID 不再参与外部 WS discovery
+    assert.equal(tools.result.meta.agentId, undefined);
 });
 
 test('real harness: websocket capability discovery exposes prompt-only and tool-only gateway surfaces', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {
@@ -1523,7 +1531,8 @@ test('real harness: websocket capability discovery exposes prompt-only and tool-
 
     assert.equal(Array.isArray(tools.result.tools), true);
     assert.equal(tools.result.meta.requestId, 'req-cap-tools-list');
-    assert.equal(tools.result.meta.agentId, 'Ariadne');
+    // M1.S5.T4：外部 WS discovery 不再回落 default agent
+    assert.equal(tools.result.meta.agentId, undefined);
     assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_memory_search'), true);
     assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_context_assemble'), true);
     assert.equal(tools.result.tools.some((tool) => tool.name === 'gateway_memory_write'), true);
@@ -1531,7 +1540,7 @@ test('real harness: websocket capability discovery exposes prompt-only and tool-
 
     assert.deepEqual(prompts.result.prompts.map((prompt) => prompt.name), ['gateway_agent_render']);
     assert.equal(prompts.result.meta.requestId, 'req-cap-prompts-list');
-    assert.equal(prompts.result.meta.agentId, 'Ariadne');
+    assert.equal(prompts.result.meta.agentId, undefined);
 });
 
 test('real harness: websocket prompts/get returns rendered prompt content with host hints', { timeout: INTEGRATION_TEST_TIMEOUT_MS }, async (t) => {

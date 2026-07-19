@@ -7,6 +7,8 @@ const { MCP_ERROR_CODES } = require('./constants');
 function mapGatewayFailureToMcpErrorCode(code) {
     const canonicalCode = OPENCLAW_TO_AGENT_GATEWAY_CODE[code] || code || AGW_ERROR_CODES.INTERNAL_ERROR;
     switch (canonicalCode) {
+    case AGW_ERROR_CODES.UNAUTHORIZED:
+        return MCP_ERROR_CODES.UNAUTHORIZED;
     case AGW_ERROR_CODES.INVALID_REQUEST:
         return MCP_ERROR_CODES.INVALID_REQUEST;
     case AGW_ERROR_CODES.VALIDATION_ERROR:

@@ -1,5 +1,6 @@
 'use strict';
 
+const { createGuardedSseWriter } = require('../../modules/agentGateway/policy/guardedSseWriter');
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
 
 function registerToolRoute(router, context) {
@@ -14,7 +15,7 @@ function registerToolRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: governedBody.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: governedBody.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -109,7 +110,7 @@ function registerJobReadRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.query.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -176,7 +177,7 @@ function registerJobCancelRoute(router, context) {
             authContextResolver,
             requestContext,
             providedAuthContext: req.body?.authContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.body?.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -245,7 +246,7 @@ function registerEventsRoute(router, context) {
         const authContext = buildNativeAuthContext({
             authContextResolver,
             requestContext,
-            dedicatedAuth: req.agentGatewayDedicatedAuth,
+            dedicatedAuth: req.agentGatewayAuth,
             maid: req.query.maid
         });
         const operationControl = beginNativeOperation(operabilityService, {
@@ -310,6 +311,29 @@ function registerEventsRoute(router, context) {
                     gatewayId: authContext.gatewayId
                 });
 
+                // §3.6 / M1.S6.T6：每事件写出前重校验 credential；
+                // credential 上下文缺失（阶段 A 过渡身份）时保持原行为。
+                const credentialContext = req.agentGatewayAuth?.credentialContext;
+                const credentialService = context.gatewayCredentialService;
+                if (credentialContext?.ok && credentialService?.credentialResolver &&
+                    credentialContext.credential && !credentialContext.credential.builtin) {
+                    const guardedWriter = createGuardedSseWriter({
+                        res,
+                        checkStatus: () => credentialService.credentialResolver
+                            .checkCredentialStatus(credentialContext.credentialId),
+                        writeEvent: writeNativeSseEvent
+                    });
+                    for (const event of result.data.events) {
+                        const written = await guardedWriter.write(event.eventType, event);
+                        if (!written) {
+                            operationControl?.finish?.({ outcome: 'failure', code: 'AGW_UNAUTHORIZED' });
+                            return undefined;
+                        }
+                    }
+                    operationControl?.finish?.({ outcome: 'success' });
+                    guardedWriter.end();
+                    return undefined;
+                }
                 result.data.events.forEach((event) => {
                     writeNativeSseEvent(res, event.eventType, event);
                 });

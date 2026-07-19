@@ -2,6 +2,15 @@ const crypto = require('crypto');
 const {
     AGW_ERROR_CODES
 } = require('../contracts/errorCodes');
+
+// 审计不得含 admin session 原始标识（05 第 6 条）——session id 一律脱敏为摘要。
+function digestSessionId(sessionId) {
+    const normalized = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!normalized) {
+        return null;
+    }
+    return `sha256:${crypto.createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 16)}`;
+}
 const {
     JOB_EVENT_TYPES,
     createRuntimeEvent,
@@ -29,6 +38,12 @@ const TERMINAL_JOB_STATUSES = new Set([
     JOB_STATUS.CANCELLED
 ]);
 
+const {
+    SESSION_STATES,
+    applyAdoption,
+    authorizeIndirectAccess
+} = require('../policy/indirectObjectOwnership');
+
 function normalizeJobRuntimeString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -41,7 +56,7 @@ function createJobId() {
 }
 
 function buildAuthSnapshot(authContext) {
-    return {
+    const snapshot = {
         requestId: normalizeJobRuntimeString(authContext?.requestId),
         sessionId: normalizeJobRuntimeString(authContext?.sessionId),
         agentId: normalizeJobRuntimeString(authContext?.agentId),
@@ -50,6 +65,39 @@ function buildAuthSnapshot(authContext) {
         gatewayId: normalizeJobRuntimeString(authContext?.gatewayId),
         authMode: normalizeJobRuntimeString(authContext?.authMode),
         authSource: normalizeJobRuntimeString(authContext?.authSource)
+    };
+    // §3.4 / M1.S6.T1：创建时固化服务端 owner snapshot（不信任调用方声明）。
+    const credentialSubject = normalizeJobRuntimeString(authContext?.credentialSubject);
+    if (credentialSubject) {
+        snapshot.owner = {
+            credentialSubject,
+            credentialId: normalizeJobRuntimeString(authContext?.credentialId),
+            credentialRevision: normalizeJobRuntimeString(authContext?.credentialRevision),
+            effectiveAgentId: normalizeJobRuntimeString(authContext?.effectiveAgentId || authContext?.agentId) || null,
+            trustedSessionId: normalizeJobRuntimeString(authContext?.trustedSessionId) || null,
+            credentialRecord: authContext?.credentialRecord && typeof authContext.credentialRecord === 'object'
+                ? { ...authContext.credentialRecord }
+                : null
+        };
+    }
+    return snapshot;
+}
+
+function buildRequesterContextFromAuth(authContext) {
+    const credentialSubject = normalizeJobRuntimeString(authContext?.credentialSubject);
+    if (!credentialSubject) {
+        return null;
+    }
+    const record = authContext?.credentialRecord && typeof authContext.credentialRecord === 'object'
+        ? authContext.credentialRecord
+        : null;
+    return {
+        ok: true,
+        credentialSubject,
+        credentialId: normalizeJobRuntimeString(authContext?.credentialId),
+        credentialRevision: normalizeJobRuntimeString(authContext?.credentialRevision),
+        credential: record,
+        isAdmin: Array.isArray(record?.scopes) && record.scopes.includes('admin')
     };
 }
 
@@ -91,17 +139,57 @@ function cloneJob(job) {
     if (!job || typeof job !== 'object') {
         return job;
     }
+    // 出站快照：owner（含 credentialRecord.tokenDigest、原始 trustedSessionId）
+    // 与 adoptionAudit 只存在于服务端 store，绝不进客户端响应（§3.4 / 05 第 6 条）。
+    let authContext = job.authContext;
+    if (authContext && typeof authContext === 'object') {
+        const { owner: _owner, adoptionAudit: _adoptionAudit, ...publicAuthContext } = authContext;
+        authContext = publicAuthContext;
+    }
     return {
         ...job,
         target: job.target && typeof job.target === 'object' ? { ...job.target } : job.target,
         metadata: job.metadata && typeof job.metadata === 'object' ? { ...job.metadata } : job.metadata,
-        authContext: job.authContext && typeof job.authContext === 'object' ? { ...job.authContext } : job.authContext
+        authContext
     };
 }
 
-function canAccessJob(job, authContext) {
+function canAccessJob(job, authContext, { allowAdoption = true, auditLogger = null } = {}) {
     if (!authContext || typeof authContext !== 'object') {
         return true;
+    }
+
+    const owner = job?.authContext?.owner;
+    const requesterContext = buildRequesterContextFromAuth(authContext);
+    if (owner && requesterContext) {
+        const decision = authorizeIndirectAccess({
+            owner,
+            requesterContext,
+            requesterSessionId: normalizeJobRuntimeString(authContext.trustedSessionId) || null,
+            ownerSessionState: authContext.ownerSessionState || SESSION_STATES.UNKNOWN
+        });
+        if (decision.allowed && decision.adoption && allowAdoption) {
+            // 首次收养：原子替换 owner 的 trustedSessionId 并留下审计标记
+            job.authContext.owner = { ...applyAdoption(owner, decision.adoption) };
+            job.authContext.adoptionAudit = {
+                previousTrustedSessionId: decision.adoption.previousTrustedSessionId,
+                newTrustedSessionId: decision.adoption.newTrustedSessionId,
+                at: new Date().toISOString()
+            };
+            // §3.4：收养产生结构化审计事件（session id 只记摘要）
+            auditLogger?.logGatewayOperation?.('job.adopted', {
+                jobId: job.jobId,
+                credentialSubject: owner.credentialSubject,
+                credentialId: owner.credentialId,
+                previousTrustedSessionDigest: digestSessionId(decision.adoption.previousTrustedSessionId),
+                newTrustedSessionDigest: digestSessionId(decision.adoption.newTrustedSessionId)
+            });
+        }
+        return decision.allowed;
+    }
+    if (owner && !requesterContext) {
+        // 有 owner 的对象不接受无凭据身份的访问
+        return false;
     }
 
     const requestedAgentId = normalizeJobRuntimeString(authContext.agentId);
@@ -249,7 +337,7 @@ function createJobStoreApi(store, eventStore) {
     return { createJob, updateJob };
 }
 
-function createJobRuntimeApi(store, eventStore, jobStore) {
+function createJobRuntimeApi(store, eventStore, jobStore, { auditLogger = null } = {}) {
     const { createJob, updateJob } = jobStore;
     return {
         createAcceptedJob({ operation, authContext, metadata, target }) {
@@ -289,7 +377,7 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
             if (!job) {
                 return createMissingJobResult(normalizedJobId);
             }
-            if (!canAccessJob(job, authContext)) {
+            if (!canAccessJob(job, authContext, { auditLogger })) {
                 return createForbiddenJobResult(normalizedJobId);
             }
             return {
@@ -305,7 +393,7 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
             if (!job) {
                 return createMissingJobResult(normalizedJobId);
             }
-            if (!canAccessJob(job, authContext)) {
+            if (!canAccessJob(job, authContext, { auditLogger })) {
                 return createForbiddenJobResult(normalizedJobId);
             }
             if (!CANCELLABLE_JOB_STATUSES.has(job.status)) {
@@ -326,16 +414,26 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
             });
         },
         listEvents({ authContext, filters } = {}) {
-            // 事件可见性与 job ownership 先绑定到同一 canonical identity 语义。
+            // §3.4 / M1.S6.T1：事件可见性从关联 job 的服务端 owner snapshot 决议
+            // （先 lookup owner 再授权），不使用事件弱字段（agentId/sessionId/
+            // gatewayId）合成身份——两侧 gatewayId 同值会导致跨 credential 泄漏。
+            // 事件流授权不触发收养（收养只发生在显式 job poll/cancel）。
             const normalizedFilters = filters && typeof filters === 'object' ? filters : {};
             const visibleEvents = filterRuntimeEvents(eventStore, normalizedFilters)
-                .filter((event) => canAccessJob({
-                    authContext: {
-                        agentId: event.agentId,
-                        sessionId: event.sessionId,
-                        gatewayId: event.gatewayId
+                .filter((event) => {
+                    const job = event.jobId ? store.get(event.jobId) : null;
+                    if (job) {
+                        return canAccessJob(job, authContext, { allowAdoption: false });
                     }
-                }, authContext))
+                    // 无关联 job 的孤儿事件退回弱比较（仅限旧数据；新事件均带 jobId）
+                    return canAccessJob({
+                        authContext: {
+                            agentId: event.agentId,
+                            sessionId: event.sessionId,
+                            gatewayId: event.gatewayId
+                        }
+                    }, authContext);
+                })
                 .map(createEventSnapshot);
 
             return {
@@ -348,10 +446,10 @@ function createJobRuntimeApi(store, eventStore, jobStore) {
     };
 }
 
-function createJobRuntimeService() {
+function createJobRuntimeService({ auditLogger = null } = {}) {
     const store = new Map();
     const eventStore = [];
-    return createJobRuntimeApi(store, eventStore, createJobStoreApi(store, eventStore));
+    return createJobRuntimeApi(store, eventStore, createJobStoreApi(store, eventStore), { auditLogger });
 }
 
 module.exports = {

@@ -48,6 +48,7 @@ function createIntegrationSnapshotCoordinator({
     legacyCredentialEnabled = true,
     allowLegacyScopeNames = true,
     buildCatalog = buildAuthPolicyCatalog,
+    detectLegacyTokenCollision = null,
     logger = console
 } = {}) {
     if (typeof listAgents !== 'function') {
@@ -262,6 +263,20 @@ function createIntegrationSnapshotCoordinator({
             crossErrors.push(...crossValidateCredentialAgents(credentialParsed.config, directoryAgentIds));
             if (crossErrors.length > 0) {
                 failure.fields.credentialFile = { reason: 'cross-reference validation failed', errors: crossErrors };
+            }
+            // §3.3：内置 legacy token 与文件 credential token 冲突属配置错误，拒绝发布。
+            if (typeof detectLegacyTokenCollision === 'function' && keyringParsed?.valid) {
+                const collision = detectLegacyTokenCollision({
+                    available: true,
+                    records: credentialParsed.config.credentials,
+                    pepperKeys: keyringParsed.config.keys
+                });
+                if (collision?.collision) {
+                    failure.fields.credentialFile = {
+                        reason: 'legacy gateway key collides with file credential token',
+                        credentialId: collision.credentialId
+                    };
+                }
             }
         }
 

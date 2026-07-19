@@ -108,7 +108,8 @@ class GatewayBackendClient {
         bearerToken,
         defaultHeaders,
         fetchImpl,
-        timeoutMs
+        timeoutMs,
+        requireRequestAuthOverride = false
     } = {}) {
         if (!baseUrl) {
             throw new Error('Gateway backend baseUrl is required');
@@ -118,6 +119,12 @@ class GatewayBackendClient {
         this.gatewayKey = sanitizeHeaderValue(gatewayKey);
         this.gatewayId = sanitizeHeaderValue(gatewayId);
         this.bearerToken = sanitizeHeaderValue(bearerToken);
+        // HTTP/WS 生产 proxy 必须逐请求透传 credential：此模式下禁止静态凭据兜底，
+        // 凭据丢失 fail-closed（§3.3）。静态构造参数仅供 stdio 单身份进程。
+        this.requireRequestAuthOverride = Boolean(requireRequestAuthOverride);
+        if (this.requireRequestAuthOverride && (this.gatewayKey || this.bearerToken)) {
+            throw new Error('GatewayBackendClient: static credentials are not allowed when requireRequestAuthOverride is enabled (stdio-only, §3.3)');
+        }
         this.defaultHeaders = defaultHeaders && typeof defaultHeaders === 'object'
             ? { ...defaultHeaders }
             : {};
@@ -132,12 +139,26 @@ class GatewayBackendClient {
         }
     }
 
-    createHeaders(extraHeaders = {}) {
+    createHeaders(extraHeaders = {}, authOverride = null) {
         const headers = {
             accept: 'application/json',
             ...this.defaultHeaders,
             ...extraHeaders
         };
+
+        const overrideToken = sanitizeHeaderValue(authOverride?.token);
+        if (overrideToken) {
+            // request-scoped override 生效时互斥清除全部静态凭据通道，
+            // 仅呈现 override 的单一通道（§3.3 点名的覆盖顺序陷阱）。
+            delete headers.authorization;
+            delete headers.Authorization;
+            delete headers[AGENT_GATEWAY_HEADERS.GATEWAY_KEY];
+            headers[AGENT_GATEWAY_HEADERS.GATEWAY_KEY] = overrideToken;
+            if (this.gatewayId) {
+                headers[AGENT_GATEWAY_HEADERS.GATEWAY_ID] = this.gatewayId;
+            }
+            return headers;
+        }
 
         if (this.gatewayKey) {
             headers[AGENT_GATEWAY_HEADERS.GATEWAY_KEY] = this.gatewayKey;
@@ -152,7 +173,17 @@ class GatewayBackendClient {
         return headers;
     }
 
-    async requestJson(method, routePath, { query, body, headers, signal } = {}) {
+    ensureRequestAuth(authOverride) {
+        if (this.requireRequestAuthOverride && !sanitizeHeaderValue(authOverride?.token)) {
+            const error = new Error('Gateway backend request requires a request-scoped credential (fail-closed, no static fallback)');
+            error.code = 'AGW_UNAUTHORIZED';
+            error.httpStatus = 401;
+            throw error;
+        }
+    }
+
+    async requestJson(method, routePath, { query, body, headers, signal, authOverride } = {}) {
+        this.ensureRequestAuth(authOverride);
         const requestSignal = createRequestSignal(signal, this.timeoutMs);
         try {
             const response = await this.fetchImpl(
@@ -162,7 +193,7 @@ class GatewayBackendClient {
                     headers: this.createHeaders({
                         ...(body ? { 'content-type': 'application/json' } : {}),
                         ...(headers || {})
-                    }),
+                    }, authOverride),
                     body: body ? JSON.stringify(body) : undefined,
                     signal: requestSignal.signal
                 }
@@ -189,7 +220,8 @@ class GatewayBackendClient {
         }
     }
 
-    async requestEventStream(routePath, { query, headers, signal } = {}) {
+    async requestEventStream(routePath, { query, headers, signal, authOverride } = {}) {
+        this.ensureRequestAuth(authOverride);
         const requestSignal = createRequestSignal(signal, this.timeoutMs);
         try {
             const response = await this.fetchImpl(
@@ -199,7 +231,7 @@ class GatewayBackendClient {
                     headers: this.createHeaders({
                         accept: 'text/event-stream',
                         ...(headers || {})
-                    }),
+                    }, authOverride),
                     signal: requestSignal.signal
                 }
             );

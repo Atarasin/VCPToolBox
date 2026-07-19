@@ -18,11 +18,15 @@ function resolveRequiredEnv(name, fallbackValue = '') {
 }
 
 async function createBackendRuntime(options = {}) {
+    // HTTP/WS 生产 proxy 逐请求透传 credential，禁止静态 backend key 兜底
+    //（§3.3 M1.S4.T3）；静态凭据仅供 stdio 单身份进程。
+    const requireRequestAuthOverride = options.requireRequestAuthOverride === true;
     const backendClient = options.backendClient || new GatewayBackendClient({
         baseUrl: options.backendUrl || resolveRequiredEnv('VCP_MCP_BACKEND_URL'),
-        gatewayKey: options.gatewayKey || process.env.VCP_MCP_BACKEND_KEY,
+        gatewayKey: requireRequestAuthOverride ? undefined : (options.gatewayKey || process.env.VCP_MCP_BACKEND_KEY),
         gatewayId: options.gatewayId || process.env.VCP_MCP_BACKEND_GATEWAY_ID,
-        bearerToken: options.bearerToken || process.env.VCP_MCP_BACKEND_BEARER_TOKEN
+        bearerToken: requireRequestAuthOverride ? undefined : (options.bearerToken || process.env.VCP_MCP_BACKEND_BEARER_TOKEN),
+        requireRequestAuthOverride
     });
     const defaultAgentId = typeof options.defaultAgentId === 'string'
         ? options.defaultAgentId.trim()
@@ -32,6 +36,9 @@ async function createBackendRuntime(options = {}) {
         harness: createBackendProxyMcpServerHarness({
             backendClient,
             defaultAgentId,
+            // §3.4 T4：VCP_MCP_DEFAULT_AGENT_ID 只保留给 stdio 开发兼容；
+            // 外部 HTTP/WS transport 显式传 false 关闭 discovery 参与。
+            discoveryDefaultAgentEnabled: options.discoveryDefaultAgentEnabled !== false,
             includeAgentRender: options.includeAgentRender !== false
         })
     };

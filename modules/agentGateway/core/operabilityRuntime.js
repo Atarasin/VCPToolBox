@@ -1,5 +1,6 @@
 const { AGW_ERROR_CODES } = require('../contracts/errorCodes');
 const { resolveTraceId } = require('../infra/trace');
+const { OPERATION_CREDENTIAL_ACTIONS } = require('../contracts/authPolicyCatalog');
 
 function getMetricEntry(state, operationName) {
     const normalized = state.helpers.normalizeString(operationName) || 'unknown';
@@ -67,14 +68,50 @@ function finishRequest(state, control, outcome, code) {
     control.metric.lastOutcome = outcome === 'success' ? 'success' : 'failure';
     state.audit.logGatewayOperation(`request.${outcome === 'success' ? 'completed' : 'failed'}`, {
         requestId: control.requestId, traceId: control.traceId,
-        operationName: control.operationName, code: state.helpers.normalizeString(code, 64)
+        operationName: control.operationName, code: state.helpers.normalizeString(code, 64),
+        ...(control.auditIdentity || {})
     });
+}
+
+function buildAuditIdentityFields(state, requestContext, authContext, operationName) {
+    // M1 门禁第 6 条：审计事件包含 credential 身份链（不含 token/digest/pepper）、
+    // credentialAction、indirect owner、targetAgentId 与配置 revision。
+    const fields = {};
+    const identitySource = authContext || {};
+    for (const [auditKey, sourceKey] of [
+        ['credentialId', 'credentialId'],
+        ['credentialRevision', 'credentialRevision'],
+        ['credentialSubject', 'credentialSubject'],
+        ['effectiveAgentId', 'effectiveAgentId'],
+        ['targetAgentId', 'targetAgentId']
+    ]) {
+        const value = state.helpers.normalizeString(identitySource[sourceKey], 256);
+        if (value) fields[auditKey] = value;
+    }
+    const boundAgent = state.helpers.normalizeString(
+        identitySource.credentialRecord?.boundAgentId || identitySource.boundAgentId, 256);
+    if (boundAgent) fields.boundAgentId = boundAgent;
+    const agentId = state.helpers.normalizeString(identitySource.agentId || requestContext?.agentId, 256);
+    if (agentId && !fields.effectiveAgentId) fields.effectiveAgentId = agentId;
+    // credentialAction：按 canonical catalog 从 operationName 决议。
+    const credentialAction = OPERATION_CREDENTIAL_ACTIONS[state.helpers.normalizeString(operationName)];
+    if (credentialAction) fields.credentialAction = credentialAction;
+    // indirect owner subject（job/event 授权主体，与 credentialSubject 区分）。
+    const indirectOwner = state.helpers.normalizeString(
+        identitySource.owner?.credentialSubject, 256);
+    if (indirectOwner) fields.indirectOwnerSubject = indirectOwner;
+    // 配置 revision（安全快照一致性追踪）。
+    const configRevision = state.helpers.normalizeString(
+        identitySource.snapshotRevision || requestContext?.configRevision, 256);
+    if (configRevision) fields.configRevision = configRevision;
+    return fields;
 }
 
 function beginRequest(state, { operationName, requestContext, authContext, payloadBytes } = {}) {
     const name = state.helpers.normalizeString(operationName) || 'unknown';
     const requestId = state.helpers.normalizeString(requestContext?.requestId, 128);
     const traceId = resolveTraceId(requestContext?.traceId, 'agwop');
+    const auditIdentity = buildAuditIdentityFields(state, requestContext, authContext, name);
     const timestamp = state.now();
     const subjectKey = createSubjectKey(state, name, requestContext, authContext);
     const policy = state.helpers.resolvePolicy(state.config, name);
@@ -115,14 +152,14 @@ function beginRequest(state, { operationName, requestContext, authContext, paylo
     state.active.set(subjectKey, activeCount + 1);
     metric.active += 1;
     metric.lastOutcome = 'started';
-    state.audit.logGatewayOperation('request.started', { requestId, traceId, operationName: name, payloadBytes: bytes });
+    state.audit.logGatewayOperation('request.started', { requestId, traceId, operationName: name, payloadBytes: bytes, ...auditIdentity });
     let finished = false;
     return {
         allowed: true, traceId, operationName: name,
         finish({ outcome, code } = {}) {
             if (finished) return;
             finished = true;
-            finishRequest(state, { subjectKey, metric, traceId, requestId, operationName: name }, outcome, code);
+            finishRequest(state, { subjectKey, metric, traceId, requestId, operationName: name, auditIdentity }, outcome, code);
         }
     };
 }

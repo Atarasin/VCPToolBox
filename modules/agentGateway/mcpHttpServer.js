@@ -144,7 +144,7 @@ function createMcpHttpServer(options = {}) {
             ? options.heartbeatIntervalMs : DEFAULT_HEARTBEAT_INTERVAL_MS,
         backpressureTimeoutMs: Number.isFinite(options.backpressureTimeoutMs) && options.backpressureTimeoutMs > 0
             ? options.backpressureTimeoutMs : DEFAULT_SSE_BACKPRESSURE_TIMEOUT_MS,
-        initializeRuntime: options.initializeRuntime || initializeBackendProxyMcpRuntime,
+        initializeRuntime: options.initializeRuntime || ((runtimeOptions) => initializeBackendProxyMcpRuntime({ ...runtimeOptions, discoveryDefaultAgentEnabled: false, requireRequestAuthOverride: true })),
         shutdownRuntime: options.shutdownRuntime || shutdownBackendProxyMcpRuntime,
         resolveAuth: options.resolveAuth || resolveDedicatedGatewayAuth,
         rawBodyParser: express.raw({ type: '*/*', limit: maxPayloadBytes }),

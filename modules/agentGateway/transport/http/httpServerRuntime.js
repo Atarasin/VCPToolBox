@@ -3,7 +3,19 @@
 const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('../../contracts/requestContext');
 const { checkSlidingWindowRateLimit, createSlidingWindowRateLimit, injectMcpContext } = require('../shared');
+const { attachPresentedCredential } = require('../../policy/trustedCredentialContext');
+const { extractPresentedCredential } = require('../../policy/gatewayRequestContext');
+const {
+    DISCOVERY_SNAPSHOT_HOLDER,
+    createDiscoverySnapshotHolder
+} = require('../../policy/discoverySnapshot');
+const { isSessionCredentialCompatible } = require('../../policy/sessionCredentialCompatibility');
 const { createSessionStore } = require('./sessionStore');
+
+function extractRequestToken(headers) {
+    const extracted = extractPresentedCredential(headers);
+    return extracted.conflict ? '' : extracted.token;
+}
 const {
     createPayloadTooLargeErrorResponse,
     createRateLimitErrorResponse,
@@ -98,7 +110,28 @@ class HttpServerRuntime {
 
     createSession(auth, profile = {}) {
         const context = this.createSessionContext(auth, this.options, profile);
+        // session resurrection：复用调用方指定的 sessionId
         if (profile.sessionId) context.sessionId = profile.sessionId;
+        // initialize/短 TTL discovery session 均按 session 冻结 discovery（§3.4）
+        context[DISCOVERY_SNAPSHOT_HOLDER] = createDiscoverySnapshotHolder();
+        const credentialContext = auth?.credentialContext || null;
+        if (credentialContext?.ok) {
+            context.credentialOwner = {
+                credentialSubject: credentialContext.credentialSubject,
+                credentialId: credentialContext.credentialId,
+                credentialRevision: credentialContext.credentialRevision,
+                credentialRecord: {
+                    credentialId: credentialContext.credential?.credentialId,
+                    credentialSubject: credentialContext.credentialSubject,
+                    tokenDigest: credentialContext.credential?.tokenDigest || null,
+                    boundAgentId: credentialContext.credential?.boundAgentId || null,
+                    allowedAgents: credentialContext.credential?.allowedAgents,
+                    scopes: credentialContext.credential?.scopes,
+                    status: credentialContext.credential?.status,
+                    expiresAt: credentialContext.credential?.expiresAt || null
+                }
+            };
+        }
         const session = { cleanedUp: false, kind: profile.kind === 'discovery' ? 'discovery' : 'standard',
             context, createdAt: Date.now(), lastActivityAt: Date.now(),
             rateLimit: createSlidingWindowRateLimit({ limit: this.rateLimitMessages,
@@ -137,6 +170,37 @@ class HttpServerRuntime {
             cleanup = () => req.off('aborted', rejectOnAbort);
         });
         try {
+            const credentialService = this.options.credentialService || null;
+            if (credentialService) {
+                // M1.S6.T4/T7：统一决议入口；security snapshot 不可用 → 503。
+                const credentialContext = await Promise.race([
+                    credentialService.buildGatewayRequestContext({
+                        headers: req.headers,
+                        clientIp: req.socket?.remoteAddress || '',
+                        targetCandidates: {},
+                        requiresAgent: false,
+                        entry: 'mcp-http'
+                    }), timeoutPromise, abortPromise]);
+                if (!credentialContext.ok) {
+                    const statusCode = credentialContext.httpStatus || 401;
+                    return { ok: false, statusCode,
+                        payload: statusCode === 503
+                            ? createTransportErrorResponse(requestId, 'Security configuration unavailable', {
+                                canonicalCode: AGW_ERROR_CODES.CONFIG_UNAVAILABLE,
+                                gatewayCode: AGW_ERROR_CODES.CONFIG_UNAVAILABLE,
+                                reason: 'security_snapshot_unavailable' })
+                            : createUnauthorizedErrorResponse(requestId, 'agent-gateway-credential') };
+                }
+                return { ok: true, auth: {
+                    provided: true,
+                    authenticated: true,
+                    authMode: 'gateway_credential',
+                    authSource: 'agent-gateway-credential',
+                    gatewayId: sanitizeRequestContextValue(req.headers['x-agent-gateway-id'], 256) || 'vcp-gateway',
+                    roles: ['gateway_client'],
+                    credentialContext
+                } };
+            }
             const auth = await Promise.race([Promise.resolve(this.resolveAuth({ headers: req.headers,
                 config: this.options.protocolConfig })), timeoutPromise, abortPromise]);
             if (!auth?.provided || !auth?.authenticated) {
@@ -162,6 +226,37 @@ class HttpServerRuntime {
 
     ensureSessionOwnership(session, auth, requestId = null) {
         if (!session) return createSessionErrorResponse(requestId, 'unknown_session');
+        // M1.S6.T4：从仅比较 gatewayId 升级为 credential snapshot 比较 +
+        // 每请求 isSessionCredentialCompatible()（§3.6）。
+        const ownerSnapshot = session.context.credentialOwner || null;
+        const currentContext = auth?.credentialContext || null;
+        if (ownerSnapshot && currentContext) {
+            if (ownerSnapshot.credentialSubject !== currentContext.credentialSubject) {
+                return createTransportErrorResponse(requestId, 'HTTP MCP session ownership mismatch', {
+                    canonicalCode: AGW_ERROR_CODES.FORBIDDEN, gatewayCode: AGW_ERROR_CODES.FORBIDDEN,
+                    reason: 'session_owner_mismatch' });
+            }
+            const compatibility = isSessionCredentialCompatible(
+                ownerSnapshot.credentialRecord,
+                {
+                    credentialId: currentContext.credential?.credentialId,
+                    credentialSubject: currentContext.credentialSubject,
+                    tokenDigest: currentContext.credential?.tokenDigest || null,
+                    boundAgentId: currentContext.credential?.boundAgentId || null,
+                    allowedAgents: currentContext.credential?.allowedAgents,
+                    scopes: currentContext.credential?.scopes,
+                    status: currentContext.credential?.status,
+                    expiresAt: currentContext.credential?.expiresAt || null
+                }
+            );
+            if (!compatibility.compatible) {
+                void this.sessionStore.destroy(session, 'credential_incompatible');
+                return createTransportErrorResponse(requestId, 'HTTP MCP session credential incompatible', {
+                    canonicalCode: AGW_ERROR_CODES.UNAUTHORIZED, gatewayCode: AGW_ERROR_CODES.UNAUTHORIZED,
+                    reason: 'session_credential_incompatible' });
+            }
+            return null;
+        }
         const gatewayId = sanitizeRequestContextValue(auth?.gatewayId, 256);
         if (session.context.gatewayId && gatewayId && session.context.gatewayId !== gatewayId) {
             return createTransportErrorResponse(requestId, 'HTTP MCP session ownership mismatch', {
@@ -191,6 +286,9 @@ class HttpServerRuntime {
         this.sessionStore.touch(session);
         try {
             const harness = await this.resolveHarness();
+            // 逐请求把 presented credential 存入 transport 私有通道（Symbol，
+            // 不进 params/日志），供 backend-proxy request-scoped 透传（§3.3）。
+            attachPresentedCredential(session.context, extractRequestToken(req.headers));
             const withContext = injectMcpContext(request, session.context, {
                 requestIdPrefix: this.options.requestIdPrefix, signal: controller.signal });
             const response = await harness.handleRequest(withContext);

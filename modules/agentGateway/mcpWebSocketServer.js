@@ -12,6 +12,17 @@ const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance'
 const { createProtocolConfigSnapshot } = require('./composition/vcpPortBindings');
 const { WebSocketTransport, validateMcpTransport } = require('./transport');
 const {
+    attachPresentedCredential,
+    clearPresentedCredential,
+    getPresentedCredential
+} = require('./policy/trustedCredentialContext');
+const { extractPresentedCredential } = require('./policy/gatewayRequestContext');
+const {
+    DISCOVERY_SNAPSHOT_HOLDER,
+    createDiscoverySnapshotHolder
+} = require('./policy/discoverySnapshot');
+const { createRevocationWatcher } = require('./policy/revocationWatcher');
+const {
     createJsonRpcErrorResponse,
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime
@@ -202,7 +213,7 @@ function createWebSocketState(options) {
             DEFAULT_RATE_LIMIT_WINDOW_MS),
         idleTimeoutMs: resolvePositiveInteger(options.idleTimeoutMs) ||
             resolvePositiveInteger(process.env[IDLE_TIMEOUT_MS_ENV]) || 0,
-        initializeRuntime: options.initializeRuntime || initializeBackendProxyMcpRuntime,
+        initializeRuntime: options.initializeRuntime || ((runtimeOptions) => initializeBackendProxyMcpRuntime({ ...runtimeOptions, discoveryDefaultAgentEnabled: false, requireRequestAuthOverride: true })),
         shutdownRuntime: options.shutdownRuntime || shutdownBackendProxyMcpRuntime,
         resolveAuth: options.resolveAuth || resolveDedicatedGatewayAuth,
         wss: new WebSocket.Server({ noServer: true, clientTracking: false, maxPayload: maxPayloadBytes }),
@@ -285,6 +296,12 @@ async function cleanupConnection(state, connection, _reason = 'cleanup') {
 
         connection.cleanedUp = true;
         state.connections.delete(connection.connectionId);
+        // 销毁时清除对 presented token 的引用（§3.3）
+        clearPresentedCredential(connection.context);
+        if (connection.revocationWatcher) {
+            connection.revocationWatcher.stop();
+            connection.revocationWatcher = null;
+        }
 
         if (connection.heartbeatTimer) {
             clearInterval(connection.heartbeatTimer);
@@ -348,8 +365,28 @@ async function handleClientMessage(state, connection, rawMessage) {
         }
 }
 
+function dispatchConnectionMessage(state, connection, message) {
+    const rateLimitResult = checkRateLimit(connection);
+    if (!rateLimitResult.allowed) {
+        const payload = buildRateLimitRejectionPayload(message, rateLimitResult);
+        if (payload) {
+            connection.transport.send(payload);
+        }
+        return Promise.resolve();
+    }
+    return handleClientMessage(state, connection, message).catch((error) => {
+        try {
+            logTransportError(state.stderr, '[MCPTransport] Request handling failed', error);
+        } catch (_logError) { /* noop */ }
+    });
+}
+
 function registerConnection(state, ws, auth) {
         const context = createConnectionContext(auth, state.options);
+        context[DISCOVERY_SNAPSHOT_HOLDER] = createDiscoverySnapshotHolder();
+        attachPresentedCredential(context, getPresentedCredential(auth));
+        clearPresentedCredential(auth);
+        const connectionCredentialId = auth?.credentialContext?.credentialId || '';
         const transport = validateMcpTransport(new WebSocketTransport(ws, state.options.transportOptions));
         const connection = {
             ws,
@@ -364,8 +401,22 @@ function registerConnection(state, ws, auth) {
             lastActivityAt: Date.now(),
             queue: Promise.resolve(),
             harnessPromise: null,
-            rateLimit: createSlidingWindowRateLimit({ limit: state.rateLimitMessages, windowMs: state.rateLimitWindowMs })
+            rateLimit: createSlidingWindowRateLimit({ limit: state.rateLimitMessages, windowMs: state.rateLimitWindowMs }),
+            credentialId: connectionCredentialId,
+            revocationWatcher: null
         };
+
+        // §3.6 / M1.S6.T5：空闲连接 30s 周期重校验，吊销 close(4401)，
+        // 配置不可用 close(1013)；≤60s 承诺。
+        if (state.options.checkConnectionCredential && connectionCredentialId) {
+            connection.revocationWatcher = createRevocationWatcher({
+                checkStatus: () => state.options.checkConnectionCredential(connectionCredentialId),
+                intervalMs: state.options.credentialRevalidationIntervalMs || 30_000,
+                onRevoked: () => { try { ws.close(4401, 'credential revoked'); } catch (_e) { /* closed */ } },
+                onUnavailable: () => { try { ws.close(1013, 'security configuration unavailable'); } catch (_e) { /* closed */ } }
+            });
+            connection.revocationWatcher.start();
+        }
 
         state.connections.set(connection.connectionId, connection);
         startHeartbeat(state, connection);
@@ -378,6 +429,25 @@ function registerConnection(state, ws, auth) {
 
         transport.setMessageHandler((message) => {
             touchConnection(state, connection);
+            // §3.6 / M1.S6.T5：每条消息轻量重校验 credential 当前状态
+            const credentialCheck = state.options.checkConnectionCredential || null;
+            if (credentialCheck && connection.credentialId) {
+                connection.queue = connection.queue
+                    .then(() => credentialCheck(connection.credentialId))
+                    .then((status) => {
+                        if (status?.ok) {
+                            return dispatchConnectionMessage(state, connection, message);
+                        }
+                        const closeCode = status?.code === 'AGW_CONFIG_UNAVAILABLE' ? 1013 : 4401;
+                        try { connection.ws.close(closeCode, 'credential no longer valid'); } catch (_e) { /* closed */ }
+                        return undefined;
+                    })
+                    .catch((error) => {
+                        try { logTransportError(state.stderr, '[MCPTransport] Credential revalidation failed', error); } catch (_e) { /* noop */ }
+                        try { connection.ws.close(1013, 'credential revalidation failed'); } catch (_e) { /* closed */ }
+                    });
+                return;
+            }
             const rateLimitResult = checkRateLimit(connection);
             if (!rateLimitResult.allowed) {
                 const payload = buildRateLimitRejectionPayload(message, rateLimitResult);
@@ -468,6 +538,14 @@ async function handleUpgrade(state, request, socket, head) {
         if (!auth.provided || !auth.authenticated) {
             destroySocket(socket);
             return;
+        }
+
+        // presented token 存入 transport 私有通道（Symbol），供逐消息透传 backend
+        {
+            const extracted = extractPresentedCredential(request.headers);
+            if (!extracted.conflict && extracted.token) {
+                attachPresentedCredential(auth, extracted.token);
+            }
         }
 
         try {

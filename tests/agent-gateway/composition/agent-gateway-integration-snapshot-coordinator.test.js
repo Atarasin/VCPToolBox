@@ -299,6 +299,29 @@ test('invalid auth policy catalog blocks the security domain', async () => {
     assert.equal(health.credentialFile, 'blocked');
 });
 
+test('legacy token collision with file credential fails the security domain closed', async () => {
+    const paths = await makeFixture();
+    // detectLegacyTokenCollision 命中 → 拒绝发布 security snapshot（§3.3）
+    const coordinator = makeCoordinator(paths, {
+        detectLegacyTokenCollision: () => ({ collision: true, credentialId: 'midas-prod' })
+    });
+    const result = await coordinator.refreshAll();
+    assert.equal(result.security.available, false);
+    assert.equal(result.security.code, 'AGW_CONFIG_UNAVAILABLE');
+    assert.equal(result.security.failure.fields.credentialFile.credentialId, 'midas-prod');
+    await fs.rm(paths.dir, { recursive: true, force: true });
+});
+
+test('no legacy collision publishes the security snapshot normally', async () => {
+    const paths = await makeFixture();
+    const coordinator = makeCoordinator(paths, {
+        detectLegacyTokenCollision: () => ({ collision: false })
+    });
+    const result = await coordinator.refreshAll();
+    assert.equal(result.security.available, true);
+    await fs.rm(paths.dir, { recursive: true, force: true });
+});
+
 test('AGW_CONFIG_UNAVAILABLE maps to MCP_SERVICE_UNAVAILABLE', () => {
     assert.equal(AGW_ERROR_CODES.CONFIG_UNAVAILABLE, 'AGW_CONFIG_UNAVAILABLE');
     assert.equal(MCP_ERROR_CODES.SERVICE_UNAVAILABLE, 'MCP_SERVICE_UNAVAILABLE');

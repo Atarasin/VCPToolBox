@@ -31,8 +31,9 @@ const SURFACE_ENTRIES = Object.freeze([
     { surface: 'mcp.prompts/get', kind: 'mcp-discovery', credentialAction: 'read' },
     { surface: 'mcp.resources/read', kind: 'mcp-resource', credentialAction: 'read' },
     { surface: 'rest.integration', kind: 'rest-integration', credentialAction: 'read' },
-    { surface: 'rest.integration/skill', kind: 'rest-integration', credentialAction: 'read' },
-    { surface: 'rest.auth/admin-session', kind: 'admin-session-bridge', authMechanism: 'adminAuthBridge' }
+    { surface: 'rest.integration/skill', kind: 'rest-integration', credentialAction: 'read' }
+    // admin session bridge 自 M1.S3 起由 restOperations.json 的
+    // createAgentGatewayAdminSession（authMechanism: adminAuthBridge）登记。
 ].map(Object.freeze));
 
 // canonical operation 在两套 binding 中的对应关系；两侧 action 必须一致。
@@ -44,6 +45,24 @@ const REST_BINDING_BY_OPERATION_ID = Object.freeze({
     'jobs.read': 'getAgentGatewayJob',
     'jobs.cancel': 'cancelAgentGatewayJob',
     'agents.render': 'renderAgentGatewayAgent'
+});
+
+// route/adapter operationName → canonical credentialAction（§3.5）。
+// 供审计事件登记 credentialAction；health/metrics 是 adminAuth 排除项。
+const OPERATION_CREDENTIAL_ACTIONS = Object.freeze({
+    'agents.list': 'read',
+    'agents.detail': 'read',
+    'agents.render': 'read',
+    'capabilities.read': 'read',
+    'memory.targets': 'read',
+    'memory.search': 'read',
+    'memory.write': 'execute',
+    'context.assemble': 'read',
+    'recall.run': 'read',
+    'tool.invoke': 'execute',
+    'jobs.read': 'read',
+    'jobs.cancel': 'execute',
+    'events.stream': 'read'
 });
 
 function entryError(entryName, message) {
@@ -189,6 +208,7 @@ module.exports = {
     ACTION_SCOPES,
     AUTH_MECHANISMS,
     CREDENTIAL_ACTIONS,
+    OPERATION_CREDENTIAL_ACTIONS,
     REST_BINDING_BY_OPERATION_ID,
     SURFACE_ENTRIES,
     assertValidAuthPolicyCatalog,

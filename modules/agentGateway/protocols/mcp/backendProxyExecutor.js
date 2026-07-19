@@ -28,6 +28,8 @@ const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
 const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
+const { getPresentedCredential } = require('../../policy/trustedCredentialContext');
+const { serveFrozenList } = require('../../policy/discoverySnapshot');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
 
@@ -345,9 +347,12 @@ function buildBody(input, args, { requireSession = true, defaultAgentId = '', de
 
 function buildRequestOptions(input) {
     const traceId = normalizeMcpString(input?.requestContext?.traceId, 128);
+    // transport 私有通道透传的 presented credential（Symbol 属性，不进 JSON/日志）
+    const presentedCredential = getPresentedCredential(input);
     return {
         ...(input?.signal ? { signal: input.signal } : {}),
-        ...(traceId ? { headers: { 'x-agent-gateway-trace-id': traceId } } : {})
+        ...(traceId ? { headers: { 'x-agent-gateway-trace-id': traceId } } : {}),
+        ...(presentedCredential ? { authOverride: { token: presentedCredential } } : {})
     };
 }
 
@@ -399,8 +404,10 @@ function buildPromptMeta(result, agentId) {
 
 const BACKEND_PROXY_METHODS = {
     async listTools(state, input = {}) {
+        return serveFrozenList(input, 'tools', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
+        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
+        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
         return {
             tools: gatewayManagedTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
             meta: {
@@ -408,11 +415,14 @@ const BACKEND_PROXY_METHODS = {
                 ...(agentId ? { agentId } : {})
             }
         };
+        });
     },
 
     async listPrompts(state, input = {}) {
+        return serveFrozenList(input, 'prompts', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
+        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
+        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
         return {
             prompts: gatewayManagedPrompts,
             meta: {
@@ -420,6 +430,7 @@ const BACKEND_PROXY_METHODS = {
                 ...(agentId ? { agentId } : {})
             }
         };
+        });
     },
 
     async getPrompt(state, input = {}) {
@@ -622,8 +633,10 @@ const BACKEND_PROXY_METHODS = {
     },
 
     async listResources(state, input = {}) {
+        return serveFrozenList(input, 'resources', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || defaultAgentId);
+        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
+        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
 
         if (!agentId) {
             return {
@@ -643,6 +656,7 @@ const BACKEND_PROXY_METHODS = {
                 agentId
             }
         };
+        });
     },
 
     async readResource(state, input = {}) {
@@ -753,12 +767,14 @@ const BACKEND_PROXY_METHODS = {
 function createBackendProxyMcpAdapter({
     backendClient,
     defaultAgentId = process.env.VCP_MCP_DEFAULT_AGENT_ID || '',
+    discoveryDefaultAgentEnabled = true,
     includeAgentRender = true
 }) {
     if (!backendClient) throw new Error('backendClient is required');
     const state = {
         backendClient,
         defaultAgentId,
+        discoveryDefaultAgentEnabled,
         gatewayManagedTools: createGatewayManagedToolDescriptors(),
         gatewayManagedPrompts: createGatewayManagedPromptDescriptors({ includeAgentRender })
     };

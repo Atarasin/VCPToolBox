@@ -46,6 +46,11 @@ const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
 const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError, callMcpTool } = require('./inProcessOperations');
+const {
+    isTrustedCredentialContext,
+    sanitizeUntrustedAuthContext
+} = require('../../policy/trustedCredentialContext');
+const { ACTION_SCOPES } = require('../../contracts/authPolicyCatalog');
 const { createReadResourceHandler } = require('./resourceHandlers');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -317,7 +322,11 @@ function buildManagedToolContextInput(input, args) {
                 ...((input.requestContext && typeof input.requestContext === 'object') ? input.requestContext : {})
             }
             : input.requestContext,
-        authContext: input.authContext || args.authContext
+        // in-process adapter 只信任组装根注入的 trustedCredentialContext；
+        // MCP params（args）传入的 authContext 一律剥离身份与 trusted 标记（§5.1）。
+        authContext: isTrustedCredentialContext(input.authContext)
+            ? input.authContext
+            : sanitizeUntrustedAuthContext(input.authContext || args.authContext)
     };
 }
 
@@ -589,6 +598,23 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
             field: 'name',
             name
         });
+    }
+    // §3.5 两层授权（M1.S2.T3）：trusted context 携带 resolver 产出的
+    // scopes 时按 catalog credentialAction 检查；scope 不足统一 FORBIDDEN。
+    // 未携带（阶段 A admin_transition）与 authenticated 动作跳过凭据层。
+    const credentialAction = operation.credentialAction;
+    if (credentialAction && credentialAction !== 'authenticated'
+        && isTrustedCredentialContext(input.authContext)
+        && Array.isArray(input.authContext.scopes)) {
+        const requiredScopes = ACTION_SCOPES[credentialAction] || [];
+        const granted = input.authContext.scopes.some((scope) => requiredScopes.includes(scope));
+        if (!granted) {
+            throw createMcpError(MCP_ERROR_CODES.FORBIDDEN, `Credential lacks scope for "${credentialAction}"`, {
+                field: 'credentialAction',
+                name,
+                credentialAction
+            });
+        }
     }
     const validationErrors = validateGatewayToolArguments(name, {
         ...args,
