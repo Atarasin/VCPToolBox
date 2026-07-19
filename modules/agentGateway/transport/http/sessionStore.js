@@ -1,3 +1,6 @@
+const TERMINATED_TOMBSTONE_LIMIT = 256;
+const TOMBSTONE_REASONS = new Set(['session_deleted', 'initialize_failed']);
+
 function createSessionStore({
     normalizeId = (value) => String(value || ''),
     standardIdleMs,
@@ -7,6 +10,15 @@ function createSessionStore({
 }) {
     const standard = new Map();
     const discovery = new Map();
+    const terminated = new Set();
+
+    function recordTermination(sessionId) {
+        terminated.delete(sessionId);
+        terminated.add(sessionId);
+        while (terminated.size > TERMINATED_TOMBSTONE_LIMIT) {
+            terminated.delete(terminated.values().next().value);
+        }
+    }
 
     function getMap(session) {
         return session.kind === 'discovery' ? discovery : standard;
@@ -20,6 +32,7 @@ function createSessionStore({
     async function destroy(session, reason = 'session_deleted') {
         if (!session || session.cleanedUp) return;
         session.cleanedUp = true;
+        if (TOMBSTONE_REASONS.has(reason)) recordTermination(session.context.sessionId);
         standard.delete(session.context.sessionId);
         discovery.delete(session.context.sessionId);
         clearTimer(session);
@@ -66,6 +79,10 @@ function createSessionStore({
             return id ? standard.get(id) || discovery.get(id) || null : null;
         },
         touch,
+        isTerminated(sessionId) {
+            const id = normalizeId(sessionId);
+            return Boolean(id) && terminated.has(id);
+        },
         async closeAll(reason = 'server_close') {
             await Promise.all([...standard.values(), ...discovery.values()].map((session) => destroy(session, reason)));
         },
