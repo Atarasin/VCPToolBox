@@ -24,6 +24,8 @@ function mapGatewayFailureToMcpErrorCode(code) {
         return MCP_ERROR_CODES.NOT_FOUND;
     case AGW_ERROR_CODES.TIMEOUT:
         return MCP_ERROR_CODES.TIMEOUT;
+    case AGW_ERROR_CODES.CONFIG_UNAVAILABLE:
+        return MCP_ERROR_CODES.SERVICE_UNAVAILABLE;
     default:
         return MCP_ERROR_CODES.RUNTIME_ERROR;
     }

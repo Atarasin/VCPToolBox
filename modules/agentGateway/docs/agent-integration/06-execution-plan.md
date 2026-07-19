@@ -41,12 +41,12 @@
 
 依赖：S1、S2。
 
-- [ ] T1 实现 `integrationSnapshotCoordinator`（§4.3）：内容/调优候选变化时读取关联配置全集，交叉校验后一次性发布 `{ revision, contentHashes, agents }` 冻结快照。
-- [ ] T2 内容/调优配置的 last-known-good 语义：热加载失败保留旧快照，记录失败 content hash 与当前有效 revision；初始失败 health degraded + `AGW_CONFIG_UNAVAILABLE`。
-- [ ] T3 身份/授权配置的分域 security snapshot + fail-closed 语义（§4.3 第 2 类；实际 credential resolver 在 M1.S1 接入）。
-- [ ] T4 health 分域暴露：guidance 不可用 / credential 文件不可用 / pepper keyring 不可用 / authorization policy 不可用。
-- [ ] T5 新增 `AGW_CONFIG_UNAVAILABLE` 与 MCP `MCP_SERVICE_UNAVAILABLE` 错误码及映射。
-- [ ] T6 验收：§8「配置」行全部用例（初始失败/恢复、交叉引用错误、content hash、同 mtime/size、原子 rename、revision 一致性）。
+- [x] T1 实现 `integrationSnapshotCoordinator`（§4.3）：内容/调优候选变化时读取关联配置全集，交叉校验后一次性发布 `{ revision, contentHashes, agents }` 冻结快照。
+- [x] T2 内容/调优配置的 last-known-good 语义：热加载失败保留旧快照，记录失败 content hash 与当前有效 revision；初始失败 health degraded + `AGW_CONFIG_UNAVAILABLE`。
+- [x] T3 身份/授权配置的分域 security snapshot + fail-closed 语义（§4.3 第 2 类；实际 credential resolver 在 M1.S1 接入）。
+- [x] T4 health 分域暴露：guidance 不可用 / credential 文件不可用 / pepper keyring 不可用 / authorization policy 不可用。
+- [x] T5 新增 `AGW_CONFIG_UNAVAILABLE` 与 MCP `MCP_SERVICE_UNAVAILABLE` 错误码及映射。
+- [x] T6 验收：§8「配置」行全部用例（初始失败/恢复、交叉引用错误、content hash、同 mtime/size、原子 rename、revision 一致性）。
 
 ### M0.S4 Tool description 重写
 
