@@ -18,6 +18,10 @@ const {
 } = require('./policy/trustedCredentialContext');
 const { extractPresentedCredential } = require('./policy/gatewayRequestContext');
 const {
+    DISCOVERY_SNAPSHOT_HOLDER,
+    createDiscoverySnapshotHolder
+} = require('./policy/discoverySnapshot');
+const {
     createJsonRpcErrorResponse,
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime
@@ -208,7 +212,7 @@ function createWebSocketState(options) {
             DEFAULT_RATE_LIMIT_WINDOW_MS),
         idleTimeoutMs: resolvePositiveInteger(options.idleTimeoutMs) ||
             resolvePositiveInteger(process.env[IDLE_TIMEOUT_MS_ENV]) || 0,
-        initializeRuntime: options.initializeRuntime || initializeBackendProxyMcpRuntime,
+        initializeRuntime: options.initializeRuntime || ((runtimeOptions) => initializeBackendProxyMcpRuntime({ ...runtimeOptions, discoveryDefaultAgentEnabled: false })),
         shutdownRuntime: options.shutdownRuntime || shutdownBackendProxyMcpRuntime,
         resolveAuth: options.resolveAuth || resolveDedicatedGatewayAuth,
         wss: new WebSocket.Server({ noServer: true, clientTracking: false, maxPayload: maxPayloadBytes }),
@@ -358,6 +362,7 @@ async function handleClientMessage(state, connection, rawMessage) {
 
 function registerConnection(state, ws, auth) {
         const context = createConnectionContext(auth, state.options);
+        context[DISCOVERY_SNAPSHOT_HOLDER] = createDiscoverySnapshotHolder();
         attachPresentedCredential(context, getPresentedCredential(auth));
         clearPresentedCredential(auth);
         const transport = validateMcpTransport(new WebSocketTransport(ws, state.options.transportOptions));

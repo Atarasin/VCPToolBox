@@ -191,7 +191,7 @@ function createGatewayRequestContextBuilder({
         // 两者 token 冲突在 snapshot 校验层拒绝（M1.S3）。
         let authResult = null;
         if (resolveBuiltinCredential) {
-            const builtin = await resolveBuiltinCredential({ token, headers, requestContext });
+            const builtin = await resolveBuiltinCredential({ token, headers, requestContext, entry });
             if (builtin?.matched) {
                 authResult = builtin.result;
             }

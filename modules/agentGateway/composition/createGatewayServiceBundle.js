@@ -57,9 +57,83 @@ const {
     createRecallProjectionService
 } = require('../services/recallProjectionService');
 const { bindVcpPorts } = require('./vcpPortBindings');
+const { getProtocolGovernanceConfig } = require('../contracts/protocolGovernance');
+const { createCredentialResolver } = require('../policy/credentialResolver');
+const {
+    createAuthMigrationMetrics,
+    createBuiltinCredentialResolver,
+    readMigrationSwitches
+} = require('../policy/builtinCredentials');
+const { createGatewayRequestContextBuilder } = require('../policy/gatewayRequestContext');
+const {
+    createAdminGatewaySessionStore,
+    createInMemoryAdminSessionBackend
+} = require('../policy/adminGatewaySessionStore');
+const { parseBoolean: parseEnvBoolean } = require('../policy/shared/normalize');
+
 const DEFAULT_GATEWAY_VERSION = 'v1';
 const DEFAULT_AUDIT_PREFIX = '[AgentGatewayAudit]';
 const DEFAULT_MEMORY_BRIDGE_TOOL_NAME = 'vcp_memory_write';
+
+/**
+ * 统一身份决议服务（M1）：文件 credential resolver + 内置 credential +
+ * `buildGatewayRequestContext()`，供 Native routes 与 MCP transports 复用。
+ */
+function parseCookieHeader(headers = {}) {
+    const header = typeof headers.cookie === 'string' ? headers.cookie : '';
+    const cookies = {};
+    for (const part of header.split(';')) {
+        const [key, ...rest] = part.trim().split('=');
+        if (key) cookies[key] = decodeURIComponent(rest.join('=') || '');
+    }
+    return cookies;
+}
+
+function resolveAdminSessionStoreForBundle(pluginManager) {
+    const injectedBackend = pluginManager?.agentGatewayAdminSessionBackend || null;
+    const allowDevStore = parseEnvBoolean(process.env.AGENT_GATEWAY_ADMIN_SESSION_DEV_STORE, false);
+    if (!injectedBackend && !allowDevStore) return null;
+    return createAdminGatewaySessionStore({
+        backend: injectedBackend || createInMemoryAdminSessionBackend()
+    });
+}
+
+function createGatewayCredentialService({ auditLogger, pluginManager, protocolConfig } = {}) {
+    const switches = readMigrationSwitches();
+    const adminSessionStore = resolveAdminSessionStoreForBundle(pluginManager);
+    const credentialResolver = createCredentialResolver({
+        credentialsPath: process.env.AGENT_GATEWAY_CREDENTIALS_PATH,
+        pepperKeyringPath: process.env.AGENT_GATEWAY_CREDENTIAL_PEPPERS_PATH,
+        legacyCredentialEnabled: !switches.legacyKeyDisabled,
+        allowLegacyScopeNames: !switches.legacyScopeNamesDisabled
+    });
+    const authMigrationMetrics = createAuthMigrationMetrics();
+    const builtinCredentialResolver = createBuiltinCredentialResolver({
+        gatewayKey: getProtocolGovernanceConfig(protocolConfig || {}).gatewayKey,
+        adminSessionStore,
+        switches,
+        authMigrationMetrics
+    });
+    const contextBuilder = createGatewayRequestContextBuilder({
+        credentialResolver,
+        resolveBuiltinCredential: ({ token, headers, entry }) => builtinCredentialResolver.resolveBuiltinCredential({
+            token,
+            surface: String(entry || '').startsWith('mcp') ? 'mcp' : 'native',
+            adminSessionId: parseCookieHeader(headers).agw_admin_session || '',
+            csrfToken: typeof headers?.['x-agent-gateway-csrf'] === 'string' ? headers['x-agent-gateway-csrf'] : null
+        }),
+        auditLogger
+    });
+    return Object.freeze({
+        adminSessionStore,
+        credentialResolver,
+        builtinCredentialResolver,
+        authMigrationMetrics,
+        switches,
+        buildGatewayRequestContext: contextBuilder.buildGatewayRequestContext,
+        authorizeTarget: contextBuilder.authorizeTarget
+    });
+}
 
 /**
  * 统一构建并缓存 Gateway Core 的共享 service bundle。
@@ -180,6 +254,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         recallProfileResolver
     });
     const recallProjectionService = createRecallProjectionService();
+    const gatewayCredentialService = createGatewayCredentialService({ auditLogger, pluginManager, protocolConfig: ports.configuration.protocol });
 
     pluginManager.__agentGatewayServiceBundle = {
         ports,
@@ -199,6 +274,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         recallProfileResolver,
         recallRuntimeService,
         recallProjectionService,
+        gatewayCredentialService,
         jobStatus: JOB_STATUS,
         gatewayVersion: options.gatewayVersion || DEFAULT_GATEWAY_VERSION,
         memoryBridgeToolName: options.memoryBridgeToolName || DEFAULT_MEMORY_BRIDGE_TOOL_NAME

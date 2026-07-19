@@ -32,6 +32,9 @@ async function createBackendRuntime(options = {}) {
         harness: createBackendProxyMcpServerHarness({
             backendClient,
             defaultAgentId,
+            // §3.4 T4：VCP_MCP_DEFAULT_AGENT_ID 只保留给 stdio 开发兼容；
+            // 外部 HTTP/WS transport 显式传 false 关闭 discovery 参与。
+            discoveryDefaultAgentEnabled: options.discoveryDefaultAgentEnabled !== false,
             includeAgentRender: options.includeAgentRender !== false
         })
     };

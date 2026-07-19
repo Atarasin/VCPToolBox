@@ -4,6 +4,7 @@ const {
     attachPresentedCredential,
     getPresentedCredential
 } = require('../../policy/trustedCredentialContext');
+const { DISCOVERY_SNAPSHOT_HOLDER } = require('../../policy/discoverySnapshot');
 
 function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -32,6 +33,9 @@ function injectMcpContext(request, context, options = {}) {
     const injectedParams = { ...params };
     if (presentedCredential) {
         attachPresentedCredential(injectedParams, presentedCredential);
+    }
+    if (context[DISCOVERY_SNAPSHOT_HOLDER]) {
+        injectedParams[DISCOVERY_SNAPSHOT_HOLDER] = context[DISCOVERY_SNAPSHOT_HOLDER];
     }
     return {
         ...requestObject,

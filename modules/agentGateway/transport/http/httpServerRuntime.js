@@ -5,6 +5,10 @@ const { sanitizeRequestContextValue } = require('../../contracts/requestContext'
 const { checkSlidingWindowRateLimit, createSlidingWindowRateLimit, injectMcpContext } = require('../shared');
 const { attachPresentedCredential } = require('../../policy/trustedCredentialContext');
 const { extractPresentedCredential } = require('../../policy/gatewayRequestContext');
+const {
+    DISCOVERY_SNAPSHOT_HOLDER,
+    createDiscoverySnapshotHolder
+} = require('../../policy/discoverySnapshot');
 const { createSessionStore } = require('./sessionStore');
 
 function extractRequestToken(headers) {
@@ -100,6 +104,8 @@ class HttpServerRuntime {
 
     createSession(auth, profile = {}) {
         const context = this.createSessionContext(auth, this.options, profile);
+        // initialize/短 TTL discovery session 均按 session 冻结 discovery（§3.4）
+        context[DISCOVERY_SNAPSHOT_HOLDER] = createDiscoverySnapshotHolder();
         const session = { cleanedUp: false, kind: profile.kind === 'discovery' ? 'discovery' : 'standard',
             context, createdAt: Date.now(), lastActivityAt: Date.now(),
             rateLimit: createSlidingWindowRateLimit({ limit: this.rateLimitMessages,

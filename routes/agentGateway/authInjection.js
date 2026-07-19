@@ -11,61 +11,99 @@ const {
 const { ADMIN_SESSION_COOKIE, CSRF_HEADER, parseCookies } = require('./authSessionRoutes');
 
 /**
- * 单一认证注入点（§3.3 / M1.S3.T7）。
+ * 单一认证注入点（§3.3 / M1.S3.T7 / M1.S5）。
  *
- * 收编原 `req.agentGatewayAuth`（server.js adminAuth 写入）与
- * `req.agentGatewayDedicatedAuth`（原 systemRoutes registrar 写入）的命名
- * 裂缝：本中间件在 createAgentGatewayRoutes 中显式最先挂载（不再依赖
- * ROUTE_REGISTRARS 注册顺序），产出唯一的 `req.agentGatewayAuth`。
+ * 收编原 `req.agentGatewayAuth` / `req.agentGatewayDedicatedAuth` 命名裂缝，
+ * 在 createAgentGatewayRoutes 中显式最先挂载（不依赖 registrar 顺序）。
  *
- * 注入内容：
- * - dedicated gateway key 认证结果（保持既有 401 行为）
- * - outerAuthenticated 标记（既有 adminAuth Basic/cookie 兜底，仅供
- *   pre-credential bridge 使用）
- * - admin session cookie 的 opaque id 与 CSRF header（供 builtin credential
- *   解析与 bridge DELETE 使用；此处不做 session 校验）
+ * 决议顺序：
+ * 1. 呈现了 credential（gateway key / bearer / admin session cookie）→ 经
+ *    `gatewayCredentialService.buildGatewayRequestContext()` 统一决议
+ *    （文件 credential、legacy key、admin session 走同一张决议表）。
+ *    认证失败按其错误码返回（401/429/503）。
+ * 2. 仅有 adminAuth Basic（outerAuthenticated）而无 Gateway credential →
+ *    只允许 pre-credential bridge（POST /auth/admin-session），
+ *    其余业务入口 401（§3.3）。
+ * 3. 什么都没呈现 → 阶段 A 过渡语义（admin_transition），生产环境由
+ *    server.js adminAuth 在外层拦截。
  */
 function createAuthInjectionMiddleware(context) {
-    const { protocolConfig } = context;
+    const { protocolConfig, gatewayCredentialService } = context;
 
-    return function authInjection(req, res, next) {
+    return async function authInjection(req, res, next) {
         const outerAuth = req.agentGatewayAuth && typeof req.agentGatewayAuth === 'object'
             ? req.agentGatewayAuth
             : null;
         const outerAuthenticated = outerAuth?.outerAuthenticated === true;
-
-        // outer 层若已完成 dedicated key 认证则复用其结果，否则统一在此解析
         const dedicatedAuth = outerAuth && !outerAuthenticated
             ? outerAuth
             : resolveDedicatedGatewayAuth({ headers: req.headers, config: protocolConfig });
 
         const cookies = parseCookies(req);
+        const adminSessionId = cookies[ADMIN_SESSION_COOKIE] || '';
+        const csrfToken = typeof req.headers[CSRF_HEADER] === 'string' ? req.headers[CSRF_HEADER] : '';
         const unifiedAuth = {
             ...dedicatedAuth,
             outerAuthenticated,
-            adminSessionId: cookies[ADMIN_SESSION_COOKIE] || '',
-            csrfToken: typeof req.headers[CSRF_HEADER] === 'string' ? req.headers[CSRF_HEADER] : ''
+            adminSessionId,
+            csrfToken,
+            credentialContext: null
         };
         req.agentGatewayAuth = unifiedAuth;
-        // 过渡期兼容别名：与 canonical 对象同引用，禁止在新代码中使用
+        // 过渡期兼容别名（同引用）；新代码一律使用 req.agentGatewayAuth
         req.agentGatewayDedicatedAuth = unifiedAuth;
 
-        if (dedicatedAuth.provided && !dedicatedAuth.authenticated) {
+        const sendAuthError = (status, code, error, extra = {}) => {
             const requestContext = createNativeRequestContext(
-                req,
-                req.body?.requestContext || req.query,
-                'agent-gateway-auth'
+                req, req.body?.requestContext || req.query, 'agent-gateway-auth'
             );
             return sendNativeError(res, {
-                status: 401,
+                status,
                 requestId: requestContext.requestId,
                 startedAt: Date.now(),
-                code: AGW_ERROR_CODES.UNAUTHORIZED,
-                error: 'Invalid agent gateway credentials',
-                details: { authSource: dedicatedAuth.authSource },
-                extraHeaders: { [AGENT_GATEWAY_HEADERS.TRACE_ID]: requestContext.traceId },
+                code,
+                error,
+                details: { authSource: dedicatedAuth.authSource, ...extra },
+                extraHeaders: {
+                    [AGENT_GATEWAY_HEADERS.TRACE_ID]: requestContext.traceId,
+                    ...(extra.retryAfterMs ? { 'retry-after': Math.max(1, Math.ceil(extra.retryAfterMs / 1000)) } : {})
+                },
                 extraMeta: buildNativeResponseMeta(dedicatedAuth, { traceId: requestContext.traceId })
             });
+        };
+
+        const isBridgeRequest = req.path === '/auth/admin-session';
+        const credentialPresented = Boolean(dedicatedAuth.provided) || Boolean(adminSessionId);
+
+        if (credentialPresented && gatewayCredentialService && !isBridgeRequest) {
+            const credentialContext = await gatewayCredentialService.buildGatewayRequestContext({
+                headers: req.headers,
+                clientIp: req.ip || req.socket?.remoteAddress || '',
+                targetCandidates: {},
+                requiresAgent: false,
+                entry: 'native-rest'
+            });
+            if (!credentialContext.ok) {
+                // legacy 静态 key 校验通过但文件/内置决议失败的组合不应出现——
+                // legacy key 即内置 credential；任何失败按统一错误码返回。
+                const status = credentialContext.httpStatus || 401;
+                return sendAuthError(status, credentialContext.code, 'Agent gateway authentication failed', {
+                    ...(credentialContext.retryAfterMs ? { retryAfterMs: credentialContext.retryAfterMs } : {})
+                });
+            }
+            unifiedAuth.credentialContext = credentialContext;
+            unifiedAuth.authenticated = true;
+            return next();
+        }
+
+        if (outerAuthenticated && !credentialPresented && !isBridgeRequest) {
+            // pre-credential bridge 只允许 session POST（§3.3）
+            return sendAuthError(401, AGW_ERROR_CODES.UNAUTHORIZED,
+                'Create a gateway admin session before accessing agent business surfaces');
+        }
+
+        if (dedicatedAuth.provided && !dedicatedAuth.authenticated && !gatewayCredentialService) {
+            return sendAuthError(401, AGW_ERROR_CODES.UNAUTHORIZED, 'Invalid agent gateway credentials');
         }
 
         return next();

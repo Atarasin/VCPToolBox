@@ -113,12 +113,12 @@
 
 依赖：S2。
 
-- [ ] T1 bound/unbound/admin 的 tools/resources/prompts list 确定规则(§3.4 补充规则;不依赖非标准 discovery agentId,越界返回空集合)。
-- [ ] T2 initialize-time 冻结 discovery snapshot:`{ discoveryRevision, tools, resources, prompts, visibleAgents }`,cursor 绑定 revision,保持 `listChanged:false`(§3.4)。
-- [ ] T3 HTTP 自愈 discovery 的短 TTL discovery session 同规则冻结。
-- [ ] T4 外部 HTTP/WS discovery 移除 `VCP_MCP_DEFAULT_AGENT_ID` 授权参与(仅保留 §5.5 stdio 开发兼容)。
-- [ ] T5 Native `/agents` 按相同可见集合过滤(§3.4)。
-- [ ] T6 验收:§8「discovery」行用例。
+- [x] T1 bound/unbound/admin 的 tools/resources/prompts list 确定规则(§3.4 补充规则;不依赖非标准 discovery agentId,越界返回空集合)。
+- [x] T2 initialize-time 冻结 discovery snapshot:`{ discoveryRevision, tools, resources, prompts, visibleAgents }`,cursor 绑定 revision,保持 `listChanged:false`(§3.4)。
+- [x] T3 HTTP 自愈 discovery 的短 TTL discovery session 同规则冻结。
+- [x] T4 外部 HTTP/WS discovery 移除 `VCP_MCP_DEFAULT_AGENT_ID` 授权参与(仅保留 §5.5 stdio 开发兼容)。
+- [x] T5 Native `/agents` 按相同可见集合过滤(§3.4)。
+- [x] T6 验收:§8「discovery」行用例。
 
 ### M1.S6 间接对象所有权与吊销传播
 
