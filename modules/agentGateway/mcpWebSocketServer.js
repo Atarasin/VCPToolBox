@@ -213,7 +213,7 @@ function createWebSocketState(options) {
             DEFAULT_RATE_LIMIT_WINDOW_MS),
         idleTimeoutMs: resolvePositiveInteger(options.idleTimeoutMs) ||
             resolvePositiveInteger(process.env[IDLE_TIMEOUT_MS_ENV]) || 0,
-        initializeRuntime: options.initializeRuntime || ((runtimeOptions) => initializeBackendProxyMcpRuntime({ ...runtimeOptions, discoveryDefaultAgentEnabled: false })),
+        initializeRuntime: options.initializeRuntime || ((runtimeOptions) => initializeBackendProxyMcpRuntime({ ...runtimeOptions, discoveryDefaultAgentEnabled: false, requireRequestAuthOverride: true })),
         shutdownRuntime: options.shutdownRuntime || shutdownBackendProxyMcpRuntime,
         resolveAuth: options.resolveAuth || resolveDedicatedGatewayAuth,
         wss: new WebSocket.Server({ noServer: true, clientTracking: false, maxPayload: maxPayloadBytes }),
