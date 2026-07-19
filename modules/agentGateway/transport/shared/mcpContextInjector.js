@@ -1,5 +1,9 @@
 const { normalizeRequestContext, sanitizeRequestContextValue } = require('../../contracts/requestContext');
 const { resolveTraceId } = require('../../infra/trace');
+const {
+    attachPresentedCredential,
+    getPresentedCredential
+} = require('../../policy/trustedCredentialContext');
 
 function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -22,10 +26,17 @@ function injectMcpContext(request, context, options = {}) {
         requestIdPrefix: sanitizeRequestContextValue(options.requestIdPrefix, 16) || 'agwmcp'
     });
     normalized.traceId = resolveTraceId(clientContext.traceId, 'agwop');
+    // transport 私有通道：session/connection context 中的 presented credential
+    // 经 Symbol 属性传给 executor（不进 JSON 序列化，params 中的伪造值被忽略）。
+    const presentedCredential = getPresentedCredential(context);
+    const injectedParams = { ...params };
+    if (presentedCredential) {
+        attachPresentedCredential(injectedParams, presentedCredential);
+    }
     return {
         ...requestObject,
         params: {
-            ...params,
+            ...injectedParams,
             ...(topLevelAgentId || normalized.agentId ? { agentId: topLevelAgentId || normalized.agentId } : {}),
             sessionId: context.sessionId,
             ...(options.signal ? { signal: options.signal } : {}),

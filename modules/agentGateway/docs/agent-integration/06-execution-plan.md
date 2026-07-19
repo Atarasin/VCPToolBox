@@ -102,12 +102,12 @@
 
 依赖：S2。与 S3 并行。
 
-- [ ] T1 HTTP/WS transport 私有保存 presented token(不进 params/context/日志/审计;销毁时清引用,§3.3)。
-- [ ] T2 `GatewayBackendClient` request-scoped auth override,**改造 `createHeaders()` 覆盖顺序**:override 生效时互斥清除全部静态凭据通道(§3.3 点名陷阱)。
-- [ ] T3 HTTP/WS 生产路径禁止静态 backend key fallback,凭据丢失 fail-closed 401;静态 credential 仅限 stdio 单身份进程(§3.3)。
-- [ ] T4 backend 双侧解析一致性:`credentialId`/`credentialSubject`/`effectiveAgentId` 必须一致,revision 差异走 `isSessionCredentialCompatible()`(§5.1)。
-- [ ] T5 in-process adapter 只接受 resolver 构建的 `trustedCredentialContext`;MCP params 传入的 authContext 不得标记 trusted(§5.1;现状 `buildManagedToolContextInput` 合并 `args.requestContext` 的信任缺口在此关闭)。
-- [ ] T6 验收:§8「transport」行用例(含 override 与静态凭据并存组合)。
+- [x] T1 HTTP/WS transport 私有保存 presented token(不进 params/context/日志/审计;销毁时清引用,§3.3)。
+- [x] T2 `GatewayBackendClient` request-scoped auth override,**改造 `createHeaders()` 覆盖顺序**:override 生效时互斥清除全部静态凭据通道(§3.3 点名陷阱)。
+- [x] T3 HTTP/WS 生产路径禁止静态 backend key fallback,凭据丢失 fail-closed 401;静态 credential 仅限 stdio 单身份进程(§3.3)。
+- [x] T4 backend 双侧解析一致性:`credentialId`/`credentialSubject`/`effectiveAgentId` 必须一致,revision 差异走 `isSessionCredentialCompatible()`(§5.1)。
+- [x] T5 in-process adapter 只接受 resolver 构建的 `trustedCredentialContext`;MCP params 传入的 authContext 不得标记 trusted(§5.1;现状 `buildManagedToolContextInput` 合并 `args.requestContext` 的信任缺口在此关闭)。
+- [x] T6 验收:§8「transport」行用例(含 override 与静态凭据并存组合)。
 
 ### M1.S5 Discovery 确定规则与冻结快照
 

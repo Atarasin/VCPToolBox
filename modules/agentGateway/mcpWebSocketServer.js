@@ -12,6 +12,12 @@ const { resolveDedicatedGatewayAuth } = require('./contracts/protocolGovernance'
 const { createProtocolConfigSnapshot } = require('./composition/vcpPortBindings');
 const { WebSocketTransport, validateMcpTransport } = require('./transport');
 const {
+    attachPresentedCredential,
+    clearPresentedCredential,
+    getPresentedCredential
+} = require('./policy/trustedCredentialContext');
+const { extractPresentedCredential } = require('./policy/gatewayRequestContext');
+const {
     createJsonRpcErrorResponse,
     initializeBackendProxyMcpRuntime,
     shutdownBackendProxyMcpRuntime
@@ -285,6 +291,8 @@ async function cleanupConnection(state, connection, _reason = 'cleanup') {
 
         connection.cleanedUp = true;
         state.connections.delete(connection.connectionId);
+        // 销毁时清除对 presented token 的引用（§3.3）
+        clearPresentedCredential(connection.context);
 
         if (connection.heartbeatTimer) {
             clearInterval(connection.heartbeatTimer);
@@ -350,6 +358,8 @@ async function handleClientMessage(state, connection, rawMessage) {
 
 function registerConnection(state, ws, auth) {
         const context = createConnectionContext(auth, state.options);
+        attachPresentedCredential(context, getPresentedCredential(auth));
+        clearPresentedCredential(auth);
         const transport = validateMcpTransport(new WebSocketTransport(ws, state.options.transportOptions));
         const connection = {
             ws,
@@ -468,6 +478,14 @@ async function handleUpgrade(state, request, socket, head) {
         if (!auth.provided || !auth.authenticated) {
             destroySocket(socket);
             return;
+        }
+
+        // presented token 存入 transport 私有通道（Symbol），供逐消息透传 backend
+        {
+            const extracted = extractPresentedCredential(request.headers);
+            if (!extracted.conflict && extracted.token) {
+                attachPresentedCredential(auth, extracted.token);
+            }
         }
 
         try {

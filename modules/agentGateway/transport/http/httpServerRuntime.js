@@ -3,7 +3,14 @@
 const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('../../contracts/requestContext');
 const { checkSlidingWindowRateLimit, createSlidingWindowRateLimit, injectMcpContext } = require('../shared');
+const { attachPresentedCredential } = require('../../policy/trustedCredentialContext');
+const { extractPresentedCredential } = require('../../policy/gatewayRequestContext');
 const { createSessionStore } = require('./sessionStore');
+
+function extractRequestToken(headers) {
+    const extracted = extractPresentedCredential(headers);
+    return extracted.conflict ? '' : extracted.token;
+}
 const {
     createPayloadTooLargeErrorResponse,
     createRateLimitErrorResponse,
@@ -174,6 +181,9 @@ class HttpServerRuntime {
         this.sessionStore.touch(session);
         try {
             const harness = await this.resolveHarness();
+            // 逐请求把 presented credential 存入 transport 私有通道（Symbol，
+            // 不进 params/日志），供 backend-proxy request-scoped 透传（§3.3）。
+            attachPresentedCredential(session.context, extractRequestToken(req.headers));
             const withContext = injectMcpContext(request, session.context, {
                 requestIdPrefix: this.options.requestIdPrefix, signal: controller.signal });
             const response = await harness.handleRequest(withContext);

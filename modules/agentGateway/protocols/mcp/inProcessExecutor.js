@@ -46,6 +46,10 @@ const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
 const { IN_PROCESS_OPERATION_HANDLERS, attachRequestId, mapAgentRegistryError, callMcpTool } = require('./inProcessOperations');
+const {
+    isTrustedCredentialContext,
+    sanitizeUntrustedAuthContext
+} = require('../../policy/trustedCredentialContext');
 const { createReadResourceHandler } = require('./resourceHandlers');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -317,7 +321,11 @@ function buildManagedToolContextInput(input, args) {
                 ...((input.requestContext && typeof input.requestContext === 'object') ? input.requestContext : {})
             }
             : input.requestContext,
-        authContext: input.authContext || args.authContext
+        // in-process adapter 只信任组装根注入的 trustedCredentialContext；
+        // MCP params（args）传入的 authContext 一律剥离身份与 trusted 标记（§5.1）。
+        authContext: isTrustedCredentialContext(input.authContext)
+            ? input.authContext
+            : sanitizeUntrustedAuthContext(input.authContext || args.authContext)
     };
 }
 

@@ -28,6 +28,7 @@ const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
 const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
+const { getPresentedCredential } = require('../../policy/trustedCredentialContext');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
 
@@ -345,9 +346,12 @@ function buildBody(input, args, { requireSession = true, defaultAgentId = '', de
 
 function buildRequestOptions(input) {
     const traceId = normalizeMcpString(input?.requestContext?.traceId, 128);
+    // transport 私有通道透传的 presented credential（Symbol 属性，不进 JSON/日志）
+    const presentedCredential = getPresentedCredential(input);
     return {
         ...(input?.signal ? { signal: input.signal } : {}),
-        ...(traceId ? { headers: { 'x-agent-gateway-trace-id': traceId } } : {})
+        ...(traceId ? { headers: { 'x-agent-gateway-trace-id': traceId } } : {}),
+        ...(presentedCredential ? { authOverride: { token: presentedCredential } } : {})
     };
 }
 

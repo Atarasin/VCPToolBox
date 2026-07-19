@@ -1,3 +1,5 @@
+const { clearPresentedCredential } = require('../../policy/trustedCredentialContext');
+
 function createSessionStore({
     normalizeId = (value) => String(value || ''),
     standardIdleMs,
@@ -23,6 +25,8 @@ function createSessionStore({
         standard.delete(session.context.sessionId);
         discovery.delete(session.context.sessionId);
         clearTimer(session);
+        // 销毁时清除对 presented token 的引用（§3.3）
+        clearPresentedCredential(session.context);
         await onDestroy(session, reason);
     }
 

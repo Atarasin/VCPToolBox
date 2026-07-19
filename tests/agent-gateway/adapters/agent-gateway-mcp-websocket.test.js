@@ -385,7 +385,14 @@ function assertNoTopologyLeak(response) {
 async function createBackendProxyClient(t, options = {}) {
     let backendServer = null;
     if (!options.backendUrl) {
-        backendServer = await createNativeServer(options.backendPluginManager || createPluginManager());
+        // M1.S4：backend-proxy 逐请求透传边缘 credential，backend 必须能认同一把 key
+        const backendPluginManager = options.backendPluginManager || createPluginManager();
+        backendPluginManager.agentGatewayProtocolConfig = {
+            ...(backendPluginManager.agentGatewayProtocolConfig || {}),
+            gatewayKey: 'gw-secret',
+            gatewayId: 'gw-websocket-test'
+        };
+        backendServer = await createNativeServer(backendPluginManager);
         t.after(async () => backendServer.close());
     }
 
