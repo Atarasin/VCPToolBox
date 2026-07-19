@@ -32,10 +32,10 @@
 
 依赖：无（与 S1 并行）。
 
-- [ ] T1 为 canonical operation/surface catalog 增加互斥的 `credentialAction: "read"|"execute"|"authenticated"` 与 `authMechanism: "adminAuthBridge"` 字段（§3.5）；REST 与 MCP binding 引用同一 canonical action。
-- [ ] T2 登记不完全对应业务 operation 的 surface：initialize、discovery、resource read、skill download、admin session bridge。
-- [ ] T3 生成器与启动校验：两者皆无、两者并存、未知 scope/mechanism、binding action 不一致 → fail-fast（按 §3.5 定义：拒绝发布候选 snapshot，health 标记 degraded，仅 strict startup 下进程退出）。
-- [ ] T4 验收：§8「scope」「契约」行中 catalog 相关用例；`tools/list` descriptor 与 auth policy catalog 快照评审。
+- [x] T1 为 canonical operation/surface catalog 增加互斥的 `credentialAction: "read"|"execute"|"authenticated"` 与 `authMechanism: "adminAuthBridge"` 字段（§3.5）；REST 与 MCP binding 引用同一 canonical action。
+- [x] T2 登记不完全对应业务 operation 的 surface：initialize、discovery、resource read、skill download、admin session bridge。
+- [x] T3 生成器与启动校验：两者皆无、两者并存、未知 scope/mechanism、binding action 不一致 → fail-fast（按 §3.5 定义：拒绝发布候选 snapshot，health 标记 degraded，仅 strict startup 下进程退出）。
+- [x] T4 验收：§8「scope」「契约」行中 catalog 相关用例；`tools/list` descriptor 与 auth policy catalog 快照评审。
 
 ### M0.S3 Snapshot 协调与分域 fail-closed
 

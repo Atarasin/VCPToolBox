@@ -61,7 +61,8 @@
           }
         }
       }
-    }
+    },
+    "authExclusion": "adminAuth"
   },
   {
     "operationId": "getAgentGatewayCapabilities",
@@ -129,7 +130,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "listAgentGatewayAgents",
@@ -175,7 +177,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "getAgentGatewayAgentDetail",
@@ -234,7 +237,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "renderAgentGatewayAgent",
@@ -291,7 +295,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "getAgentGatewayMetrics",
@@ -346,7 +351,8 @@
           }
         }
       }
-    }
+    },
+    "authExclusion": "adminAuth"
   },
   {
     "operationId": "listAgentGatewayMemoryTargets",
@@ -405,7 +411,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "searchAgentGatewayMemory",
@@ -482,7 +489,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "writeAgentGatewayMemory",
@@ -559,7 +567,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "execute"
   },
   {
     "operationId": "assembleAgentGatewayContext",
@@ -645,7 +654,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "runAgentGatewayRecall",
@@ -722,7 +732,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "invokeAgentGatewayTool",
@@ -818,7 +829,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "execute"
   },
   {
     "operationId": "getAgentGatewayJob",
@@ -894,7 +906,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   },
   {
     "operationId": "cancelAgentGatewayJob",
@@ -969,7 +982,8 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "execute"
   },
   {
     "operationId": "streamAgentGatewayEvents",
@@ -1061,6 +1075,7 @@
           }
         }
       }
-    }
+    },
+    "credentialAction": "read"
   }
 ]

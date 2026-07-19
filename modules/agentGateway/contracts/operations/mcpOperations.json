@@ -59,7 +59,8 @@
       "requiresAgentOnly": true,
       "publishedAsTool": false,
       "executor": "render",
-      "backendExecutor": "removedRender"
+      "backendExecutor": "removedRender",
+      "credentialAction": "read"
     },
     "mcp": {
       "prompt": {
@@ -161,7 +162,8 @@
       "requiresAgentOnly": true,
       "asBootstrap": true,
       "executor": "render",
-      "backendExecutor": "render"
+      "backendExecutor": "render",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
@@ -246,7 +248,8 @@
       "source": "mcp-job-get",
       "requiresJobIdentity": true,
       "executor": "jobGet",
-      "backendExecutor": "jobGet"
+      "backendExecutor": "jobGet",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
@@ -304,7 +307,8 @@
       "source": "mcp-job-cancel",
       "requiresJobIdentity": true,
       "executor": "jobCancel",
-      "backendExecutor": "jobCancel"
+      "backendExecutor": "jobCancel",
+      "credentialAction": "execute"
     },
     "mcp": {
       "tool": {
@@ -416,7 +420,8 @@
       "source": "mcp-memory-search",
       "diaryPolicy": true,
       "executor": "memorySearch",
-      "backendExecutor": "memorySearch"
+      "backendExecutor": "memorySearch",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
@@ -591,7 +596,8 @@
       "source": "mcp-context-assemble",
       "diaryPolicy": true,
       "executor": "contextAssemble",
-      "backendExecutor": "contextAssemble"
+      "backendExecutor": "contextAssemble",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
@@ -762,7 +768,8 @@
       "operationName": "memory.write",
       "source": "mcp-memory-write",
       "executor": "memoryWrite",
-      "backendExecutor": "memoryWrite"
+      "backendExecutor": "memoryWrite",
+      "credentialAction": "execute"
     },
     "mcp": {
       "tool": {
@@ -880,7 +887,8 @@
       "source": "mcp-recall-run",
       "requireSession": false,
       "executor": "recallRun",
-      "backendExecutor": "recallRun"
+      "backendExecutor": "recallRun",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
