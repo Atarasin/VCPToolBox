@@ -1,0 +1,260 @@
+const { normalizeString, normalizeStringArray } = require('./shared/normalize');
+
+const SUPPORTED_CREDENTIAL_FILE_VERSION = 1;
+
+const CREDENTIAL_STATUSES = Object.freeze(['active', 'rotating', 'revoked', 'expired']);
+const CREDENTIAL_SCOPES = Object.freeze(['gateway:read', 'gateway:execute', 'admin']);
+const LEGACY_SCOPE_ALIASES = Object.freeze({
+    'mcp:read': 'gateway:read',
+    'mcp:execute': 'gateway:execute'
+});
+
+const TOKEN_DIGEST_PATTERN = /^hmac-sha256:[A-Fa-f0-9]{64}$/;
+const MIN_PEPPER_SECRET_BYTES = 32;
+
+function invalidField(fieldPath, message) {
+    return { path: fieldPath, message };
+}
+
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeScopes(rawScopes, fieldPath, errors, { allowLegacyScopeNames = true, warnings = [] } = {}) {
+    if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
+        errors.push(invalidField(fieldPath, 'must be a non-empty array of scope names'));
+        return [];
+    }
+    const scopes = [];
+    rawScopes.forEach((rawScope, index) => {
+        let scope = normalizeString(rawScope);
+        if (LEGACY_SCOPE_ALIASES[scope]) {
+            if (!allowLegacyScopeNames) {
+                errors.push(invalidField(`${fieldPath}[${index}]`, `legacy scope name "${scope}" is disabled (AGENT_GATEWAY_LEGACY_SCOPE_NAMES_DISABLED)`));
+                return;
+            }
+            warnings.push({
+                path: `${fieldPath}[${index}]`,
+                message: `legacy scope name "${scope}" mapped to "${LEGACY_SCOPE_ALIASES[scope]}"; migrate the credential file`
+            });
+            scope = LEGACY_SCOPE_ALIASES[scope];
+        }
+        if (!CREDENTIAL_SCOPES.includes(scope)) {
+            errors.push(invalidField(`${fieldPath}[${index}]`, `unknown scope "${scope || String(rawScope)}"`));
+            return;
+        }
+        if (!scopes.includes(scope)) {
+            scopes.push(scope);
+        }
+    });
+    return scopes;
+}
+
+function validateCredentialRecord(record, index, errors, options) {
+    const fieldPath = `$.credentials[${index}]`;
+    if (!isPlainObject(record)) {
+        errors.push(invalidField(fieldPath, 'must be an object'));
+        return null;
+    }
+
+    const credentialId = normalizeString(record.credentialId);
+    if (!credentialId) {
+        errors.push(invalidField(`${fieldPath}.credentialId`, 'is required and must be a non-empty string'));
+    }
+
+    const pepperKid = normalizeString(record.pepperKid);
+    if (!pepperKid) {
+        errors.push(invalidField(`${fieldPath}.pepperKid`, 'is required and must be a non-empty string'));
+    }
+
+    const tokenDigest = normalizeString(record.tokenDigest);
+    if (!TOKEN_DIGEST_PATTERN.test(tokenDigest)) {
+        errors.push(invalidField(`${fieldPath}.tokenDigest`, 'must match "hmac-sha256:<64 hex chars>"'));
+    }
+
+    let boundAgentId = null;
+    if (record.boundAgentId !== null && record.boundAgentId !== undefined) {
+        boundAgentId = normalizeString(record.boundAgentId);
+        if (!boundAgentId) {
+            errors.push(invalidField(`${fieldPath}.boundAgentId`, 'must be null or a non-empty string'));
+            boundAgentId = null;
+        }
+    }
+
+    let allowedAgents;
+    if (record.allowedAgents !== undefined) {
+        if (boundAgentId) {
+            errors.push(invalidField(`${fieldPath}.allowedAgents`, 'is only meaningful when boundAgentId is null'));
+        } else if (!Array.isArray(record.allowedAgents)) {
+            errors.push(invalidField(`${fieldPath}.allowedAgents`, 'must be an array of agent ids'));
+        } else {
+            allowedAgents = normalizeStringArray(record.allowedAgents);
+            if (allowedAgents.length !== record.allowedAgents.length) {
+                errors.push(invalidField(`${fieldPath}.allowedAgents`, 'entries must be non-empty strings'));
+            }
+        }
+    }
+
+    const scopes = normalizeScopes(record.scopes, `${fieldPath}.scopes`, errors, options);
+    if (scopes.includes('admin') && boundAgentId) {
+        errors.push(invalidField(`${fieldPath}.scopes`, '"admin" scope is only allowed on credentials with boundAgentId: null (§3.2)'));
+    }
+
+    const status = normalizeString(record.status);
+    if (!CREDENTIAL_STATUSES.includes(status)) {
+        errors.push(invalidField(`${fieldPath}.status`, `must be one of ${CREDENTIAL_STATUSES.join(', ')}`));
+    }
+
+    let expiresAt = null;
+    if (record.expiresAt !== undefined && record.expiresAt !== null) {
+        const timestamp = Date.parse(String(record.expiresAt));
+        if (Number.isNaN(timestamp)) {
+            errors.push(invalidField(`${fieldPath}.expiresAt`, 'must be an ISO-8601 timestamp'));
+        } else {
+            expiresAt = new Date(timestamp).toISOString();
+        }
+    }
+    if (status === 'rotating' && !expiresAt) {
+        errors.push(invalidField(`${fieldPath}.expiresAt`, 'is required when status is "rotating" (§4.4)'));
+    }
+
+    return {
+        credentialId,
+        pepperKid,
+        tokenDigest,
+        boundAgentId,
+        ...(allowedAgents !== undefined ? { allowedAgents } : {}),
+        scopes,
+        status,
+        expiresAt
+    };
+}
+
+/**
+ * 校验 credential 文件候选内容（§4.4）。
+ * 身份/授权配置：任何错误都必须导致整个 security snapshot 拒绝发布（fail-closed），
+ * 不允许部分接受其余 credential。
+ */
+function validateCredentialFileConfig(parsed, { allowLegacyScopeNames = true } = {}) {
+    const errors = [];
+    const warnings = [];
+    if (!isPlainObject(parsed)) {
+        return { valid: false, errors: [invalidField('$', 'config root must be a JSON object')], warnings, config: null };
+    }
+    if (parsed.version !== SUPPORTED_CREDENTIAL_FILE_VERSION) {
+        errors.push(invalidField('$.version', `must equal ${SUPPORTED_CREDENTIAL_FILE_VERSION}`));
+    }
+    if (!Array.isArray(parsed.credentials)) {
+        errors.push(invalidField('$.credentials', 'is required and must be an array'));
+        return { valid: false, errors, warnings, config: null };
+    }
+
+    const options = { allowLegacyScopeNames, warnings };
+    const credentials = parsed.credentials
+        .map((record, index) => validateCredentialRecord(record, index, errors, options))
+        .filter(Boolean);
+
+    const seenCredentialIds = new Set();
+    const seenDigestByKid = new Map();
+    credentials.forEach((record, index) => {
+        if (!record.credentialId) {
+            return;
+        }
+        if (seenCredentialIds.has(record.credentialId)) {
+            errors.push(invalidField(`$.credentials[${index}].credentialId`, `duplicate credentialId "${record.credentialId}"`));
+        }
+        seenCredentialIds.add(record.credentialId);
+        const digestKey = `${record.pepperKid}|${record.tokenDigest}`;
+        if (seenDigestByKid.has(digestKey)) {
+            errors.push(invalidField(`$.credentials[${index}].tokenDigest`, 'duplicate tokenDigest under the same pepperKid (§4.4 匹配与冲突规则)'));
+        }
+        seenDigestByKid.set(digestKey, record.credentialId);
+    });
+
+    if (errors.length > 0) {
+        return { valid: false, errors, warnings, config: null };
+    }
+    return {
+        valid: true,
+        errors: [],
+        warnings,
+        config: Object.freeze({ version: SUPPORTED_CREDENTIAL_FILE_VERSION, credentials })
+    };
+}
+
+/**
+ * 校验 pepper keyring 候选内容（§4.4）：{ keys: { kid: base64-secret } }，
+ * 每把解码后至少 256 bit。错误一律 fail-closed。
+ */
+function validatePepperKeyringConfig(parsed) {
+    const errors = [];
+    if (!isPlainObject(parsed)) {
+        return { valid: false, errors: [invalidField('$', 'keyring root must be a JSON object')], config: null };
+    }
+    if (!isPlainObject(parsed.keys)) {
+        errors.push(invalidField('$.keys', 'is required and must be an object of kid -> base64 secret'));
+        return { valid: false, errors, config: null };
+    }
+    const keys = {};
+    for (const [rawKid, rawSecret] of Object.entries(parsed.keys)) {
+        const kid = normalizeString(rawKid);
+        if (!kid) {
+            errors.push(invalidField('$.keys', 'kid keys must be non-empty strings'));
+            continue;
+        }
+        const secretText = normalizeString(rawSecret);
+        if (!secretText) {
+            errors.push(invalidField(`$.keys.${kid}`, 'secret must be a non-empty base64 string'));
+            continue;
+        }
+        let decoded;
+        try {
+            decoded = Buffer.from(secretText, 'base64');
+        } catch (_error) {
+            decoded = Buffer.alloc(0);
+        }
+        if (decoded.length === 0 || decoded.toString('base64').replace(/=+$/, '') !== secretText.replace(/=+$/, '')) {
+            errors.push(invalidField(`$.keys.${kid}`, 'secret must be valid base64'));
+            continue;
+        }
+        if (decoded.length < MIN_PEPPER_SECRET_BYTES) {
+            errors.push(invalidField(`$.keys.${kid}`, `secret must decode to at least ${MIN_PEPPER_SECRET_BYTES} bytes (256 bit)`));
+            continue;
+        }
+        keys[kid] = decoded;
+    }
+    if (errors.length > 0) {
+        return { valid: false, errors, config: null };
+    }
+    return { valid: true, errors: [], config: Object.freeze({ keys: Object.freeze(keys) }) };
+}
+
+function parseJsonCandidate(rawText, validate) {
+    let parsed;
+    try {
+        parsed = JSON.parse(rawText);
+    } catch (error) {
+        return { valid: false, errors: [invalidField('$', `invalid JSON: ${error.message}`)], warnings: [], config: null };
+    }
+    return validate(parsed);
+}
+
+function parseCredentialFileConfig(rawText, options) {
+    return parseJsonCandidate(rawText, (parsed) => validateCredentialFileConfig(parsed, options));
+}
+
+function parsePepperKeyringConfig(rawText) {
+    return parseJsonCandidate(rawText, validatePepperKeyringConfig);
+}
+
+module.exports = {
+    CREDENTIAL_SCOPES,
+    CREDENTIAL_STATUSES,
+    LEGACY_SCOPE_ALIASES,
+    MIN_PEPPER_SECRET_BYTES,
+    SUPPORTED_CREDENTIAL_FILE_VERSION,
+    parseCredentialFileConfig,
+    parsePepperKeyringConfig,
+    validateCredentialFileConfig,
+    validatePepperKeyringConfig
+};

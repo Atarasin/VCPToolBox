@@ -22,38 +22,38 @@
 
 依赖：无。
 
-- [ ] T1 新增 `config/agent_guidance.json` schema 与 example（§4.2：shared workflow / memoryWritePolicy / per-agent displayName、memoryDefaults）。
-- [ ] T2 新增 credential 文件 schema 与不含 secret 的 `.example`（§4.4：credentialId、pepperKid、tokenDigest、boundAgentId、allowedAgents、scopes、status、expiresAt）。
-- [ ] T3 新增 pepper keyring schema（§4.4：`{ keys: { kid: base64-secret } }`，256 bit 最小熵校验）。
-- [ ] T4 `agentGuidanceResolver` 骨架：经窄端口读取 agent directory 快照，合成只读 integration snapshot（§4.1；displayName 来自 guidance 配置，不来自目录）。
-- [ ] T5 验收：schema 校验用例（有效配置、未知 agent、default diary 非 allowed、损坏 JSON、未知 pepperKid）。
+- [x] T1 新增 `config/agent_guidance.json` schema 与 example（§4.2：shared workflow / memoryWritePolicy / per-agent displayName、memoryDefaults）。
+- [x] T2 新增 credential 文件 schema 与不含 secret 的 `.example`（§4.4：credentialId、pepperKid、tokenDigest、boundAgentId、allowedAgents、scopes、status、expiresAt）。
+- [x] T3 新增 pepper keyring schema（§4.4：`{ keys: { kid: base64-secret } }`，256 bit 最小熵校验）。
+- [x] T4 `agentGuidanceResolver` 骨架：经窄端口读取 agent directory 快照，合成只读 integration snapshot（§4.1；displayName 来自 guidance 配置，不来自目录）。
+- [x] T5 验收：schema 校验用例（有效配置、未知 agent、default diary 非 allowed、损坏 JSON、未知 pepperKid）。
 
 ### M0.S2 Auth policy catalog
 
 依赖：无（与 S1 并行）。
 
-- [ ] T1 为 canonical operation/surface catalog 增加互斥的 `credentialAction: "read"|"execute"|"authenticated"` 与 `authMechanism: "adminAuthBridge"` 字段（§3.5）；REST 与 MCP binding 引用同一 canonical action。
-- [ ] T2 登记不完全对应业务 operation 的 surface：initialize、discovery、resource read、skill download、admin session bridge。
-- [ ] T3 生成器与启动校验：两者皆无、两者并存、未知 scope/mechanism、binding action 不一致 → fail-fast（按 §3.5 定义：拒绝发布候选 snapshot，health 标记 degraded，仅 strict startup 下进程退出）。
-- [ ] T4 验收：§8「scope」「契约」行中 catalog 相关用例；`tools/list` descriptor 与 auth policy catalog 快照评审。
+- [x] T1 为 canonical operation/surface catalog 增加互斥的 `credentialAction: "read"|"execute"|"authenticated"` 与 `authMechanism: "adminAuthBridge"` 字段（§3.5）；REST 与 MCP binding 引用同一 canonical action。
+- [x] T2 登记不完全对应业务 operation 的 surface：initialize、discovery、resource read、skill download、admin session bridge。
+- [x] T3 生成器与启动校验：两者皆无、两者并存、未知 scope/mechanism、binding action 不一致 → fail-fast（按 §3.5 定义：拒绝发布候选 snapshot，health 标记 degraded，仅 strict startup 下进程退出）。
+- [x] T4 验收：§8「scope」「契约」行中 catalog 相关用例；`tools/list` descriptor 与 auth policy catalog 快照评审。
 
 ### M0.S3 Snapshot 协调与分域 fail-closed
 
 依赖：S1、S2。
 
-- [ ] T1 实现 `integrationSnapshotCoordinator`（§4.3）：内容/调优候选变化时读取关联配置全集，交叉校验后一次性发布 `{ revision, contentHashes, agents }` 冻结快照。
-- [ ] T2 内容/调优配置的 last-known-good 语义：热加载失败保留旧快照，记录失败 content hash 与当前有效 revision；初始失败 health degraded + `AGW_CONFIG_UNAVAILABLE`。
-- [ ] T3 身份/授权配置的分域 security snapshot + fail-closed 语义（§4.3 第 2 类；实际 credential resolver 在 M1.S1 接入）。
-- [ ] T4 health 分域暴露：guidance 不可用 / credential 文件不可用 / pepper keyring 不可用 / authorization policy 不可用。
-- [ ] T5 新增 `AGW_CONFIG_UNAVAILABLE` 与 MCP `MCP_SERVICE_UNAVAILABLE` 错误码及映射。
-- [ ] T6 验收：§8「配置」行全部用例（初始失败/恢复、交叉引用错误、content hash、同 mtime/size、原子 rename、revision 一致性）。
+- [x] T1 实现 `integrationSnapshotCoordinator`（§4.3）：内容/调优候选变化时读取关联配置全集，交叉校验后一次性发布 `{ revision, contentHashes, agents }` 冻结快照。
+- [x] T2 内容/调优配置的 last-known-good 语义：热加载失败保留旧快照，记录失败 content hash 与当前有效 revision；初始失败 health degraded + `AGW_CONFIG_UNAVAILABLE`。
+- [x] T3 身份/授权配置的分域 security snapshot + fail-closed 语义（§4.3 第 2 类；实际 credential resolver 在 M1.S1 接入）。
+- [x] T4 health 分域暴露：guidance 不可用 / credential 文件不可用 / pepper keyring 不可用 / authorization policy 不可用。
+- [x] T5 新增 `AGW_CONFIG_UNAVAILABLE` 与 MCP `MCP_SERVICE_UNAVAILABLE` 错误码及映射。
+- [x] T6 验收：§8「配置」行全部用例（初始失败/恢复、交叉引用错误、content hash、同 mtime/size、原子 rename、revision 一致性）。
 
 ### M0.S4 Tool description 重写
 
 依赖：无。可与 M1 并行,但发布需 real-client smoke。
 
-- [ ] T1 重写 4 个核心 MCP tool description 的触发判断,不改身份与 schema 行为。
-- [ ] T2 验收：真实 client smoke 评审(模型行为变化,不标记为"无行为风险")。
+- [x] T1 重写 4 个核心 MCP tool description 的触发判断,不改身份与 schema 行为。
+- [x] T2 验收：真实 client smoke 评审(模型行为变化,不标记为"无行为风险")。
 
 ---
 

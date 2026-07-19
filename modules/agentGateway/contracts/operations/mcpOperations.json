@@ -59,7 +59,8 @@
       "requiresAgentOnly": true,
       "publishedAsTool": false,
       "executor": "render",
-      "backendExecutor": "removedRender"
+      "backendExecutor": "removedRender",
+      "credentialAction": "read"
     },
     "mcp": {
       "prompt": {
@@ -161,7 +162,8 @@
       "requiresAgentOnly": true,
       "asBootstrap": true,
       "executor": "render",
-      "backendExecutor": "render"
+      "backendExecutor": "render",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
@@ -246,7 +248,8 @@
       "source": "mcp-job-get",
       "requiresJobIdentity": true,
       "executor": "jobGet",
-      "backendExecutor": "jobGet"
+      "backendExecutor": "jobGet",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
@@ -304,7 +307,8 @@
       "source": "mcp-job-cancel",
       "requiresJobIdentity": true,
       "executor": "jobCancel",
-      "backendExecutor": "jobCancel"
+      "backendExecutor": "jobCancel",
+      "credentialAction": "execute"
     },
     "mcp": {
       "tool": {
@@ -416,13 +420,14 @@
       "source": "mcp-memory-search",
       "diaryPolicy": true,
       "executor": "memorySearch",
-      "backendExecutor": "memorySearch"
+      "backendExecutor": "memorySearch",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
         "name": "gateway_memory_search",
         "title": "Gateway Memory Search",
-        "description": "Execute canonical Agent Gateway memory search through Gateway Core.",
+        "description": "Search specific memory diaries by keyword or semantic query. Use this only when you already know the target diary, an exact name, or a narrowly scoped historical question. For broad \"is there relevant history?\" questions, use gateway_recall_run instead — it applies the agent's tuned recall profile automatically.",
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,
@@ -591,13 +596,14 @@
       "source": "mcp-context-assemble",
       "diaryPolicy": true,
       "executor": "contextAssemble",
-      "backendExecutor": "contextAssemble"
+      "backendExecutor": "contextAssemble",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
         "name": "gateway_context_assemble",
         "title": "Gateway Context Assemble",
-        "description": "Assemble canonical Agent Gateway recall context through Gateway Core.",
+        "description": "Assemble a token-budgeted recall context block from the agent's memory for injection into a prompt. Use this when you need a ready-to-insert context digest rather than raw search hits — e.g. before drafting a long answer that should reflect prior decisions. For quick lookups prefer gateway_recall_run; for targeted queries prefer gateway_memory_search.",
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,
@@ -762,13 +768,14 @@
       "operationName": "memory.write",
       "source": "mcp-memory-write",
       "executor": "memoryWrite",
-      "backendExecutor": "memoryWrite"
+      "backendExecutor": "memoryWrite",
+      "credentialAction": "execute"
     },
     "mcp": {
       "tool": {
         "name": "gateway_memory_write",
         "title": "Gateway Memory Write",
-        "description": "Persist durable memory through the canonical Agent Gateway write path.",
+        "description": "Persist a durable memory entry to the agent's diary at the end of a session or after a confirmed conclusion. Write: user preferences and corrections, architecture or workflow decisions, non-obvious bug root causes, and verified conclusions. Skip: secrets or sensitive data, transient logs, trivial changes recoverable from git, and unconfirmed speculation. When unsure, do not write.",
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,
@@ -880,13 +887,14 @@
       "source": "mcp-recall-run",
       "requireSession": false,
       "executor": "recallRun",
-      "backendExecutor": "recallRun"
+      "backendExecutor": "recallRun",
+      "credentialAction": "read"
     },
     "mcp": {
       "tool": {
         "name": "gateway_recall_run",
         "title": "Gateway Recall Run",
-        "description": "Execute a preconfigured recall profile for an agent. Supports rag and gated_rag base modes with Time, Group, Rerank, TagMemo, and Truncate modifiers.",
+        "description": "Run the agent's preconfigured recall profile against its memory diaries. Use this FIRST, before answering, whenever the task depends on prior decisions, known bugs, strategy research, or user preferences — you do not need to know which diary holds the information. Prefer this over gateway_memory_search unless you already know the exact diary or document name. If recall returns empty or fails, continue with local repository context; do not block the task.",
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,
