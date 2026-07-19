@@ -52,8 +52,8 @@
 
 依赖：无。可与 M1 并行,但发布需 real-client smoke。
 
-- [ ] T1 重写 4 个核心 MCP tool description 的触发判断,不改身份与 schema 行为。
-- [ ] T2 验收：真实 client smoke 评审(模型行为变化,不标记为"无行为风险")。
+- [x] T1 重写 4 个核心 MCP tool description 的触发判断,不改身份与 schema 行为。
+- [x] T2 验收：真实 client smoke 评审(模型行为变化,不标记为"无行为风险")。
 
 ---
 
