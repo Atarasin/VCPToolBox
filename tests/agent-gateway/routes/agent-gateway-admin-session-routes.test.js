@@ -136,6 +136,61 @@ test('POST /auth/admin-session returns 503 without origin policy or production s
     }
 });
 
+test('cookie-authenticated business mutation requires CSRF token and Origin check', async () => {
+    const server = await createServer({ outerAuthenticated: true, env: BRIDGE_ENV });
+    try {
+        const created = await fetch(`${server.baseUrl}/agent_gateway/auth/admin-session`, { method: 'POST' });
+        assert.equal(created.status, 201);
+        const cookie = created.headers.get('set-cookie').split(';')[0];
+        const { data } = await created.json();
+
+        const writeBody = JSON.stringify({
+            agentId: 'MCPMidas',
+            target: { diary: 'MidasDiary' },
+            memory: { text: 'csrf check' }
+        });
+
+        // 无 CSRF token 的 cookie mutation → 拒绝（401/403）
+        const noCsrf = await fetch(`${server.baseUrl}/agent_gateway/memory/write`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', cookie },
+            body: writeBody
+        });
+        assert.ok([401, 403].includes(noCsrf.status),
+            `cookie mutation without CSRF must be rejected, got ${noCsrf.status}`);
+
+        // 带 CSRF token → 通过认证层（业务层结果不限定，但不得是 401/403）
+        const withCsrf = await fetch(`${server.baseUrl}/agent_gateway/memory/write`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', cookie, 'x-agent-gateway-csrf': data.csrfToken },
+            body: writeBody
+        });
+        assert.ok(![401, 403].includes(withCsrf.status),
+            `cookie mutation with valid CSRF must pass auth, got ${withCsrf.status}`);
+
+        // same-origin 模式下伪造跨域 Origin → 403
+        const badOrigin = await fetch(`${server.baseUrl}/agent_gateway/memory/write`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json', cookie,
+                'x-agent-gateway-csrf': data.csrfToken,
+                origin: 'https://evil.example'
+            },
+            body: writeBody
+        });
+        assert.equal(badOrigin.status, 403, 'cross-origin cookie mutation must be rejected');
+
+        // cookie GET（read 操作）不要求 CSRF
+        const read = await fetch(`${server.baseUrl}/agent_gateway/capabilities`, {
+            headers: { cookie }
+        });
+        assert.ok(![401, 403].includes(read.status),
+            `cookie read must not require CSRF, got ${read.status}`);
+    } finally {
+        await server.close();
+    }
+});
+
 test('unified injection point exposes a single canonical auth object', async () => {
     const server = await createServer({ env: BRIDGE_ENV });
     try {

@@ -116,11 +116,14 @@ function createGatewayCredentialService({ auditLogger, pluginManager, protocolCo
     });
     const contextBuilder = createGatewayRequestContextBuilder({
         credentialResolver,
-        resolveBuiltinCredential: ({ token, headers, entry }) => builtinCredentialResolver.resolveBuiltinCredential({
+        // §3.3：requireCsrf 由入口按 HTTP method 传入——所有 cookie-authenticated
+        // mutation 必须呈现 session-bound CSRF token。
+        resolveBuiltinCredential: ({ token, headers, entry, requireCsrf }) => builtinCredentialResolver.resolveBuiltinCredential({
             token,
             surface: String(entry || '').startsWith('mcp') ? 'mcp' : 'native',
             adminSessionId: parseCookieHeader(headers).agw_admin_session || '',
-            csrfToken: typeof headers?.['x-agent-gateway-csrf'] === 'string' ? headers['x-agent-gateway-csrf'] : null
+            csrfToken: typeof headers?.['x-agent-gateway-csrf'] === 'string' ? headers['x-agent-gateway-csrf'] : null,
+            requireCsrf: Boolean(requireCsrf)
         }),
         auditLogger
     });

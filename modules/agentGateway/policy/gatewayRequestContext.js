@@ -164,7 +164,8 @@ function createGatewayRequestContextBuilder({
         requiresAgent = true,
         entry = 'unknown',
         requestContext = {},
-        authContext = {}
+        authContext = {},
+        requireCsrf = false
     } = {}) {
         const rateLimitState = checkFailureRateLimit(clientIp);
         if (rateLimitState.limited) {
@@ -191,7 +192,7 @@ function createGatewayRequestContextBuilder({
         // 两者 token 冲突在 snapshot 校验层拒绝（M1.S3）。
         let authResult = null;
         if (resolveBuiltinCredential) {
-            const builtin = await resolveBuiltinCredential({ token, headers, requestContext, entry });
+            const builtin = await resolveBuiltinCredential({ token, headers, requestContext, entry, requireCsrf });
             if (builtin?.matched) {
                 authResult = builtin.result;
             }

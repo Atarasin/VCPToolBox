@@ -8,8 +8,10 @@ const {
     sendNativeError,
     buildNativeResponseMeta
 } = require('./shared');
-const { ADMIN_SESSION_COOKIE, CSRF_HEADER, parseCookies } = require('./authSessionRoutes');
+const { ADMIN_SESSION_COOKIE, CSRF_HEADER, checkOrigin, parseCookies, resolveOriginPolicy } = require('./authSessionRoutes');
 const { resolveRestCredentialAction } = require('../../modules/agentGateway/policy/restCredentialActions');
+
+const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
  * 单一认证注入点（§3.3 / M1.S3.T7 / M1.S5）。
@@ -32,6 +34,26 @@ function createAuthInjectionMiddleware(context) {
     const { protocolConfig, gatewayCredentialService } = context;
 
     return async function authInjection(req, res, next) {
+        // allowlist 部署形态的 CORS preflight：JSON POST 必触发 OPTIONS，
+        // 无凭据呈现，按 origin allowlist 直接应答（§3.3 T4）。
+        if (req.method === 'OPTIONS') {
+            const originPolicy = resolveOriginPolicy();
+            if (originPolicy.mode === 'allowlist') {
+                const originCheck = checkOrigin(req, originPolicy);
+                if (originCheck.ok && originCheck.corsOrigin) {
+                    res.setHeader('Access-Control-Allow-Origin', originCheck.corsOrigin);
+                    res.setHeader('Access-Control-Allow-Credentials', 'true');
+                    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+                    res.setHeader('Access-Control-Allow-Headers',
+                        `content-type, authorization, x-agent-gateway-key, ${CSRF_HEADER}`);
+                    res.setHeader('Access-Control-Max-Age', '600');
+                    res.setHeader('Vary', 'Origin');
+                    return res.status(204).end();
+                }
+            }
+            return next();
+        }
+
         const outerAuth = req.agentGatewayAuth && typeof req.agentGatewayAuth === 'object'
             ? req.agentGatewayAuth
             : null;
@@ -75,8 +97,19 @@ function createAuthInjectionMiddleware(context) {
 
         const isBridgeRequest = req.path === '/auth/admin-session';
         const credentialPresented = Boolean(dedicatedAuth.provided) || Boolean(adminSessionId);
+        const isCookieAuthenticated = !dedicatedAuth.provided && Boolean(adminSessionId);
+        const isMutation = !SAFE_HTTP_METHODS.has(req.method);
 
         if (credentialPresented && gatewayCredentialService && !isBridgeRequest) {
+            // §3.3：cookie-authenticated 业务 mutation 必须通过 Origin 校验
+            //（CSRF token 校验由 requireCsrf 传入 admin session store 执行）。
+            if (isCookieAuthenticated && isMutation) {
+                const originCheck = checkOrigin(req, resolveOriginPolicy());
+                if (!originCheck.ok) {
+                    return sendAuthError(403, AGW_ERROR_CODES.FORBIDDEN,
+                        'Origin check failed for cookie-authenticated mutation', { reason: originCheck.reason });
+                }
+            }
             // §3.2：path/query/body 多来源 target candidate 全部提取，
             // 冲突 → AGW_INVALID_REQUEST；绑定不一致 → AGW_FORBIDDEN。
             // router-level 中间件拿不到 req.params，从 URL 提取 path candidate。
@@ -92,7 +125,8 @@ function createAuthInjectionMiddleware(context) {
                 clientIp: req.ip || req.socket?.remoteAddress || '',
                 targetCandidates,
                 requiresAgent: false,
-                entry: 'native-rest'
+                entry: 'native-rest',
+                requireCsrf: isCookieAuthenticated && isMutation
             });
             if (!credentialContext.ok) {
                 // legacy 静态 key 校验通过但文件/内置决议失败的组合不应出现——
