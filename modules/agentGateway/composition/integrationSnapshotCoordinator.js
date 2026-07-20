@@ -143,6 +143,11 @@ function createIntegrationSnapshotCoordinator({
         const contentHashes = { guidance: candidate.contentHash };
         const revision = computeSnapshotRevision(contentHashes);
         const previousFailure = state.integrationFailure;
+        // 内容未变时保持已冻结的快照（revision 与 publishedAt 均不变）——
+        // 冻结快照只在候选变化时一次性发布（§4.3）。
+        if (!previousFailure && state.integrationSnapshot?.revision === revision) {
+            return buildIntegrationStatus();
+        }
         const agents = Object.fromEntries(
             Object.entries(parsed.config.agents).map(([agentId, entry]) => {
                 const directoryEntry = directoryEntries.find((item) => normalizeString(item?.alias) === agentId);

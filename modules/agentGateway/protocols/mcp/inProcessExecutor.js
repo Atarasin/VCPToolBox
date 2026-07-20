@@ -2,6 +2,10 @@ const {
     getGatewayServiceBundle
 } = require('../../createGatewayServiceBundle');
 const {
+    GENERIC_INSTRUCTIONS,
+    buildGuidanceInstructions
+} = require('../../services/agentGuidanceService');
+const {
     normalizeRequestContext,
     sanitizeRequestContextValue
 } = require('../../contracts/requestContext');
@@ -32,6 +36,7 @@ const {
     createMemoryTargetsResource,
     createAgentProfileResource,
     createAgentPromptTemplateResource,
+    createAgentGuidanceResource,
     createJobEventsResource
 } = require('./descriptors');
 const { createMcpHarness } = require('./harness');
@@ -769,7 +774,8 @@ function createMcpAdapter(pluginManager, options = {}) {
                     createCapabilitiesResource(requestContext.agentId),
                     createMemoryTargetsResource(requestContext.agentId),
                     createAgentProfileResource(requestContext.agentId),
-                    createAgentPromptTemplateResource(requestContext.agentId)
+                    createAgentPromptTemplateResource(requestContext.agentId),
+                    createAgentGuidanceResource(requestContext.agentId)
                 ],
                 meta: {
                     requestId: requestContext.requestId,
@@ -782,14 +788,53 @@ function createMcpAdapter(pluginManager, options = {}) {
     };
 }
 
+/**
+ * in-process 的 initialize.instructions per-request 渲染（§5.2）。
+ *
+ * 只信任组装根注入的 trustedCredentialContext（params.authContext 上的
+ * Symbol 标记）；MCP params 传入的普通 authContext 不参与判定。绑定 +
+ * read scope → canonical guidance service 的 ≤800 token 摘要；其余情形
+ * 返回通用文案，不泄露任何 agent 内容。
+ */
+function createInProcessInstructionsResolver(bundle) {
+    return async function resolveInstructions({ params } = {}) {
+        const candidate = params?.authContext;
+        if (!isTrustedCredentialContext(candidate)) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        const boundAgentId = normalizeMcpString(candidate.boundAgentId, 256);
+        const scopes = Array.isArray(candidate.scopes)
+            ? candidate.scopes
+            : (Array.isArray(candidate.credentialScopes) ? candidate.credentialScopes : []);
+        if (!boundAgentId || !scopes.includes('gateway:read')) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        if (!bundle.agentGuidanceService) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        const result = await bundle.agentGuidanceService.getAgentGuidance(boundAgentId);
+        if (!result.ok) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        return buildGuidanceInstructions(result.guidance).text;
+    };
+}
+
 function createMcpServerHarness(pluginManager, options = {}) {
     const adapter = options.adapter || createMcpAdapter(pluginManager, options);
-    return createMcpHarness({ adapter });
+    const bundle = options.gatewayServiceBundle
+        || (pluginManager ? getGatewayServiceBundle(pluginManager) : null);
+    return createMcpHarness({
+        adapter,
+        resolveInstructions: options.resolveInstructions
+            || (bundle ? createInProcessInstructionsResolver(bundle) : undefined)
+    });
 }
 module.exports = {
     MCP_ERROR_CODES,
     MCP_RESOURCE_KINDS,
     MCP_SUPPORTED_RESOURCE_TEMPLATES,
+    createInProcessInstructionsResolver,
     createMcpAdapter,
     createMcpServerHarness,
     createInProcessExecutor: createMcpAdapter

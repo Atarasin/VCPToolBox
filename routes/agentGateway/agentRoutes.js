@@ -240,6 +240,10 @@ function registerAgentGuidanceRoute(router, context) {
     // 完成（path candidate 提取 + bound credential 不一致 → AGW_FORBIDDEN）。
     router.get('/agents/:agentId/guidance', async (req, res) => {
         const startedAt = Date.now();
+        // §6 / M2.S2.T4：guidance 按身份返回，禁止共享缓存；Vary 声明全部
+        // 身份呈现通道（Bearer / gateway key / admin session cookie）。
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Vary', 'Authorization, x-agent-gateway-key, Cookie');
         const requestContext = createNativeRequestContext(req, {
             requestId: req.query.requestId,
             source: req.query.source,

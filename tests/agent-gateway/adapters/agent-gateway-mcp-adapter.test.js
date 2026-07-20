@@ -1096,7 +1096,8 @@ test('MCP adapter lists and reads the supported read-only resource subset', asyn
                 'vcp://agent-gateway/capabilities/Ariadne',
                 'vcp://agent-gateway/memory-targets/Ariadne',
                 'vcp://agent-gateway/agents/Ariadne/profile',
-                'vcp://agent-gateway/agents/Ariadne/prompt-template'
+                'vcp://agent-gateway/agents/Ariadne/prompt-template',
+                'vcp://agent-gateway/agents/Ariadne/guidance'
             ]
         );
         assert.equal(JSON.parse(capabilities.contents[0].text).server.bridgeVersion, 'v1');

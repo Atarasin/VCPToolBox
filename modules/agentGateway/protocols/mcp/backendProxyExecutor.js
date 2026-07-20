@@ -10,7 +10,9 @@ const {
     createGatewayManagedPromptDescriptors,
     createGatewayManagedToolDescriptors,
     buildJobEventsResourceUri,
+    buildResourceUri,
     parseResourceUri,
+    createAgentGuidanceResource,
     createMemoryTargetsResource
 } = require('./descriptors');
 const {
@@ -29,6 +31,10 @@ const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
 const { getPresentedCredential } = require('../../policy/trustedCredentialContext');
+const {
+    GENERIC_INSTRUCTIONS,
+    buildGuidanceInstructions
+} = require('../../services/agentGuidanceService');
 const { serveFrozenList } = require('../../policy/discoverySnapshot');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -622,6 +628,21 @@ const BACKEND_PROXY_METHODS = {
         }
         if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
             result.data = buildBootstrapResult(result.data || {}, result.data?.agentId || input.agentId || args.agentId || defaultAgentId);
+            // §5.3 / M2.S2.T2：bootstrap 以向后兼容的附加字段承载 guidance，
+            // 内容与 guidance resource 等价并含同一 revision。canonical backend
+            // 重新校验凭据与绑定；guidance 不可用时省略字段，不阻断 bootstrap。
+            const guidanceAgentId = normalizeMcpString(result.data?.agentId, 256);
+            if (guidanceAgentId) {
+                try {
+                    const guidanceResponse = await backendClient.getAgentGuidance(guidanceAgentId, undefined, requestOptions);
+                    const guidanceResult = normalizeNativeResult(guidanceResponse);
+                    if (guidanceResult.success && guidanceResult.data) {
+                        result.data = { ...result.data, integrationGuidance: guidanceResult.data };
+                    }
+                } catch (_error) {
+                    // guidance 是增强内容；获取失败保持原 bootstrap 语义。
+                }
+            }
         }
         if (
             DEFERRED_RESULT_TOOL_NAMES.has(name) &&
@@ -649,7 +670,8 @@ const BACKEND_PROXY_METHODS = {
 
         return {
             resources: [
-                createMemoryTargetsResource(agentId)
+                createMemoryTargetsResource(agentId),
+                createAgentGuidanceResource(agentId)
             ],
             meta: {
                 requestId: normalizeMcpString(input.requestContext?.requestId, 128),
@@ -699,6 +721,38 @@ const BACKEND_PROXY_METHODS = {
                 }],
                 meta: {
                     requestId: result.requestId,
+                    agentId
+                }
+            };
+        }
+
+        if (parsed.kind === MCP_RESOURCE_KINDS.AGENT_GUIDANCE) {
+            // §5.3：URI target 决议 + 统一 context 绑定校验由 canonical backend
+            // 的 guidance REST binding 执行（request-scoped credential 透传）。
+            const agentId = ensureAgentId({
+                ...input,
+                agentId: parsed.agentId || input.agentId
+            }, 'resources/read', defaultAgentId);
+            const response = await backendClient.getAgentGuidance(agentId, {
+                requestId: normalizeMcpString(input.requestContext?.requestId, 128)
+            }, buildRequestOptions(input));
+            const result = normalizeNativeResult(response);
+            if (!result.success) {
+                throw createMcpError(
+                    mapGatewayFailureToMcpErrorCode(result.code),
+                    result.error || 'Failed to read agent integration guidance',
+                    buildGatewayFailureDetails(result)
+                );
+            }
+
+            return {
+                contents: [{
+                    uri: buildResourceUri(MCP_RESOURCE_KINDS.AGENT_GUIDANCE, agentId),
+                    mimeType: 'application/json',
+                    text: serializeMcpValue(result.data || {})
+                }],
+                meta: {
+                    requestId: result.requestId || normalizeMcpString(input.requestContext?.requestId, 128),
                     agentId
                 }
             };
@@ -787,13 +841,54 @@ function createBackendProxyMcpAdapter({
     };
 }
 
+/**
+ * backend-proxy 的 initialize.instructions per-request 渲染（§5.2）。
+ *
+ * 绑定与 scope 来自边缘 credential 决议注入的受信任 authContext
+ * （HTTP session / WS connection context；客户端 params 中的同名字段已被
+ * transport 注入整体覆盖）。绑定 + read scope 时经 canonical backend 取
+ * guidance bundle（request-scoped credential 透传，backend 重新校验），
+ * 摘要裁剪复用 canonical 单点实现；其余情形（含 stdio 静态凭据进程，
+ * 边缘无绑定信息）返回通用文案，不泄露任何 agent 内容。
+ */
+function createBackendProxyInstructionsResolver(backendClient) {
+    return async function resolveInstructions({ params, authContext } = {}) {
+        const context = authContext && typeof authContext === 'object' ? authContext : {};
+        const boundAgentId = normalizeMcpString(context.boundAgentId, 256);
+        const scopes = Array.isArray(context.credentialScopes) ? context.credentialScopes : [];
+        if (!boundAgentId || !scopes.includes('gateway:read')) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        try {
+            const response = await backendClient.getAgentGuidance(
+                boundAgentId,
+                undefined,
+                buildRequestOptions(params || {})
+            );
+            const result = normalizeNativeResult(response);
+            if (!result.success || !result.data) {
+                return GENERIC_INSTRUCTIONS;
+            }
+            return buildGuidanceInstructions(result.data).text;
+        } catch (_error) {
+            return GENERIC_INSTRUCTIONS;
+        }
+    };
+}
+
 function createBackendProxyMcpServerHarness(options = {}) {
     const adapter = options.adapter || createBackendProxyMcpAdapter(options);
-    return createMcpHarness({ adapter });
+    const backendClient = options.backendClient || null;
+    return createMcpHarness({
+        adapter,
+        resolveInstructions: options.resolveInstructions
+            || (backendClient ? createBackendProxyInstructionsResolver(backendClient) : undefined)
+    });
 }
 
 module.exports = {
     MCP_ERROR_CODES,
+    createBackendProxyInstructionsResolver,
     createBackendProxyMcpAdapter,
     createBackendProxyMcpServerHarness,
     createBackendProxyExecutor: createBackendProxyMcpAdapter,

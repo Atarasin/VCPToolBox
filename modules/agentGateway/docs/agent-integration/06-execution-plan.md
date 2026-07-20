@@ -154,11 +154,11 @@
 
 依赖：S1。
 
-- [ ] T1 guidance resource `vcp://agent-gateway/agents/{agentId}/guidance`:URI target 决议 + 绑定校验(§5.3)。
-- [ ] T2 bootstrap 附加 `integrationGuidance` 字段(与 resource 同 revision);绑定 credential 可省略 agentId(§5.3)。
-- [ ] T3 `resolveInstructions` per-request 选项贯通 harness/两 executor/三 transport;绑定 + read → ≤800 token 摘要(canonical 单点 `ceil(chars/4)` 计数);未绑定/execute-only → 通用文案不泄露 agent 内容(§5.2)。
-- [ ] T4 guidance/integration/mint 响应缓存头:`Cache-Control: private, no-store` + `Vary` 身份通道(§6)。
-- [ ] T5 验收:§8「guidance」行用例。
+- [x] T1 guidance resource `vcp://agent-gateway/agents/{agentId}/guidance`:URI target 决议 + 绑定校验(§5.3)。
+- [x] T2 bootstrap 附加 `integrationGuidance` 字段(与 resource 同 revision);绑定 credential 可省略 agentId(§5.3;schema 层 optional 化按 §5.4 顺序留在 M3.S1)。
+- [x] T3 `resolveInstructions` per-request 选项贯通 harness/两 executor/三 transport;绑定 + read → ≤800 token 摘要(canonical 单点 `ceil(chars/4)` 计数);未绑定/execute-only → 通用文案不泄露 agent 内容(§5.2)。
+- [x] T4 guidance/integration/mint 响应缓存头:`Cache-Control: private, no-store` + `Vary` 身份通道(§6;integration/mint endpoint 属 M4,届时复用同一头部约定)。
+- [x] T5 验收:§8「guidance」行用例。
 
 ### M2.S3 双 adapter 差异收敛
 

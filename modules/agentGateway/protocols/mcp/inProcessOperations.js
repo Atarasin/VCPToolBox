@@ -48,6 +48,27 @@ function buildBootstrapResult(renderResult, agentId) {
     return { ...renderResult, agentId: resolvedAgentId, summary: fragments.join('; ') };
 }
 
+/**
+ * §5.3 / M2.S2.T2：bootstrap 以向后兼容的附加字段承载 guidance，内容与
+ * guidance resource 等价并含同一 revision。guidance 不可用（未配置该 agent
+ * 或内容配置不可用）时省略字段，不阻断 bootstrap 主语义。
+ */
+async function attachIntegrationGuidance(bootstrapData, bundle) {
+    const agentId = normalizeMcpString(bootstrapData?.agentId, 256);
+    if (!agentId || !bundle.agentGuidanceService) {
+        return bootstrapData;
+    }
+    try {
+        const guidanceResult = await bundle.agentGuidanceService.getAgentGuidance(agentId);
+        if (guidanceResult.ok) {
+            return { ...bootstrapData, integrationGuidance: guidanceResult.guidance };
+        }
+    } catch (_error) {
+        // guidance 是增强内容；失败保持原 bootstrap 语义。
+    }
+    return bootstrapData;
+}
+
 async function executeRender(context) {
     const { bundle, name, args, input, operation, executeManaged } = context;
     return executeManaged({
@@ -71,7 +92,8 @@ async function executeRender(context) {
                     success: true,
                     requestId: requestContext.requestId,
                     data: operation.asBootstrap
-                        ? buildBootstrapResult(renderResult, requestContext.agentId)
+                        ? await attachIntegrationGuidance(
+                            buildBootstrapResult(renderResult, requestContext.agentId), bundle)
                         : renderResult,
                     audit: { runtime: requestContext.runtime, source: requestContext.source }
                 };

@@ -298,7 +298,7 @@ test('stdio MCP transport serves capability discovery and representative tool ca
         assert.equal(resources.result.meta.agentId, 'Ariadne');
         assert.deepEqual(
             resources.result.resources.map((resource) => resource.uri),
-            ['vcp://agent-gateway/memory-targets/Ariadne']
+            ['vcp://agent-gateway/memory-targets/Ariadne', 'vcp://agent-gateway/agents/Ariadne/guidance']
         );
         assert.equal(promptGet.result.name, 'gateway_agent_render');
         assert.equal(promptGet.result.messages[0].content[0].text.includes('Hello Nova'), true);

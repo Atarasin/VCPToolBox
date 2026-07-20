@@ -32,6 +32,72 @@ function estimateTokenCount(text) {
     return Math.ceil(codePoints / 4);
 }
 
+const INSTRUCTIONS_TOKEN_LIMIT = 800;
+
+/**
+ * 未绑定 / execute-only / legacy credential 的通用 initialize.instructions
+ * 文案（§5.2）：不泄露任何 agent 的 diaries、tags 或 metadata。
+ */
+const GENERIC_INSTRUCTIONS = [
+    'This VCP Agent Gateway MCP server publishes gateway_* tools, prompts, and resources.',
+    'Use gateway_recall_run before answering when the task depends on prior decisions, known bugs, or user preferences.',
+    'Use gateway_memory_search only for a known diary or a narrowly scoped historical question.',
+    'Durable conclusions can be persisted with gateway_memory_write; skip secrets and unconfirmed speculation.',
+    'Agent-specific integration guidance requires an agent-bound credential with read scope.'
+].join(' ');
+
+/**
+ * 按 canonical token 计数把文本裁剪到 maxTokens 以内（§5.2）。
+ * 超限时截断并追加标记；两个 adapter 必须复用，保证同一 guidance revision
+ * 在两条路径裁剪结果一致。
+ */
+function clampInstructionsText(text, maxTokens = INSTRUCTIONS_TOKEN_LIMIT) {
+    if (typeof text !== 'string' || text.length === 0) {
+        return { text: '', truncated: false };
+    }
+    if (estimateTokenCount(text) <= maxTokens) {
+        return { text, truncated: false };
+    }
+    const marker = ' …[truncated]';
+    const budgetCodePoints = Math.max(0, (maxTokens * 4) - marker.length);
+    const codePoints = Array.from(text);
+    return {
+        text: codePoints.slice(0, budgetCodePoints).join('') + marker,
+        truncated: true
+    };
+}
+
+/**
+ * 绑定 + read scope 的 initialize.instructions 摘要（§5.2）：
+ * ≤800 token，含 recall/write 要点与 guidance resource URI。
+ * 完整内容下沉到 resource/bootstrap；instructions 只是增强。
+ */
+function buildGuidanceInstructions(guidance) {
+    if (!guidance || typeof guidance !== 'object') {
+        return { text: GENERIC_INSTRUCTIONS, truncated: false, generic: true };
+    }
+    const lines = [];
+    lines.push(`You are connected to the VCP Agent Gateway as agent "${guidance.agentId}"` +
+        (guidance.displayName && guidance.displayName !== guidance.agentId ? ` (${guidance.displayName}).` : '.'));
+    const workflow = Array.isArray(guidance.workflow) ? guidance.workflow : [];
+    if (workflow.length > 0) {
+        lines.push(`Workflow: ${workflow.join(' ')}`);
+    }
+    const writePolicy = guidance.memoryWritePolicy || {};
+    if (Array.isArray(writePolicy.write) && writePolicy.write.length > 0) {
+        lines.push(`Write to memory: ${writePolicy.write.join('; ')}.`);
+    }
+    if (Array.isArray(writePolicy.skip) && writePolicy.skip.length > 0) {
+        lines.push(`Do not write: ${writePolicy.skip.join('; ')}.`);
+    }
+    if (Array.isArray(guidance.defaultDiaries) && guidance.defaultDiaries.length > 0) {
+        lines.push(`Default diaries: ${guidance.defaultDiaries.join(', ')}.`);
+    }
+    lines.push(`Full guidance resource: vcp://agent-gateway/agents/${encodeURIComponent(guidance.agentId)}/guidance (revision ${guidance.revision}).`);
+    const clamped = clampInstructionsText(lines.join('\n'));
+    return { ...clamped, generic: false, revision: guidance.revision };
+}
+
 function createAgentGuidanceService({
     snapshotCoordinator,
     agentPolicyResolver,
@@ -130,4 +196,11 @@ function createAgentGuidanceService({
     });
 }
 
-module.exports = { createAgentGuidanceService, estimateTokenCount };
+module.exports = {
+    GENERIC_INSTRUCTIONS,
+    INSTRUCTIONS_TOKEN_LIMIT,
+    buildGuidanceInstructions,
+    clampInstructionsText,
+    createAgentGuidanceService,
+    estimateTokenCount
+};

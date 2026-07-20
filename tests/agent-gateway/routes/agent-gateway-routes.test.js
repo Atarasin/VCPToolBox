@@ -1521,6 +1521,12 @@ test('GET /agent_gateway/agents/:agentId/guidance returns the canonical guidance
         const response = await fetch(`${server.baseUrl}/agent_gateway/agents/Ariadne/guidance?requestId=req-native-guidance-001`);
         const payload = await response.json();
         assert.equal(response.status, 200);
+        // §6 / M2.S2.T4：guidance 响应 no-store 且 Vary 覆盖身份呈现通道
+        assert.equal(response.headers.get('cache-control'), 'private, no-store');
+        const varyHeader = String(response.headers.get('vary') || '').toLowerCase();
+        for (const channel of ['authorization', 'x-agent-gateway-key', 'cookie']) {
+            assert.ok(varyHeader.includes(channel), `Vary must include ${channel}`);
+        }
         assert.equal(payload.success, true);
         assert.equal(payload.meta.operationName, 'agents.guidance');
         assert.equal(payload.data.agentId, 'Ariadne');
