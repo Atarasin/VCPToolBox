@@ -130,8 +130,8 @@ const {
     createProtocolConfigSnapshot
 } = require('./modules/agentGateway/composition/vcpPortBindings');
 const {
-    getGatewayServiceBundle
-} = require('./modules/agentGateway/composition/createGatewayServiceBundle');
+    createLazyGatewayCredentialService
+} = require('./modules/agentGateway/composition/lazyGatewayCredentialService');
 
 const BLACKLIST_FILE = path.join(__dirname, 'ip_blacklist.json');
 const MAX_API_ERRORS = 5;
@@ -562,9 +562,8 @@ const app = express();
 app.set('trust proxy', true); // 新增：信任代理，以便正确解析 X-Forwarded-For 头，解决本地IP识别为127.0.0.1的问题
 app.use(cors({ origin: '*' })); // 启用 CORS，允许所有来源的跨域请求，方便本地文件调试
 
-// M1 修复：生产 /mcp 接线 credentialService，启用文件 credential 认证
-const mcpGatewayBundle = getGatewayServiceBundle(pluginManager);
-const gatewayCredentialService = mcpGatewayBundle.gatewayCredentialService;
+// `/mcp` 必须在全局 body parser 前挂载，但完整 Gateway bundle 只能在宿主初始化后创建。
+const gatewayCredentialService = createLazyGatewayCredentialService(pluginManager);
 
 // `/mcp` 路由需要独立的 payload 限制与原始 JSON 解析，因此在全局 body parser 之前挂载。
 const mcpHttpServer = createMcpHttpServer({

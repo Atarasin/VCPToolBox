@@ -4,6 +4,9 @@ const test = require('node:test');
 const { bootstrapGateway } = require('../../../modules/agentGateway/composition/bootstrapGateway');
 const canonicalBundle = require('../../../modules/agentGateway/composition/createGatewayServiceBundle');
 const legacyBundle = require('../../../modules/agentGateway/createGatewayServiceBundle');
+const {
+    createLazyGatewayCredentialService
+} = require('../../../modules/agentGateway/composition/lazyGatewayCredentialService');
 const { bindVcpPorts } = require('../../../modules/agentGateway/composition/vcpPortBindings');
 
 function createReadyHost() {
@@ -42,6 +45,22 @@ test('bootstrap binds frozen ports and mounts routes after host readiness', () =
     assert.equal(result.ports.toolInvoker.available, true);
     assert.deepEqual(mounts[0], ['/agent_gateway', { kind: 'router' }]);
     assert.equal(result.bundle.ports, result.ports);
+});
+
+test('lazy credential service does not freeze RAG ports before host readiness', () => {
+    const pluginManager = createReadyHost();
+    pluginManager.vectorDBManager = null;
+
+    const credentialService = createLazyGatewayCredentialService(pluginManager);
+    assert.equal(pluginManager.__agentGatewayServiceBundle, undefined);
+
+    pluginManager.vectorDBManager = {
+        listDiaryNames: () => ['Diary'],
+        search: async () => []
+    };
+
+    assert.ok(credentialService.credentialResolver);
+    assert.equal(pluginManager.__agentGatewayServiceBundle.ports.ragRetriever.available, true);
 });
 
 test('optional host capabilities expose typed unavailable ports', () => {

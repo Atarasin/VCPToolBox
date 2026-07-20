@@ -322,9 +322,8 @@ class HttpServerRuntime {
             writeEmptyResponse(res, 202);
             return;
         }
-        if (session.activeStream && !options.isInitialize) {
-            await this.sseStreams.queue(session, this.sseStreams.createSseFrame('message', response));
-        }
+        // Canonical Streamable HTTP responses belong exclusively to the POST response body.
+        // Only the legacy streamOnly path above publishes request responses over SSE.
         writeJsonRpcResponse(res, 200, response, options.attachSessionHeader && initialized
             ? { 'MCP-Session-Id': session.context.sessionId } : {});
         if (!initialized && options.destroySessionOnFailure) {
