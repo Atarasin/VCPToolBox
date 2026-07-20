@@ -10,6 +10,11 @@
  * 生成物零 secret。
  */
 
+// 与 server.js 同源加载部署配置（AGENT_GATEWAY_PUBLIC_BASE_URL 等）；
+// 已在环境中显式设置的变量优先于 config.env
+require('../modules/dotenvPatch.js');
+require('dotenv').config({ path: require('node:path').join(__dirname, '..', 'config.env') });
+
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
