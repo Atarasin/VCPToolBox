@@ -10,6 +10,7 @@
 - **Kimi Code 0.27.0（真实安装）**：PASS。生成的 `SKILL.md` 置入隔离 skills 目录（`kimi --skills-dir <tmp>`，不改写用户级 `~/.kimi-code` 配置），真实 `kimi -p` 会话的可用 skill 列表包含 `vcp-agent-gateway-mcpmidas`（首轮 smoke 发现 Kimi 要求 frontmatter 才能装载——kimi 模板据此补齐 name/description frontmatter 后复测通过）。`mcp.json` 注册片段另经 JSON 解析校验（`bearerTokenEnvVar` 形态，零明文 token）；MCP endpoint 本身已由 M2.S4 真实 smoke 覆盖。
 - **端到端签名下载**：route 级测试覆盖 mint（credential + format 校验）→ 裸签名 URL redeem（无 credential）→ 重放 403 → revision 漂移 410（不烧 nonce）→ 文件 backend 跨实例/跨重启一次性语义（`tests/agent-gateway/routes/agent-gateway-skill-download-routes.test.js`）。
 - **部署要求**：代理/CDN/APM/access log 的缓存旁路与 query 脱敏为部署侧责任，清单见 [deployment-notes.md](deployment-notes.md)。
+- **统一模板复测（2026-07-20 晚）**：三 format 收敛为同一 SKILL.md（含三客户端注册片段）后，单份物理拷贝置于 `~/.agents/skills/`、Claude 侧符号链接——真实 Claude Code 2.1.215（经符号链接）、Codex 0.144.5、Kimi 0.27.0 三端均发现该 skill；Codex 与 Kimi 经统一 VPN 地址（`http://10.126.126.2:6005/mcp`）+ `AGENT_GATEWAY_TOKEN` 实连网关并列出全部 7 个 gateway 工具（Kimi 为用户级 `~/.kimi-code/mcp.json` 注册）。
 
 ## M2.S4 三客户端 capability smoke（2026-07-20）
 

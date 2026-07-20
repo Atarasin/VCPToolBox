@@ -133,10 +133,18 @@ const SECRET_STORE_GUIDANCE = [
     'Ask your gateway operator for an agent-bound credential.'
 ].join('\n');
 
-function renderClaudeSkill({ guidance, baseUrl }) {
+/**
+ * 统一模板（2026-07-20 经部署方确认）：三客户端（Claude Code / Codex / Kimi）
+ * 均消费 Agent-Skills 形态的 SKILL.md，guidance 内容一致，仅 MCP 注册方式
+ * 因客户端而异——单一 SKILL.md 内并列三种注册片段，三个 format 产出相同
+ * 文件，一份安装即可跨客户端共享（`~/.agents/skills/` + Claude 侧符号链接）。
+ * format 参数保留以兼容既有契约（artifactId/manifest 仍按 format 记录）。
+ */
+function renderUnifiedSkill({ guidance, baseUrl }) {
+    const skillName = `vcp-agent-gateway-${guidance.agentId.toLowerCase()}`;
     const skillMd = [
         '---',
-        `name: vcp-agent-gateway-${guidance.agentId.toLowerCase()}`,
+        `name: ${skillName}`,
         `description: Use the VCP Agent Gateway MCP server as ${guidance.displayName}'s durable recall and memory layer. Use when the task depends on prior decisions, project history, or durable memory writes through gateway_recall_run, gateway_memory_search, and gateway_memory_write.`,
         '---',
         '',
@@ -144,6 +152,10 @@ function renderClaudeSkill({ guidance, baseUrl }) {
         '',
         `Agent id: \`${guidance.agentId}\` (bound credentials may omit \`agentId\` in tool calls).`,
         `Gateway endpoint: \`${baseUrl}/mcp\` (Streamable HTTP MCP).`,
+        '',
+        'Tool-only hosts (e.g. Kimi) do not surface MCP instructions/resources:',
+        'call `gateway_agent_bootstrap` once per session to fetch the rendered',
+        'prompt and `integrationGuidance` payload as text.',
         '',
         renderGuidanceSection(guidance),
         '',
@@ -153,7 +165,11 @@ function renderClaudeSkill({ guidance, baseUrl }) {
         '',
         '## MCP registration',
         '',
-        'Add to your `.mcp.json` (or `claude mcp add --transport http`):',
+        'Pick the section for your client. All of them read the token from the',
+        '`AGENT_GATEWAY_TOKEN` environment variable; the raw token never lives in',
+        'any config file.',
+        '',
+        '### Claude Code (`.mcp.json` or `claude mcp add --transport http`)',
         '',
         '```json',
         JSON.stringify({
@@ -167,34 +183,7 @@ function renderClaudeSkill({ guidance, baseUrl }) {
         }, null, 2),
         '```',
         '',
-        '`${AGENT_GATEWAY_TOKEN}` is expanded by Claude Code from your environment;',
-        'the raw token never lives in this file.'
-    ].join('\n');
-    return [
-        { path: 'SKILL.md', content: skillMd }
-    ];
-}
-
-function renderCodexSkill({ guidance, baseUrl }) {
-    // Codex 支持 Agent Skills 规范（项目 `.agents/skills/` / 用户 `~/.agents/skills/`）：
-    // 输出与 claude/kimi 同构的 SKILL.md（按需装载），仅 MCP 注册片段为 config.toml 形式。
-    const skillMd = [
-        '---',
-        `name: vcp-agent-gateway-${guidance.agentId.toLowerCase()}`,
-        `description: Use the VCP Agent Gateway MCP server as ${guidance.displayName}'s durable recall and memory layer. Use when the task depends on prior decisions, project history, or durable memory writes through gateway_recall_run, gateway_memory_search, and gateway_memory_write.`,
-        '---',
-        '',
-        `# VCP Agent Gateway — ${guidance.displayName}`,
-        '',
-        `Agent id: \`${guidance.agentId}\`. Gateway MCP endpoint: \`${baseUrl}/mcp\`.`,
-        '',
-        renderGuidanceSection(guidance),
-        '',
-        renderToolCheatsheet(),
-        '',
-        SECRET_STORE_GUIDANCE,
-        '',
-        '## MCP registration (config.toml)',
+        '### Codex (`~/.codex/config.toml`)',
         '',
         '```toml',
         '[mcp_servers.vcp-agent-gateway]',
@@ -202,41 +191,7 @@ function renderCodexSkill({ guidance, baseUrl }) {
         'http_headers = { "Authorization" = "Bearer ${AGENT_GATEWAY_TOKEN}" }',
         '```',
         '',
-        'Codex expands `${AGENT_GATEWAY_TOKEN}` from the launching shell environment.',
-        'Do not paste the raw token into config.toml.',
-        '',
-        '## Installation',
-        '',
-        'Place this file at `<project>/.agents/skills/vcp-agent-gateway-' + guidance.agentId.toLowerCase() + '/SKILL.md`',
-        '(or `~/.agents/skills/…` for user-wide, cross-client use).'
-    ].join('\n');
-    return [
-        { path: 'SKILL.md', content: skillMd }
-    ];
-}
-
-function renderKimiSkill({ guidance, baseUrl }) {
-    const skillMd = [
-        '---',
-        `name: vcp-agent-gateway-${guidance.agentId.toLowerCase()}`,
-        `description: Use the VCP Agent Gateway MCP server as ${guidance.displayName}'s durable recall and memory layer. Use when the task depends on prior decisions, project history, or durable memory writes through gateway_recall_run, gateway_memory_search, and gateway_memory_write.`,
-        '---',
-        '',
-        `# VCP Agent Gateway — ${guidance.displayName}`,
-        '',
-        `Agent id: \`${guidance.agentId}\`. Gateway MCP endpoint: \`${baseUrl}/mcp\`.`,
-        '',
-        'Kimi consumes MCP tools only: instructions and resources are not surfaced.',
-        'Call `gateway_agent_bootstrap` once per session to fetch the rendered prompt',
-        'and `integrationGuidance` payload as text.',
-        '',
-        renderGuidanceSection(guidance),
-        '',
-        renderToolCheatsheet(),
-        '',
-        SECRET_STORE_GUIDANCE,
-        '',
-        '## MCP registration (.kimi-code/mcp.json)',
+        '### Kimi (`.kimi-code/mcp.json`)',
         '',
         '```json',
         JSON.stringify({
@@ -249,8 +204,18 @@ function renderKimiSkill({ guidance, baseUrl }) {
         }, null, 2),
         '```',
         '',
-        '`bearerTokenEnvVar` makes Kimi read the token from the environment;',
-        'the raw token never lives in mcp.json.'
+        '## Installation (one copy, all clients)',
+        '',
+        `Place this file at \`~/.agents/skills/${skillName}/SKILL.md\` — Codex and`,
+        'Kimi auto-discover that directory. Claude Code reads `~/.claude/skills/`,',
+        'so link the same copy:',
+        '',
+        '```bash',
+        `ln -s ~/.agents/skills/${skillName} ~/.claude/skills/${skillName}`,
+        '```',
+        '',
+        'Project-level equivalents: `<project>/.agents/skills/…` and',
+        '`<project>/.claude/skills/…`.'
     ].join('\n');
     return [
         { path: 'SKILL.md', content: skillMd }
@@ -258,9 +223,9 @@ function renderKimiSkill({ guidance, baseUrl }) {
 }
 
 const FORMAT_RENDERERS = Object.freeze({
-    claude: renderClaudeSkill,
-    codex: renderCodexSkill,
-    kimi: renderKimiSkill
+    claude: renderUnifiedSkill,
+    codex: renderUnifiedSkill,
+    kimi: renderUnifiedSkill
 });
 
 // 禁止出现在生成物中的 secret 形态（防回归 secret scan 的单源模式表）。
