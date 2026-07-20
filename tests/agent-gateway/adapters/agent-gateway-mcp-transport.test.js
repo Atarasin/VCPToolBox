@@ -623,6 +623,11 @@ test('stdio MCP transport preserves deferred bootstrap continuation and job-even
 
         assert.equal(deferred.result.deferred, true);
         assert.equal(deferred.result.status, 'waiting_approval');
+        // §5.3 / M2.S3.T1：backend-proxy 的 deferred bootstrap 分支同样返回
+        // canonical summary（与 in-process 一致，门禁 5「所有分支」证据）。
+        assert.equal(typeof deferred.result.structuredContent.summary, 'string');
+        assert.ok(deferred.result.structuredContent.summary.includes('Ariadne'));
+        assert.ok(deferred.result.structuredContent.summary.includes('waiting for approval'));
         assert.equal(eventUri.includes(encodeURIComponent(jobId)), true);
         assert.equal(jobGet.result.isError, false);
         assert.equal(jobGet.result.structuredContent.result.job.jobId, jobId);

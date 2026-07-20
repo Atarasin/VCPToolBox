@@ -410,6 +410,17 @@ async function runDirectCapabilityProbes({
     check(crossResponse.status === 403, `cross-agent REST guidance returned ${crossResponse.status}, expected 403`);
     await crossResponse.text();
 
+    // --- 越界：MCP resources/read 读他人 guidance → forbidden，不泄露内容 ---
+    const crossResourceRead = await bound.call('res-3', 'resources/read', {
+        uri: 'vcp://agent-gateway/agents/NotMyAgent/guidance'
+    });
+    const crossResourceError = crossResourceRead.body?.error
+        || crossResourceRead.body?.result?.error
+        || null;
+    check(Boolean(crossResourceError), 'cross-agent MCP guidance resource read must fail');
+    check(!JSON.stringify(crossResourceRead.body || {}).includes(GUIDANCE_MARKER),
+        'cross-agent MCP guidance resource read leaks guidance content');
+
     return {
         ok: issues.length === 0,
         issues,

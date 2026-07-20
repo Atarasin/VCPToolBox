@@ -15,7 +15,7 @@
 | Kimi Code | 0.27.0 | ok | 未向模型呈现 | 客户端不支持 MCP resources | `tools/call` 成功但只向模型渲染 `content[0].text`（renderedPrompt），`structuredContent`（含 `integrationGuidance`）不可见 | 典型 tool-only host：guidance 依赖 bootstrap 文本层 |
 
 - **结论**：无绑定连接只收通用 instructions、绑定连接只得所属 agent guidance、tool-only host 经 bootstrap 获取等价内容——三条 M2 门禁全部满足。已知限制：Kimi 只消费 tool result 的 text 内容，`integrationGuidance` 结构化字段对模型不可见（renderedPrompt 兼容语义仍完整送达）；Codex 非交互模式无法完成模型侧 MCP tool call（与 M0.S4 记录一致）。
-- **测试**：`npm run test:agent-gateway-m2-smoke-script`（脚本 helper 单测）；`npm run test:agent-gateway` 全量 871 用例通过。
+- **测试**：`npm run test:agent-gateway-m2-smoke-script`（脚本 helper 单测）；`npm run test:agent-gateway` 全量通过（M2 合并时 879 用例，0 失败）。
 
 ## M0.S4 Tool description 重写（2026-07-19）
 

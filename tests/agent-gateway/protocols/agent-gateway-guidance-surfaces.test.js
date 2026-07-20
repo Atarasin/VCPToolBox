@@ -349,6 +349,33 @@ test('backend-proxy discovery follows the bound credential without explicit agen
     assert.deepEqual(unbound.resources, []);
 });
 
+test('backend-proxy guidance resource read maps backend 403 to MCP_FORBIDDEN without content leak', async () => {
+    const backendClient = {
+        async getAgentGuidance() {
+            return {
+                ok: false,
+                httpStatus: 403,
+                payload: {
+                    success: false,
+                    error: 'credential is not authorized for this agent',
+                    code: 'AGW_FORBIDDEN'
+                }
+            };
+        }
+    };
+    const adapter = createBackendProxyMcpAdapter({ backendClient, defaultAgentId: '' });
+    await assert.rejects(
+        () => adapter.readResource({
+            uri: 'vcp://agent-gateway/agents/NotMyAgent/guidance',
+            requestContext: { requestId: 'req-proxy-cross-guidance' }
+        }),
+        (error) => {
+            assert.equal(error.code, 'MCP_FORBIDDEN');
+            return true;
+        }
+    );
+});
+
 test('instructions clamp obeys the canonical 800-token limit with truncation marker', () => {
     const oversized = 'x'.repeat(INSTRUCTIONS_TOKEN_LIMIT * 4 + 400);
     const clamped = clampInstructionsText(oversized);
