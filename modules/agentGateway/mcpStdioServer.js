@@ -1,6 +1,7 @@
 const { StdioTransport, validateMcpTransport } = require('./transport');
 const { createBackendProxyMcpServerHarness } = require('./protocols/mcp/backendProxyExecutor');
 const { GatewayBackendClient } = require('./clients/GatewayBackendClient');
+const { sanitizeUntrustedAuthContext } = require('./policy/trustedCredentialContext');
 const {
     createJsonRpcErrorResponse,
     createRuntimeProvider,
@@ -86,6 +87,21 @@ async function createStdioMcpServer(options = {}) {
         const response = await dispatchJsonRpc({
             ...parsed,
             harness,
+            // §3.2/§5.5：stdio 客户端 params 中的 authContext 身份字段
+            //（boundAgentId/credentialScopes 等）可伪造——剥离后透传，
+            // 授权由 backend 以进程静态 credential 重新决议。
+            inject: (request) => {
+                if (request?.params?.authContext) {
+                    return {
+                        ...request,
+                        params: {
+                            ...request.params,
+                            authContext: sanitizeUntrustedAuthContext(request.params.authContext)
+                        }
+                    };
+                }
+                return request;
+            },
             onNotificationError: (error) => logger.error('notification.failed', error)
         });
         if (response) transport.send(JSON.stringify(response));

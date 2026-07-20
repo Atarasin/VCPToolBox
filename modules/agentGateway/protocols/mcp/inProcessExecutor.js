@@ -331,7 +331,7 @@ function isGatewayManagedTool(name) {
     return Object.values(MCP_GATEWAY_TOOL_NAMES).includes(name);
 }
 
-function buildManagedToolContextInput(input, args) {
+function buildManagedToolContextInput(input, args, { surface = 'in-process:tools/call', directAgentScoped = true } = {}) {
     const trusted = isTrustedCredentialContext(input.authContext);
     const explicitAgentId = normalizeMcpString(
         input.agentId || args.agentId || args.target?.agentId || input.requestContext?.agentId
@@ -345,13 +345,17 @@ function buildManagedToolContextInput(input, args) {
         if (boundAgentId) {
             if (!explicitAgentId) {
                 agentId = boundAgentId;
-                defaultAgentTargetTelemetry.record({ surface: 'in-process:tools/call', outcome: 'boundOmitted' });
+                // 比例 telemetry 只统计直接 agent-scoped 操作（job 等间接
+                // 对象按 owner 决议，不计入显式 agentId 迁移比例）。
+                if (directAgentScoped) {
+                    defaultAgentTargetTelemetry.record({ surface, outcome: 'boundOmitted' });
+                }
             } else if (explicitAgentId !== boundAgentId) {
                 throw createMcpError(MCP_ERROR_CODES.FORBIDDEN, 'target agent differs from bound agent', {
                     field: 'agentId'
                 });
-            } else {
-                defaultAgentTargetTelemetry.record({ surface: 'in-process:tools/call', outcome: 'explicit' });
+            } else if (directAgentScoped) {
+                defaultAgentTargetTelemetry.record({ surface, outcome: 'explicit' });
             }
         }
     }
@@ -500,7 +504,10 @@ async function executeGatewayManagedOperation({
     requiresJobIdentity = false,
     execute
 }) {
-    const contextInput = buildManagedToolContextInput(input, args);
+    const contextInput = buildManagedToolContextInput(input, args, {
+        surface: `in-process:tools/call:${name}`,
+        directAgentScoped: !requiresJobIdentity
+    });
     const { requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
     if (requiresJobIdentity) {
         ensureJobIdentity(requestContext, authContext, `tools/call:${name}`);
@@ -575,7 +582,9 @@ async function executeGatewayManagedPromptGet({
         });
     }
 
-    const contextInput = buildManagedToolContextInput(input, args);
+    const contextInput = buildManagedToolContextInput(input, args, {
+        surface: `in-process:prompts/get:${name}`
+    });
     const { requestContext, authContext } = buildMcpContexts(bundle, contextInput, 'mcp-prompts-get');
     ensureAgentId(requestContext, `prompts/get:${name}`);
 

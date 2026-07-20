@@ -22,6 +22,7 @@ const UNTRUSTED_STRIP_FIELDS = Object.freeze([
     'boundAgentId',
     'effectiveAgentId',
     'scopes',
+    'credentialScopes',
     'isAdmin'
 ]);
 
