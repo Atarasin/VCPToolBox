@@ -858,6 +858,9 @@
             "$ref": "#/components/parameters/AgentIdPath"
           },
           {
+            "$ref": "#/components/parameters/SkillFormatQuery"
+          },
+          {
             "$ref": "#/components/parameters/RequestIdQuery"
           },
           {
@@ -877,6 +880,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"

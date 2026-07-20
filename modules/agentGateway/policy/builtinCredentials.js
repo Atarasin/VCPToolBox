@@ -168,11 +168,28 @@ function createBuiltinCredentialResolver({
         return { collision: false };
     }
 
+    /**
+     * L3 签名下载 redeem 的 legacy owner 重读（§6）：`legacy-gateway-key`
+     * 不在文件 credential snapshot 中，按当前 env key 与迁移开关重建
+     * record/revision——key 轮换或开关关闭后旧下载 token 立即失效。
+     */
+    function checkLegacyCredentialStatus() {
+        if (!normalizedGatewayKey) {
+            return { ok: false, code: 'AGW_UNAUTHORIZED', reason: 'legacy gateway key not configured' };
+        }
+        if (switches.legacyKeyDisabled) {
+            return { ok: false, code: 'AGW_UNAUTHORIZED', reason: 'legacy gateway key disabled' };
+        }
+        const result = buildLegacyResult();
+        return { ok: true, record: result.record, credentialRevision: result.credentialRevision };
+    }
+
     return Object.freeze({
         LEGACY_CREDENTIAL_ID,
         ADMIN_SESSION_CREDENTIAL_ID,
         switches,
         resolveBuiltinCredential,
+        checkLegacyCredentialStatus,
         detectLegacyTokenCollision,
         hasLegacyKey: Boolean(normalizedGatewayKey)
     });

@@ -50,7 +50,7 @@ test('REST operations carry credentialAction except fixed adminAuth exclusions',
     for (const operation of REST_OPERATIONS) {
         if (operation.authExclusion === 'adminAuth') {
             assert.equal(operation.credentialAction, undefined);
-        } else if (operation.authMechanism === 'adminAuthBridge') {
+        } else if (operation.authMechanism === 'adminAuthBridge' || operation.authMechanism === 'signedDownloadUrl') {
             assert.equal(operation.credentialAction, undefined);
         } else {
             assert.ok(CREDENTIAL_ACTIONS.includes(operation.credentialAction), operation.operationId);
@@ -65,10 +65,7 @@ test('surface registry covers initialize, discovery, resource read, skill downlo
         'mcp.tools/list',
         'mcp.resources/list',
         'mcp.prompts/list',
-        'mcp.resources/read',
-        // integration/skill 在线 endpoint 自 M4.S1 起由 restOperations.json 登记（credentialAction: read）；
-        // surface entry 只保留 M4.S2 的签名下载 redeem（credentialAction: authenticated）。
-        'rest.integration/skill-download-redeem'
+        'mcp.resources/read'
     ]) {
         assert.ok(surfaces.includes(required), `missing surface ${required}`);
     }
@@ -83,6 +80,32 @@ test('surface registry covers initialize, discovery, resource read, skill downlo
     const bridge = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/auth/admin-session');
     assert.equal(bridge.authMechanism, 'adminAuthBridge');
     assert.equal(bridge.credentialAction, undefined);
+    // L3 签名下载 redeem（§6）：signedDownloadUrl surface 由 REST binding 登记，
+    // 不呈现 credential——签名 URL 即 bearer capability。
+    const redeem = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/agents/{agentId}/integration/skill/download');
+    assert.equal(redeem.authMechanism, 'signedDownloadUrl');
+    assert.equal(redeem.credentialAction, undefined);
+    const mint = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/agents/{agentId}/integration/skill/download-url');
+    assert.equal(mint.credentialAction, 'read');
+});
+
+test('catalog rejects a second signedDownloadUrl surface and misplaced usage', () => {
+    const second = buildAuthPolicyCatalog({
+        surfaceEntries: [
+            ...SURFACE_ENTRIES,
+            { surface: 'rest.other-download', kind: 'rest-download-redeem', authMechanism: 'signedDownloadUrl' }
+        ]
+    });
+    assert.equal(second.valid, false);
+    assert.ok(second.errors.some((error) => /reserved for the skill download redeem operation/.test(error.message)));
+
+    const restOperations = structuredClone([...REST_OPERATIONS]);
+    const guidance = restOperations.find((operation) => operation.operationId === 'getAgentGatewayAgentGuidance');
+    delete guidance.credentialAction;
+    guidance.authMechanism = 'signedDownloadUrl';
+    const misplaced = buildAuthPolicyCatalog({ restOperations });
+    assert.equal(misplaced.valid, false);
+    assert.ok(misplaced.errors.some((error) => /reserved for the skill download redeem operation|only one signedDownloadUrl/.test(error.message)));
 });
 
 test('catalog rejects entries with both action and mechanism', () => {

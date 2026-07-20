@@ -507,6 +507,7 @@ paths:
       operationId: mintAgentGatewaySkillDownloadUrl
       parameters:
         - $ref: "#/components/parameters/AgentIdPath"
+        - $ref: "#/components/parameters/SkillFormatQuery"
         - $ref: "#/components/parameters/RequestIdQuery"
         - $ref: "#/components/parameters/SourceQuery"
         - $ref: "#/components/parameters/RuntimeQuery"
@@ -517,6 +518,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

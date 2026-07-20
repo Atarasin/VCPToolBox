@@ -731,6 +731,16 @@ const adminAuth = (req, res, next) => {
         // ========== 新增结束 ==========
 
         if (isAgentGatewayPath) {
+            // L3 签名下载 redeem（§6 / auth policy catalog authMechanism:
+            // signedDownloadUrl）：签名 URL 本身是 bearer capability，redeem
+            // 无需 credential 或 Basic——放行到 route 层完成签名/owner/nonce
+            // 校验。仅限该唯一路径的完整 GET。
+            const isSignedSkillDownloadRedeem = req.method === 'GET'
+                && /^\/agent_gateway\/agents\/[^/]+\/integration\/skill\/download\/?$/.test(req.path);
+            if (isSignedSkillDownloadRedeem) {
+                return next();
+            }
+
             const dedicatedGatewayAuth = resolveDedicatedGatewayAuth({
                 headers: req.headers,
                 config: createProtocolConfigSnapshot(pluginManager)

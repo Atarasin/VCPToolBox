@@ -1423,11 +1423,13 @@
     "path": "/agent_gateway/agents/{agentId}/integration/skill/download-url",
     "parameterLocations": [
       "#/components/parameters/AgentIdPath",
+      "#/components/parameters/SkillFormatQuery",
       "#/components/parameters/RequestIdQuery",
       "#/components/parameters/SourceQuery",
       "#/components/parameters/RuntimeQuery"
     ],
     "errors": [
+      { "status": 400, "response": { "$ref": "#/components/responses/InvalidRequest" } },
       { "status": 401, "response": { "$ref": "#/components/responses/Unauthorized" } },
       { "status": 403, "response": { "$ref": "#/components/responses/Forbidden" } },
       { "status": 503, "response": { "$ref": "#/components/responses/ServiceUnavailable" } }
@@ -1439,12 +1441,14 @@
         "operationId": "mintAgentGatewaySkillDownloadUrl",
         "parameters": [
           { "$ref": "#/components/parameters/AgentIdPath" },
+          { "$ref": "#/components/parameters/SkillFormatQuery" },
           { "$ref": "#/components/parameters/RequestIdQuery" },
           { "$ref": "#/components/parameters/SourceQuery" },
           { "$ref": "#/components/parameters/RuntimeQuery" }
         ],
         "responses": {
           "200": { "description": "Download URL minted", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "503": { "$ref": "#/components/responses/ServiceUnavailable" }
@@ -1477,6 +1481,6 @@
         }
       }
     },
-    "credentialAction": "authenticated"
+    "authMechanism": "signedDownloadUrl"
   }
 ]

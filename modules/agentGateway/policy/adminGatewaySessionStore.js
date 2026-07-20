@@ -158,6 +158,38 @@ function createAdminGatewaySessionStore({
         };
     }
 
+    /**
+     * L3 签名下载 redeem 的 owner 重读（§6）：签名载荷不得含 opaque session
+     * id，只携带其 sha256 digest（即本 store 的存储键）。按 digest 重读
+     * record，校验存活、未过期与 subject key 未轮换；revision 由调用方与
+     * 载荷 ownerRevision 比对。digest 不可逆推 opaque id，亦无法直接用于
+     * cookie 认证（verifySession 会对呈现值再做一次 sha256）。
+     */
+    async function verifySessionOwnerByDigest(idDigest) {
+        if (!isConfigured()) {
+            return { ok: false, code: 'AGW_CONFIG_UNAVAILABLE' };
+        }
+        const normalizedDigest = normalizeString(idDigest);
+        if (!normalizedDigest) {
+            return { ok: false, code: 'AGW_UNAUTHORIZED', reason: 'no session owner reference' };
+        }
+        const timestamp = now();
+        await sessionBackend.cleanupExpired(timestamp);
+        const record = await sessionBackend.get(normalizedDigest);
+        if (!record || record.status !== 'active') {
+            return { ok: false, code: 'AGW_UNAUTHORIZED', reason: 'session not found or inactive' };
+        }
+        if (record.expiresAt <= timestamp) {
+            await sessionBackend.delete(record.idDigest);
+            return { ok: false, code: 'AGW_UNAUTHORIZED', reason: 'session expired' };
+        }
+        if (record.subjectKeyFingerprint !== subjectKeyFingerprint) {
+            await sessionBackend.delete(record.idDigest);
+            return { ok: false, code: 'AGW_UNAUTHORIZED', reason: 'subject key rotated; session revoked' };
+        }
+        return { ok: true, revision: record.revision, expiresAt: record.expiresAt };
+    }
+
     async function revokeSession(opaqueSessionId) {
         const normalizedId = normalizeString(opaqueSessionId);
         if (!normalizedId) {
@@ -175,6 +207,7 @@ function createAdminGatewaySessionStore({
         isConfigured,
         createSession,
         verifySession,
+        verifySessionOwnerByDigest,
         revokeSession,
         revokeAllSessions
     });

@@ -60,7 +60,7 @@ const {
     createAgentGuidanceService
 } = require('../services/agentGuidanceService');
 const { createSkillDownloadSigningService } = require('../services/skillDownloadSigningService');
-const { createDownloadNonceStore } = require('../policy/downloadNonceStore');
+const { createDownloadNonceStore, createFileDownloadNonceBackend } = require('../policy/downloadNonceStore');
 const { bindVcpPorts } = require('./vcpPortBindings');
 const { createIntegrationSnapshotCoordinator } = require('./integrationSnapshotCoordinator');
 const { DEFAULT_GUIDANCE_CONFIG_PATH } = require('../policy/agentGuidanceConfig');
@@ -77,7 +77,7 @@ const {
     createAdminGatewaySessionStore,
     createInMemoryAdminSessionBackend
 } = require('../policy/adminGatewaySessionStore');
-const { parseBoolean: parseEnvBoolean } = require('../policy/shared/normalize');
+const { normalizeString, parseBoolean: parseEnvBoolean } = require('../policy/shared/normalize');
 
 const DEFAULT_GATEWAY_VERSION = 'v1';
 const DEFAULT_AUDIT_PREFIX = '[AgentGatewayAudit]';
@@ -95,6 +95,23 @@ function parseCookieHeader(headers = {}) {
         if (key) cookies[key] = decodeURIComponent(rest.join('=') || '');
     }
     return cookies;
+}
+
+/**
+ * §6：生产 nonce store 三选一——pluginManager 注入外部共享 backend（跨主机
+ * KV 等）、`AGENT_GATEWAY_DOWNLOAD_NONCE_DIR` 启用单机多 worker 文件
+ * backend、或都缺省时的非生产内存 backend（mint 对其恒 503，fail-closed）。
+ */
+function resolveDownloadNonceStoreForBundle(pluginManager) {
+    const injectedBackend = pluginManager?.agentGatewayDownloadNonceBackend || null;
+    if (injectedBackend) {
+        return createDownloadNonceStore({ backend: injectedBackend });
+    }
+    const nonceDir = normalizeString(process.env.AGENT_GATEWAY_DOWNLOAD_NONCE_DIR);
+    if (nonceDir) {
+        return createDownloadNonceStore({ backend: createFileDownloadNonceBackend({ dir: nonceDir }) });
+    }
+    return createDownloadNonceStore();
 }
 
 function resolveAdminSessionStoreForBundle(pluginManager) {
@@ -312,9 +329,10 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         integrationSnapshotCoordinator,
         agentGuidanceService,
         skillDownloadSigningService: createSkillDownloadSigningService({
-            downloadNonceStore: createDownloadNonceStore(),
+            downloadNonceStore: resolveDownloadNonceStoreForBundle(pluginManager),
             credentialResolver: gatewayCredentialService?.credentialResolver || null,
-            adminGatewaySessionStore: gatewayCredentialService?.adminSessionStore || null
+            adminGatewaySessionStore: gatewayCredentialService?.adminSessionStore || null,
+            checkLegacyCredentialStatus: gatewayCredentialService?.builtinCredentialResolver?.checkLegacyCredentialStatus || null
         }),
         jobStatus: JOB_STATUS,
         gatewayVersion: options.gatewayVersion || DEFAULT_GATEWAY_VERSION,

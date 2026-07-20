@@ -11,7 +11,10 @@ const { MCP_OPERATIONS, REST_OPERATIONS } = require('./operations');
  */
 
 const CREDENTIAL_ACTIONS = Object.freeze(['authenticated', 'read', 'execute']);
-const AUTH_MECHANISMS = Object.freeze(['adminAuthBridge']);
+// adminAuthBridge：唯一 pre-credential bridge（§3.3）。
+// signedDownloadUrl：L3 redeem surface（§6）——签名 URL 本身是 bearer
+// capability，redeem 无需再呈现 credential，owner 校验由签名载荷承担。
+const AUTH_MECHANISMS = Object.freeze(['adminAuthBridge', 'signedDownloadUrl']);
 
 const ACTION_SCOPES = Object.freeze({
     authenticated: Object.freeze([]),
@@ -31,10 +34,11 @@ const SURFACE_ENTRIES = Object.freeze([
     { surface: 'mcp.resources/list', kind: 'mcp-discovery', credentialAction: 'read' },
     { surface: 'mcp.prompts/list', kind: 'mcp-discovery', credentialAction: 'read' },
     { surface: 'mcp.prompts/get', kind: 'mcp-discovery', credentialAction: 'read' },
-    { surface: 'mcp.resources/read', kind: 'mcp-resource', credentialAction: 'read' },
-    { surface: 'rest.integration/skill-download-redeem', kind: 'rest-download-redeem', credentialAction: 'authenticated' }
+    { surface: 'mcp.resources/read', kind: 'mcp-resource', credentialAction: 'read' }
     // admin session bridge 自 M1.S3 起由 restOperations.json 的
-    // createAgentGatewayAdminSession（authMechanism: adminAuthBridge）登记。
+    // createAgentGatewayAdminSession（authMechanism: adminAuthBridge）登记；
+    // skill download redeem surface 自 M4.S2 起由 restOperations.json 的
+    // redeemAgentGatewaySkillDownload（authMechanism: signedDownloadUrl）登记。
 ].map(Object.freeze));
 
 // canonical operation 在两套 binding 中的对应关系；两侧 action 必须一致。
@@ -57,7 +61,8 @@ const OPERATION_CREDENTIAL_ACTIONS = Object.freeze({
     'agents.integration': 'read',
     'agents.integration.skill': 'read',
     'agents.integration.skill.download.mint': 'read',
-    'agents.integration.skill.download.redeem': 'authenticated',
+    // redeem 是 signedDownloadUrl surface（§6）：不呈现 credential，不产生
+    // credential-action 审计事件，故不在此登记。
     'agents.render': 'read',
     'capabilities.read': 'read',
     'memory.targets': 'read',
@@ -162,6 +167,18 @@ function buildAuthPolicyCatalog({
     const bridgeEntries = entries.filter((entry) => entry.authMechanism === 'adminAuthBridge');
     if (bridgeEntries.length > 1) {
         errors.push(entryError(bridgeEntries.map((entry) => entry.entry).join(', '), 'only one adminAuthBridge surface is allowed'));
+    }
+
+    // §6：signedDownloadUrl 只保留给 L3 redeem endpoint，且全 catalog 唯一。
+    const signedDownloadEntries = entries.filter((entry) => entry.authMechanism === 'signedDownloadUrl');
+    if (signedDownloadEntries.length > 1) {
+        errors.push(entryError(signedDownloadEntries.map((entry) => entry.entry).join(', '), 'only one signedDownloadUrl surface is allowed'));
+    }
+    for (const entry of signedDownloadEntries) {
+        const isRedeemRestOperation = entry.binding === 'rest' && /\/integration\/skill\/download$/.test(entry.path || '');
+        if (!isRedeemRestOperation) {
+            errors.push(entryError(entry.entry, 'authMechanism "signedDownloadUrl" is reserved for the skill download redeem operation'));
+        }
     }
 
     for (const mcpOperation of mcpOperations) {
