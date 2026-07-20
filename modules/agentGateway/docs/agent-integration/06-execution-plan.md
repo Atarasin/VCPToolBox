@@ -221,7 +221,7 @@
 依赖：S1、S2。
 
 - [x] T1 三 agent x 三 format 的 snapshot、manifest 校验、secret scan、真实安装 smoke(§6)。
-- [x] T2 迁移公告 + 现网确认后删除手写 `skills/midas-vcp/`(§6)。（`skills/midas-vcp/` 在本仓库不存在，无需删除；迁移公告见本 commit。）
+- [ ] T2 迁移公告 + 现网确认后删除手写 `skills/midas-vcp/`(§6)。（迁移公告已发布：[skill-migration-announcement.md](skill-migration-announcement.md)；手写 skill 实际位于 `modules/agentGateway/skills/midas-vcp/`，按 §6 与本 task 约定，删除 gated 于现网确认——待运维确认所有在用客户端已切换后执行。）
 - [x] T3 M4 门禁:05-testing-gates.md 第 10 条。
 
 ---
