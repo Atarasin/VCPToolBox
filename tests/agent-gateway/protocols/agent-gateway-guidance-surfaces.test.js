@@ -318,6 +318,37 @@ test('backend-proxy resource and bootstrap consume the same REST guidance bindin
     assert.equal(bootstrapResult.integrationGuidance.revision, resourcePayload.revision);
 });
 
+test('backend-proxy discovery follows the bound credential without explicit agentId (§3.4)', async () => {
+    const adapter = createBackendProxyMcpAdapter({
+        backendClient: {},
+        defaultAgentId: '',
+        discoveryDefaultAgentEnabled: false
+    });
+
+    // 标准 host：list 不带 agentId，可见集合来自 transport 注入的绑定身份
+    const bound = await adapter.listResources({
+        authContext: { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read'] },
+        requestContext: { requestId: 'req-proxy-bound-list' }
+    });
+    assert.ok(bound.resources.some(
+        (resource) => resource.uri === 'vcp://agent-gateway/agents/Ariadne/guidance'
+    ));
+
+    // 自定义 discovery agentId 只作收窄扩展：越界返回空集合，不报错
+    const outOfScope = await adapter.listResources({
+        agentId: 'Nexus',
+        authContext: { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read'] },
+        requestContext: { requestId: 'req-proxy-out-of-scope-list' }
+    });
+    assert.deepEqual(outOfScope.resources, []);
+
+    // 未绑定且无显式 agentId / discovery default → 空集合
+    const unbound = await adapter.listResources({
+        requestContext: { requestId: 'req-proxy-unbound-list' }
+    });
+    assert.deepEqual(unbound.resources, []);
+});
+
 test('instructions clamp obeys the canonical 800-token limit with truncation marker', () => {
     const oversized = 'x'.repeat(INSTRUCTIONS_TOKEN_LIMIT * 4 + 400);
     const clamped = clampInstructionsText(oversized);

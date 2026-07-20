@@ -398,12 +398,31 @@ function buildPromptMeta(result, agentId) {
     };
 }
 
+/**
+ * Discovery target 决议（§3.4 补充规则）：标准 host 只发送 cursor，服务端按
+ * credential 决定可见集合。绑定 credential（transport 注入的受信任
+ * authContext，客户端 params.authContext 已被整体覆盖）可见集合为
+ * [boundAgentId]；自定义 discovery agentId 只作收窄扩展，越界返回空集合。
+ * 未绑定时保留显式 agentId / stdio 开发 default 的既有语义。
+ */
+function resolveDiscoveryScope(state, input) {
+    const boundAgentId = normalizeMcpString(input.authContext?.boundAgentId, 256);
+    const requestedAgentId = normalizeMcpString(input.agentId || input.requestContext?.agentId);
+    if (boundAgentId) {
+        if (requestedAgentId && requestedAgentId !== boundAgentId) {
+            return { agentId: '', outOfScope: true };
+        }
+        return { agentId: boundAgentId, outOfScope: false };
+    }
+    const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : state.defaultAgentId;
+    return { agentId: requestedAgentId || normalizeMcpString(discoveryDefault), outOfScope: false };
+}
+
 const BACKEND_PROXY_METHODS = {
     async listTools(state, input = {}) {
         return serveFrozenList(input, 'tools', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
+        const { agentId } = resolveDiscoveryScope(state, input);
         return {
             tools: gatewayManagedTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
             meta: {
@@ -417,8 +436,7 @@ const BACKEND_PROXY_METHODS = {
     async listPrompts(state, input = {}) {
         return serveFrozenList(input, 'prompts', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
+        const { agentId } = resolveDiscoveryScope(state, input);
         return {
             prompts: gatewayManagedPrompts,
             meta: {
@@ -652,8 +670,7 @@ const BACKEND_PROXY_METHODS = {
     async listResources(state, input = {}) {
         return serveFrozenList(input, 'resources', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
+        const { agentId } = resolveDiscoveryScope(state, input);
 
         if (!agentId) {
             return {

@@ -90,7 +90,7 @@ vcp://agent-gateway/agents/{agentId}/guidance
 | 仅 tools | tool description | 仅触发建议，不保证完整路由 |
 | 无 MCP | 可选 L3 skill | 本地安装后生效 |
 
-因此“零安装”仅表示不再需要手写 skill 才能连接并发现基础工具；不表示每个 host 都能自动消费所有 guidance 层。
+因此“零安装”仅表示不再需要手写 skill 才能连接并发现基础工具；不表示每个 host 都能自动消费所有 guidance 层。M2.S4 对 Claude Code / Codex / Kimi 的实测矩阵见 [smoke-records.md](smoke-records.md)：Claude Code 三层全消费；Codex 消费 instructions + resource；Kimi 为典型 tool-only host，仅消费 bootstrap 的 text 内容层。
 
 ### 5.4 `agentId` 迁移
 

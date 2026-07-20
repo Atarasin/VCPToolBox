@@ -172,8 +172,8 @@
 
 依赖：S2、S3。
 
-- [ ] T1 Claude Code、Codex、Kimi capability smoke;记录 instructions/resources 实际消费情况(填充 §5.3 兼容性矩阵)。
-- [ ] T2 M2 门禁:无绑定连接只收通用 instructions;绑定连接只得所属 agent guidance;tool-only host 经 bootstrap 获取等价内容。
+- [x] T1 Claude Code、Codex、Kimi capability smoke;记录 instructions/resources 实际消费情况(填充 §5.3 兼容性矩阵)。
+- [x] T2 M2 门禁:无绑定连接只收通用 instructions;绑定连接只得所属 agent guidance;tool-only host 经 bootstrap 获取等价内容。
 
 ---
 
