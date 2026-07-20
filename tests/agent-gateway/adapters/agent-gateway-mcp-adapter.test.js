@@ -813,8 +813,10 @@ test('Gateway-managed MCP tools preserve concurrency operability rejection for r
     const adapter = createMcpAdapter(pluginManager);
 
     try {
+        // M2.S3.T2 后 render 不再经 tools/call 暴露；bootstrap 走同一
+        // agents.render operation，concurrency 语义不变。
         const firstPromise = adapter.callTool({
-            name: 'gateway_agent_render',
+            name: 'gateway_agent_bootstrap',
             arguments: {
                 agentId: 'Ariadne',
                 variables: {
@@ -827,7 +829,7 @@ test('Gateway-managed MCP tools preserve concurrency operability rejection for r
             }
         });
         const secondPromise = adapter.callTool({
-            name: 'gateway_agent_render',
+            name: 'gateway_agent_bootstrap',
             arguments: {
                 agentId: 'Ariadne',
                 variables: {
@@ -854,7 +856,7 @@ test('Gateway-managed MCP tools preserve concurrency operability rejection for r
     }
 });
 
-test('MCP adapter executes canonical agent render tool with shared render metadata', async () => {
+test('MCP adapter rejects gateway_agent_render via tools/call per catalog publishedAsTool: false (M2.S3.T2)', async () => {
     const agentDir = await createTempAgentDir();
     await writeAgentFile(
         agentDir,
@@ -865,7 +867,29 @@ test('MCP adapter executes canonical agent render tool with shared render metada
     const adapter = createMcpAdapter(pluginManager);
 
     try {
-        const result = await adapter.callTool({
+        await assert.rejects(
+            () => adapter.callTool({
+                name: 'gateway_agent_render',
+                arguments: {
+                    agentId: 'Ariadne',
+                    variables: {
+                        VarUserName: 'Nova'
+                    }
+                },
+                sessionId: 'sess-mcp-agent-render',
+                requestContext: {
+                    requestId: 'req-mcp-agent-render'
+                }
+            }),
+            (error) => {
+                assert.equal(error.code, 'MCP_NOT_FOUND');
+                assert.equal(error.details.primarySurface, 'prompts/get');
+                return true;
+            }
+        );
+
+        // render 能力仍经 prompts/get 提供（shared render metadata 不变）
+        const prompt = await adapter.getPrompt({
             name: 'gateway_agent_render',
             arguments: {
                 agentId: 'Ariadne',
@@ -873,21 +897,15 @@ test('MCP adapter executes canonical agent render tool with shared render metada
                     VarUserName: 'Nova'
                 }
             },
-            sessionId: 'sess-mcp-agent-render',
+            sessionId: 'sess-mcp-agent-render-prompt',
             requestContext: {
-                requestId: 'req-mcp-agent-render'
+                requestId: 'req-mcp-agent-render-prompt'
             }
         });
-
-        assert.equal(result.isError, false);
-        assert.equal(result.status, 'completed');
-        assert.equal(result.structuredContent.requestId, 'req-mcp-agent-render');
-        assert.equal(result.structuredContent.toolName, 'gateway_agent_render');
-        assert.equal(result.structuredContent.result.renderedPrompt.includes('Hello Nova from Ariadne'), true);
-        assert.equal(result.structuredContent.result.renderedPrompt.includes('记忆片段'), true);
-        assert.equal(result.structuredContent.result.renderMeta.memoryRecallApplied, true);
-        assert.deepEqual(result.structuredContent.result.renderMeta.recallSources, ['tagmemo']);
-        assert.equal(result.content[0].text, result.structuredContent.result.renderedPrompt);
+        assert.equal(prompt.messages[0].content[0].text.includes('Hello Nova from Ariadne'), true);
+        assert.equal(prompt.messages[0].content[0].text.includes('记忆片段'), true);
+        assert.equal(prompt.meta.renderMeta.memoryRecallApplied, true);
+        assert.deepEqual(prompt.meta.renderMeta.recallSources, ['tagmemo']);
     } finally {
         await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -1712,15 +1730,19 @@ test('Gateway-managed MCP tools reuse one deferred runtime envelope for render a
         gatewayServiceBundle: deferredBundle
     });
 
-    const render = await adapter.callTool({
-        name: 'gateway_agent_render',
-        arguments: {
-            agentId: 'Ariadne'
-        },
-        requestContext: {
-            requestId: 'req-mcp-deferred-render'
-        }
-    });
+    // M2.S3.T2：render 不再经 tools/call 暴露（deferred 场景同样拒绝）
+    await assert.rejects(
+        () => adapter.callTool({
+            name: 'gateway_agent_render',
+            arguments: {
+                agentId: 'Ariadne'
+            },
+            requestContext: {
+                requestId: 'req-mcp-deferred-render'
+            }
+        }),
+        (error) => error && error.code === 'MCP_NOT_FOUND'
+    );
     const bootstrap = await adapter.callTool({
         name: 'gateway_agent_bootstrap',
         arguments: {
@@ -1733,17 +1755,16 @@ test('Gateway-managed MCP tools reuse one deferred runtime envelope for render a
         }
     });
 
-    assert.equal(render.deferred, true);
-    assert.equal(render.status, 'accepted');
-    assert.equal(render.structuredContent.toolName, 'gateway_agent_render');
-    assert.equal(render.structuredContent.runtime.eventResourceUri.includes('/events'), true);
-    assert.equal(render.structuredContent.operability.operationName, 'agents.render');
-
     assert.equal(bootstrap.deferred, true);
     assert.equal(bootstrap.status, 'accepted');
     assert.equal(bootstrap.structuredContent.job.status, 'accepted');
     assert.equal(bootstrap.structuredContent.runtime.eventResourceUri.includes(encodeURIComponent(bootstrap.structuredContent.job.jobId)), true);
     assert.equal(bootstrap.structuredContent.operability.operationName, 'agents.render');
+    // M2.S3.T1：deferred 分支补齐 summary（canonical 单点实现）
+    assert.equal(
+        bootstrap.structuredContent.summary,
+        `Bootstrap accepted for deferred processing for Ariadne; jobId=${bootstrap.structuredContent.job.jobId}`
+    );
 });
 
 test('MCP prompt publication and agent preview resources preserve machine-readable missing-agent failures', async () => {
@@ -2173,7 +2194,8 @@ test('MCP agent render adapter remains semantically aligned with representative 
             })
         });
         const nativeRenderPayload = await nativeRenderResponse.json();
-        const mcpRender = await adapter.callTool({
+        // M2.S3.T2 后 render 的 MCP 主 surface 是 prompts/get
+        const mcpRender = await adapter.getPrompt({
             name: 'gateway_agent_render',
             arguments: {
                 agentId: 'Ariadne',
@@ -2201,27 +2223,30 @@ test('MCP agent render adapter remains semantically aligned with representative 
             })
         });
         const nativeMissingPayload = await nativeMissingResponse.json();
-        const mcpMissing = await adapter.callTool({
-            name: 'gateway_agent_render',
-            arguments: {
-                agentId: 'MissingAgent'
-            },
-            sessionId: 'sess-native-mcp-render-missing',
-            requestContext: {
-                requestId: 'req-mcp-render-missing'
-            }
-        });
 
         assert.equal(nativeRenderResponse.status, 200);
-        assert.equal(mcpRender.isError, false);
-        assert.equal(nativeRenderPayload.data.renderedPrompt, mcpRender.structuredContent.result.renderedPrompt);
-        assert.deepEqual(nativeRenderPayload.data.renderMeta, mcpRender.structuredContent.result.renderMeta);
+        assert.equal(nativeRenderPayload.data.renderedPrompt, mcpRender.messages[0].content[0].text);
+        assert.deepEqual(nativeRenderPayload.data.renderMeta, mcpRender.meta.renderMeta);
 
         assert.equal(nativeMissingResponse.status, 404);
         assert.equal(nativeMissingPayload.code, 'AGW_NOT_FOUND');
-        assert.equal(mcpMissing.isError, true);
-        assert.equal(mcpMissing.error.code, 'MCP_NOT_FOUND');
-        assert.equal(mcpMissing.error.details.canonicalCode, 'AGW_NOT_FOUND');
+        await assert.rejects(
+            () => adapter.getPrompt({
+                name: 'gateway_agent_render',
+                arguments: {
+                    agentId: 'MissingAgent'
+                },
+                sessionId: 'sess-native-mcp-render-missing',
+                requestContext: {
+                    requestId: 'req-mcp-render-missing'
+                }
+            }),
+            (error) => {
+                assert.equal(error.code, 'MCP_NOT_FOUND');
+                assert.equal(error.details.canonicalCode, 'AGW_NOT_FOUND');
+                return true;
+            }
+        );
     } finally {
         await server.close();
         await fs.rm(agentDir, { recursive: true, force: true });

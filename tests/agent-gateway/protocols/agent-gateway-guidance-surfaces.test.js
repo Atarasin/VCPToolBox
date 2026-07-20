@@ -10,7 +10,8 @@ const {
     createMcpServerHarness
 } = require('../../../modules/agentGateway/protocols/mcp/inProcessExecutor');
 const {
-    createBackendProxyInstructionsResolver
+    createBackendProxyInstructionsResolver,
+    createBackendProxyMcpAdapter
 } = require('../../../modules/agentGateway/protocols/mcp/backendProxyExecutor');
 const {
     GENERIC_INSTRUCTIONS,
@@ -254,6 +255,67 @@ test('backend-proxy instructions resolver mirrors the bound/unbound rules throug
         authContext: { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read'] }
     });
     assert.equal(degraded, GENERIC_INSTRUCTIONS);
+});
+
+test('backend-proxy resource and bootstrap consume the same REST guidance binding with one revision (M2.S3.T3)', async () => {
+    const guidanceBundleFixture = {
+        agentId: 'Ariadne',
+        displayName: '阿里阿德涅',
+        workflow: ['先调用 gateway_recall_run。'],
+        memoryWritePolicy: { write: ['已验证结论'], skip: ['密钥和敏感数据'] },
+        allowedDiaries: ['Nova'],
+        defaultDiaries: ['Nova'],
+        memoryDefaults: {},
+        revision: `sha256:${'b'.repeat(64)}`,
+        updatedAt: '2026-07-19T00:00:00.000Z'
+    };
+    const backendClient = {
+        async getAgentGuidance() {
+            return {
+                ok: true,
+                httpStatus: 200,
+                payload: { success: true, data: guidanceBundleFixture, meta: { requestId: 'req-proxy-guidance' } }
+            };
+        },
+        async renderAgent() {
+            return {
+                ok: true,
+                httpStatus: 200,
+                payload: {
+                    success: true,
+                    data: { agentId: 'Ariadne', renderedPrompt: 'Hello from Ariadne', warnings: [] },
+                    meta: { requestId: 'req-proxy-bootstrap' }
+                }
+            };
+        }
+    };
+    const adapter = createBackendProxyMcpAdapter({ backendClient, defaultAgentId: '' });
+
+    const listed = await adapter.listResources({
+        agentId: 'Ariadne',
+        requestContext: { requestId: 'req-proxy-guidance-list' }
+    });
+    assert.ok(listed.resources.some(
+        (resource) => resource.uri === 'vcp://agent-gateway/agents/Ariadne/guidance'
+    ));
+
+    const resource = await adapter.readResource({
+        uri: 'vcp://agent-gateway/agents/Ariadne/guidance',
+        requestContext: { requestId: 'req-proxy-guidance-read' }
+    });
+    const resourcePayload = JSON.parse(resource.contents[0].text);
+    assert.deepEqual(resourcePayload, guidanceBundleFixture);
+
+    const bootstrap = await adapter.callTool({
+        name: 'gateway_agent_bootstrap',
+        arguments: { agentId: 'Ariadne' },
+        requestContext: { requestId: 'req-proxy-guidance-bootstrap' }
+    });
+    assert.equal(bootstrap.isError, false);
+    const bootstrapResult = bootstrap.structuredContent.result;
+    assert.ok(bootstrapResult.summary.includes('Bootstrap prompt ready for Ariadne'));
+    assert.deepEqual(bootstrapResult.integrationGuidance, resourcePayload);
+    assert.equal(bootstrapResult.integrationGuidance.revision, resourcePayload.revision);
 });
 
 test('instructions clamp obeys the canonical 800-token limit with truncation marker', () => {

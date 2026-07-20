@@ -35,6 +35,10 @@ const {
     GENERIC_INSTRUCTIONS,
     buildGuidanceInstructions
 } = require('../../services/agentGuidanceService');
+const {
+    buildBootstrapResult,
+    buildDeferredBootstrapSummary
+} = require('../../services/bootstrapResultService');
 const { serveFrozenList } = require('../../policy/discoverySnapshot');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -135,7 +139,8 @@ function createDeferredResultEnvelope({
     runtime,
     job,
     audit,
-    operability
+    operability,
+    summary
 }) {
     const shapedRuntime = buildDeferredRuntime(runtime, job);
 
@@ -149,6 +154,7 @@ function createDeferredResultEnvelope({
             toolName,
             runtime: shapedRuntime,
             job: job || null,
+            ...(summary ? { summary } : {}),
             audit: audit || {},
             operability: operability || {}
         },
@@ -200,7 +206,18 @@ function createGatewayManagedDeferredResult(name, result) {
         runtime: result.data?.runtime || {},
         job: result.data?.job || null,
         audit: result.audit || {},
-        operability: buildOperabilityMetadata(result.meta)
+        operability: buildOperabilityMetadata(result.meta),
+        // §5.3 / M2.S3.T1：bootstrap 的 deferred 分支同样返回 summary，
+        // 与 in-process 复用同一 canonical 实现。
+        ...(name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP
+            ? {
+                summary: buildDeferredBootstrapSummary({
+                    status: result.status,
+                    agentId: result.data?.agentId,
+                    jobId: result.data?.job?.jobId || result.data?.job?.id
+                })
+            }
+            : {})
     });
 }
 
@@ -301,33 +318,6 @@ function ensureJobIdentity(input, operation, fallbackAgentId = '', fallbackSessi
             fields: ['agentId', 'sessionId', 'gatewayId']
         }
     );
-}
-
-function buildBootstrapSummary(renderResult, agentId) {
-    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || 'unknown-agent';
-    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
-    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
-    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId}`];
-
-    if (renderedPrompt) {
-        fragments.push(`length=${renderedPrompt.length}`);
-    }
-    if (renderResult?.truncated) {
-        fragments.push('truncated=true');
-    }
-    if (warnings.length > 0) {
-        fragments.push(`warnings=${warnings.length}`);
-    }
-
-    return fragments.join('; ');
-}
-
-function buildBootstrapResult(renderResult, agentId) {
-    return {
-        ...renderResult,
-        agentId: normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId,
-        summary: buildBootstrapSummary(renderResult, agentId)
-    };
 }
 
 function buildBody(input, args, { requireSession = true, defaultAgentId = '', defaultSessionId = 'mcp-session' } = {}) {
@@ -626,28 +616,34 @@ const BACKEND_PROXY_METHODS = {
         if (!result.success) {
             return createFailureResult(result);
         }
+        const isDeferredResult = DEFERRED_RESULT_TOOL_NAMES.has(name) &&
+            (result.status === 'accepted' || result.status === 'waiting_approval');
         if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
-            result.data = buildBootstrapResult(result.data || {}, result.data?.agentId || input.agentId || args.agentId || defaultAgentId);
-            // §5.3 / M2.S2.T2：bootstrap 以向后兼容的附加字段承载 guidance，
-            // 内容与 guidance resource 等价并含同一 revision。canonical backend
-            // 重新校验凭据与绑定；guidance 不可用时省略字段，不阻断 bootstrap。
-            const guidanceAgentId = normalizeMcpString(result.data?.agentId, 256);
-            if (guidanceAgentId) {
-                try {
-                    const guidanceResponse = await backendClient.getAgentGuidance(guidanceAgentId, undefined, requestOptions);
-                    const guidanceResult = normalizeNativeResult(guidanceResponse);
-                    if (guidanceResult.success && guidanceResult.data) {
-                        result.data = { ...result.data, integrationGuidance: guidanceResult.data };
+            const resolvedAgentId = result.data?.agentId || input.agentId || args.agentId || defaultAgentId;
+            if (isDeferredResult) {
+                // deferred 分支只需 agentId 供 canonical summary；render 尚未
+                // 完成，不做 prompt 整形也不取 guidance。
+                result.data = { ...(result.data || {}), agentId: normalizeMcpString(resolvedAgentId, 256) };
+            } else {
+                result.data = buildBootstrapResult(result.data || {}, resolvedAgentId);
+                // §5.3 / M2.S2.T2：bootstrap 以向后兼容的附加字段承载 guidance，
+                // 内容与 guidance resource 等价并含同一 revision。canonical backend
+                // 重新校验凭据与绑定；guidance 不可用时省略字段，不阻断 bootstrap。
+                const guidanceAgentId = normalizeMcpString(result.data?.agentId, 256);
+                if (guidanceAgentId) {
+                    try {
+                        const guidanceResponse = await backendClient.getAgentGuidance(guidanceAgentId, undefined, requestOptions);
+                        const guidanceResult = normalizeNativeResult(guidanceResponse);
+                        if (guidanceResult.success && guidanceResult.data) {
+                            result.data = { ...result.data, integrationGuidance: guidanceResult.data };
+                        }
+                    } catch (_error) {
+                        // guidance 是增强内容；获取失败保持原 bootstrap 语义。
                     }
-                } catch (_error) {
-                    // guidance 是增强内容；获取失败保持原 bootstrap 语义。
                 }
             }
         }
-        if (
-            DEFERRED_RESULT_TOOL_NAMES.has(name) &&
-            (result.status === 'accepted' || result.status === 'waiting_approval')
-        ) {
+        if (isDeferredResult) {
             return createGatewayManagedDeferredResult(name, result);
         }
         return createGatewayManagedSuccessResult(name, result);

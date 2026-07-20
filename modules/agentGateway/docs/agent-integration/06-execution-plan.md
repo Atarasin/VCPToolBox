@@ -164,9 +164,9 @@
 
 依赖：S2。
 
-- [ ] T1 in-process bootstrap deferred 分支(`accepted`/`waiting_approval`)补齐 `summary`;两份 `buildBootstrapResult` 收敛到 canonical service(§5.1、§5.3)。
-- [ ] T2 `gateway_agent_render` 不再经 in-process `tools/call` 暴露,以 catalog `publishedAsTool: false` 为准(§5.1)。
-- [ ] T3 验收:§8「MCP」行用例;两 adapter 的 resource/bootstrap/REST 结果 revision 一致。
+- [x] T1 in-process bootstrap deferred 分支(`accepted`/`waiting_approval`)补齐 `summary`;两份 `buildBootstrapResult` 收敛到 canonical service(§5.1、§5.3)。
+- [x] T2 `gateway_agent_render` 不再经 in-process `tools/call` 暴露,以 catalog `publishedAsTool: false` 为准(§5.1)。
+- [x] T3 验收:§8「MCP」行用例;两 adapter 的 resource/bootstrap/REST 结果 revision 一致。
 
 ### M2.S4 真实客户端 capability smoke
 

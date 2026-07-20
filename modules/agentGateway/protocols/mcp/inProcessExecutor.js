@@ -5,6 +5,7 @@ const {
     GENERIC_INSTRUCTIONS,
     buildGuidanceInstructions
 } = require('../../services/agentGuidanceService');
+const { buildDeferredBootstrapSummary } = require('../../services/bootstrapResultService');
 const {
     normalizeRequestContext,
     sanitizeRequestContextValue
@@ -158,7 +159,8 @@ function createDeferredResultEnvelope({
     runtime,
     job,
     audit,
-    operability
+    operability,
+    summary
 }) {
     const shapedRuntime = buildDeferredRuntime(runtime, job);
     const shapedOperability = operability && typeof operability === 'object'
@@ -175,6 +177,7 @@ function createDeferredResultEnvelope({
             toolName,
             runtime: shapedRuntime,
             job: job || null,
+            ...(summary ? { summary } : {}),
             audit: audit || {},
             operability: shapedOperability
         },
@@ -231,7 +234,18 @@ function createGatewayManagedDeferredResult(name, result, options = {}) {
         runtime: result.data?.runtime || {},
         job: result.data?.job || null,
         audit: result.audit || {},
-        operability
+        operability,
+        // §5.3 / M2.S3.T1：bootstrap 的 deferred 分支同样返回 summary，
+        // 与 backend-proxy 复用同一 canonical 实现。
+        ...(name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP
+            ? {
+                summary: buildDeferredBootstrapSummary({
+                    status: result.status,
+                    agentId: result.data?.agentId,
+                    jobId: result.data?.job?.jobId || result.data?.job?.id
+                })
+            }
+            : {})
     });
 }
 
@@ -597,6 +611,16 @@ async function executeGatewayManagedPromptGet({
 
 async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     const operation = getGatewayOperation(name);
+    // §5.1 / M2.S3.T2：catalog 标记 publishedAsTool: false 的 operation
+    // （gateway_agent_render）两个 adapter 都不得经 tools/call 暴露；
+    // in-process 与 proxy 的 removedRender 行为对齐。
+    if (operation && operation.publishedAsTool === false) {
+        throw createMcpError(
+            MCP_ERROR_CODES.NOT_FOUND,
+            `${name} is no longer published as a MCP tool; use prompts/get instead`,
+            { field: 'name', name, primarySurface: 'prompts/get' }
+        );
+    }
     const handler = operation && IN_PROCESS_OPERATION_HANDLERS[operation.executor];
     if (!handler) {
         throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {

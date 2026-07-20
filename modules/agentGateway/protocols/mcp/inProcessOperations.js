@@ -1,5 +1,6 @@
 const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('../../contracts/requestContext');
+const { buildBootstrapResult } = require('../../services/bootstrapResultService');
 const { normalizeDiaryCanonicalName } = require('../../policy/mcpAgentMemoryPolicy');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { createMcpError } = require('./resultShapes');
@@ -35,17 +36,6 @@ function mapAgentRegistryError(error, requestContext) {
         requestId: requestContext.requestId,
         details: { message: error?.message || 'Unknown render failure' }
     };
-}
-
-function buildBootstrapResult(renderResult, agentId) {
-    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId;
-    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
-    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
-    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId || 'unknown-agent'}`];
-    if (renderedPrompt) fragments.push(`length=${renderedPrompt.length}`);
-    if (renderResult?.truncated) fragments.push('truncated=true');
-    if (warnings.length > 0) fragments.push(`warnings=${warnings.length}`);
-    return { ...renderResult, agentId: resolvedAgentId, summary: fragments.join('; ') };
 }
 
 /**
@@ -86,7 +76,18 @@ async function executeRender(context) {
                     messages: args.messages
                 });
                 if (renderResult?.success && ['accepted', 'waiting_approval'].includes(renderResult.status)) {
-                    return attachRequestId(renderResult, requestContext.requestId);
+                    // §5.3 / M2.S3.T1：deferred 分支同样携带 agentId，供
+                    // canonical deferred envelope 补齐 bootstrap `summary`。
+                    const shaped = operation.asBootstrap
+                        ? {
+                            ...renderResult,
+                            data: {
+                                ...(renderResult.data && typeof renderResult.data === 'object' ? renderResult.data : {}),
+                                agentId: normalizeMcpString(renderResult.data?.agentId, 256) || requestContext.agentId
+                            }
+                        }
+                        : renderResult;
+                    return attachRequestId(shaped, requestContext.requestId);
                 }
                 return {
                     success: true,
