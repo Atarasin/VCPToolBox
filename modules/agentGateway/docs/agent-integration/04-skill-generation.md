@@ -14,7 +14,7 @@ GET /agent_gateway/agents/:agentId/integration
 
 约束：
 
-- 对外 base URL 只能读取 `AGENT_GATEWAY_PUBLIC_BASE_URL`；不从请求 host 推导。配置必须解析为绝对 URL，不允许 userinfo、query 或 fragment；生产只允许 HTTPS，loopback 开发环境可显式允许 HTTP。
+- 对外 base URL 只能读取 `AGENT_GATEWAY_PUBLIC_BASE_URL`；不从请求 host 推导。配置必须解析为绝对 URL，不允许 userinfo、query 或 fragment；生产只允许 HTTPS。HTTP 仅限 loopback 与私网/CGNAT 字面 IP（RFC1918、100.64/10、IPv6 ULA——VPN/内网部署形态，隧道层承担加密）且必须显式 `ALLOW_INSECURE` 豁免；公网地址与无法离线判定的主机名一律拒绝 HTTP。（2026-07-20 经部署方确认放宽：原文仅允许 loopback。）
 - 授权走 §3.2 同一张决议表，无特例：绑定 credential 只能取所绑 agent 的 skill；未绑定 credential 按 `allowedAgents`/`admin` scope 决议（`admin` 只存在于未绑定 credential，见 §3.2）。
 - 生成物只包含 endpoint、工具说明和“从客户端安全 secret store 读取 credential”的指引；绝不包含 API key、gateway key、token、`.env` 内容或下载签名。
 - guidance、integration、在线 skill 和签名 URL mint 都是按 owner 渲染的认证响应；成功与错误均设置 `Cache-Control: private, no-store`，并至少 `Vary: Authorization, Cookie, x-agent-gateway-key`。mint 响应中的一次性 URL 不进入审计 payload、APM attributes、Referer 或 access log。

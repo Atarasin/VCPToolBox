@@ -10,7 +10,7 @@
 | `AGENT_GATEWAY_PUBLIC_BASE_URL` | 生成物与签名 URL 的对外 base URL | 绝对 URL；生产必须 HTTPS；不从请求 host 推导 |
 | `AGENT_GATEWAY_DOWNLOAD_SIGNING_SECRET` | 下载签名独立密钥 | ≥32 字节；JSON 数组支持 kid 轮换（首个为当前，旧 kid 在轮换期仍可验签）；经环境变量或 secret 文件注入，不进仓库 |
 | `AGENT_GATEWAY_DOWNLOAD_NONCE_DIR` | 单机多 worker 的文件 nonce backend 目录 | 所有 worker 可写的同一本地目录；消费记录落盘（跨重启保持）。跨主机部署改用 `pluginManager.agentGatewayDownloadNonceBackend` 注入共享 KV backend |
-| `AGENT_GATEWAY_PUBLIC_BASE_URL_ALLOW_INSECURE` | 仅 loopback 开发环境显式允许 HTTP | 生产不得设置；非 loopback HTTP 无任何豁免 |
+| `AGENT_GATEWAY_PUBLIC_BASE_URL_ALLOW_INSECURE` | loopback 与私网/CGNAT 字面 IP 显式允许 HTTP（VPN/内网部署，隧道层加密） | 公网地址与主机名 HTTP 无任何豁免；公网部署必须 HTTPS 且不设此开关 |
 
 未配置生产级 nonce store 时 mint endpoint 恒 503（fail-closed）；直接认证的在线 `GET .../integration/skill` 不受影响。
 

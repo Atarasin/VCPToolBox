@@ -40,13 +40,16 @@ function validatePublicBaseUrl(rawValue, { allowInsecure = false } = {}) {
     }
     const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
         || parsed.hostname === '::1';
-    // §6：生产只允许 HTTPS；HTTP 仅限 loopback 开发环境且必须显式允许
-    if (parsed.protocol === 'http:' && !(isLoopback && allowInsecure)) {
+    // §6：生产只允许 HTTPS；HTTP 仅限 loopback 与私网/CGNAT 地址（VPN/内网
+    // 部署形态），且必须显式 allowInsecure。公网地址与无法判定的主机名
+    // 一律拒绝 HTTP。
+    const isPrivateAddress = isLoopback || isPrivateNetworkHostname(parsed.hostname);
+    if (parsed.protocol === 'http:' && !(isPrivateAddress && allowInsecure)) {
         return {
             ok: false,
-            reason: isLoopback
-                ? `${PUBLIC_BASE_URL_ENV} uses HTTP: loopback development requires explicit allowInsecure opt-in`
-                : `${PUBLIC_BASE_URL_ENV} must use HTTPS outside loopback`
+            reason: isPrivateAddress
+                ? `${PUBLIC_BASE_URL_ENV} uses HTTP: loopback/private-network deployment requires explicit allowInsecure opt-in`
+                : `${PUBLIC_BASE_URL_ENV} must use HTTPS outside loopback/private networks`
         };
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -55,6 +58,27 @@ function validatePublicBaseUrl(rawValue, { allowInsecure = false } = {}) {
     // 去掉尾斜杠，模板内统一拼接
     const baseUrl = `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
     return { ok: true, baseUrl };
+}
+
+/**
+ * RFC1918（10/8、172.16/12、192.168/16）、CGNAT（100.64/10）与 IPv6 ULA
+ * （fc00::/7）视为私网。仅接受字面 IP——内网主机名无法离线判定，不豁免。
+ */
+function isPrivateNetworkHostname(hostname) {
+    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+    if (ipv4) {
+        const octets = ipv4.slice(1).map(Number);
+        if (octets.some((value) => value > 255)) return false;
+        const [a, b] = octets;
+        return a === 10
+            || (a === 172 && b >= 16 && b <= 31)
+            || (a === 192 && b === 168)
+            || (a === 100 && b >= 64 && b <= 127);
+    }
+    const ipv6 = hostname.startsWith('[') && hostname.endsWith(']')
+        ? hostname.slice(1, -1).toLowerCase()
+        : hostname.toLowerCase();
+    return /^f[cd][0-9a-f]{2}:/.test(ipv6);
 }
 
 function sha256Hex(value) {

@@ -146,10 +146,12 @@ test('public URL validation rejects Host-header-derived or insecure URLs', () =>
     // query/fragment 禁止
     assert.equal(validatePublicBaseUrl('https://gw.example.com/?x=1').ok, false);
     assert.equal(validatePublicBaseUrl('https://gw.example.com/#frag').ok, false);
-    // loopback HTTP 仅显式 opt-in 后允许（§6：loopback 开发环境可显式允许 HTTP）
+    // loopback/私网 HTTP 仅显式 opt-in 后允许（§6）；公网 HTTP 无豁免
     assert.equal(validatePublicBaseUrl('http://localhost:6005').ok, false);
     assert.equal(validatePublicBaseUrl('http://localhost:6005', { allowInsecure: true }).ok, true);
     assert.equal(validatePublicBaseUrl('http://127.0.0.1:6005', { allowInsecure: true }).ok, true);
+    assert.equal(validatePublicBaseUrl('http://10.126.126.2:6005', { allowInsecure: true }).ok, true);
+    assert.equal(validatePublicBaseUrl('http://8.8.8.8:6005', { allowInsecure: true }).ok, false);
     // 有效 HTTPS
     const valid = validatePublicBaseUrl('https://gw.example.com/vcp/');
     assert.equal(valid.ok, true);

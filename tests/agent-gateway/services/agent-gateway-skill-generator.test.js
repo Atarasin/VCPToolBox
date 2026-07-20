@@ -30,12 +30,22 @@ test('validatePublicBaseUrl enforces §6 constraints', () => {
     assert.equal(validatePublicBaseUrl('https://gw.example.com/#frag').ok, false);
     assert.equal(validatePublicBaseUrl('ftp://gw.example.com').ok, false);
     // 生产禁 HTTP（loopback 例外）
-    // §6：HTTP 仅限 loopback 且必须显式允许；非 loopback HTTP 无任何豁免
+    // §6：HTTP 仅限 loopback 与私网/CGNAT 字面 IP 且必须显式允许；
+    // 公网地址与主机名 HTTP 无任何豁免
     assert.equal(validatePublicBaseUrl('http://gw.example.com').ok, false);
     assert.equal(validatePublicBaseUrl('http://gw.example.com', { allowInsecure: true }).ok, false);
+    assert.equal(validatePublicBaseUrl('http://8.8.8.8:6005', { allowInsecure: true }).ok, false);
     assert.equal(validatePublicBaseUrl('http://127.0.0.1:6005').ok, false);
     assert.equal(validatePublicBaseUrl('http://127.0.0.1:6005', { allowInsecure: true }).ok, true);
     assert.equal(validatePublicBaseUrl('http://localhost:6005', { allowInsecure: true }).ok, true);
+    // 私网/CGNAT：显式豁免后允许，未豁免拒绝
+    assert.equal(validatePublicBaseUrl('http://10.126.126.2:6005').ok, false);
+    assert.equal(validatePublicBaseUrl('http://10.126.126.2:6005', { allowInsecure: true }).ok, true);
+    assert.equal(validatePublicBaseUrl('http://192.168.3.10:6005', { allowInsecure: true }).ok, true);
+    assert.equal(validatePublicBaseUrl('http://172.16.0.1:6005', { allowInsecure: true }).ok, true);
+    assert.equal(validatePublicBaseUrl('http://172.32.0.1:6005', { allowInsecure: true }).ok, false);
+    assert.equal(validatePublicBaseUrl('http://100.64.0.1:6005', { allowInsecure: true }).ok, true);
+    assert.equal(validatePublicBaseUrl('http://100.128.0.1:6005', { allowInsecure: true }).ok, false);
     const valid = validatePublicBaseUrl('https://gw.example.com/vcp/');
     assert.equal(valid.ok, true);
     assert.equal(valid.baseUrl, 'https://gw.example.com/vcp');
