@@ -201,28 +201,28 @@
 
 ### M4.S1 生成器与 endpoint
 
-- [ ] T1 Claude Code/Codex/Kimi 三 format 模板、manifest、内容哈希、固定文件清单;format allowlist(§6)。
-- [ ] T2 `GET .../integration/skill` 与 `GET .../integration` endpoint,授权走 §3.2 同一决议表;`AGENT_GATEWAY_PUBLIC_BASE_URL` 校验(绝对 URL、生产 HTTPS、不从请求 host 推导)(§6)。
-- [ ] T3 生成物零 secret:只含 endpoint、工具说明与安全 secret store 指引(§6)。
-- [ ] T4 CLI export。
+- [x] T1 Claude Code/Codex/Kimi 三 format 模板、manifest、内容哈希、固定文件清单;format allowlist(§6)。
+- [x] T2 `GET .../integration/skill` 与 `GET .../integration` endpoint,授权走 §3.2 同一决议表;`AGENT_GATEWAY_PUBLIC_BASE_URL` 校验(绝对 URL、生产 HTTPS、不从请求 host 推导)(§6)。
+- [x] T3 生成物零 secret:只含 endpoint、工具说明与安全 secret store 指引(§6)。
+- [x] T4 CLI export。
 
 ### M4.S2 签名下载
 
 依赖：S1。
 
-- [ ] T1 mint/redeem 权限分离:mint 按 `gateway:read` 授权;redeem 从 resolver/session store 重读 owner,校验 subject/revision 仍可用(§6)。
-- [ ] T2 `AGENT_GATEWAY_DOWNLOAD_SIGNING_SECRET` 独立密钥 + `kid` 轮换(当前与前一把)(§6)。
-- [ ] T3 `downloadNonceStore.consumeOnce()`:先校验后原子消费、消费后传输失败不恢复、共享跨重启 store、无生产 store 时 mint 503(§6)。
-- [ ] T4 redeem 响应与链路:no-store 全套响应头、拒绝 redirect/Range/CDN 代答、代理与日志脱敏 query/signature/nonce(§6)。
-- [ ] T5 验收:§8「L3」行全部用例。
+- [x] T1 mint/redeem 权限分离:mint 按 `gateway:read` 授权;redeem 从 resolver/session store 重读 owner,校验 subject/revision 仍可用(§6)。
+- [x] T2 `AGENT_GATEWAY_DOWNLOAD_SIGNING_SECRET` 独立密钥 + `kid` 轮换(当前与前一把)(§6)。
+- [x] T3 `downloadNonceStore.consumeOnce()`:先校验后原子消费、消费后传输失败不恢复、共享跨重启 store、无生产 store 时 mint 503(§6)。
+- [x] T4 redeem 响应与链路:no-store 全套响应头、拒绝 redirect/Range/CDN 代答、代理与日志脱敏 query/signature/nonce(§6)。
+- [x] T5 验收:§8「L3」行全部用例。
 
 ### M4.S3 三格式验证与清理
 
 依赖：S1、S2。
 
-- [ ] T1 三 agent x 三 format 的 snapshot、manifest 校验、secret scan、真实安装 smoke(§6)。
-- [ ] T2 迁移公告 + 现网确认后删除手写 `skills/midas-vcp/`(§6)。
-- [ ] T3 M4 门禁:05-testing-gates.md 第 10 条。
+- [x] T1 三 agent x 三 format 的 snapshot、manifest 校验、secret scan、真实安装 smoke(§6)。
+- [x] T2 迁移公告 + 现网确认后删除手写 `skills/midas-vcp/`(§6)。（`skills/midas-vcp/` 在本仓库不存在，无需删除；迁移公告见本 commit。）
+- [x] T3 M4 门禁:05-testing-gates.md 第 10 条。
 
 ---
 
