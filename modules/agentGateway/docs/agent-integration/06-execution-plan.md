@@ -135,8 +135,8 @@
 
 ### M1 里程碑门禁
 
-- [ ] 两把不同 agent credential 的真实 HTTP/WS → backend-proxy → Native REST 链路互不可访问,审计主体不折叠。
-- [ ] 发布前检查清单中标记 [M1] 的门禁项(05-testing-gates.md 第 1–4、6–7 条;第 8 条在阶段 B 关闭开关前完成)。
+- [x] 两把不同 agent credential 的真实 HTTP/WS → backend-proxy → Native REST 链路互不可访问,审计主体不折叠。
+- [x] 发布前检查清单中标记 [M1] 的门禁项(05-testing-gates.md 第 1–4、6–7 条;第 8 条在阶段 B 关闭开关前完成)。
 
 ---
 
