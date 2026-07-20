@@ -528,7 +528,7 @@ test('streamable HTTP GET /mcp emits heartbeat comments for live sessions', asyn
     }
 }, INTEGRATION_TEST_TIMEOUT_MS);
 
-test('streamable HTTP follow-up POST mirrors JSON-RPC responses onto the active SSE stream', async () => {
+test('streamable HTTP follow-up POST returns JSON-RPC responses only in the POST body', async () => {
     const fixture = await createFixture({
         heartbeatIntervalMs: 25
     });
@@ -560,8 +560,13 @@ test('streamable HTTP follow-up POST mirrors JSON-RPC responses onto the active 
 
             assert.equal(response.status, 200);
             assert.equal(response.body.result.method, 'tools/list');
-            const message = await stream.waitFor((frame) => frame.kind === 'event' && frame.event === 'message' && frame.data.id === 2);
-            assert.equal(message.data.result.method, 'tools/list');
+            await assert.rejects(
+                stream.waitFor(
+                    (frame) => frame.kind === 'event' && frame.event === 'message' && frame.data.id === 2,
+                    100
+                ),
+                /Timed out waiting for SSE frame/
+            );
         } finally {
             await stream.close();
         }
