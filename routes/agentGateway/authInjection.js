@@ -96,6 +96,14 @@ function createAuthInjectionMiddleware(context) {
         };
 
         const isBridgeRequest = req.path === '/auth/admin-session';
+        // L3 redeem surface（authMechanism: signedDownloadUrl，§6）：签名 URL
+        // 即 bearer capability，不做 credential 决议——顺带呈现的过期 cookie /
+        // 静态 header 不得使有效签名 URL 失效；签名/owner/nonce 校验在 route
+        // 层执行。server.js adminAuth 对同一唯一路径放行。
+        const signedUrlSurface = resolveRestCredentialAction(req.method, req.path);
+        if (signedUrlSurface.matched && signedUrlSurface.authMechanism === 'signedDownloadUrl') {
+            return next();
+        }
         const credentialPresented = Boolean(dedicatedAuth.provided) || Boolean(adminSessionId);
         const isCookieAuthenticated = !dedicatedAuth.provided && Boolean(adminSessionId);
         const isMutation = !SAFE_HTTP_METHODS.has(req.method);

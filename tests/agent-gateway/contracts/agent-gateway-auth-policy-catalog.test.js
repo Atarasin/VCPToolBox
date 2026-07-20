@@ -50,7 +50,7 @@ test('REST operations carry credentialAction except fixed adminAuth exclusions',
     for (const operation of REST_OPERATIONS) {
         if (operation.authExclusion === 'adminAuth') {
             assert.equal(operation.credentialAction, undefined);
-        } else if (operation.authMechanism === 'adminAuthBridge') {
+        } else if (operation.authMechanism === 'adminAuthBridge' || operation.authMechanism === 'signedDownloadUrl') {
             assert.equal(operation.credentialAction, undefined);
         } else {
             assert.ok(CREDENTIAL_ACTIONS.includes(operation.credentialAction), operation.operationId);
@@ -58,22 +58,54 @@ test('REST operations carry credentialAction except fixed adminAuth exclusions',
     }
 });
 
-test('surface registry covers initialize, discovery, resource read, skill download, admin bridge', () => {
+test('surface registry covers initialize, discovery, resource read, skill download redeem, admin bridge', () => {
     const surfaces = SURFACE_ENTRIES.map((entry) => entry.surface);
     for (const required of [
         'mcp.initialize',
         'mcp.tools/list',
         'mcp.resources/list',
         'mcp.prompts/list',
-        'mcp.resources/read',
-        'rest.integration/skill'
+        'mcp.resources/read'
     ]) {
         assert.ok(surfaces.includes(required), `missing surface ${required}`);
     }
+    // integration/skill 在线 endpoint 必须在 REST operations 中以 credentialAction: read 登记
+    const integrationOp = REST_OPERATIONS.find((op) => op.path === '/agent_gateway/agents/{agentId}/integration');
+    assert.ok(integrationOp, 'integration endpoint must be in REST operations');
+    assert.equal(integrationOp.credentialAction, 'read');
+    const skillOp = REST_OPERATIONS.find((op) => op.path === '/agent_gateway/agents/{agentId}/integration/skill');
+    assert.ok(skillOp, 'integration/skill endpoint must be in REST operations');
+    assert.equal(skillOp.credentialAction, 'read');
     // admin session bridge 自 M1.S3 起由真实 REST binding 登记
     const bridge = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/auth/admin-session');
     assert.equal(bridge.authMechanism, 'adminAuthBridge');
     assert.equal(bridge.credentialAction, undefined);
+    // L3 签名下载 redeem（§6）：signedDownloadUrl surface 由 REST binding 登记，
+    // 不呈现 credential——签名 URL 即 bearer capability。
+    const redeem = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/agents/{agentId}/integration/skill/download');
+    assert.equal(redeem.authMechanism, 'signedDownloadUrl');
+    assert.equal(redeem.credentialAction, undefined);
+    const mint = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/agents/{agentId}/integration/skill/download-url');
+    assert.equal(mint.credentialAction, 'read');
+});
+
+test('catalog rejects a second signedDownloadUrl surface and misplaced usage', () => {
+    const second = buildAuthPolicyCatalog({
+        surfaceEntries: [
+            ...SURFACE_ENTRIES,
+            { surface: 'rest.other-download', kind: 'rest-download-redeem', authMechanism: 'signedDownloadUrl' }
+        ]
+    });
+    assert.equal(second.valid, false);
+    assert.ok(second.errors.some((error) => /reserved for the skill download redeem operation/.test(error.message)));
+
+    const restOperations = structuredClone([...REST_OPERATIONS]);
+    const guidance = restOperations.find((operation) => operation.operationId === 'getAgentGatewayAgentGuidance');
+    delete guidance.credentialAction;
+    guidance.authMechanism = 'signedDownloadUrl';
+    const misplaced = buildAuthPolicyCatalog({ restOperations });
+    assert.equal(misplaced.valid, false);
+    assert.ok(misplaced.errors.some((error) => /reserved for the skill download redeem operation|only one signedDownloadUrl/.test(error.message)));
 });
 
 test('catalog rejects entries with both action and mechanism', () => {

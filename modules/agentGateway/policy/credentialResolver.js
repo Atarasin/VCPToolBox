@@ -34,6 +34,23 @@ function computeTokenDigest(pepperSecret, token) {
     return crypto.createHmac('sha256', pepperSecret).update(token, 'utf8').digest('hex');
 }
 
+/**
+ * 单条 credential 记录的 canonical revision（§3.4 owner 语义单源）。
+ * `statusOverride` 供 owner revision compatibility 使用：同 token digest 的
+ * `active -> rotating` 过渡按 record 在 active 状态下的 revision 比较。
+ */
+function computeCredentialRecordRevision(record, statusOverride = null) {
+    return `sha256:${sha256Hex(Buffer.from(JSON.stringify({
+        credentialId: record.credentialId,
+        tokenDigest: record.tokenDigest,
+        boundAgentId: record.boundAgentId,
+        allowedAgents: record.allowedAgents || null,
+        scopes: record.scopes,
+        status: statusOverride || record.status,
+        expiresAt: record.expiresAt
+    }), 'utf8'))}`;
+}
+
 function constantTimeEqualHex(leftHex, rightHex) {
     const left = Buffer.from(leftHex, 'hex');
     const right = Buffer.from(rightHex, 'hex');
@@ -290,15 +307,7 @@ function createCredentialResolver({
             record,
             credentialId: record.credentialId,
             credentialSubject: record.credentialId,
-            credentialRevision: `sha256:${sha256Hex(Buffer.from(JSON.stringify({
-                credentialId: record.credentialId,
-                tokenDigest: record.tokenDigest,
-                boundAgentId: record.boundAgentId,
-                allowedAgents: record.allowedAgents || null,
-                scopes: record.scopes,
-                status: record.status,
-                expiresAt: record.expiresAt
-            }), 'utf8'))}`,
+            credentialRevision: computeCredentialRecordRevision(record),
             snapshotRevision: snapshot.revision,
             snapshot
         };
@@ -320,7 +329,17 @@ function createCredentialResolver({
         if (record.status === 'revoked' || record.status === 'expired' || isRecordExpired(record, timestamp)) {
             return { ok: false, code: 'AGW_UNAUTHORIZED', reason: `credential ${record.status}` };
         }
-        return { ok: true, record };
+        return {
+            ok: true,
+            record,
+            credentialRevision: computeCredentialRecordRevision(record),
+            // §3.4 owner revision compatibility：仅同 token digest 的
+            // active -> rotating 过渡可继承——rotating 记录以 active 状态
+            // 重算的 revision 与旧 owner revision 相等即为该过渡。
+            rotationCompatibleRevision: record.status === 'rotating'
+                ? computeCredentialRecordRevision(record, 'active')
+                : null
+        };
     }
 
     return Object.freeze({
@@ -333,6 +352,7 @@ function createCredentialResolver({
 
 module.exports = {
     MAX_PRESENTED_TOKEN_LENGTH,
+    computeCredentialRecordRevision,
     computeTokenDigest,
     createCredentialResolver
 };
