@@ -183,9 +183,9 @@
 
 ### M3.S1 Schema 与契约
 
-- [ ] T1 修改 MCP catalog:`gateway_agent_bootstrap`、`gateway_recall_run` 的 `agentId` 改 optional(+ render prompt argument);jobs 保持 jobId-only(§5.4)。
-- [ ] T2 重跑 descriptor export,更新契约快照;若放宽 Native REST 同步改 `restOperations.json`/OpenAPI(§5.4)。
-- [ ] T3 验收:§8「契约」行;重生成 snapshot 零差异。
+- [x] T1 修改 MCP catalog:`gateway_agent_bootstrap`、`gateway_recall_run` 的 `agentId` 改 optional(+ render prompt argument);jobs 保持 jobId-only(§5.4)。
+- [x] T2 重跑 descriptor export,更新契约快照;Native REST 未放宽(recall REST body 保持 agentId 必填,§5.4 只要求 MCP 面);`restOperations.json`/OpenAPI 不变。
+- [x] T3 验收:§8「契约」行;重生成 snapshot 零差异。
 
 ### M3.S2 行为与遥测
 

@@ -5,13 +5,11 @@
     "argsSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "agentId"
-      ],
+      "required": [],
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "Target agent identifier used to resolve the rendered bootstrap prompt."
+          "description": "Stable agent identifier for the render target. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
         },
         "variables": {
           "type": "object",
@@ -70,8 +68,8 @@
         "arguments": [
           {
             "name": "agentId",
-            "description": "Stable agent identifier for the render target.",
-            "required": true
+            "description": "Stable agent identifier for the render target. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials.",
+            "required": false
           },
           {
             "name": "variables",
@@ -108,13 +106,11 @@
     "argsSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "agentId"
-      ],
+      "required": [],
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "Target agent identifier used to resolve the rendered bootstrap prompt."
+          "description": "Target agent identifier used to resolve the rendered bootstrap prompt. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
         },
         "variables": {
           "type": "object",
@@ -173,13 +169,11 @@
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "agentId"
-          ],
+          "required": [],
           "properties": {
             "agentId": {
               "type": "string",
-              "description": "Target agent identifier used to resolve the rendered bootstrap prompt."
+              "description": "Target agent identifier used to resolve the rendered bootstrap prompt. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
             },
             "variables": {
               "type": "object",
@@ -853,13 +847,12 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "agentId",
         "query"
       ],
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "Target agent identifier used to resolve diary access and recall profile."
+          "description": "Target agent identifier used to resolve diary access and recall profile. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
         },
         "query": {
           "type": "string",
@@ -899,13 +892,12 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "agentId",
             "query"
           ],
           "properties": {
             "agentId": {
               "type": "string",
-              "description": "Target agent identifier used to resolve diary access and recall profile."
+              "description": "Target agent identifier used to resolve diary access and recall profile. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
             },
             "query": {
               "type": "string",

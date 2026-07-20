@@ -412,10 +412,14 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(chromeBridgeTool.annotations.pluginType, 'hybridservice');
     assert.ok(bootstrapTool && bootstrapTool.inputSchema);
     assert.equal(bootstrapTool.annotations.gatewayManaged, true);
+    // M3.S1：agentId 改 optional，description 说明绑定省略语义
     assert.equal(
         bootstrapTool.inputSchema.properties.agentId.description,
-        'Target agent identifier used to resolve the rendered bootstrap prompt.'
+        'Target agent identifier used to resolve the rendered bootstrap prompt. '
+        + 'Optional when the credential is bound to an agent (the bound agent is used); '
+        + 'a mismatching explicit value is rejected. Required for unbound credentials.'
     );
+    assert.deepEqual(bootstrapTool.inputSchema.required, []);
     assert.ok(memorySearchTool && memorySearchTool.inputSchema);
     assert.equal(memorySearchTool.annotations.gatewayManaged, true);
     assert.equal(

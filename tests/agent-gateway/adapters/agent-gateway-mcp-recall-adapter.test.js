@@ -530,7 +530,8 @@ test('gateway_recall_run tools/list includes RECALL_RUN descriptor with correct 
     assert.equal(recallTool.name, 'gateway_recall_run');
     assert.equal(typeof recallTool.description, 'string');
     assert.ok(recallTool.description.includes('recall'), 'Description should mention recall');
-    assert.deepStrictEqual(recallTool.inputSchema.required, ['agentId', 'query']);
+    // M3.S1：agentId 改 optional（绑定 credential 可省略），query 保持必填
+    assert.deepStrictEqual(recallTool.inputSchema.required, ['query']);
     assert.equal(recallTool.inputSchema.properties.agentId.type, 'string');
     assert.equal(recallTool.inputSchema.properties.query.type, 'string');
     assert.equal(recallTool.inputSchema.properties.profile.type, 'string');
