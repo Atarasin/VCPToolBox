@@ -106,6 +106,8 @@ function createConnectionContext(auth, options) {
         ? auth.roles.map((role) => sanitizeRequestContextValue(role, 128)).filter(Boolean)
         : [];
 
+    const credentialContext = auth?.credentialContext?.ok ? auth.credentialContext : null;
+
     return {
         connectionId: `${connectionPrefix}_${crypto.randomUUID()}`,
         sessionId: `${sessionPrefix}_${crypto.randomUUID()}`,
@@ -114,7 +116,13 @@ function createConnectionContext(auth, options) {
         gatewayId,
         authMode,
         authSource,
-        roles
+        roles,
+        // §5.2：边缘决议出的绑定与 scope，经 injectMcpContext 进入受信任
+        // authContext，供 initialize.instructions per-request 渲染。
+        ...(credentialContext?.boundAgentId ? { boundAgentId: credentialContext.boundAgentId } : {}),
+        ...(Array.isArray(credentialContext?.scopes) && credentialContext.scopes.length > 0
+            ? { credentialScopes: [...credentialContext.scopes] }
+            : {})
     };
 }
 

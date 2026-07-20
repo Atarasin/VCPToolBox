@@ -256,6 +256,13 @@ class GatewayBackendClient {
         });
     }
 
+    getAgentGuidance(agentId, query, requestOptions) {
+        return this.requestJson('GET', AGENT_GATEWAY_ROUTE_BINDINGS.agentGuidance(agentId), {
+            query,
+            ...(requestOptions || {})
+        });
+    }
+
     getMemoryTargets(query, requestOptions) {
         return this.requestJson('GET', AGENT_GATEWAY_ROUTE_BINDINGS.memoryTargets, {
             query,

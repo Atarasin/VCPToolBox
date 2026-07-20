@@ -191,6 +191,27 @@
         }
       }
     },
+    "AgentGuidanceSuccess": {
+      "description": "成功",
+      "headers": {
+        "x-request-id": {
+          "$ref": "#/components/headers/XRequestId"
+        },
+        "x-agent-gateway-version": {
+          "$ref": "#/components/headers/XGatewayVersion"
+        },
+        "x-agent-gateway-trace-id": {
+          "$ref": "#/components/headers/XTraceId"
+        }
+      },
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/AgentGuidanceEnvelope"
+          }
+        }
+      }
+    },
     "AgentRenderSuccess": {
       "description": "成功",
       "headers": {
@@ -621,6 +642,16 @@
     },
     "InternalError": {
       "description": "服务内部错误",
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "ServiceUnavailable": {
+      "description": "依赖的配置或子系统不可用（AGW_CONFIG_UNAVAILABLE）",
       "content": {
         "application/json": {
           "schema": {
@@ -1259,6 +1290,112 @@
         },
         "data": {
           "$ref": "#/components/schemas/AgentDetail"
+        },
+        "meta": {
+          "$ref": "#/components/schemas/GatewayMeta"
+        }
+      }
+    },
+    "AgentGuidanceBundle": {
+      "type": "object",
+      "required": [
+        "agentId",
+        "displayName",
+        "workflow",
+        "memoryWritePolicy",
+        "allowedDiaries",
+        "defaultDiaries",
+        "memoryDefaults",
+        "revision",
+        "updatedAt"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "workflow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "memoryWritePolicy": {
+          "type": "object",
+          "required": [
+            "write",
+            "skip"
+          ],
+          "properties": {
+            "write": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "skip": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedDiaries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "defaultDiaries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "memoryDefaults": {
+          "type": "object",
+          "properties": {
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "revision": {
+          "type": "string",
+          "description": "与冻结 integration snapshot 一致的内容 revision（sha256:...）"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "AgentGuidanceEnvelope": {
+      "type": "object",
+      "required": [
+        "success",
+        "data",
+        "meta"
+      ],
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "data": {
+          "$ref": "#/components/schemas/AgentGuidanceBundle"
         },
         "meta": {
           "$ref": "#/components/schemas/GatewayMeta"

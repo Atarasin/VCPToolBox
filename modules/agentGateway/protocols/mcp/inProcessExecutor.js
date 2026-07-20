@@ -2,6 +2,11 @@ const {
     getGatewayServiceBundle
 } = require('../../createGatewayServiceBundle');
 const {
+    GENERIC_INSTRUCTIONS,
+    buildGuidanceInstructions
+} = require('../../services/agentGuidanceService');
+const { buildDeferredBootstrapSummary } = require('../../services/bootstrapResultService');
+const {
     normalizeRequestContext,
     sanitizeRequestContextValue
 } = require('../../contracts/requestContext');
@@ -32,6 +37,7 @@ const {
     createMemoryTargetsResource,
     createAgentProfileResource,
     createAgentPromptTemplateResource,
+    createAgentGuidanceResource,
     createJobEventsResource
 } = require('./descriptors');
 const { createMcpHarness } = require('./harness');
@@ -153,7 +159,8 @@ function createDeferredResultEnvelope({
     runtime,
     job,
     audit,
-    operability
+    operability,
+    summary
 }) {
     const shapedRuntime = buildDeferredRuntime(runtime, job);
     const shapedOperability = operability && typeof operability === 'object'
@@ -170,6 +177,7 @@ function createDeferredResultEnvelope({
             toolName,
             runtime: shapedRuntime,
             job: job || null,
+            ...(summary ? { summary } : {}),
             audit: audit || {},
             operability: shapedOperability
         },
@@ -226,7 +234,18 @@ function createGatewayManagedDeferredResult(name, result, options = {}) {
         runtime: result.data?.runtime || {},
         job: result.data?.job || null,
         audit: result.audit || {},
-        operability
+        operability,
+        // §5.3 / M2.S3.T1：bootstrap 的 deferred 分支同样返回 summary，
+        // 与 backend-proxy 复用同一 canonical 实现。
+        ...(name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP
+            ? {
+                summary: buildDeferredBootstrapSummary({
+                    status: result.status,
+                    agentId: result.data?.agentId,
+                    jobId: result.data?.job?.jobId || result.data?.job?.id
+                })
+            }
+            : {})
     });
 }
 
@@ -592,6 +611,16 @@ async function executeGatewayManagedPromptGet({
 
 async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     const operation = getGatewayOperation(name);
+    // §5.1 / M2.S3.T2：catalog 标记 publishedAsTool: false 的 operation
+    // （gateway_agent_render）两个 adapter 都不得经 tools/call 暴露；
+    // in-process 与 proxy 的 removedRender 行为对齐。
+    if (operation && operation.publishedAsTool === false) {
+        throw createMcpError(
+            MCP_ERROR_CODES.NOT_FOUND,
+            `${name} is no longer published as a MCP tool; use prompts/get instead`,
+            { field: 'name', name, primarySurface: 'prompts/get' }
+        );
+    }
     const handler = operation && IN_PROCESS_OPERATION_HANDLERS[operation.executor];
     if (!handler) {
         throw createMcpError(MCP_ERROR_CODES.NOT_FOUND, 'Unsupported gateway-managed tool', {
@@ -769,7 +798,8 @@ function createMcpAdapter(pluginManager, options = {}) {
                     createCapabilitiesResource(requestContext.agentId),
                     createMemoryTargetsResource(requestContext.agentId),
                     createAgentProfileResource(requestContext.agentId),
-                    createAgentPromptTemplateResource(requestContext.agentId)
+                    createAgentPromptTemplateResource(requestContext.agentId),
+                    createAgentGuidanceResource(requestContext.agentId)
                 ],
                 meta: {
                     requestId: requestContext.requestId,
@@ -782,14 +812,53 @@ function createMcpAdapter(pluginManager, options = {}) {
     };
 }
 
+/**
+ * in-process 的 initialize.instructions per-request 渲染（§5.2）。
+ *
+ * 只信任组装根注入的 trustedCredentialContext（params.authContext 上的
+ * Symbol 标记）；MCP params 传入的普通 authContext 不参与判定。绑定 +
+ * read scope → canonical guidance service 的 ≤800 token 摘要；其余情形
+ * 返回通用文案，不泄露任何 agent 内容。
+ */
+function createInProcessInstructionsResolver(bundle) {
+    return async function resolveInstructions({ params } = {}) {
+        const candidate = params?.authContext;
+        if (!isTrustedCredentialContext(candidate)) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        const boundAgentId = normalizeMcpString(candidate.boundAgentId, 256);
+        const scopes = Array.isArray(candidate.scopes)
+            ? candidate.scopes
+            : (Array.isArray(candidate.credentialScopes) ? candidate.credentialScopes : []);
+        if (!boundAgentId || !scopes.includes('gateway:read')) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        if (!bundle.agentGuidanceService) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        const result = await bundle.agentGuidanceService.getAgentGuidance(boundAgentId);
+        if (!result.ok) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        return buildGuidanceInstructions(result.guidance).text;
+    };
+}
+
 function createMcpServerHarness(pluginManager, options = {}) {
     const adapter = options.adapter || createMcpAdapter(pluginManager, options);
-    return createMcpHarness({ adapter });
+    const bundle = options.gatewayServiceBundle
+        || (pluginManager ? getGatewayServiceBundle(pluginManager) : null);
+    return createMcpHarness({
+        adapter,
+        resolveInstructions: options.resolveInstructions
+            || (bundle ? createInProcessInstructionsResolver(bundle) : undefined)
+    });
 }
 module.exports = {
     MCP_ERROR_CODES,
     MCP_RESOURCE_KINDS,
     MCP_SUPPORTED_RESOURCE_TEMPLATES,
+    createInProcessInstructionsResolver,
     createMcpAdapter,
     createMcpServerHarness,
     createInProcessExecutor: createMcpAdapter

@@ -50,7 +50,14 @@ function injectMcpContext(request, context, options = {}) {
                 sessionId: context.sessionId,
                 ...(context.authMode ? { authMode: context.authMode } : {}),
                 ...(context.authSource ? { authSource: context.authSource } : {}),
-                ...(context.roles?.length ? { roles: [...context.roles] } : {})
+                ...(context.roles?.length ? { roles: [...context.roles] } : {}),
+                // §5.2：边缘 credential 决议出的绑定与 scope（服务端来源，
+                // 客户端 params.authContext 已被本注入整体覆盖，无法伪造），
+                // 供 initialize.instructions 的 per-request 渲染判定。
+                ...(context.boundAgentId ? { boundAgentId: sanitizeRequestContextValue(context.boundAgentId, 256) } : {}),
+                ...(Array.isArray(context.credentialScopes) && context.credentialScopes.length > 0
+                    ? { credentialScopes: context.credentialScopes.map((scope) => sanitizeRequestContextValue(scope, 64)).filter(Boolean) }
+                    : {})
             }
         }
     };

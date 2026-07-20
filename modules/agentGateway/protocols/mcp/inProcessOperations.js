@@ -1,5 +1,6 @@
 const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { sanitizeRequestContextValue } = require('../../contracts/requestContext');
+const { buildBootstrapResult } = require('../../services/bootstrapResultService');
 const { normalizeDiaryCanonicalName } = require('../../policy/mcpAgentMemoryPolicy');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { createMcpError } = require('./resultShapes');
@@ -37,15 +38,25 @@ function mapAgentRegistryError(error, requestContext) {
     };
 }
 
-function buildBootstrapResult(renderResult, agentId) {
-    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId;
-    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
-    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
-    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId || 'unknown-agent'}`];
-    if (renderedPrompt) fragments.push(`length=${renderedPrompt.length}`);
-    if (renderResult?.truncated) fragments.push('truncated=true');
-    if (warnings.length > 0) fragments.push(`warnings=${warnings.length}`);
-    return { ...renderResult, agentId: resolvedAgentId, summary: fragments.join('; ') };
+/**
+ * §5.3 / M2.S2.T2：bootstrap 以向后兼容的附加字段承载 guidance，内容与
+ * guidance resource 等价并含同一 revision。guidance 不可用（未配置该 agent
+ * 或内容配置不可用）时省略字段，不阻断 bootstrap 主语义。
+ */
+async function attachIntegrationGuidance(bootstrapData, bundle) {
+    const agentId = normalizeMcpString(bootstrapData?.agentId, 256);
+    if (!agentId || !bundle.agentGuidanceService) {
+        return bootstrapData;
+    }
+    try {
+        const guidanceResult = await bundle.agentGuidanceService.getAgentGuidance(agentId);
+        if (guidanceResult.ok) {
+            return { ...bootstrapData, integrationGuidance: guidanceResult.guidance };
+        }
+    } catch (_error) {
+        // guidance 是增强内容；失败保持原 bootstrap 语义。
+    }
+    return bootstrapData;
 }
 
 async function executeRender(context) {
@@ -65,13 +76,25 @@ async function executeRender(context) {
                     messages: args.messages
                 });
                 if (renderResult?.success && ['accepted', 'waiting_approval'].includes(renderResult.status)) {
-                    return attachRequestId(renderResult, requestContext.requestId);
+                    // §5.3 / M2.S3.T1：deferred 分支同样携带 agentId，供
+                    // canonical deferred envelope 补齐 bootstrap `summary`。
+                    const shaped = operation.asBootstrap
+                        ? {
+                            ...renderResult,
+                            data: {
+                                ...(renderResult.data && typeof renderResult.data === 'object' ? renderResult.data : {}),
+                                agentId: normalizeMcpString(renderResult.data?.agentId, 256) || requestContext.agentId
+                            }
+                        }
+                        : renderResult;
+                    return attachRequestId(shaped, requestContext.requestId);
                 }
                 return {
                     success: true,
                     requestId: requestContext.requestId,
                     data: operation.asBootstrap
-                        ? buildBootstrapResult(renderResult, requestContext.agentId)
+                        ? await attachIntegrationGuidance(
+                            buildBootstrapResult(renderResult, requestContext.agentId), bundle)
                         : renderResult,
                     audit: { runtime: requestContext.runtime, source: requestContext.source }
                 };

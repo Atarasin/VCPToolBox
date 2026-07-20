@@ -143,6 +143,11 @@ function createIntegrationSnapshotCoordinator({
         const contentHashes = { guidance: candidate.contentHash };
         const revision = computeSnapshotRevision(contentHashes);
         const previousFailure = state.integrationFailure;
+        // 内容未变时保持已冻结的快照（revision 与 publishedAt 均不变）——
+        // 冻结快照只在候选变化时一次性发布（§4.3）。
+        if (!previousFailure && state.integrationSnapshot?.revision === revision) {
+            return buildIntegrationStatus();
+        }
         const agents = Object.fromEntries(
             Object.entries(parsed.config.agents).map(([agentId, entry]) => {
                 const directoryEntry = directoryEntries.find((item) => normalizeString(item?.alias) === agentId);
@@ -152,7 +157,10 @@ function createIntegrationSnapshotCoordinator({
                     displayName: entry.displayName || agentId,
                     guidanceRef: agentId,
                     memoryPolicyRef: agentId,
-                    recallProfileRef: agentId
+                    recallProfileRef: agentId,
+                    // §4.2：guidance bundle 的 per-agent 表达内容随冻结快照发布，
+                    // 消费面（REST/resource/bootstrap）不得回读原始配置文件。
+                    memoryDefaults: Object.freeze(entry.memoryDefaults ? structuredClone(entry.memoryDefaults) : {})
                 })];
             })
         );

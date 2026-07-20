@@ -3,6 +3,7 @@ const MCP_RESOURCE_KINDS = Object.freeze({
     MEMORY_TARGETS: 'memory-targets',
     AGENT_PROFILE: 'agent-profile',
     AGENT_PROMPT_TEMPLATE: 'agent-prompt-template',
+    AGENT_GUIDANCE: 'agent-guidance',
     JOB_EVENTS: 'job-events'
 });
 
@@ -18,11 +19,13 @@ const MCP_SUPPORTED_RESOURCE_TEMPLATES = Object.freeze([
     'vcp://agent-gateway/memory-targets/{agentId}',
     'vcp://agent-gateway/agents/{agentId}/profile',
     'vcp://agent-gateway/agents/{agentId}/prompt-template',
+    'vcp://agent-gateway/agents/{agentId}/guidance',
     'vcp://agent-gateway/jobs/{jobId}/events'
 ]);
 
 const MCP_DIARY_LOOP_RESOURCE_TEMPLATES = Object.freeze([
     'vcp://agent-gateway/memory-targets/{agentId}',
+    'vcp://agent-gateway/agents/{agentId}/guidance',
     'vcp://agent-gateway/jobs/{jobId}/events'
 ]);
 
@@ -141,6 +144,9 @@ function buildResourceUri(kind, agentId) {
     if (kind === MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE) {
         return `vcp://agent-gateway/agents/${encodeResourceAgentId(agentId)}/prompt-template`;
     }
+    if (kind === MCP_RESOURCE_KINDS.AGENT_GUIDANCE) {
+        return `vcp://agent-gateway/agents/${encodeResourceAgentId(agentId)}/guidance`;
+    }
     if (kind === MCP_RESOURCE_KINDS.JOB_EVENTS) {
         return buildJobEventsResourceUri(agentId);
     }
@@ -149,12 +155,15 @@ function buildResourceUri(kind, agentId) {
 
 function parseResourceUri(uri) {
     const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
-    const agentResourceMatch = normalizedUri.match(/^vcp:\/\/agent-gateway\/agents\/([^/]+)\/(profile|prompt-template)$/);
+    const agentResourceMatch = normalizedUri.match(/^vcp:\/\/agent-gateway\/agents\/([^/]+)\/(profile|prompt-template|guidance)$/);
     if (agentResourceMatch) {
+        const agentResourceKinds = {
+            profile: MCP_RESOURCE_KINDS.AGENT_PROFILE,
+            'prompt-template': MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE,
+            guidance: MCP_RESOURCE_KINDS.AGENT_GUIDANCE
+        };
         return {
-            kind: agentResourceMatch[2] === 'profile'
-                ? MCP_RESOURCE_KINDS.AGENT_PROFILE
-                : MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE,
+            kind: agentResourceKinds[agentResourceMatch[2]],
             agentId: decodeURIComponent(agentResourceMatch[1])
         };
     }
@@ -212,6 +221,15 @@ function createAgentPromptTemplateResource(agentId) {
     };
 }
 
+function createAgentGuidanceResource(agentId) {
+    return {
+        uri: buildResourceUri(MCP_RESOURCE_KINDS.AGENT_GUIDANCE, agentId),
+        name: `Agent Gateway integration guidance for ${agentId}`,
+        description: 'Canonical integration guidance bundle (workflow, memory write policy, diary routing) derived from the frozen integration snapshot.',
+        mimeType: 'application/json'
+    };
+}
+
 function createJobEventsResource(jobId) {
     return {
         uri: buildResourceUri(MCP_RESOURCE_KINDS.JOB_EVENTS, jobId),
@@ -238,5 +256,6 @@ module.exports = {
     createMemoryTargetsResource,
     createAgentProfileResource,
     createAgentPromptTemplateResource,
+    createAgentGuidanceResource,
     createJobEventsResource
 };

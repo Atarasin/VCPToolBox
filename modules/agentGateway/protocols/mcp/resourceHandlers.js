@@ -45,6 +45,24 @@ async function readJobEvents({ jobRuntimeService, jobId, authContext, requestCon
     };
 }
 
+async function readAgentGuidance({ agentGuidanceService, agentId, requestContext }) {
+    if (!agentGuidanceService) {
+        throw createMcpError(MCP_ERROR_CODES.SERVICE_UNAVAILABLE, 'Agent guidance service is not configured', {
+            canonicalCode: AGW_ERROR_CODES.CONFIG_UNAVAILABLE,
+            requestId: requestContext.requestId
+        });
+    }
+    const result = await agentGuidanceService.getAgentGuidance(agentId);
+    if (!result.ok) {
+        throwResourceFailure(
+            { code: result.code, error: result.reason, requestId: requestContext.requestId },
+            requestContext.requestId,
+            'Failed to read agent integration guidance'
+        );
+    }
+    return result.guidance;
+}
+
 function createResourcePayloadHandlers(bundle, context) {
     return {
         [MCP_RESOURCE_KINDS.CAPABILITIES]: ({ agentId, authContext }) =>
@@ -55,6 +73,11 @@ function createResourcePayloadHandlers(bundle, context) {
             bundle.agentRegistryService.getAgentProfile(agentId, { authContext }),
         [MCP_RESOURCE_KINDS.AGENT_PROMPT_TEMPLATE]: ({ agentId, authContext }) =>
             bundle.agentRegistryService.getPromptTemplatePreview(agentId, { authContext }),
+        [MCP_RESOURCE_KINDS.AGENT_GUIDANCE]: ({ agentId, requestContext }) => readAgentGuidance({
+            agentGuidanceService: bundle.agentGuidanceService,
+            agentId,
+            requestContext
+        }),
         [MCP_RESOURCE_KINDS.JOB_EVENTS]: (input) => readJobEvents({
             jobRuntimeService: bundle.jobRuntimeService,
             attachRequestId: context.attachRequestId,

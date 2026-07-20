@@ -1490,3 +1490,73 @@ test('POST /agent_gateway/recall/run native envelope shape verification', async 
         await fs.rm(agentDir, { recursive: true, force: true });
     }
 });
+
+test('GET /agent_gateway/agents/:agentId/guidance returns the canonical guidance bundle (M2.S1)', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', 'Ariadne system prompt');
+    const guidanceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agw-native-guidance-'));
+    const guidancePath = path.join(guidanceDir, 'agent_guidance.json');
+    await fs.writeFile(guidancePath, JSON.stringify({
+        version: 1,
+        shared: {
+            workflow: ['先调用 gateway_recall_run。'],
+            memoryWritePolicy: { write: ['已验证结论'], skip: ['密钥和敏感数据'] }
+        },
+        agents: {
+            Ariadne: {
+                displayName: '阿里阿德涅',
+                memoryDefaults: { tags: ['vcp'], metadata: { project: 'vcp-toolbox' } }
+            }
+        }
+    }, null, 2), 'utf8');
+    const previousGuidancePath = process.env.AGENT_GATEWAY_GUIDANCE_CONFIG_PATH;
+    process.env.AGENT_GATEWAY_GUIDANCE_CONFIG_PATH = guidancePath;
+
+    const pluginManager = createPluginManager({
+        agentManager: createAgentManager(agentDir, { Ariadne: 'Ariadne.md' })
+    });
+    const server = await createServer(pluginManager);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/agent_gateway/agents/Ariadne/guidance?requestId=req-native-guidance-001`);
+        const payload = await response.json();
+        assert.equal(response.status, 200);
+        // §6 / M2.S2.T4：guidance 响应 no-store 且 Vary 覆盖身份呈现通道
+        assert.equal(response.headers.get('cache-control'), 'private, no-store');
+        const varyHeader = String(response.headers.get('vary') || '').toLowerCase();
+        for (const channel of ['authorization', 'x-agent-gateway-key', 'cookie']) {
+            assert.ok(varyHeader.includes(channel), `Vary must include ${channel}`);
+        }
+        assert.equal(payload.success, true);
+        assert.equal(payload.meta.operationName, 'agents.guidance');
+        assert.equal(payload.data.agentId, 'Ariadne');
+        assert.equal(payload.data.displayName, '阿里阿德涅');
+        assert.deepEqual(payload.data.workflow, ['先调用 gateway_recall_run。']);
+        assert.deepEqual(payload.data.memoryWritePolicy, {
+            write: ['已验证结论'],
+            skip: ['密钥和敏感数据']
+        });
+        // 日记本集合由 memory policy / rag 配置注入（Ariadne → Nova, SharedMemory）
+        assert.deepEqual(payload.data.allowedDiaries, ['Nova', 'SharedMemory']);
+        assert.deepEqual(payload.data.memoryDefaults, { tags: ['vcp'], metadata: { project: 'vcp-toolbox' } });
+        assert.match(payload.data.revision, /^sha256:[0-9a-f]{64}$/);
+
+        // revision 与冻结 integration snapshot 一致（M2.S1.T3）
+        const bundle = pluginManager.__agentGatewayServiceBundle;
+        assert.equal(payload.data.revision, bundle.agentGuidanceService.getIntegrationRevision());
+
+        const notFoundResponse = await fetch(`${server.baseUrl}/agent_gateway/agents/Unknown/guidance`);
+        const notFoundPayload = await notFoundResponse.json();
+        assert.equal(notFoundResponse.status, 404);
+        assert.equal(notFoundPayload.code, 'AGW_NOT_FOUND');
+    } finally {
+        if (previousGuidancePath === undefined) {
+            delete process.env.AGENT_GATEWAY_GUIDANCE_CONFIG_PATH;
+        } else {
+            process.env.AGENT_GATEWAY_GUIDANCE_CONFIG_PATH = previousGuidancePath;
+        }
+        await server.close();
+        await fs.rm(agentDir, { recursive: true, force: true });
+        await fs.rm(guidanceDir, { recursive: true, force: true });
+    }
+});

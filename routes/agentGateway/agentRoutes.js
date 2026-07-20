@@ -233,4 +233,90 @@ function registerAgentRenderRoute(router, context) {
     });
 }
 
-module.exports = { registerAgentListRoute, registerAgentDetailRoute, registerAgentRenderRoute };
+function registerAgentGuidanceRoute(router, context) {
+    const { authContextResolver, operabilityService, agentGuidanceService } = context;
+    // §5.1 / M2.S1.T2：guidance bundle 的 Native REST binding。
+    // path agent 的绑定校验由单一认证注入点的 buildGatewayRequestContext()
+    // 完成（path candidate 提取 + bound credential 不一致 → AGW_FORBIDDEN）。
+    router.get('/agents/:agentId/guidance', async (req, res) => {
+        const startedAt = Date.now();
+        // §6 / M2.S2.T4：guidance 按身份返回，禁止共享缓存；Vary 声明全部
+        // 身份呈现通道（Bearer / gateway key / admin session cookie）。
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Vary', 'Authorization, x-agent-gateway-key, Cookie');
+        const requestContext = createNativeRequestContext(req, {
+            requestId: req.query.requestId,
+            source: req.query.source,
+            runtime: req.query.runtime
+        }, 'agent-gateway-guidance');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayAuth
+        });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'agents.guidance',
+            requestContext,
+            authContext,
+            payload: {
+                ...req.query,
+                agentId: req.params.agentId
+            }
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
+
+        try {
+            if (!agentGuidanceService) {
+                return sendNativeErrorWithOperation(res, {
+                    status: 503,
+                    requestId: requestContext.requestId,
+                    startedAt,
+                    code: AGW_ERROR_CODES.CONFIG_UNAVAILABLE,
+                    error: 'Agent guidance service is not configured',
+                    authContext,
+                    operationControl
+                });
+            }
+            const result = await agentGuidanceService.getAgentGuidance(req.params.agentId);
+            if (!result.ok) {
+                return sendNativeErrorWithOperation(res, {
+                    status: result.httpStatus || 500,
+                    requestId: requestContext.requestId,
+                    startedAt,
+                    code: result.code || AGW_ERROR_CODES.INTERNAL_ERROR,
+                    error: result.reason || 'Failed to resolve agent guidance',
+                    authContext,
+                    operationControl
+                });
+            }
+            return sendNativeSuccessWithOperation(res, {
+                requestId: requestContext.requestId,
+                startedAt,
+                data: result.guidance,
+                authContext,
+                operationControl
+            });
+        } catch (error) {
+            return sendNativeErrorWithOperation(res, {
+                status: 500,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: AGW_ERROR_CODES.INTERNAL_ERROR,
+                error: 'Failed to resolve agent guidance',
+                details: { message: error.message },
+                authContext,
+                operationControl
+            });
+        }
+    });
+}
+
+module.exports = { registerAgentListRoute, registerAgentDetailRoute, registerAgentGuidanceRoute, registerAgentRenderRoute };

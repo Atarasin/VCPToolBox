@@ -146,34 +146,34 @@
 
 ### M2.S1 Guidance bundle 与 REST binding
 
-- [ ] T1 `agentGuidanceResolver` 输出完整 guidance bundle(§4.2:workflow、memoryWritePolicy、allowed/defaultDiaries 由 memory policy 注入、memoryDefaults、revision)。
-- [ ] T2 `GET /agent_gateway/agents/:agentId/guidance`:经 `buildGatewayRequestContext()` 校验 path agent;`restOperations.json` 注册 + OpenAPI path/schema/route binding 生成校验(§5.1、§5.4)。
-- [ ] T3 验收:REST guidance 用例;revision 与 snapshot 一致。
+- [x] T1 `agentGuidanceResolver` 输出完整 guidance bundle(§4.2:workflow、memoryWritePolicy、allowed/defaultDiaries 由 memory policy 注入、memoryDefaults、revision)。
+- [x] T2 `GET /agent_gateway/agents/:agentId/guidance`:经 `buildGatewayRequestContext()` 校验 path agent;`restOperations.json` 注册 + OpenAPI path/schema/route binding 生成校验(§5.1、§5.4)。
+- [x] T3 验收:REST guidance 用例;revision 与 snapshot 一致。
 
 ### M2.S2 MCP surfaces:resource、bootstrap、instructions
 
 依赖：S1。
 
-- [ ] T1 guidance resource `vcp://agent-gateway/agents/{agentId}/guidance`:URI target 决议 + 绑定校验(§5.3)。
-- [ ] T2 bootstrap 附加 `integrationGuidance` 字段(与 resource 同 revision);绑定 credential 可省略 agentId(§5.3)。
-- [ ] T3 `resolveInstructions` per-request 选项贯通 harness/两 executor/三 transport;绑定 + read → ≤800 token 摘要(canonical 单点 `ceil(chars/4)` 计数);未绑定/execute-only → 通用文案不泄露 agent 内容(§5.2)。
-- [ ] T4 guidance/integration/mint 响应缓存头:`Cache-Control: private, no-store` + `Vary` 身份通道(§6)。
-- [ ] T5 验收:§8「guidance」行用例。
+- [x] T1 guidance resource `vcp://agent-gateway/agents/{agentId}/guidance`:URI target 决议 + 绑定校验(§5.3)。
+- [x] T2 bootstrap 附加 `integrationGuidance` 字段(与 resource 同 revision);绑定 credential 可省略 agentId(§5.3;schema 层 optional 化按 §5.4 顺序留在 M3.S1)。
+- [x] T3 `resolveInstructions` per-request 选项贯通 harness/两 executor/三 transport;绑定 + read → ≤800 token 摘要(canonical 单点 `ceil(chars/4)` 计数);未绑定/execute-only → 通用文案不泄露 agent 内容(§5.2)。
+- [x] T4 guidance/integration/mint 响应缓存头:`Cache-Control: private, no-store` + `Vary` 身份通道(§6;integration/mint endpoint 属 M4,届时复用同一头部约定)。
+- [x] T5 验收:§8「guidance」行用例。
 
 ### M2.S3 双 adapter 差异收敛
 
 依赖：S2。
 
-- [ ] T1 in-process bootstrap deferred 分支(`accepted`/`waiting_approval`)补齐 `summary`;两份 `buildBootstrapResult` 收敛到 canonical service(§5.1、§5.3)。
-- [ ] T2 `gateway_agent_render` 不再经 in-process `tools/call` 暴露,以 catalog `publishedAsTool: false` 为准(§5.1)。
-- [ ] T3 验收:§8「MCP」行用例;两 adapter 的 resource/bootstrap/REST 结果 revision 一致。
+- [x] T1 in-process bootstrap deferred 分支(`accepted`/`waiting_approval`)补齐 `summary`;两份 `buildBootstrapResult` 收敛到 canonical service(§5.1、§5.3)。
+- [x] T2 `gateway_agent_render` 不再经 in-process `tools/call` 暴露,以 catalog `publishedAsTool: false` 为准(§5.1)。
+- [x] T3 验收:§8「MCP」行用例;两 adapter 的 resource/bootstrap/REST 结果 revision 一致。
 
 ### M2.S4 真实客户端 capability smoke
 
 依赖：S2、S3。
 
-- [ ] T1 Claude Code、Codex、Kimi capability smoke;记录 instructions/resources 实际消费情况(填充 §5.3 兼容性矩阵)。
-- [ ] T2 M2 门禁:无绑定连接只收通用 instructions;绑定连接只得所属 agent guidance;tool-only host 经 bootstrap 获取等价内容。
+- [x] T1 Claude Code、Codex、Kimi capability smoke;记录 instructions/resources 实际消费情况(填充 §5.3 兼容性矩阵)。
+- [x] T2 M2 门禁:无绑定连接只收通用 instructions;绑定连接只得所属 agent guidance;tool-only host 经 bootstrap 获取等价内容。
 
 ---
 

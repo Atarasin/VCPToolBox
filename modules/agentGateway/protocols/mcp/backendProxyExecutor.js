@@ -10,7 +10,9 @@ const {
     createGatewayManagedPromptDescriptors,
     createGatewayManagedToolDescriptors,
     buildJobEventsResourceUri,
+    buildResourceUri,
     parseResourceUri,
+    createAgentGuidanceResource,
     createMemoryTargetsResource
 } = require('./descriptors');
 const {
@@ -29,6 +31,14 @@ const { MCP_ERROR_CODES } = require('./constants');
 const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { getGatewayOperation } = require('./operations');
 const { getPresentedCredential } = require('../../policy/trustedCredentialContext');
+const {
+    GENERIC_INSTRUCTIONS,
+    buildGuidanceInstructions
+} = require('../../services/agentGuidanceService');
+const {
+    buildBootstrapResult,
+    buildDeferredBootstrapSummary
+} = require('../../services/bootstrapResultService');
 const { serveFrozenList } = require('../../policy/discoverySnapshot');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -129,7 +139,8 @@ function createDeferredResultEnvelope({
     runtime,
     job,
     audit,
-    operability
+    operability,
+    summary
 }) {
     const shapedRuntime = buildDeferredRuntime(runtime, job);
 
@@ -143,6 +154,7 @@ function createDeferredResultEnvelope({
             toolName,
             runtime: shapedRuntime,
             job: job || null,
+            ...(summary ? { summary } : {}),
             audit: audit || {},
             operability: operability || {}
         },
@@ -194,7 +206,18 @@ function createGatewayManagedDeferredResult(name, result) {
         runtime: result.data?.runtime || {},
         job: result.data?.job || null,
         audit: result.audit || {},
-        operability: buildOperabilityMetadata(result.meta)
+        operability: buildOperabilityMetadata(result.meta),
+        // §5.3 / M2.S3.T1：bootstrap 的 deferred 分支同样返回 summary，
+        // 与 in-process 复用同一 canonical 实现。
+        ...(name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP
+            ? {
+                summary: buildDeferredBootstrapSummary({
+                    status: result.status,
+                    agentId: result.data?.agentId,
+                    jobId: result.data?.job?.jobId || result.data?.job?.id
+                })
+            }
+            : {})
     });
 }
 
@@ -297,33 +320,6 @@ function ensureJobIdentity(input, operation, fallbackAgentId = '', fallbackSessi
     );
 }
 
-function buildBootstrapSummary(renderResult, agentId) {
-    const resolvedAgentId = normalizeMcpString(renderResult?.agentId || agentId, 256) || 'unknown-agent';
-    const renderedPrompt = typeof renderResult?.renderedPrompt === 'string' ? renderResult.renderedPrompt : '';
-    const warnings = Array.isArray(renderResult?.warnings) ? renderResult.warnings : [];
-    const fragments = [`Bootstrap prompt ready for ${resolvedAgentId}`];
-
-    if (renderedPrompt) {
-        fragments.push(`length=${renderedPrompt.length}`);
-    }
-    if (renderResult?.truncated) {
-        fragments.push('truncated=true');
-    }
-    if (warnings.length > 0) {
-        fragments.push(`warnings=${warnings.length}`);
-    }
-
-    return fragments.join('; ');
-}
-
-function buildBootstrapResult(renderResult, agentId) {
-    return {
-        ...renderResult,
-        agentId: normalizeMcpString(renderResult?.agentId || agentId, 256) || agentId,
-        summary: buildBootstrapSummary(renderResult, agentId)
-    };
-}
-
 function buildBody(input, args, { requireSession = true, defaultAgentId = '', defaultSessionId = 'mcp-session' } = {}) {
     const inputWithArgs = {
         ...input,
@@ -402,12 +398,31 @@ function buildPromptMeta(result, agentId) {
     };
 }
 
+/**
+ * Discovery target 决议（§3.4 补充规则）：标准 host 只发送 cursor，服务端按
+ * credential 决定可见集合。绑定 credential（transport 注入的受信任
+ * authContext，客户端 params.authContext 已被整体覆盖）可见集合为
+ * [boundAgentId]；自定义 discovery agentId 只作收窄扩展，越界返回空集合。
+ * 未绑定时保留显式 agentId / stdio 开发 default 的既有语义。
+ */
+function resolveDiscoveryScope(state, input) {
+    const boundAgentId = normalizeMcpString(input.authContext?.boundAgentId, 256);
+    const requestedAgentId = normalizeMcpString(input.agentId || input.requestContext?.agentId);
+    if (boundAgentId) {
+        if (requestedAgentId && requestedAgentId !== boundAgentId) {
+            return { agentId: '', outOfScope: true };
+        }
+        return { agentId: boundAgentId, outOfScope: false };
+    }
+    const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : state.defaultAgentId;
+    return { agentId: requestedAgentId || normalizeMcpString(discoveryDefault), outOfScope: false };
+}
+
 const BACKEND_PROXY_METHODS = {
     async listTools(state, input = {}) {
         return serveFrozenList(input, 'tools', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
+        const { agentId } = resolveDiscoveryScope(state, input);
         return {
             tools: gatewayManagedTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
             meta: {
@@ -421,8 +436,7 @@ const BACKEND_PROXY_METHODS = {
     async listPrompts(state, input = {}) {
         return serveFrozenList(input, 'prompts', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
+        const { agentId } = resolveDiscoveryScope(state, input);
         return {
             prompts: gatewayManagedPrompts,
             meta: {
@@ -620,13 +634,34 @@ const BACKEND_PROXY_METHODS = {
         if (!result.success) {
             return createFailureResult(result);
         }
+        const isDeferredResult = DEFERRED_RESULT_TOOL_NAMES.has(name) &&
+            (result.status === 'accepted' || result.status === 'waiting_approval');
         if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
-            result.data = buildBootstrapResult(result.data || {}, result.data?.agentId || input.agentId || args.agentId || defaultAgentId);
+            const resolvedAgentId = result.data?.agentId || input.agentId || args.agentId || defaultAgentId;
+            if (isDeferredResult) {
+                // deferred 分支只需 agentId 供 canonical summary；render 尚未
+                // 完成，不做 prompt 整形也不取 guidance。
+                result.data = { ...(result.data || {}), agentId: normalizeMcpString(resolvedAgentId, 256) };
+            } else {
+                result.data = buildBootstrapResult(result.data || {}, resolvedAgentId);
+                // §5.3 / M2.S2.T2：bootstrap 以向后兼容的附加字段承载 guidance，
+                // 内容与 guidance resource 等价并含同一 revision。canonical backend
+                // 重新校验凭据与绑定；guidance 不可用时省略字段，不阻断 bootstrap。
+                const guidanceAgentId = normalizeMcpString(result.data?.agentId, 256);
+                if (guidanceAgentId) {
+                    try {
+                        const guidanceResponse = await backendClient.getAgentGuidance(guidanceAgentId, undefined, requestOptions);
+                        const guidanceResult = normalizeNativeResult(guidanceResponse);
+                        if (guidanceResult.success && guidanceResult.data) {
+                            result.data = { ...result.data, integrationGuidance: guidanceResult.data };
+                        }
+                    } catch (_error) {
+                        // guidance 是增强内容；获取失败保持原 bootstrap 语义。
+                    }
+                }
+            }
         }
-        if (
-            DEFERRED_RESULT_TOOL_NAMES.has(name) &&
-            (result.status === 'accepted' || result.status === 'waiting_approval')
-        ) {
+        if (isDeferredResult) {
             return createGatewayManagedDeferredResult(name, result);
         }
         return createGatewayManagedSuccessResult(name, result);
@@ -635,8 +670,7 @@ const BACKEND_PROXY_METHODS = {
     async listResources(state, input = {}) {
         return serveFrozenList(input, 'resources', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
-        const discoveryDefault = state.discoveryDefaultAgentEnabled === false ? '' : defaultAgentId;
-        const agentId = normalizeMcpString(input.agentId || input.requestContext?.agentId || discoveryDefault);
+        const { agentId } = resolveDiscoveryScope(state, input);
 
         if (!agentId) {
             return {
@@ -649,7 +683,8 @@ const BACKEND_PROXY_METHODS = {
 
         return {
             resources: [
-                createMemoryTargetsResource(agentId)
+                createMemoryTargetsResource(agentId),
+                createAgentGuidanceResource(agentId)
             ],
             meta: {
                 requestId: normalizeMcpString(input.requestContext?.requestId, 128),
@@ -699,6 +734,38 @@ const BACKEND_PROXY_METHODS = {
                 }],
                 meta: {
                     requestId: result.requestId,
+                    agentId
+                }
+            };
+        }
+
+        if (parsed.kind === MCP_RESOURCE_KINDS.AGENT_GUIDANCE) {
+            // §5.3：URI target 决议 + 统一 context 绑定校验由 canonical backend
+            // 的 guidance REST binding 执行（request-scoped credential 透传）。
+            const agentId = ensureAgentId({
+                ...input,
+                agentId: parsed.agentId || input.agentId
+            }, 'resources/read', defaultAgentId);
+            const response = await backendClient.getAgentGuidance(agentId, {
+                requestId: normalizeMcpString(input.requestContext?.requestId, 128)
+            }, buildRequestOptions(input));
+            const result = normalizeNativeResult(response);
+            if (!result.success) {
+                throw createMcpError(
+                    mapGatewayFailureToMcpErrorCode(result.code),
+                    result.error || 'Failed to read agent integration guidance',
+                    buildGatewayFailureDetails(result)
+                );
+            }
+
+            return {
+                contents: [{
+                    uri: buildResourceUri(MCP_RESOURCE_KINDS.AGENT_GUIDANCE, agentId),
+                    mimeType: 'application/json',
+                    text: serializeMcpValue(result.data || {})
+                }],
+                meta: {
+                    requestId: result.requestId || normalizeMcpString(input.requestContext?.requestId, 128),
                     agentId
                 }
             };
@@ -787,13 +854,54 @@ function createBackendProxyMcpAdapter({
     };
 }
 
+/**
+ * backend-proxy 的 initialize.instructions per-request 渲染（§5.2）。
+ *
+ * 绑定与 scope 来自边缘 credential 决议注入的受信任 authContext
+ * （HTTP session / WS connection context；客户端 params 中的同名字段已被
+ * transport 注入整体覆盖）。绑定 + read scope 时经 canonical backend 取
+ * guidance bundle（request-scoped credential 透传，backend 重新校验），
+ * 摘要裁剪复用 canonical 单点实现；其余情形（含 stdio 静态凭据进程，
+ * 边缘无绑定信息）返回通用文案，不泄露任何 agent 内容。
+ */
+function createBackendProxyInstructionsResolver(backendClient) {
+    return async function resolveInstructions({ params, authContext } = {}) {
+        const context = authContext && typeof authContext === 'object' ? authContext : {};
+        const boundAgentId = normalizeMcpString(context.boundAgentId, 256);
+        const scopes = Array.isArray(context.credentialScopes) ? context.credentialScopes : [];
+        if (!boundAgentId || !scopes.includes('gateway:read')) {
+            return GENERIC_INSTRUCTIONS;
+        }
+        try {
+            const response = await backendClient.getAgentGuidance(
+                boundAgentId,
+                undefined,
+                buildRequestOptions(params || {})
+            );
+            const result = normalizeNativeResult(response);
+            if (!result.success || !result.data) {
+                return GENERIC_INSTRUCTIONS;
+            }
+            return buildGuidanceInstructions(result.data).text;
+        } catch (_error) {
+            return GENERIC_INSTRUCTIONS;
+        }
+    };
+}
+
 function createBackendProxyMcpServerHarness(options = {}) {
     const adapter = options.adapter || createBackendProxyMcpAdapter(options);
-    return createMcpHarness({ adapter });
+    const backendClient = options.backendClient || null;
+    return createMcpHarness({
+        adapter,
+        resolveInstructions: options.resolveInstructions
+            || (backendClient ? createBackendProxyInstructionsResolver(backendClient) : undefined)
+    });
 }
 
 module.exports = {
     MCP_ERROR_CODES,
+    createBackendProxyInstructionsResolver,
     createBackendProxyMcpAdapter,
     createBackendProxyMcpServerHarness,
     createBackendProxyExecutor: createBackendProxyMcpAdapter,

@@ -56,7 +56,13 @@ const {
 const {
     createRecallProjectionService
 } = require('../services/recallProjectionService');
+const {
+    createAgentGuidanceService
+} = require('../services/agentGuidanceService');
 const { bindVcpPorts } = require('./vcpPortBindings');
+const { createIntegrationSnapshotCoordinator } = require('./integrationSnapshotCoordinator');
+const { DEFAULT_GUIDANCE_CONFIG_PATH } = require('../policy/agentGuidanceConfig');
+const { resolveConfiguredAgentMemoryPolicy } = require('../policy/mcpAgentMemoryPolicy');
 const { getProtocolGovernanceConfig } = require('../contracts/protocolGovernance');
 const { createCredentialResolver } = require('../policy/credentialResolver');
 const {
@@ -259,6 +265,29 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
     const recallProjectionService = createRecallProjectionService();
     const gatewayCredentialService = createGatewayCredentialService({ auditLogger, pluginManager, protocolConfig: ports.configuration.protocol });
 
+    // M2.S1：guidance 单源产出。协调器发布冻结 integration snapshot（§4.3），
+    // canonical guidance service 注入 memory policy diaries 后输出唯一 bundle。
+    const integrationSnapshotCoordinator = createIntegrationSnapshotCoordinator({
+        guidanceConfigPath: process.env.AGENT_GATEWAY_GUIDANCE_CONFIG_PATH || DEFAULT_GUIDANCE_CONFIG_PATH,
+        credentialsPath: process.env.AGENT_GATEWAY_CREDENTIALS_PATH,
+        pepperKeyringPath: process.env.AGENT_GATEWAY_CREDENTIAL_PEPPERS_PATH,
+        listAgents: () => ports.agentDirectory.listAgents(),
+        getMemoryPolicy: (agentId) => {
+            const policy = resolveConfiguredAgentMemoryPolicy({ agentId });
+            return {
+                allowedDiaries: policy.allowedDiaryNames,
+                defaultDiaries: policy.defaultDiaryNames
+            };
+        },
+        legacyCredentialEnabled: !gatewayCredentialService.switches.legacyKeyDisabled,
+        allowLegacyScopeNames: !gatewayCredentialService.switches.legacyScopeNamesDisabled
+    });
+    const agentGuidanceService = createAgentGuidanceService({
+        snapshotCoordinator: integrationSnapshotCoordinator,
+        agentPolicyResolver,
+        ragRetrieverPort: ports.ragRetriever
+    });
+
     pluginManager.__agentGatewayServiceBundle = {
         ports,
         schemaRegistry,
@@ -278,6 +307,8 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         recallRuntimeService,
         recallProjectionService,
         gatewayCredentialService,
+        integrationSnapshotCoordinator,
+        agentGuidanceService,
         jobStatus: JOB_STATUS,
         gatewayVersion: options.gatewayVersion || DEFAULT_GATEWAY_VERSION,
         memoryBridgeToolName: options.memoryBridgeToolName || DEFAULT_MEMORY_BRIDGE_TOOL_NAME
