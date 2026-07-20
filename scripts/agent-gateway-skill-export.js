@@ -19,7 +19,9 @@ const {
     generateSkillArtifact,
     validatePublicBaseUrl
 } = require('../modules/agentGateway/services/skillGeneratorService');
-const { createPluginManager } = require('../tests/agent-gateway/helpers/agent-gateway-test-helpers');
+// 离线 CLI 也使用真实 agent directory（Agent/ + agent_map.json）——
+// guidance snapshot 的 agent 交叉校验（§4.3）依赖它；不依赖测试夹具。
+const agentManager = require('../modules/agentManager');
 
 function printUsage() {
     process.stdout.write(`Agent Gateway skill export CLI
@@ -79,8 +81,9 @@ async function main(argv = process.argv.slice(2)) {
         return 1;
     }
 
-    const pluginManager = createPluginManager();
+    const pluginManager = { agentManager };
     const bundle = getGatewayServiceBundle(pluginManager);
+    await bundle.ports.agentDirectory.ensureLoaded?.();
     const guidanceResult = await bundle.agentGuidanceService.getAgentGuidance(options.agentId);
     if (!guidanceResult.ok) {
         process.stderr.write(`Failed to resolve guidance for "${options.agentId}": ${guidanceResult.reason}\n`);

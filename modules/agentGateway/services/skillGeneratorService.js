@@ -40,8 +40,14 @@ function validatePublicBaseUrl(rawValue, { allowInsecure = false } = {}) {
     }
     const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
         || parsed.hostname === '::1';
-    if (parsed.protocol === 'http:' && !isLoopback && !allowInsecure) {
-        return { ok: false, reason: `${PUBLIC_BASE_URL_ENV} must use HTTPS outside loopback` };
+    // §6：生产只允许 HTTPS；HTTP 仅限 loopback 开发环境且必须显式允许
+    if (parsed.protocol === 'http:' && !(isLoopback && allowInsecure)) {
+        return {
+            ok: false,
+            reason: isLoopback
+                ? `${PUBLIC_BASE_URL_ENV} uses HTTP: loopback development requires explicit allowInsecure opt-in`
+                : `${PUBLIC_BASE_URL_ENV} must use HTTPS outside loopback`
+        };
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return { ok: false, reason: `${PUBLIC_BASE_URL_ENV} must be http(s)` };
