@@ -111,6 +111,28 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+  /agent_gateway/agents/{agentId}/guidance:
+    get:
+      tags:
+        - Agents
+      summary: 获取单个 agent 的 integration guidance bundle
+      operationId: getAgentGatewayAgentGuidance
+      parameters:
+        - $ref: "#/components/parameters/AgentIdPath"
+        - $ref: "#/components/parameters/RequestIdQuery"
+        - $ref: "#/components/parameters/SourceQuery"
+        - $ref: "#/components/parameters/RuntimeQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/AgentGuidanceSuccess"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /agent_gateway/agents/{agentId}/render:
     post:
       tags:
@@ -566,6 +588,19 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/AgentDetailEnvelope"
+    AgentGuidanceSuccess:
+      description: 成功
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/XRequestId"
+        x-agent-gateway-version:
+          $ref: "#/components/headers/XGatewayVersion"
+        x-agent-gateway-trace-id:
+          $ref: "#/components/headers/XTraceId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AgentGuidanceEnvelope"
     AgentRenderSuccess:
       description: 成功
       headers:
@@ -851,6 +886,12 @@ components:
             $ref: "#/components/schemas/ErrorEnvelope"
     InternalError:
       description: 服务内部错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ServiceUnavailable:
+      description: 依赖的配置或子系统不可用（AGW_CONFIG_UNAVAILABLE）
       content:
         application/json:
           schema:
@@ -1279,6 +1320,80 @@ components:
             - true
         data:
           $ref: "#/components/schemas/AgentDetail"
+        meta:
+          $ref: "#/components/schemas/GatewayMeta"
+    AgentGuidanceBundle:
+      type: object
+      required:
+        - agentId
+        - displayName
+        - workflow
+        - memoryWritePolicy
+        - allowedDiaries
+        - defaultDiaries
+        - memoryDefaults
+        - revision
+        - updatedAt
+      properties:
+        agentId:
+          type: string
+        displayName:
+          type: string
+        workflow:
+          type: array
+          items:
+            type: string
+        memoryWritePolicy:
+          type: object
+          required:
+            - write
+            - skip
+          properties:
+            write:
+              type: array
+              items:
+                type: string
+            skip:
+              type: array
+              items:
+                type: string
+        allowedDiaries:
+          type: array
+          items:
+            type: string
+        defaultDiaries:
+          type: array
+          items:
+            type: string
+        memoryDefaults:
+          type: object
+          properties:
+            tags:
+              type: array
+              items:
+                type: string
+            metadata:
+              type: object
+              additionalProperties: true
+        revision:
+          type: string
+          description: 与冻结 integration snapshot 一致的内容 revision（sha256:...）
+        updatedAt:
+          type: string
+          format: date-time
+    AgentGuidanceEnvelope:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/AgentGuidanceBundle"
         meta:
           $ref: "#/components/schemas/GatewayMeta"
     AgentRenderRequest:

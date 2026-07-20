@@ -152,7 +152,10 @@ function createIntegrationSnapshotCoordinator({
                     displayName: entry.displayName || agentId,
                     guidanceRef: agentId,
                     memoryPolicyRef: agentId,
-                    recallProfileRef: agentId
+                    recallProfileRef: agentId,
+                    // §4.2：guidance bundle 的 per-agent 表达内容随冻结快照发布，
+                    // 消费面（REST/resource/bootstrap）不得回读原始配置文件。
+                    memoryDefaults: Object.freeze(entry.memoryDefaults ? structuredClone(entry.memoryDefaults) : {})
                 })];
             })
         );

@@ -146,9 +146,9 @@
 
 ### M2.S1 Guidance bundle 与 REST binding
 
-- [ ] T1 `agentGuidanceResolver` 输出完整 guidance bundle(§4.2:workflow、memoryWritePolicy、allowed/defaultDiaries 由 memory policy 注入、memoryDefaults、revision)。
-- [ ] T2 `GET /agent_gateway/agents/:agentId/guidance`:经 `buildGatewayRequestContext()` 校验 path agent;`restOperations.json` 注册 + OpenAPI path/schema/route binding 生成校验(§5.1、§5.4)。
-- [ ] T3 验收:REST guidance 用例;revision 与 snapshot 一致。
+- [x] T1 `agentGuidanceResolver` 输出完整 guidance bundle(§4.2:workflow、memoryWritePolicy、allowed/defaultDiaries 由 memory policy 注入、memoryDefaults、revision)。
+- [x] T2 `GET /agent_gateway/agents/:agentId/guidance`:经 `buildGatewayRequestContext()` 校验 path agent;`restOperations.json` 注册 + OpenAPI path/schema/route binding 生成校验(§5.1、§5.4)。
+- [x] T3 验收:REST guidance 用例;revision 与 snapshot 一致。
 
 ### M2.S2 MCP surfaces:resource、bootstrap、instructions
 

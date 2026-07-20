@@ -1,5 +1,6 @@
 const AGENT_GATEWAY_ROUTE_BINDINGS = Object.freeze({
     agentRender: (agentId) => `/agent_gateway/agents/${encodeURIComponent(agentId)}/render`,
+    agentGuidance: (agentId) => `/agent_gateway/agents/${encodeURIComponent(agentId)}/guidance`,
     memoryTargets: '/agent_gateway/memory/targets',
     memorySearch: '/agent_gateway/memory/search',
     contextAssemble: '/agent_gateway/context/assemble',

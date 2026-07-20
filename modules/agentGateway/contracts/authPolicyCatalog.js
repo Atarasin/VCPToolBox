@@ -52,6 +52,7 @@ const REST_BINDING_BY_OPERATION_ID = Object.freeze({
 const OPERATION_CREDENTIAL_ACTIONS = Object.freeze({
     'agents.list': 'read',
     'agents.detail': 'read',
+    'agents.guidance': 'read',
     'agents.render': 'read',
     'capabilities.read': 'read',
     'memory.targets': 'read',

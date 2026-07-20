@@ -241,6 +241,84 @@
     "credentialAction": "read"
   },
   {
+    "operationId": "getAgentGatewayAgentGuidance",
+    "method": "get",
+    "path": "/agent_gateway/agents/{agentId}/guidance",
+    "parameterLocations": [
+      "#/components/parameters/AgentIdPath",
+      "#/components/parameters/RequestIdQuery",
+      "#/components/parameters/SourceQuery",
+      "#/components/parameters/RuntimeQuery"
+    ],
+    "errors": [
+      {
+        "status": 403,
+        "response": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      },
+      {
+        "status": 404,
+        "response": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      },
+      {
+        "status": 500,
+        "response": {
+          "$ref": "#/components/responses/InternalError"
+        }
+      },
+      {
+        "status": 503,
+        "response": {
+          "$ref": "#/components/responses/ServiceUnavailable"
+        }
+      }
+    ],
+    "openapi": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "获取单个 agent 的 integration guidance bundle",
+        "operationId": "getAgentGatewayAgentGuidance",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AgentIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/RequestIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SourceQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RuntimeQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AgentGuidanceSuccess"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "credentialAction": "read"
+  },
+  {
     "operationId": "renderAgentGatewayAgent",
     "method": "post",
     "path": "/agent_gateway/agents/{agentId}/render",
