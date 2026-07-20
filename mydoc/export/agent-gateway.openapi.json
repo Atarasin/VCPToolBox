@@ -243,6 +243,92 @@
         }
       }
     },
+    "/agent_gateway/agents/{agentId}/integration": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "获取单个 agent 的 integration 汇总（可用 skill format 与 MCP endpoint）",
+        "operationId": "getAgentGatewayAgentIntegration",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AgentIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/RequestIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SourceQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RuntimeQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AgentIntegrationSuccess"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/agent_gateway/agents/{agentId}/integration/skill": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "生成单个 agent 的 L3 skill artifact（claude|codex|kimi format allowlist）",
+        "operationId": "getAgentGatewayAgentIntegrationSkill",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AgentIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/SkillFormatQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RequestIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SourceQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RuntimeQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AgentIntegrationSkillSuccess"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/agent_gateway/agents/{agentId}/render": {
       "post": {
         "tags": [
@@ -888,6 +974,20 @@
         "schema": {
           "type": "string"
         }
+      },
+      "SkillFormatQuery": {
+        "name": "format",
+        "in": "query",
+        "required": true,
+        "description": "Skill format allowlist",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "kimi"
+          ]
+        }
       }
     },
     "responses": {
@@ -1419,6 +1519,48 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "AgentIntegrationSuccess": {
+        "description": "成功",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/XRequestId"
+          },
+          "x-agent-gateway-version": {
+            "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AgentIntegrationEnvelope"
+            }
+          }
+        }
+      },
+      "AgentIntegrationSkillSuccess": {
+        "description": "成功",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/XRequestId"
+          },
+          "x-agent-gateway-version": {
+            "$ref": "#/components/headers/XGatewayVersion"
+          },
+          "x-agent-gateway-trace-id": {
+            "$ref": "#/components/headers/XTraceId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AgentIntegrationSkillEnvelope"
             }
           }
         }
@@ -3321,6 +3463,186 @@
           "data": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "AgentIntegrationSummary": {
+        "type": "object",
+        "required": [
+          "agentId",
+          "displayName",
+          "guidanceRevision",
+          "mcpEndpoint",
+          "formats"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "guidanceRevision": {
+            "type": "string"
+          },
+          "mcpEndpoint": {
+            "type": "string"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "format",
+                "skillPath"
+              ],
+              "properties": {
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "claude",
+                    "codex",
+                    "kimi"
+                  ]
+                },
+                "skillPath": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AgentIntegrationSkillArtifact": {
+        "type": "object",
+        "required": [
+          "artifactId",
+          "manifest",
+          "files"
+        ],
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "manifest": {
+            "type": "object",
+            "required": [
+              "artifactId",
+              "agentId",
+              "format",
+              "guidanceRevision",
+              "files",
+              "contentHash"
+            ],
+            "properties": {
+              "artifactId": {
+                "type": "string"
+              },
+              "agentId": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "kimi"
+                ]
+              },
+              "guidanceRevision": {
+                "type": "string"
+              },
+              "generatedWith": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "path",
+                    "bytes",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "contentHash": {
+                "type": "string"
+              }
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "content"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AgentIntegrationEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/AgentIntegrationSummary"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/GatewayMeta"
+          }
+        }
+      },
+      "AgentIntegrationSkillEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/AgentIntegrationSkillArtifact"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/GatewayMeta"
           }
         }
       }

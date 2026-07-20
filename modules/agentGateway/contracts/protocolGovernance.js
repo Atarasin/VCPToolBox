@@ -21,6 +21,8 @@ const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
     '/agent_gateway/agents',
     '/agent_gateway/agents/{agentId}',
     '/agent_gateway/agents/{agentId}/guidance',
+    '/agent_gateway/agents/{agentId}/integration',
+    '/agent_gateway/agents/{agentId}/integration/skill',
     '/agent_gateway/agents/{agentId}/render',
     '/agent_gateway/metrics',
     '/agent_gateway/memory/targets',

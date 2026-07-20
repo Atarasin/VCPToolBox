@@ -58,7 +58,7 @@ test('REST operations carry credentialAction except fixed adminAuth exclusions',
     }
 });
 
-test('surface registry covers initialize, discovery, resource read, skill download, admin bridge', () => {
+test('surface registry covers initialize, discovery, resource read, skill download redeem, admin bridge', () => {
     const surfaces = SURFACE_ENTRIES.map((entry) => entry.surface);
     for (const required of [
         'mcp.initialize',
@@ -66,10 +66,19 @@ test('surface registry covers initialize, discovery, resource read, skill downlo
         'mcp.resources/list',
         'mcp.prompts/list',
         'mcp.resources/read',
-        'rest.integration/skill'
+        // integration/skill 在线 endpoint 自 M4.S1 起由 restOperations.json 登记（credentialAction: read）；
+        // surface entry 只保留 M4.S2 的签名下载 redeem（credentialAction: authenticated）。
+        'rest.integration/skill-download-redeem'
     ]) {
         assert.ok(surfaces.includes(required), `missing surface ${required}`);
     }
+    // integration/skill 在线 endpoint 必须在 REST operations 中以 credentialAction: read 登记
+    const integrationOp = REST_OPERATIONS.find((op) => op.path === '/agent_gateway/agents/{agentId}/integration');
+    assert.ok(integrationOp, 'integration endpoint must be in REST operations');
+    assert.equal(integrationOp.credentialAction, 'read');
+    const skillOp = REST_OPERATIONS.find((op) => op.path === '/agent_gateway/agents/{agentId}/integration/skill');
+    assert.ok(skillOp, 'integration/skill endpoint must be in REST operations');
+    assert.equal(skillOp.credentialAction, 'read');
     // admin session bridge 自 M1.S3 起由真实 REST binding 登记
     const bridge = REST_OPERATIONS.find((operation) => operation.path === '/agent_gateway/auth/admin-session');
     assert.equal(bridge.authMechanism, 'adminAuthBridge');

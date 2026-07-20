@@ -20,7 +20,9 @@ const ACTION_SCOPES = Object.freeze({
 });
 
 // 不完全对应业务 operation 的 surface（M0.S2.T2）。
-// skill download surface 在 M4 才有实现，此处先登记 canonical action。
+// integration/skill surface 自 M4.S1 起由 restOperations.json 的
+// getAgentGatewayAgentIntegration / getAgentGatewayAgentIntegrationSkill
+// （credentialAction: read）登记；skill 签名下载 mint/redeem 见 M4.S2。
 const SURFACE_ENTRIES = Object.freeze([
     { surface: 'mcp.initialize', kind: 'mcp-protocol', credentialAction: 'authenticated' },
     { surface: 'mcp.notifications/initialized', kind: 'mcp-protocol', credentialAction: 'authenticated' },
@@ -30,8 +32,7 @@ const SURFACE_ENTRIES = Object.freeze([
     { surface: 'mcp.prompts/list', kind: 'mcp-discovery', credentialAction: 'read' },
     { surface: 'mcp.prompts/get', kind: 'mcp-discovery', credentialAction: 'read' },
     { surface: 'mcp.resources/read', kind: 'mcp-resource', credentialAction: 'read' },
-    { surface: 'rest.integration', kind: 'rest-integration', credentialAction: 'read' },
-    { surface: 'rest.integration/skill', kind: 'rest-integration', credentialAction: 'read' }
+    { surface: 'rest.integration/skill-download-redeem', kind: 'rest-download-redeem', credentialAction: 'authenticated' }
     // admin session bridge 自 M1.S3 起由 restOperations.json 的
     // createAgentGatewayAdminSession（authMechanism: adminAuthBridge）登记。
 ].map(Object.freeze));
@@ -53,6 +54,8 @@ const OPERATION_CREDENTIAL_ACTIONS = Object.freeze({
     'agents.list': 'read',
     'agents.detail': 'read',
     'agents.guidance': 'read',
+    'agents.integration': 'read',
+    'agents.integration.skill': 'read',
     'agents.render': 'read',
     'capabilities.read': 'read',
     'memory.targets': 'read',
