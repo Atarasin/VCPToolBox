@@ -112,6 +112,15 @@ test('loadSigningKeys parses JSON array and single base64', () => {
 
     assert.equal(loadSigningKeys(null), null);
     assert.equal(loadSigningKeys(Buffer.alloc(8).toString('base64')), null); // too short
+
+    // fail-fast：缺 kid / 熵不足的 entry 使整组配置无效（表现为 mint 503）
+    assert.equal(loadSigningKeys(JSON.stringify([
+        { secret: Buffer.alloc(32, 1).toString('base64') }
+    ])), null);
+    assert.equal(loadSigningKeys(JSON.stringify([
+        { kid: 'k1', secret: Buffer.alloc(32, 1).toString('base64') },
+        { kid: 'k0', secret: Buffer.alloc(8, 1).toString('base64') }
+    ])), null);
 });
 
 test('mint returns 503 when nonce store is not production', () => {

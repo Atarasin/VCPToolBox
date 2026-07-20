@@ -181,6 +181,11 @@ function renderCodexSkill({ guidance, baseUrl }) {
 
 function renderKimiSkill({ guidance, baseUrl }) {
     const skillMd = [
+        '---',
+        `name: vcp-agent-gateway-${guidance.agentId.toLowerCase()}`,
+        `description: Use the VCP Agent Gateway MCP server as ${guidance.displayName}'s durable recall and memory layer. Use when the task depends on prior decisions, project history, or durable memory writes through gateway_recall_run, gateway_memory_search, and gateway_memory_write.`,
+        '---',
+        '',
         `# VCP Agent Gateway — ${guidance.displayName}`,
         '',
         `Agent id: \`${guidance.agentId}\`. Gateway MCP endpoint: \`${baseUrl}/mcp\`.`,

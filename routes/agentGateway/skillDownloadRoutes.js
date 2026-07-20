@@ -12,8 +12,8 @@ const { SKILL_FORMATS, generateSkillArtifact, validatePublicBaseUrl } = require(
  * redeem：GET .../integration/skill/download — 无需原 credential（签名 URL
  *         本身是 bearer capability，authInjection 对该 surface 放行）；服务端
  *         重读 owner，校验 subject/revision，先完成 artifact 生成再原子消费
- *         nonce，最后输出 artifact 文件。format/revision 以签名载荷的
- *         artifactId 为准，query 仅作一致性断言。
+ *         nonce，最后输出 artifact 文件。format/revision 只从签名载荷的
+ *         artifactId 解析，query 不参与 artifact 选择。
  *
  * 响应头：no-store 全套 + Vary 身份通道（mint）；no-store + no-referrer +
  *         Content-Disposition: attachment（redeem）。

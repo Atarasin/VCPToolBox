@@ -7,7 +7,7 @@
 - **生成**：`node scripts/agent-gateway-skill-export.js --agent MCPMidas --out <tmp> --format all --base-url https://vcp.example.com`（真实部署 guidance 配置 `modules/agentGateway/config/agent_guidance.json` + 真实 agent directory）。三 format 各 2 文件（skill/guide + manifest.json），manifest 内 per-file sha256 全部与落盘内容一致；secret scan 零命中（生成物只含 endpoint、工具说明与 `${AGENT_GATEWAY_TOKEN}` 环境引用形态）。
 - **Claude Code 2.1.215（真实安装）**：PASS。生成的 `SKILL.md` 安装至临时项目 `.claude/skills/vcp-agent-gateway-mcpmidas/`，真实 `claude -p` 会话的 available-skills 列表包含 `vcp-agent-gateway-mcpmidas`（frontmatter name/description 被正常解析装载）。
 - **Codex CLI 0.144.5（真实安装）**：PASS。生成的 `AGENTS.md` 放入临时项目根，真实 `codex exec` 读取项目文档并正确回答其中 Agent id（`MCPMidas`）；`config.toml` MCP 注册片段经 TOML 解析校验（url + `${AGENT_GATEWAY_TOKEN}` header 环境引用）。
-- **Kimi Code 0.27.0（结构校验）**：`SKILL.md` 中 `mcp.json` 注册片段经 JSON 解析校验（`bearerTokenEnvVar` 形态，零明文 token）。未做真实注册（避免改写用户级 `~/.kimi-code` 配置）；Kimi 只消费 MCP tools（见 M2.S4 矩阵），MCP endpoint 本身已由 M2.S4 真实 smoke 覆盖。
+- **Kimi Code 0.27.0（真实安装）**：PASS。生成的 `SKILL.md` 置入隔离 skills 目录（`kimi --skills-dir <tmp>`，不改写用户级 `~/.kimi-code` 配置），真实 `kimi -p` 会话的可用 skill 列表包含 `vcp-agent-gateway-mcpmidas`（首轮 smoke 发现 Kimi 要求 frontmatter 才能装载——kimi 模板据此补齐 name/description frontmatter 后复测通过）。`mcp.json` 注册片段另经 JSON 解析校验（`bearerTokenEnvVar` 形态，零明文 token）；MCP endpoint 本身已由 M2.S4 真实 smoke 覆盖。
 - **端到端签名下载**：route 级测试覆盖 mint（credential + format 校验）→ 裸签名 URL redeem（无 credential）→ 重放 403 → revision 漂移 410（不烧 nonce）→ 文件 backend 跨实例/跨重启一次性语义（`tests/agent-gateway/routes/agent-gateway-skill-download-routes.test.js`）。
 - **部署要求**：代理/CDN/APM/access log 的缓存旁路与 query 脱敏为部署侧责任，清单见 [deployment-notes.md](deployment-notes.md)。
 

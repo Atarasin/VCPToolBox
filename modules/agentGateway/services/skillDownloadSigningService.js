@@ -40,10 +40,16 @@ function loadSigningKeys(rawEnv) {
     try {
         const parsed = JSON.parse(rawEnv);
         if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed.map((entry) => ({
-                kid: String(entry.kid),
-                secret: Buffer.from(entry.secret, 'base64')
-            })).filter((k) => k.secret.length >= MIN_SECRET_BYTES);
+            // fail-fast：任一 entry 缺 kid 或密钥熵不足即整体拒绝，
+            // 不静默丢弃——配置错误应表现为 mint 503 而非难排查的验签失败
+            const keys = parsed.map((entry) => ({
+                kid: typeof entry?.kid === 'string' && entry.kid.trim() ? entry.kid.trim() : null,
+                secret: Buffer.from(String(entry?.secret || ''), 'base64')
+            }));
+            if (keys.some((k) => !k.kid || k.secret.length < MIN_SECRET_BYTES)) {
+                return null;
+            }
+            return keys;
         }
     } catch (_) { /* not JSON */ }
     const buf = Buffer.from(rawEnv, 'base64');
