@@ -183,15 +183,15 @@
 
 ### M3.S1 Schema 与契约
 
-- [ ] T1 修改 MCP catalog:`gateway_agent_bootstrap`、`gateway_recall_run` 的 `agentId` 改 optional(+ render prompt argument);jobs 保持 jobId-only(§5.4)。
-- [ ] T2 重跑 descriptor export,更新契约快照;若放宽 Native REST 同步改 `restOperations.json`/OpenAPI(§5.4)。
-- [ ] T3 验收:§8「契约」行;重生成 snapshot 零差异。
+- [x] T1 修改 MCP catalog:`gateway_agent_bootstrap`、`gateway_recall_run` 的 `agentId` 改 optional(+ render prompt argument);jobs 保持 jobId-only(§5.4)。
+- [x] T2 重跑 descriptor export,更新契约快照;Native REST 未放宽(recall REST body 保持 agentId 必填,§5.4 只要求 MCP 面);`restOperations.json`/OpenAPI 不变。
+- [x] T3 验收:§8「契约」行;重生成 snapshot 零差异。
 
 ### M3.S2 行为与遥测
 
-- [ ] T1 未绑定 credential 对直接 agent-scoped 操作保持 agentId 必填(受控 400);间接对象继续 owner lookup(§5.4)。
-- [ ] T2 显式 `agentId` 调用比例 telemetry 与兼容说明;完成迁移后再评估废弃时间表。
-- [ ] T3 M3 门禁:绑定省略成功/显式同 agent 成功/显式他 agent 403/未绑定省略 400/job 按 owner 授权。
+- [x] T1 未绑定 credential 对直接 agent-scoped 操作保持 agentId 必填(受控 400);间接对象继续 owner lookup(§5.4)。
+- [x] T2 显式 `agentId` 调用比例 telemetry(`/agent_gateway/metrics` 的 `agentTarget` 段)与兼容说明;完成迁移后再评估废弃时间表。
+- [x] T3 M3 门禁:绑定省略成功/显式同 agent 成功/显式他 agent 403/未绑定省略 400/job 按 owner 授权。
 
 ---
 

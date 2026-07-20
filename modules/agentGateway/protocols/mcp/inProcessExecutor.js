@@ -57,6 +57,7 @@ const {
     sanitizeUntrustedAuthContext
 } = require('../../policy/trustedCredentialContext');
 const { ACTION_SCOPES } = require('../../contracts/authPolicyCatalog');
+const { defaultAgentTargetTelemetry } = require('../../policy/agentTargetTelemetry');
 const { createReadResourceHandler } = require('./resourceHandlers');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
@@ -330,10 +331,37 @@ function isGatewayManagedTool(name) {
     return Object.values(MCP_GATEWAY_TOOL_NAMES).includes(name);
 }
 
-function buildManagedToolContextInput(input, args) {
+function buildManagedToolContextInput(input, args, { surface = 'in-process:tools/call', directAgentScoped = true } = {}) {
+    const trusted = isTrustedCredentialContext(input.authContext);
+    const explicitAgentId = normalizeMcpString(
+        input.agentId || args.agentId || args.target?.agentId || input.requestContext?.agentId
+    );
+    let agentId = explicitAgentId;
+    if (trusted) {
+        // §3.2/§5.4 决议树（M3.S2）：绑定 credential 省略 agentId → 以绑定
+        // 身份为 effective target；显式不一致 → 403（in-process 即 canonical
+        // backend，绑定一致性在此强制）。未绑定省略保持既有必填语义。
+        const boundAgentId = normalizeMcpString(input.authContext.boundAgentId, 256);
+        if (boundAgentId) {
+            if (!explicitAgentId) {
+                agentId = boundAgentId;
+                // 比例 telemetry 只统计直接 agent-scoped 操作（job 等间接
+                // 对象按 owner 决议，不计入显式 agentId 迁移比例）。
+                if (directAgentScoped) {
+                    defaultAgentTargetTelemetry.record({ surface, outcome: 'boundOmitted' });
+                }
+            } else if (explicitAgentId !== boundAgentId) {
+                throw createMcpError(MCP_ERROR_CODES.FORBIDDEN, 'target agent differs from bound agent', {
+                    field: 'agentId'
+                });
+            } else if (directAgentScoped) {
+                defaultAgentTargetTelemetry.record({ surface, outcome: 'explicit' });
+            }
+        }
+    }
     return {
         ...input,
-        agentId: input.agentId || args.agentId || args.target?.agentId || input.requestContext?.agentId,
+        agentId,
         sessionId: input.sessionId || args.sessionId || input.requestContext?.sessionId,
         requestContext: (args.requestContext && typeof args.requestContext === 'object')
             ? {
@@ -343,7 +371,7 @@ function buildManagedToolContextInput(input, args) {
             : input.requestContext,
         // in-process adapter 只信任组装根注入的 trustedCredentialContext；
         // MCP params（args）传入的 authContext 一律剥离身份与 trusted 标记（§5.1）。
-        authContext: isTrustedCredentialContext(input.authContext)
+        authContext: trusted
             ? input.authContext
             : sanitizeUntrustedAuthContext(input.authContext || args.authContext)
     };
@@ -476,7 +504,10 @@ async function executeGatewayManagedOperation({
     requiresJobIdentity = false,
     execute
 }) {
-    const contextInput = buildManagedToolContextInput(input, args);
+    const contextInput = buildManagedToolContextInput(input, args, {
+        surface: `in-process:tools/call:${name}`,
+        directAgentScoped: !requiresJobIdentity
+    });
     const { requestContext, authContext } = buildMcpContexts(bundle, contextInput, source);
     if (requiresJobIdentity) {
         ensureJobIdentity(requestContext, authContext, `tools/call:${name}`);
@@ -551,7 +582,9 @@ async function executeGatewayManagedPromptGet({
         });
     }
 
-    const contextInput = buildManagedToolContextInput(input, args);
+    const contextInput = buildManagedToolContextInput(input, args, {
+        surface: `in-process:prompts/get:${name}`
+    });
     const { requestContext, authContext } = buildMcpContexts(bundle, contextInput, 'mcp-prompts-get');
     ensureAgentId(requestContext, `prompts/get:${name}`);
 

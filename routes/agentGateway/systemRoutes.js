@@ -1,6 +1,7 @@
 'use strict';
 
 const { AGW_ERROR_CODES, AGENT_GATEWAY_HEADERS, NATIVE_GATEWAY_VERSION, applyGovernedCapabilitySections, resolveDedicatedGatewayAuth, normalizeNativeString, parseNativeBoolean, createNativeRequestContext, sendNativeError, buildNativeResponseMeta, buildNativeOperationMeta, buildNativeOperationHeaders, beginNativeOperation, sendNativeOperationRejection, sendNativeSuccessWithOperation, sendNativeErrorWithOperation, sendNativeServiceResult, executeNativeOperationSafely, buildNativeAuthContext, createGovernedRequestBody, createNativeStreamFilters, writeNativeSseEvent, buildNativeHealthSnapshot } = require('./shared');
+const { defaultAgentTargetTelemetry } = require('../../modules/agentGateway/policy/agentTargetTelemetry');
 
 // 认证注入已收编到 routes/agentGateway/authInjection.js 的单一注入点，
 // 由 createAgentGatewayRoutes 在所有 registrar 之前显式挂载（M1.S3.T7）。
@@ -180,19 +181,25 @@ function registerMetricsRoute(router, context) {
         }
 
         try {
+            const metricsSnapshot = operabilityService?.getMetricsSnapshot?.() || {
+                totals: {
+                    attempted: 0,
+                    succeeded: 0,
+                    failed: 0,
+                    rejected: 0,
+                    active: 0
+                },
+                operations: [],
+                recentRejections: []
+            };
             return sendNativeSuccessWithOperation(res, {
                 requestId: requestContext.requestId,
                 startedAt,
-                data: operabilityService?.getMetricsSnapshot?.() || {
-                    totals: {
-                        attempted: 0,
-                        succeeded: 0,
-                        failed: 0,
-                        rejected: 0,
-                        active: 0
-                    },
-                    operations: [],
-                    recentRejections: []
+                data: {
+                    ...metricsSnapshot,
+                    // §5.4 / M3.S2.T2：显式 agentId 调用比例（绑定 credential 的
+                    // 直接 agent-scoped 调用），供迁移完成后评估废弃时间表。
+                    agentTarget: defaultAgentTargetTelemetry.snapshot()
                 },
                 authContext,
                 operationControl
