@@ -56,6 +56,8 @@ const OPERATION_CREDENTIAL_ACTIONS = Object.freeze({
     'agents.guidance': 'read',
     'agents.integration': 'read',
     'agents.integration.skill': 'read',
+    'agents.integration.skill.download.mint': 'read',
+    'agents.integration.skill.download.redeem': 'authenticated',
     'agents.render': 'read',
     'capabilities.read': 'read',
     'memory.targets': 'read',

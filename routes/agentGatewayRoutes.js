@@ -7,6 +7,7 @@ const { createAuthInjectionMiddleware } = require('./agentGateway/authInjection'
 const systemRoutes = require('./agentGateway/systemRoutes');
 const agentRoutes = require('./agentGateway/agentRoutes');
 const integrationRoutes = require('./agentGateway/integrationRoutes');
+const skillDownloadRoutes = require('./agentGateway/skillDownloadRoutes');
 const memoryRoutes = require('./agentGateway/memoryRoutes');
 const runtimeRoutes = require('./agentGateway/runtimeRoutes');
 const { registerAdminSessionRoutes } = require('./agentGateway/authSessionRoutes');
@@ -15,6 +16,7 @@ const ROUTE_REGISTRARS = [
     ...Object.values(systemRoutes),
     ...Object.values(agentRoutes),
     ...Object.values(integrationRoutes),
+    ...Object.values(skillDownloadRoutes),
     ...Object.values(memoryRoutes),
     ...Object.values(runtimeRoutes),
     registerAdminSessionRoutes

@@ -59,6 +59,8 @@ const {
 const {
     createAgentGuidanceService
 } = require('../services/agentGuidanceService');
+const { createSkillDownloadSigningService } = require('../services/skillDownloadSigningService');
+const { createDownloadNonceStore } = require('../policy/downloadNonceStore');
 const { bindVcpPorts } = require('./vcpPortBindings');
 const { createIntegrationSnapshotCoordinator } = require('./integrationSnapshotCoordinator');
 const { DEFAULT_GUIDANCE_CONFIG_PATH } = require('../policy/agentGuidanceConfig');
@@ -309,6 +311,11 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         gatewayCredentialService,
         integrationSnapshotCoordinator,
         agentGuidanceService,
+        skillDownloadSigningService: createSkillDownloadSigningService({
+            downloadNonceStore: createDownloadNonceStore(),
+            credentialResolver: gatewayCredentialService?.credentialResolver || null,
+            adminGatewaySessionStore: gatewayCredentialService?.adminSessionStore || null
+        }),
         jobStatus: JOB_STATUS,
         gatewayVersion: options.gatewayVersion || DEFAULT_GATEWAY_VERSION,
         memoryBridgeToolName: options.memoryBridgeToolName || DEFAULT_MEMORY_BRIDGE_TOOL_NAME

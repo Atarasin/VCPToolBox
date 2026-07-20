@@ -11,10 +11,10 @@ const canonicalOperations = require('../../../modules/agentGateway/contracts/ope
 const { validateGatewayToolArguments } = require('../../../modules/agentGateway/contracts/schemas/validator');
 const { convertJsonSchemaToOpenApi } = require('../../../modules/agentGateway/contracts/generate/jsonSchemaToOpenApi');
 
-test('operation catalog freezes the 19 REST paths and 8 MCP operations', () => {
-    assert.equal(REST_OPERATIONS.length, 19);
+test('operation catalog freezes the 21 REST paths and 8 MCP operations', () => {
+    assert.equal(REST_OPERATIONS.length, 21);
     assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 8);
-    assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 19);
+    assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 21);
     for (const operation of REST_OPERATIONS) {
         assert.ok(operation.operationId);
         assert.ok(operation.method);
