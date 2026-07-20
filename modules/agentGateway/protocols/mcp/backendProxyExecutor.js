@@ -40,6 +40,7 @@ const {
     buildDeferredBootstrapSummary
 } = require('../../services/bootstrapResultService');
 const { serveFrozenList } = require('../../policy/discoverySnapshot');
+const { defaultAgentTargetTelemetry } = require('../../policy/agentTargetTelemetry');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
 
@@ -275,6 +276,32 @@ function ensureAgentId(input, operation, fallback = '') {
     return agentId;
 }
 
+/**
+ * 直接 agent-scoped 操作的 target 决议（§5.4 / M3.S2）。
+ *
+ * 绑定 credential（transport 注入的受信任 authContext）可省略 agentId：
+ * 省略时以绑定身份为 target 并记录 `boundOmitted`；显式提供记录
+ * `explicit`（与绑定不一致的值原样透传，由 canonical backend 决议树
+ * 返回 403，边缘不预授权）。未绑定时保留显式值 / stdio 开发 default
+ * 的既有语义，缺失返回 ''——按 §5.5 由调用方决定边缘受控 400 还是
+ * 透传给 backend 返回 agentId required。
+ */
+function resolveDirectAgentTarget(input, args, defaultAgentId, surface) {
+    const explicit = normalizeMcpString(args?.agentId || input?.agentId || input?.requestContext?.agentId);
+    const boundAgentId = normalizeMcpString(input?.authContext?.boundAgentId, 256);
+    if (explicit) {
+        if (boundAgentId) {
+            defaultAgentTargetTelemetry.record({ surface, outcome: 'explicit' });
+        }
+        return explicit;
+    }
+    if (boundAgentId) {
+        defaultAgentTargetTelemetry.record({ surface, outcome: 'boundOmitted' });
+        return boundAgentId;
+    }
+    return normalizeMcpString(defaultAgentId);
+}
+
 function ensureSessionId(input, operation, fallback = 'mcp-session') {
     const sessionId = normalizeMcpString(input?.sessionId || input?.requestContext?.sessionId || fallback);
     if (!sessionId) {
@@ -320,19 +347,27 @@ function ensureJobIdentity(input, operation, fallbackAgentId = '', fallbackSessi
     );
 }
 
-function buildBody(input, args, { requireSession = true, defaultAgentId = '', defaultSessionId = 'mcp-session' } = {}) {
+function buildBody(input, args, { requireSession = true, requireAgent = true, defaultAgentId = '', defaultSessionId = 'mcp-session' } = {}) {
     const inputWithArgs = {
         ...input,
         agentId: input?.agentId || args?.agentId,
         sessionId: input?.sessionId || args?.sessionId
     };
-    const agentId = ensureAgentId(inputWithArgs, 'tools/call', defaultAgentId);
+    // §5.5 / M3.S2：requireAgent=false 的 body-based 直接操作允许缺省 agentId
+    // 透传——绑定 credential 由统一 context 注入 effective agent，未绑定由
+    // backend 返回受控 400（agentId required），边缘不提前失败。
+    const agentId = requireAgent
+        ? ensureAgentId(inputWithArgs, 'tools/call', defaultAgentId)
+        : normalizeMcpString(inputWithArgs.agentId || inputWithArgs.requestContext?.agentId || defaultAgentId);
     const sessionId = requireSession ? ensureSessionId(inputWithArgs, 'tools/call', defaultSessionId) : normalizeMcpString(inputWithArgs?.sessionId || inputWithArgs?.requestContext?.sessionId || defaultSessionId);
     const requestContext = {
         ...((input?.requestContext && typeof input.requestContext === 'object') ? input.requestContext : {}),
-        agentId,
+        ...(agentId ? { agentId } : {}),
         ...(sessionId ? { sessionId } : {})
     };
+    if (!agentId) {
+        delete requestContext.agentId;
+    }
 
     return {
         ...(args && typeof args === 'object' ? args : {}),
@@ -472,10 +507,12 @@ const BACKEND_PROXY_METHODS = {
             });
         }
 
+        // M3.S1/S2：render prompt 的 agentId 改 optional——绑定 credential
+        // 省略时以绑定身份为 target；未绑定省略保持受控 400。
         const agentId = ensureAgentId({
             ...input,
-            agentId: args.agentId || input.agentId
-        }, `prompts/get:${name}`, defaultAgentId);
+            agentId: resolveDirectAgentTarget(input, args, defaultAgentId, `prompts/get:${name}`)
+        }, `prompts/get:${name}`);
         const requestOptions = buildRequestOptions(input);
         const response = await backendClient.renderAgent(agentId, buildBody({
             ...input,
@@ -583,7 +620,15 @@ const BACKEND_PROXY_METHODS = {
                 return backendClient.writeMemory(writeBody, requestOptions);
             },
             recallRun: async () => {
-                const recallBody = buildBody(input, args, { requireSession: false, defaultAgentId });
+                // M3.S2：绑定省略由 resolveDirectAgentTarget 写入 effective
+                // agent；未绑定省略透传（requireAgent:false），由 backend 返回
+                // 受控 400（§5.5：边缘不以缺少显式 agentId 为由提前失败）。
+                const targetAgentId = resolveDirectAgentTarget(input, args, defaultAgentId, `tools/call:${name}`);
+                const recallBody = buildBody(
+                    { ...input, agentId: targetAgentId },
+                    args,
+                    { requireSession: false, requireAgent: false, defaultAgentId }
+                );
                 if (!normalizeMcpString(recallBody.query, 4096)) {
                     throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_recall_run requires query', {
                         field: 'query'
@@ -591,11 +636,19 @@ const BACKEND_PROXY_METHODS = {
                 }
                 return backendClient.runRecall(recallBody, requestOptions);
             },
-            render: () => backendClient.renderAgent(
-                ensureAgentId(input, `tools/call:${name}`, defaultAgentId),
-                buildBody(input, args, { requireSession: false, defaultAgentId }),
-                requestOptions
-            ),
+            render: () => {
+                // M3.S2：bootstrap 的 REST binding 是 path 参数，边缘必须先
+                // 决议 target——绑定省略用绑定身份；未绑定省略受控 400。
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, defaultAgentId, `tools/call:${name}`)
+                }, `tools/call:${name}`);
+                return backendClient.renderAgent(
+                    targetAgentId,
+                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false, defaultAgentId }),
+                    requestOptions
+                );
+            },
             jobGet: () => {
                 ensureJobIdentity(input, `tools/call:${name}`, defaultAgentId);
                 return backendClient.getJob(args.jobId, buildJobQuery(input, args, defaultAgentId), requestOptions);

@@ -189,9 +189,9 @@
 
 ### M3.S2 行为与遥测
 
-- [ ] T1 未绑定 credential 对直接 agent-scoped 操作保持 agentId 必填(受控 400);间接对象继续 owner lookup(§5.4)。
-- [ ] T2 显式 `agentId` 调用比例 telemetry 与兼容说明;完成迁移后再评估废弃时间表。
-- [ ] T3 M3 门禁:绑定省略成功/显式同 agent 成功/显式他 agent 403/未绑定省略 400/job 按 owner 授权。
+- [x] T1 未绑定 credential 对直接 agent-scoped 操作保持 agentId 必填(受控 400);间接对象继续 owner lookup(§5.4)。
+- [x] T2 显式 `agentId` 调用比例 telemetry(`/agent_gateway/metrics` 的 `agentTarget` 段)与兼容说明;完成迁移后再评估废弃时间表。
+- [x] T3 M3 门禁:绑定省略成功/显式同 agent 成功/显式他 agent 403/未绑定省略 400/job 按 owner 授权。
 
 ---
 
