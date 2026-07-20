@@ -16,8 +16,8 @@
 ## 各客户端安装
 
 - **Claude Code**：将生成的 `SKILL.md` 放入 `<项目>/.claude/skills/vcp-agent-gateway-<agent>/SKILL.md`。
-- **Codex**：将生成的 `AGENTS.md` 放入项目根；MCP 注册按其中 `config.toml` 片段。
-- **Kimi**：按生成的 `SKILL.md` 中 `mcp.json` 片段注册（Kimi 仅消费 MCP tools）。
+- **Codex**：将生成的 `SKILL.md` 放入 `<项目>/.agents/skills/vcp-agent-gateway-<agent>/SKILL.md`（Agent Skills 规范目录，`~/.agents/skills/` 为用户级、跨客户端共享）；MCP 注册按其中 `config.toml` 片段写入 `~/.codex/config.toml`。三种 format 均为 SKILL.md，Codex 不再生成 AGENTS.md——skill 按需装载，也不与项目已有 `AGENTS.md` 产生合并/共存问题。
+- **Kimi**：将生成的 `SKILL.md` 放入 Kimi skills 目录（如 `kimi --skills-dir` 指定目录）；MCP 注册按其中 `mcp.json` 片段（Kimi 仅消费 MCP tools）。
 
 凭据一律经客户端 secret store / 环境变量（`AGENT_GATEWAY_TOKEN`）注入，生成物零 secret。
 

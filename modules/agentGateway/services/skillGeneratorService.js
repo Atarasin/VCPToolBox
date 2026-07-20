@@ -152,7 +152,14 @@ function renderClaudeSkill({ guidance, baseUrl }) {
 }
 
 function renderCodexSkill({ guidance, baseUrl }) {
-    const agentsMd = [
+    // Codex 支持 Agent Skills 规范（项目 `.agents/skills/` / 用户 `~/.agents/skills/`）：
+    // 输出与 claude/kimi 同构的 SKILL.md（按需装载），仅 MCP 注册片段为 config.toml 形式。
+    const skillMd = [
+        '---',
+        `name: vcp-agent-gateway-${guidance.agentId.toLowerCase()}`,
+        `description: Use the VCP Agent Gateway MCP server as ${guidance.displayName}'s durable recall and memory layer. Use when the task depends on prior decisions, project history, or durable memory writes through gateway_recall_run, gateway_memory_search, and gateway_memory_write.`,
+        '---',
+        '',
         `# VCP Agent Gateway — ${guidance.displayName}`,
         '',
         `Agent id: \`${guidance.agentId}\`. Gateway MCP endpoint: \`${baseUrl}/mcp\`.`,
@@ -172,10 +179,15 @@ function renderCodexSkill({ guidance, baseUrl }) {
         '```',
         '',
         'Codex expands `${AGENT_GATEWAY_TOKEN}` from the launching shell environment.',
-        'Do not paste the raw token into config.toml.'
+        'Do not paste the raw token into config.toml.',
+        '',
+        '## Installation',
+        '',
+        'Place this file at `<project>/.agents/skills/vcp-agent-gateway-' + guidance.agentId.toLowerCase() + '/SKILL.md`',
+        '(or `~/.agents/skills/…` for user-wide, cross-client use).'
     ].join('\n');
     return [
-        { path: 'AGENTS.md', content: agentsMd }
+        { path: 'SKILL.md', content: skillMd }
     ];
 }
 

@@ -56,7 +56,7 @@ test('generateSkillArtifact enforces the format allowlist', () => {
 });
 
 test('each format produces a fixed file list with manifest content hashes', () => {
-    const expectations = { claude: ['SKILL.md'], codex: ['AGENTS.md'], kimi: ['SKILL.md'] };
+    const expectations = { claude: ['SKILL.md'], codex: ['SKILL.md'], kimi: ['SKILL.md'] };
     for (const format of SKILL_FORMATS) {
         const artifact = generateSkillArtifact({
             guidance: GUIDANCE_FIXTURE, format, baseUrl: 'https://gw.example.com'
