@@ -4,6 +4,10 @@ const {
 const {
     areDiaryNamesEquivalent
 } = require('./mcpAgentMemoryPolicy');
+const {
+    buildDiaryAccessDetails,
+    buildDiaryForbiddenMessage
+} = require('./diaryAccessError');
 
 function isDiaryAllowed(policy, diaryName) {
     const normalizedDiaryName = typeof diaryName === 'string' ? diaryName.trim() : '';
@@ -20,7 +24,23 @@ function ensureDiaryAllowed({ policy, diaryName, authContext }) {
     if (isDiaryAllowed(policy, diaryName)) {
         return true;
     }
-    throw createForbiddenError('diary', diaryName, authContext);
+    const allowedDiaries = Array.isArray(policy?.allowedDiaryNames)
+        ? policy.allowedDiaryNames
+        : [];
+    const error = createForbiddenError('diary', diaryName, authContext);
+    error.message = buildDiaryForbiddenMessage({
+        forbiddenDiaries: [diaryName],
+        allowedDiaries
+    });
+    error.details = {
+        ...error.details,
+        ...buildDiaryAccessDetails({
+            agentId: authContext?.agentId,
+            allowedDiaries,
+            forbiddenDiaries: [diaryName]
+        })
+    };
+    throw error;
 }
 
 module.exports = {

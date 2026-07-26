@@ -11,6 +11,10 @@ const {
 const {
     resolveConfiguredAgentMemoryPolicy
 } = require('../policy/mcpAgentMemoryPolicy');
+const {
+    buildDiaryAccessDetails,
+    buildDiaryForbiddenMessage
+} = require('../policy/diaryAccessError');
 
 function normalizeMemoryString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -381,15 +385,36 @@ async function authorizeWrite(state, ctx) {
         } else if (!isDiaryAllowed({
             diaryName: ctx.targetDiary, agentId: ctx.agentId, ragConfig: state.ragConfig
         })) {
-            throw new Error('Requested diary target is not allowed for this agent');
+            const allowedDiaries = Array.from(collectConfiguredDiaries(ctx.agentId, state.ragConfig).configuredDiaries);
+            const error = new Error(buildDiaryForbiddenMessage({
+                forbiddenDiaries: [ctx.targetDiary],
+                allowedDiaries
+            }));
+            error.details = buildDiaryAccessDetails({
+                agentId: ctx.agentId,
+                allowedDiaries,
+                forbiddenDiaries: [ctx.targetDiary]
+            });
+            throw error;
         }
         return null;
     } catch (error) {
         return {
             success: false, requestId: ctx.requestId, status: 403,
             code: OPENCLAW_ERROR_CODES.MEMORY_TARGET_FORBIDDEN,
-            error: 'Requested diary target is not allowed for this agent',
-            details: { diary: ctx.targetDiary, agentId: ctx.agentId, canonicalCode: error.code || '' }
+            error: error.message || buildDiaryForbiddenMessage({
+                forbiddenDiaries: [ctx.targetDiary],
+                allowedDiaries: []
+            }),
+            details: {
+                ...buildDiaryAccessDetails({
+                    agentId: ctx.agentId,
+                    allowedDiaries: error?.details?.allowedDiaries,
+                    defaultDiaries: error?.details?.defaultDiaries,
+                    forbiddenDiaries: error?.details?.diaries || [ctx.targetDiary]
+                }),
+                canonicalCode: error.code || ''
+            }
         };
     }
 }

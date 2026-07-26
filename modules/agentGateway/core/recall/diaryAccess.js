@@ -2,6 +2,11 @@ const {
     normalizeDiaryCanonicalName,
     resolveDiaryAliasesToAvailable
 } = require('../../policy/mcpAgentMemoryPolicy');
+const {
+    buildDiaryAccessDetails,
+    buildDiaryDefaultsMissingMessage,
+    buildDiaryForbiddenMessage
+} = require('../../policy/diaryAccessError');
 const { normalizeStringArray } = require('../../policy/shared/normalize');
 
 function normalizeDiarySelection(diaries, availableDiaries) {
@@ -16,12 +21,12 @@ function createDiaryAccessRejection({ code, error, agentId, allowedDiaries, defa
         status: 403,
         code,
         error,
-        details: {
+        details: buildDiaryAccessDetails({
             agentId,
             allowedDiaries,
             defaultDiaries,
-            ...(forbiddenDiaries?.length ? { diary: forbiddenDiaries[0], diaries: forbiddenDiaries } : {})
-        }
+            forbiddenDiaries
+        })
     };
 }
 
@@ -34,8 +39,8 @@ async function resolveDiaryAccess({
     fallbackAllowedDiaries,
     appliedDefaultPolicy = false,
     forbiddenCode,
-    forbiddenError = 'Requested diary target is not allowed for this agent',
-    emptyError = 'No default diary targets are configured for this agent'
+    forbiddenError,
+    emptyError
 }) {
     const resolvedPolicy = policyResolver
         ? await policyResolver.resolvePolicy({ authContext, availableDiaries })
@@ -52,14 +57,20 @@ async function resolveDiaryAccess({
     if (forbiddenDiaries.length) {
         if (!appliedDefaultPolicy) {
             return createDiaryAccessRejection({
-                code: forbiddenCode, error: forbiddenError, agentId,
+                code: forbiddenCode,
+                error: forbiddenError || buildDiaryForbiddenMessage({ forbiddenDiaries, allowedDiaries }),
+                agentId,
                 allowedDiaries, defaultDiaries, forbiddenDiaries
             });
         }
         requested = requested.filter((diary) => allowedDiaries.includes(diary));
         if (!requested.length) {
             return createDiaryAccessRejection({
-                code: forbiddenCode, error: emptyError, agentId, allowedDiaries, defaultDiaries
+                code: forbiddenCode,
+                error: emptyError || buildDiaryDefaultsMissingMessage({ allowedDiaries }),
+                agentId,
+                allowedDiaries,
+                defaultDiaries
             });
         }
     }
@@ -69,7 +80,11 @@ async function resolveDiaryAccess({
         : normalizeDiarySelection(defaultDiaries, availableDiaries);
     if (!targetDiaries.length) {
         return createDiaryAccessRejection({
-            code: forbiddenCode, error: emptyError, agentId, allowedDiaries, defaultDiaries
+            code: forbiddenCode,
+            error: emptyError || buildDiaryDefaultsMissingMessage({ allowedDiaries }),
+            agentId,
+            allowedDiaries,
+            defaultDiaries
         });
     }
     return { success: true, targetDiaries, allowedDiaries, defaultDiaries };

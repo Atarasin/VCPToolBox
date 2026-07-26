@@ -297,5 +297,9 @@ test('MemoryRuntimeService rejects forbidden diary targets', async () => {
     assert.equal(result.success, false);
     assert.equal(result.status, 403);
     assert.equal(result.code, 'OCW_MEMORY_TARGET_FORBIDDEN');
+    assert.match(result.error, /Requested diary: ProjectAlpha\./);
+    assert.match(result.error, /Allowed diaries: Nova\./);
+    assert.deepEqual(result.details.allowedDiaries, ['Nova']);
+    assert.equal(result.details.diary, 'ProjectAlpha');
     assert.equal(invocationCount, 0);
 });

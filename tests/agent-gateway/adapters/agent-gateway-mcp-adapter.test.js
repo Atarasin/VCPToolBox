@@ -651,6 +651,10 @@ test('MCP memory search and context assembly enforce agent diary policy and use 
     assert.deepEqual(defaultSearch.structuredContent.result.diagnostics.targetDiaries.includes('Nova'), true);
     assert.equal(forbiddenSearch.isError, true);
     assert.equal(forbiddenSearch.error.code, 'MCP_FORBIDDEN');
+    assert.match(forbiddenSearch.error.message, /Requested diary: ProjectAlpha\./);
+    assert.match(forbiddenSearch.error.message, /Allowed diaries: Nova, SharedMemory\./);
+    assert.deepEqual(forbiddenSearch.error.details.allowedDiaries, ['Nova', 'SharedMemory']);
+    assert.equal(forbiddenSearch.error.details.diary, 'ProjectAlpha');
 });
 
 test('Gateway-managed MCP tools preserve rate-limit and payload operability rejections as machine-readable metadata', async () => {
@@ -1514,6 +1518,9 @@ test('MCP memory adapter keeps canonical failure identity for validation and pol
     assert.equal(forbiddenWrite.isError, true);
     assert.equal(forbiddenWrite.error.code, 'MCP_FORBIDDEN');
     assert.equal(forbiddenWrite.error.details.canonicalCode, 'AGW_FORBIDDEN');
+    assert.match(forbiddenWrite.error.message, /Requested diary: ProjectAlpha\./);
+    assert.match(forbiddenWrite.error.message, /Allowed diaries: Nova, SharedMemory\./);
+    assert.deepEqual(forbiddenWrite.error.details.allowedDiaries, ['Nova', 'SharedMemory']);
 });
 
 test('MCP server harness exposes a representative client flow', async () => {

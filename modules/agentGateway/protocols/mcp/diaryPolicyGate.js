@@ -4,6 +4,11 @@ const {
     normalizeDiaryCanonicalName,
     resolveConfiguredAgentMemoryPolicy
 } = require('../../policy/mcpAgentMemoryPolicy');
+const {
+    buildDiaryAccessDetails,
+    buildDiaryDefaultsMissingMessage,
+    buildDiaryForbiddenMessage
+} = require('../../policy/diaryAccessError');
 const { MCP_GATEWAY_TOOL_NAMES } = require('./descriptors');
 const { normalizeMcpString } = require('./resultShapes');
 
@@ -33,17 +38,14 @@ function createDiaryPolicyRejection({ requestId, agentId, allowedDiaries, defaul
         status: 403,
         code: AGW_ERROR_CODES.FORBIDDEN,
         error: hasForbiddenTarget
-            ? 'Requested diary target is not allowed for this agent'
-            : 'No default diary targets are configured for this agent',
-        details: {
-            ...(hasForbiddenTarget ? {
-                diary: forbiddenDiaries[0],
-                diaries: forbiddenDiaries
-            } : {}),
+            ? buildDiaryForbiddenMessage({ forbiddenDiaries, allowedDiaries })
+            : buildDiaryDefaultsMissingMessage({ allowedDiaries }),
+        details: buildDiaryAccessDetails({
             agentId,
             allowedDiaries,
-            ...(hasForbiddenTarget ? {} : { defaultDiaries })
-        }
+            defaultDiaries: hasForbiddenTarget ? [] : defaultDiaries,
+            forbiddenDiaries
+        })
     };
 }
 
