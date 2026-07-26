@@ -131,7 +131,7 @@ test('backend proxy adapter validates recall query before backend dispatch', asy
     await assert.rejects(
         adapter.callTool({
             name: 'gateway_recall_run',
-            arguments: { query: '   ' }
+            arguments: { agentId: 'Ariadne', query: '   ' }
         }),
         (error) => error.code === 'MCP_INVALID_ARGUMENTS' && error.details.field === 'query'
     );
@@ -160,6 +160,7 @@ test('backend proxy adapter merges memory write idempotency sources', async () =
     await adapter.callTool({
         name: 'gateway_memory_write',
         arguments: {
+            agentId: 'Ariadne',
             diary: 'Nova日记本',
             content: 'test',
             target: { idempotencyKey: 'idem-target-1' }
@@ -172,7 +173,7 @@ test('backend proxy adapter merges memory write idempotency sources', async () =
     assert.equal(calls[0].options.idempotencyKey, 'idem-target-1');
 });
 
-test('backend proxy diary policy uses the configured default agent and returns status 403', async () => {
+test('backend proxy no longer fabricates a default agent for MCP memory search', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-proxy-policy-'));
     const policyPath = path.join(tempDir, 'policy.json');
     fs.writeFileSync(policyPath, JSON.stringify({
@@ -206,20 +207,18 @@ test('backend proxy diary policy uses the configured default agent and returns s
             }
         });
 
-        await adapter.callTool({
-            name: 'gateway_memory_search',
-            arguments: { query: 'default diary' }
-        });
-        const forbidden = await adapter.callTool({
-            name: 'gateway_memory_search',
-            arguments: { query: 'forbidden diary', diary: 'Secret' }
-        });
-
-        assert.equal(calls[0].requestContext.agentId, 'EnvAgent');
-        assert.deepEqual(calls[0].diaries, ['Nova']);
-        assert.equal(calls[0].__defaultDiaryPolicyApplied, undefined);
-        assert.equal(forbidden.isError, true);
-        assert.equal(forbidden.error.details.gatewayStatus, 403);
+        await assert.rejects(
+            () => adapter.callTool({
+                name: 'gateway_memory_search',
+                arguments: { query: 'default diary' }
+            }),
+            (error) => {
+                assert.equal(error.code, 'MCP_INVALID_REQUEST');
+                assert.match(error.message, /explicit agentId/);
+                return true;
+            }
+        );
+        assert.equal(calls.length, 0);
     } finally {
         if (typeof previousPolicyPath === 'string') process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPolicyPath;
         else delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;

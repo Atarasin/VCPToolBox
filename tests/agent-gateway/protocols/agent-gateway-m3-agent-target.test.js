@@ -18,9 +18,9 @@ const { getGatewayServiceBundle } = require('../../../modules/agentGateway/creat
 const { createPluginManager } = require('../helpers/agent-gateway-test-helpers');
 
 /**
- * M3 门禁（06-execution-plan.md M3.S2.T3）：
- * 绑定省略成功 / 显式同 agent 成功 / 显式他 agent 403 /
- * 未绑定省略 400 / job 按 owner 授权（jobId-only，schema 不变）。
+ * MCP agent target 门禁：
+ * 显式同 agent 成功 / 显式他 agent 403 / 缺少 agentId 一律受控失败 /
+ * job 工具同样要求显式 agentId。
  */
 
 function createRecallCapturePluginManager() {
@@ -61,20 +61,25 @@ function boundContext(agentId, scopes = ['gateway:read', 'gateway:execute']) {
     });
 }
 
-test('M3 gate: bound credential may omit agentId on gateway_recall_run (in-process)', async () => {
+test('MCP gate: bound credential still requires explicit agentId on gateway_recall_run (in-process)', async () => {
     const { pluginManager, bundle, calls } = createRecallCapturePluginManager();
     const adapter = createMcpAdapter(pluginManager, { gatewayServiceBundle: bundle });
 
-    const result = await adapter.callTool({
-        name: 'gateway_recall_run',
-        arguments: { query: 'omitted target' },
-        authContext: boundContext('Ariadne'),
-        sessionId: 'sess-m3-bound-omit',
-        requestContext: { requestId: 'req-m3-bound-omit' }
-    });
-    assert.equal(result.isError, false);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].requestContext.agentId, 'Ariadne');
+    await assert.rejects(
+        () => adapter.callTool({
+            name: 'gateway_recall_run',
+            arguments: { query: 'omitted target' },
+            authContext: boundContext('Ariadne'),
+            sessionId: 'sess-m3-bound-omit',
+            requestContext: { requestId: 'req-m3-bound-omit' }
+        }),
+        (error) => {
+            assert.equal(error.code, 'MCP_INVALID_REQUEST');
+            assert.match(error.message, /explicit agentId/);
+            return true;
+        }
+    );
+    assert.equal(calls.length, 0);
 });
 
 test('M3 gate: bound credential with explicit same agent succeeds; other agent is 403 (in-process)', async () => {
@@ -106,12 +111,10 @@ test('M3 gate: bound credential with explicit same agent succeeds; other agent i
     );
 });
 
-test('M3 gate: unbound omission keeps the controlled agentId-required failure (in-process)', async () => {
+test('MCP gate: unbound omission keeps the controlled agentId-required failure (in-process)', async () => {
     const { pluginManager, bundle } = createRecallCapturePluginManager();
     const adapter = createMcpAdapter(pluginManager, { gatewayServiceBundle: bundle });
 
-    // 无 trusted 绑定、无显式 agentId：schema 已放宽，决议树仍受控失败。
-    // fixture 目录发布多个 agent，单一 agent 兜底不生效。
     await assert.rejects(
         () => adapter.callTool({
             name: 'gateway_recall_run',
@@ -126,7 +129,7 @@ test('M3 gate: unbound omission keeps the controlled agentId-required failure (i
     );
 });
 
-test('M3 gate: bound credential omitting agentId resolves to bound agent on backend-proxy bootstrap/recall', async () => {
+test('MCP gate: backend-proxy bound credential also rejects omitted agentId on bootstrap/recall', async () => {
     const requests = [];
     const backendClient = {
         async renderAgent(agentId, body) {
@@ -164,27 +167,36 @@ test('M3 gate: bound credential omitting agentId resolves to bound agent on back
     });
     const authContext = { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read', 'gateway:execute'] };
 
-    const bootstrap = await adapter.callTool({
-        name: 'gateway_agent_bootstrap',
-        arguments: { variables: {} },
-        authContext,
-        requestContext: { requestId: 'req-proxy-m3-bootstrap' }
-    });
-    assert.equal(bootstrap.isError, false);
-    assert.equal(requests.find((entry) => entry.kind === 'render').agentId, 'Ariadne');
-
-    const recall = await adapter.callTool({
-        name: 'gateway_recall_run',
-        arguments: { query: 'proxy omitted' },
-        authContext,
-        requestContext: { requestId: 'req-proxy-m3-recall' }
-    });
-    assert.equal(recall.isError, false);
-    const recallRequest = requests.find((entry) => entry.kind === 'recall');
-    assert.equal(recallRequest.body.requestContext.agentId, 'Ariadne');
+    await assert.rejects(
+        () => adapter.callTool({
+            name: 'gateway_agent_bootstrap',
+            arguments: { variables: {} },
+            authContext,
+            requestContext: { requestId: 'req-proxy-m3-bootstrap' }
+        }),
+        (error) => {
+            assert.equal(error.code, 'MCP_INVALID_REQUEST');
+            assert.match(error.message, /agentId is required|explicit agentId/);
+            return true;
+        }
+    );
+    await assert.rejects(
+        () => adapter.callTool({
+            name: 'gateway_recall_run',
+            arguments: { query: 'proxy omitted' },
+            authContext,
+            requestContext: { requestId: 'req-proxy-m3-recall' }
+        }),
+        (error) => {
+            assert.equal(error.code, 'MCP_INVALID_ARGUMENTS');
+            assert.match(error.message, /agentId is required|explicit agentId/);
+            return true;
+        }
+    );
+    assert.equal(requests.length, 0);
 });
 
-test('M3 gate: unbound backend-proxy omission forwards without a fabricated agent target', async () => {
+test('MCP gate: unbound backend-proxy omission is rejected before any fabricated agent target appears', async () => {
     const requests = [];
     const backendClient = {
         async runRecall(body) {
@@ -206,53 +218,49 @@ test('M3 gate: unbound backend-proxy omission forwards without a fabricated agen
         defaultAgentId: '',
         discoveryDefaultAgentEnabled: false
     });
-    const result = await adapter.callTool({
-        name: 'gateway_recall_run',
-        arguments: { query: 'unbound proxy omitted' },
-        requestContext: { requestId: 'req-proxy-m3-unbound' }
-    });
-    assert.equal(result.isError, true);
-    assert.equal(result.error.details.gatewayCode, 'AGW_INVALID_REQUEST');
-    assert.equal(requests[0].requestContext.agentId, undefined);
+    await assert.rejects(
+        () => adapter.callTool({
+            name: 'gateway_recall_run',
+            arguments: { query: 'unbound proxy omitted' },
+            requestContext: { requestId: 'req-proxy-m3-unbound' }
+        }),
+        (error) => {
+            assert.equal(error.code, 'MCP_INVALID_ARGUMENTS');
+            assert.match(error.message, /agentId is required|explicit agentId/);
+            return true;
+        }
+    );
+    assert.equal(requests.length, 0);
 });
 
-test('M3 gate: gateway_job_get stays jobId-only and resolves by server-side owner (schema unchanged)', async () => {
+test('MCP gate: gateway_job_get and gateway_job_cancel now require explicit agentId', async () => {
     const { OPERATION_CATALOG } = require('../../../modules/agentGateway/contracts/operations');
     const jobGet = OPERATION_CATALOG.mcp.find((operation) => operation.toolName === 'gateway_job_get');
     const jobCancel = OPERATION_CATALOG.mcp.find((operation) => operation.toolName === 'gateway_job_cancel');
-    assert.deepEqual(jobGet.argsSchema.required, ['jobId']);
-    assert.equal(jobGet.argsSchema.properties.agentId, undefined);
-    assert.deepEqual(jobCancel.argsSchema.required, ['jobId']);
-    assert.equal(jobCancel.argsSchema.properties.agentId, undefined);
+    assert.deepEqual(jobGet.argsSchema.required, ['jobId', 'agentId']);
+    assert.equal(jobGet.argsSchema.properties.agentId.type, 'string');
+    assert.deepEqual(jobCancel.argsSchema.required, ['jobId', 'agentId']);
+    assert.equal(jobCancel.argsSchema.properties.agentId.type, 'string');
 });
 
 test('agent target telemetry counts explicit vs bound-omitted calls', () => {
     const telemetry = createAgentTargetTelemetry();
     telemetry.record({ surface: 'tools/call:gateway_recall_run', outcome: 'explicit' });
-    telemetry.record({ surface: 'tools/call:gateway_recall_run', outcome: 'boundOmitted' });
-    telemetry.record({ surface: 'tools/call:gateway_recall_run', outcome: 'boundOmitted' });
     const snapshot = telemetry.snapshot();
     assert.equal(snapshot.totals.explicit, 1);
-    assert.equal(snapshot.totals.boundOmitted, 2);
-    assert.ok(Math.abs(snapshot.totals.explicitRatio - 1 / 3) < 1e-9);
-    assert.deepEqual(snapshot.bySurface['tools/call:gateway_recall_run'], { explicit: 1, boundOmitted: 2 });
+    assert.equal(snapshot.totals.boundOmitted, 0);
+    assert.ok(Math.abs(snapshot.totals.explicitRatio - 1) < 1e-9);
+    assert.deepEqual(snapshot.bySurface['tools/call:gateway_recall_run'], { explicit: 1, boundOmitted: 0 });
 
     telemetry.reset();
     assert.equal(telemetry.snapshot().totals.explicitRatio, null);
 });
 
-test('in-process bound calls feed the process-level agent target telemetry', async () => {
+test('in-process explicit calls feed the process-level agent target telemetry', async () => {
     defaultAgentTargetTelemetry.reset();
     const { pluginManager, bundle } = createRecallCapturePluginManager();
     const adapter = createMcpAdapter(pluginManager, { gatewayServiceBundle: bundle });
 
-    await adapter.callTool({
-        name: 'gateway_recall_run',
-        arguments: { query: 'telemetry omitted' },
-        authContext: boundContext('Ariadne'),
-        sessionId: 'sess-m3-telemetry',
-        requestContext: { requestId: 'req-m3-telemetry-1' }
-    });
     await adapter.callTool({
         name: 'gateway_recall_run',
         arguments: { agentId: 'Ariadne', query: 'telemetry explicit' },
@@ -262,7 +270,7 @@ test('in-process bound calls feed the process-level agent target telemetry', asy
     });
 
     const snapshot = defaultAgentTargetTelemetry.snapshot();
-    assert.equal(snapshot.totals.boundOmitted >= 1, true);
     assert.equal(snapshot.totals.explicit >= 1, true);
+    assert.equal(snapshot.totals.boundOmitted, 0);
     defaultAgentTargetTelemetry.reset();
 });

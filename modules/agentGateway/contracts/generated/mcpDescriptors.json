@@ -7,11 +7,13 @@
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "required": [],
+        "required": [
+          "agentId"
+        ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Target agent identifier used to resolve the rendered bootstrap prompt. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
           },
           "variables": {
             "type": "object",
@@ -54,9 +56,14 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "jobId"
+          "jobId",
+          "agentId"
         ],
         "properties": {
+          "agentId": {
+            "type": "string",
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+          },
           "jobId": {
             "type": "string",
             "description": "Canonical Agent Gateway job identifier to read."
@@ -75,9 +82,14 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "jobId"
+          "jobId",
+          "agentId"
         ],
         "properties": {
+          "agentId": {
+            "type": "string",
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+          },
           "jobId": {
             "type": "string",
             "description": "Canonical Agent Gateway job identifier to cancel."
@@ -96,12 +108,13 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "agentId",
           "query"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Agent identifier used to resolve diary access policy for this search."
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
           },
           "query": {
             "type": "string",
@@ -170,10 +183,13 @@
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "agentId"
+        ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Agent identifier used to resolve diary access policy for context assembly."
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
           },
           "query": {
             "type": "string",
@@ -255,13 +271,14 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "agentId",
           "target",
           "memory"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Agent identifier used to resolve memory target policy and configured write maid."
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
           },
           "target": {
             "type": "object",
@@ -327,12 +344,13 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "agentId",
           "query"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Target agent identifier used to resolve diary access and recall profile. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials."
+            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
           },
           "query": {
             "type": "string",
@@ -357,8 +375,8 @@
       "arguments": [
         {
           "name": "agentId",
-          "description": "Stable agent identifier for the render target. Optional when the credential is bound to an agent (the bound agent is used); a mismatching explicit value is rejected. Required for unbound credentials.",
-          "required": false
+          "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field.",
+          "required": true
         },
         {
           "name": "variables",

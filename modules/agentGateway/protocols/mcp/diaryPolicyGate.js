@@ -49,7 +49,7 @@ function createDiaryPolicyRejection({ requestId, agentId, allowedDiaries, defaul
     };
 }
 
-function applyDiaryPolicyGate({ toolName, payload = {}, input = {}, defaultAgentId = '' } = {}) {
+function applyDiaryPolicyGate({ toolName, payload = {}, input = {} } = {}) {
     const unchanged = {
         payload,
         rejection: null,
@@ -64,9 +64,7 @@ function applyDiaryPolicyGate({ toolName, payload = {}, input = {}, defaultAgent
         payload.agentId ||
         payload.target?.agentId ||
         input.requestContext?.agentId ||
-        payload.requestContext?.agentId ||
-        defaultAgentId ||
-        process.env.VCP_MCP_DEFAULT_AGENT_ID,
+        payload.requestContext?.agentId,
         256
     );
     const requestId = normalizeMcpString(

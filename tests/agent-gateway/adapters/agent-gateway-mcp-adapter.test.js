@@ -412,14 +412,11 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(chromeBridgeTool.annotations.pluginType, 'hybridservice');
     assert.ok(bootstrapTool && bootstrapTool.inputSchema);
     assert.equal(bootstrapTool.annotations.gatewayManaged, true);
-    // M3.S1：agentId 改 optional，description 说明绑定省略语义
     assert.equal(
         bootstrapTool.inputSchema.properties.agentId.description,
-        'Target agent identifier used to resolve the rendered bootstrap prompt. '
-        + 'Optional when the credential is bound to an agent (the bound agent is used); '
-        + 'a mismatching explicit value is rejected. Required for unbound credentials.'
+        'Explicit target agent identifier for this MCP invocation. Callers must provide this field.'
     );
-    assert.deepEqual(bootstrapTool.inputSchema.required, []);
+    assert.deepEqual(bootstrapTool.inputSchema.required, ['agentId']);
     assert.ok(memorySearchTool && memorySearchTool.inputSchema);
     assert.equal(memorySearchTool.annotations.gatewayManaged, true);
     assert.equal(
@@ -434,7 +431,7 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.ok(memoryWriteTool && memoryWriteTool.inputSchema);
     assert.equal(
         memoryWriteTool.inputSchema.properties.agentId.description,
-        'Agent identifier used to resolve memory target policy and configured write maid.'
+        'Explicit target agent identifier for this MCP invocation. Callers must provide this field.'
     );
 });
 
@@ -1327,7 +1324,7 @@ test('MCP job runtime preserves machine-readable failure identity and visibility
     );
 });
 
-test('MCP job runtime accepts canonical visibility identity from auth context without explicit agentId input', async () => {
+test('MCP job runtime now requires explicit agentId input even when auth context is present', async () => {
     const pluginManager = createPluginManager();
     const bundle = getGatewayServiceBundle(pluginManager);
     const adapter = createMcpAdapter(pluginManager, {
@@ -1350,16 +1347,23 @@ test('MCP job runtime accepts canonical visibility identity from auth context wi
         }
     });
 
-    const jobRead = await adapter.callTool({
-        name: 'gateway_job_get',
-        arguments: {
-            jobId: job.jobId
-        },
-        authContext,
-        requestContext: {
-            requestId: 'req-mcp-job-runtime-auth-only-read'
+    await assert.rejects(
+        () => adapter.callTool({
+            name: 'gateway_job_get',
+            arguments: {
+                jobId: job.jobId
+            },
+            authContext,
+            requestContext: {
+                requestId: 'req-mcp-job-runtime-auth-only-read'
+            }
+        }),
+        (error) => {
+            assert.equal(error.code, 'MCP_INVALID_REQUEST');
+            assert.match(error.message, /explicit agentId/);
+            return true;
         }
-    });
+    );
     const eventsResource = await adapter.readResource({
         uri: `vcp://agent-gateway/jobs/${encodeURIComponent(job.jobId)}/events`,
         authContext,
@@ -1368,8 +1372,6 @@ test('MCP job runtime accepts canonical visibility identity from auth context wi
         }
     });
 
-    assert.equal(jobRead.isError, false);
-    assert.equal(jobRead.structuredContent.result.job.jobId, job.jobId);
     assert.equal(JSON.parse(eventsResource.contents[0].text).jobId, job.jobId);
 });
 
