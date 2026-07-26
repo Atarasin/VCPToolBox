@@ -47,6 +47,15 @@ let runtimeKnowledgeBaseManager = null;  // 知识库管理器实例
 let runtimeRagPlugin = null;             // RAG 插件实例
 
 /**
+ * 简单延迟工具，供 warmup 轮询使用
+ * @param {number} ms - 延迟毫秒数
+ * @returns {Promise<void>}
+ */
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
  * 读取 JSONL 文件（每行一个 JSON 对象）
  * @param {string} filePath - 文件路径
  * @returns {Array} 解析后的对象数组
@@ -207,6 +216,205 @@ function isGatePassed(content) {
 }
 
 /**
+ * 获取当前已发布的原生 Memo artifact 快照
+ * @param {Object} knowledgeBaseManager - 知识库管理器实例
+ * @returns {Object|null} artifact 快照；未就绪时返回 null
+ */
+function getNativeMemoArtifactSnapshot(knowledgeBaseManager) {
+    if (!knowledgeBaseManager) return null;
+
+    const wrappedSnapshot =
+        typeof knowledgeBaseManager.getTagMemoV10ArtifactSnapshot === 'function'
+            ? knowledgeBaseManager.getTagMemoV10ArtifactSnapshot({
+                buildIfMissing: false
+            })?.bundle
+            : null;
+    const directSnapshot =
+        knowledgeBaseManager.tagMemoV10Engine?.getArtifactSnapshot?.({
+            buildIfMissing: false
+        }) || null;
+
+    const snapshot = wrappedSnapshot || directSnapshot;
+    return snapshot?.artifactSig ? snapshot : null;
+}
+
+/**
+ * 判断知识库当前是否仍有未收敛的异步工作
+ * @param {Object} knowledgeBaseManager - 知识库管理器实例
+ * @returns {boolean} 是否仍有挂起工作
+ */
+function hasPendingKnowledgeBaseWork(knowledgeBaseManager) {
+    if (!knowledgeBaseManager) return false;
+    return Boolean(
+        knowledgeBaseManager.isProcessing
+        || knowledgeBaseManager.isProcessingDeletes
+        || knowledgeBaseManager.externalMutationActive
+        || knowledgeBaseManager.rustWriteLease
+        || knowledgeBaseManager.indexRecoveryActive
+        || knowledgeBaseManager.dbHealthState === 'recovering'
+        || knowledgeBaseManager.batchTimer
+        || knowledgeBaseManager.deleteBatchTimer
+        || (knowledgeBaseManager.pendingFiles instanceof Set && knowledgeBaseManager.pendingFiles.size > 0)
+        || (knowledgeBaseManager.pendingDeletes instanceof Set && knowledgeBaseManager.pendingDeletes.size > 0)
+    );
+}
+
+/**
+ * 等待知识库完成初始扫描、批处理与 Rust 写租约等后台工作
+ * @param {Object} knowledgeBaseManager - 知识库管理器实例
+ * @param {Object} options - 等待选项
+ * @returns {Promise<void>}
+ */
+async function waitForKnowledgeBaseQuiescent(knowledgeBaseManager, options = {}) {
+    if (!knowledgeBaseManager) return;
+
+    const timeoutMs = Math.max(
+        1000,
+        Number(options.timeoutMs) || 45000
+    );
+    const pollMs = Math.max(25, Number(options.pollMs) || 100);
+    const startedAt = Date.now();
+
+    while (true) {
+        if (
+            knowledgeBaseManager.databaseCorruptionDetected
+            || knowledgeBaseManager.dbHealthState === 'corrupt'
+        ) {
+            throw new Error(
+                'KnowledgeBase is unavailable because database corruption was detected.'
+            );
+        }
+
+        const remainingMs = timeoutMs - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+            throw new Error(
+                'Timed out waiting for KnowledgeBase warmup tasks to settle.'
+            );
+        }
+
+        if (typeof knowledgeBaseManager.databaseCoordinator?.waitForIdle === 'function') {
+            await knowledgeBaseManager.databaseCoordinator.waitForIdle({
+                timeoutMs: remainingMs,
+                pollMs: Math.min(pollMs, 50)
+            });
+        }
+
+        if (!hasPendingKnowledgeBaseWork(knowledgeBaseManager)) {
+            return;
+        }
+        await delay(pollMs);
+    }
+}
+
+/**
+ * 在正式计分前显式预热 TagMemo 相关派生索引，避免把冷启动抖动计入候选效果
+ * @param {Object} params - warmup 参数
+ * @returns {Promise<Object>} warmup 结果摘要
+ */
+async function warmupTagMemoArtifacts(params = {}) {
+    const {
+        evalSet = [],
+        knowledgeBaseManager,
+        ragPlugin,
+        timeoutMs = 45000,
+        pollMs = 100
+    } = params;
+
+    const startedAt = Date.now();
+    const warmupCase = Array.isArray(evalSet)
+        ? evalSet.find(item => /TagMemo/.test(String(item?.mode || '')))
+        : null;
+
+    try {
+        await waitForKnowledgeBaseQuiescent(knowledgeBaseManager, {
+            timeoutMs,
+            pollMs
+        });
+    } catch (error) {
+        console.warn(
+            `[real-run-eval] TagMemo warmup wait did not settle cleanly: ${error.message || error}`
+        );
+    }
+
+    let snapshot = getNativeMemoArtifactSnapshot(knowledgeBaseManager);
+    if (snapshot) {
+        console.log(
+            `[real-run-eval] ✅ TagMemo artifact already ready: ` +
+            `artifact=${snapshot.artifactSig}, ` +
+            `nativeGeneration=${snapshot.nativeGeneration ?? 'lazy'}`
+        );
+        return {
+            ready: true,
+            warmupTriggered: false,
+            artifactSig: snapshot.artifactSig
+        };
+    }
+
+    let warmupTriggered = false;
+    if (warmupCase && ragPlugin?.processMessages) {
+        console.log(
+            `[real-run-eval] 🔥 Warming up TagMemo artifact with ${warmupCase.id}...`
+        );
+        try {
+            await ragPlugin.processMessages([
+                { role: 'system', content: warmupCase.mode || '' },
+                { role: 'user', content: warmupCase.query || '' }
+            ], {});
+            warmupTriggered = true;
+        } catch (error) {
+            console.warn(
+                `[real-run-eval] TagMemo warmup probe failed: ${error.message || error}`
+            );
+        }
+    }
+
+    while (Date.now() - startedAt < timeoutMs) {
+        snapshot = getNativeMemoArtifactSnapshot(knowledgeBaseManager);
+        if (snapshot) {
+            console.log(
+                `[real-run-eval] ✅ TagMemo warmup ready: ` +
+                `artifact=${snapshot.artifactSig}, ` +
+                `nativeGeneration=${snapshot.nativeGeneration ?? 'lazy'}`
+            );
+            return {
+                ready: true,
+                warmupTriggered,
+                artifactSig: snapshot.artifactSig
+            };
+        }
+
+        if (hasPendingKnowledgeBaseWork(knowledgeBaseManager)) {
+            try {
+                await waitForKnowledgeBaseQuiescent(knowledgeBaseManager, {
+                    timeoutMs: Math.max(
+                        1000,
+                        timeoutMs - (Date.now() - startedAt)
+                    ),
+                    pollMs
+                });
+            } catch (error) {
+                console.warn(
+                    `[real-run-eval] TagMemo warmup is still waiting on background work: ${error.message || error}`
+                );
+                break;
+            }
+            continue;
+        }
+
+        await delay(pollMs);
+    }
+
+    console.warn(
+        '[real-run-eval] ⚠️ TagMemo artifact warmup timed out; evaluation will continue without a confirmed warm state.'
+    );
+    return {
+        ready: false,
+        warmupTriggered,
+        artifactSig: null
+    };
+}
+
+/**
  * 运行单个评测用例
  * @param {Object} item - 评测用例对象 { id, mode, query }
  * @param {Array} pushEvents - 用于收集事件的数组
@@ -301,6 +509,17 @@ async function run() {
     // 再次应用参数（确保初始化后参数正确设置）
     applyRagParamsOverride(runtimeRagParams);
 
+    // 在正式计分前显式等待 TagMemo 原生 artifact 就绪，避免把冷启动抖动混入评测。
+    await warmupTagMemoArtifacts({
+        evalSet,
+        knowledgeBaseManager,
+        ragPlugin,
+        timeoutMs: Math.max(
+            1000,
+            Number(process.env.EVAL_TAGMEMO_WARMUP_TIMEOUT_MS) || 45000
+        )
+    });
+
     // 遍历评测集，逐个运行评测用例
     for (const item of evalSet) {
         currentEvents = [];  // 重置当前事件收集器
@@ -323,18 +542,39 @@ async function run() {
     process.stdout.write(`${outPath}\n`);
 }
 
-// 执行主函数并处理异常和资源清理
-run()
-    .catch(err => {
-        console.error('[real-run-eval] failed:', err);
-        process.exitCode = 1;
-    })
-    .finally(async () => {
-        // 优雅关闭：确保资源被释放
-        try {
-            runtimeRagPlugin?.shutdown();
-        } catch (_) {}
-        try {
-            await runtimeKnowledgeBaseManager?.shutdown();
-        } catch (_) {}
-    });
+if (require.main === module) {
+    // 执行主函数并处理异常和资源清理
+    run()
+        .catch(err => {
+            console.error('[real-run-eval] failed:', err);
+            process.exitCode = 1;
+        })
+        .finally(async () => {
+            // 优雅关闭：确保资源被释放
+            try {
+                runtimeRagPlugin?.shutdown();
+            } catch (_) {}
+            try {
+                await runtimeKnowledgeBaseManager?.shutdown();
+            } catch (_) {}
+        });
+} else {
+    module.exports = {
+        readJsonl,
+        readJson,
+        parseArgs,
+        loadVariantConfig,
+        applyVariantEnv,
+        resolveRagParamsPath,
+        extractBulletTopK,
+        sanitizeTopKItem,
+        resolveTopKFromEventsOrContent,
+        isGatePassed,
+        getNativeMemoArtifactSnapshot,
+        hasPendingKnowledgeBaseWork,
+        waitForKnowledgeBaseQuiescent,
+        warmupTagMemoArtifacts,
+        runSingleCase,
+        run
+    };
+}

@@ -139,9 +139,13 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
                 return { groups, vector: Array.isArray(enhanced) && enhanced.length ? enhanced : vector };
             }
             : null,
-        applyTagBoost: typeof knowledgeBaseManager?.applyTagBoost === 'function'
-            ? (vector, weight) => knowledgeBaseManager.applyTagBoost(new Float32Array(vector), weight)
-            : null,
+        applyTagBoost: typeof knowledgeBaseManager?.applyTagBoostAsync === 'function'
+            // 原生 Memo 资产发布后同步 applyTagBoost 已退休（JS graph runtime），
+            // 必须走异步统一门面；旧宿主缺少异步接口时才回退。
+            ? (vector, weight) => knowledgeBaseManager.applyTagBoostAsync(new Float32Array(vector), weight)
+            : typeof knowledgeBaseManager?.applyTagBoost === 'function'
+                ? (vector, weight) => knowledgeBaseManager.applyTagBoost(new Float32Array(vector), weight)
+                : null,
         parseTimeRanges: typeof ragPlugin?.timeParser?.parse === 'function'
             ? (query) => ragPlugin.timeParser.parse(query)
             : null,

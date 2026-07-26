@@ -13,7 +13,7 @@
   "candidate": {
     "ragParamsPath": "/home/zh/projects/VCP/VCPToolBox/rag_params.json",
     "env": {
-      "WhitelistEmbeddingModel": "what-qwen3-embedding-8b",
+      "WhitelistEmbeddingModel": "Qwen/Qwen3-Embedding-8B",
       "VECTORDB_DIMENSION": "4096",
       "EMBEDDING_DIMENSIONS": "4096",
       "KNOWLEDGEBASE_ROOT_PATH": "/home/zh/projects/VCP/VCPToolBox/eval/dailynote_eval",
