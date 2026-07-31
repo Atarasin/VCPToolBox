@@ -190,31 +190,21 @@ function renderDoc(doc, dateStr) {
         if (extra.trim()) lines.push(extra.trim());
     }
 
-    // ── 为什么同一份 tag 要写两行 ────────────────────────────────────────
+    // ── 标签行：只写一行 `Tag: …`，且必须是最后一行 ─────────────────────
     //
-    // 两套引擎认的 marker 不一样，而且互不兼容：
+    // 与生产语料（DailyNote 插件写出的日记）格式完全一致。
     //
-    //   KnowledgeBaseManager.extractTags   正则 /Tag:\s*(.+)$/gim
-    //       只认 `Tag:`。"Tags:" 里没有 `Tag:` 这个子串（T-a-g-s-:），所以匹配不上。
-    //       缺这行 → tags 表为空 → TagMemo / RiverMemo / tag 索引全线失效，且不报错。
+    // 历史：Rust searcher 修复前只认 `tags:`/`标签:`、看不见 `Tag:`，当时语料被迫
+    // 同时写 `Tags:` 与 `Tag:` 两行。修复（main.rs tag_line_value 与 JS 参照对齐）后
+    // 实测发现那行 `Tags:` 其实是**死行**：两套引擎的标签行提取都是自底向上扫、
+    // 只取最后一条匹配，`Tag:` 永远在最后，上面的 `Tags:` 根本不会被读到
+    // （双行探针实测：查 Tags: 行独有词 total=0，查 Tag: 行独有词 total=1）。
+    // 变体写法（Tags:/标签:/大小写/全角冒号）的兼容性由 Rust 单元测试
+    // （main.rs tag_line_tests）钉住，不需要语料来兜。
     //
-    //   DailyNoteSearcher(Rust).extract_tag_line   main.rs:857-876
-    //       只认 `tags:`（小写比较）/ `tags：` / `标签:` / `标签：`。
-    //       缺这行 → bm25_search_mode=tag 恒返回 0 条。
-    //       实测：只有 `Tag:` 的文件，tag 模式 total=0；补上 `Tags:` 后 total=1。
-    //
-    // 所以两行都必须写，否则总有一套引擎的能力测不到。
-    //
-    // 已知代价（无法消除）：Rust 的 extract_body_for_bm25（main.rs:878-894）只过滤
-    // `tags:` / `标签:` 开头的行，**不认识 `Tag:`**，因此 `Tag:` 行会被当作正文参与
-    // body 模式打分。这不是"多写一行"造成的 —— 只要 KnowledgeBaseManager 还要求 `Tag:`，
-    // 这个泄漏就存在。tier1 的 t1_searcher_tagline_leaks_into_body 专门把它钉成回归基线，
-    // 而 t1_searcher_bm25_body 的 query_tokens 只用正文散文里的词，避免被 tag 行满足。
-    //
-    // 顺序：`Tag:` 必须是最后一行 —— DirectDiaryTextProcessor.extractTagLine 与 Rust 侧
-    // 都是自底向上扫、取最后一条匹配。
+    // 顺序约束依旧：`Tag:` 必须是最后一行 —— extractTagLine 取最后一条匹配，
+    // 且 KnowledgeBaseManager 的 detectTagLine 同样自底向上。
     const tagList = doc.tags.join(', ');
-    if (doc.searcherTags !== false) lines.push(`Tags: ${tagList}`);
     lines.push(`Tag: ${tagList}`);
 
     return lines.join('\n');

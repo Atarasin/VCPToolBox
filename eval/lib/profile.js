@@ -154,6 +154,18 @@ function loadProfile(name = 'default', overrides = {}) {
         ...(overrides.env || {})
     };
 
+    // profile.env / overrides.env 允许直接覆盖 WhitelistEmbeddingModel、VECTORDB_DIMENSION、
+    // API_URL 这类变量（例如候选模型走另一个网关）。embedding.* 快照必须以**覆盖后**的
+    // env 为准 —— 否则 doctor 探测的是旧端点/旧模型，而运行时用的是新值，
+    // 前置校验就形同虚设。
+    const effectiveEmbedding = {
+        model: env.WhitelistEmbeddingModel || embedding.model,
+        dimension: Number(env.VECTORDB_DIMENSION || embedding.dimension || 0),
+        maxToken: Number(env.WhitelistEmbeddingModelMaxToken || embedding.maxToken || 8000),
+        apiUrl: env.API_URL || embedding.apiUrl,
+        apiKey: env.API_Key || embedding.apiKey
+    };
+
     return {
         name,
         profileFile: file,
@@ -165,7 +177,7 @@ function loadProfile(name = 'default', overrides = {}) {
         ragParamsPath,
         ragParams,
         ragParamsHash: hashOf(ragParams),
-        embedding,
+        embedding: effectiveEmbedding,
         rerank,
         env,
         // storePath 每次运行都不同（落在 run 目录里），由 runstore 注入。

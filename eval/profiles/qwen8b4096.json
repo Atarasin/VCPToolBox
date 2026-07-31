@@ -1,0 +1,17 @@
+{
+  "$comment": [
+    "Qwen/Qwen3-Embedding-8B @ 4096 维（与 config.env 当前默认一致，但显式固化）。",
+    "显式写死 model/dimension 的意义：config.env 以后改了默认模型，这个 profile 的行为也不变，",
+    "跑出来的 run 仍然可以与历史 run 对比。",
+    "maxToken 保持 512，与 gemini3072 可比。"
+  ],
+  "description": "Qwen/Qwen3-Embedding-8B @ 4096 维",
+  "corpusRoot": "dailynote_eval",
+  "ragParamsPath": "rag_params.json",
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-8B",
+    "dimension": 4096,
+    "maxToken": 512
+  },
+  "env": {}
+}

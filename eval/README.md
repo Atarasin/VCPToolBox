@@ -43,8 +43,10 @@ node eval/vcp-eval.js runs show latest
 `corpus build` 会：
 - 把 `dayOffset` / `dateRule` 按**运行日**落地成真实日期 → 相对时间表达（今天／上周／N天前）永不漂移
 - 生成 `[YYYY-MM-DD] - 评测助手` 首行（月日补零，否则该文件对 `::Time` 完全不可见）
-- 同时写 `Tags:` 行与 `Tag:` 行 —— 两套引擎认的 marker 不同：
-  KnowledgeBaseManager 只认 `Tag:`，DailyNoteSearcher 只认 `Tags:` / `标签:`
+- 标签行只写一行 `Tag: …`（末行），与生产语料格式完全一致。
+  历史上 Rust searcher 的 marker bug 曾迫使语料双写 `Tags:` + `Tag:`；修复后实测
+  发现 `Tags:` 行是**死行**——两套引擎都自底向上取最后一条标签行，排在 `Tag:`
+  前面的行永远读不到。变体写法的兼容性由 Rust 单元测试钉住，语料不再双写
 - 按 `mtimeRank` 钉死文件时间戳，且**刻意让 mtime 顺序 ≠ 日期顺序 ≠ 文件名顺序**，
   否则 `::LastN` 与 `{{}}` 全量模式产出相同结果，等于没测
 
@@ -199,7 +201,7 @@ profile + rag_params + 语料 + 用例集共同决定 —— 同配置重跑与�
 - 含中文的 tag ≤15 字，纯西文 ≤30 字，**不能形似日期**（会被 `extractTags` 丢弃）
 - tag 要跨 ≥3 篇复现，否则共现图没有边、场熵过不了 `minFieldEntropy 0.12` 的门
 - 首行 `[YYYY-MM-DD]` 月日必须补零
-- `::BM25+` 的判别词要在正文里（body 模式会剔除第 1 行与 Tag 行）
+- `::BM25+` 的判别词要在正文里（body 模式会剔除第 1 行与所有标签行，包括 `Tag:`）
 - 语义组的组词**只能出现在查询里，不能出现在语料正文里** ——
   否则测的是词面重叠而不是向量混合
 
@@ -289,31 +291,29 @@ TagMemo artifact 不可用时 `applyTagBoostAsync` 抛 `MEMO_ARTIFACT_UNAVAILABL
 RiverMemo 则是**彻底抛出**，连 `RAG_RETRIEVAL_DETAILS` 事件都不发 → 占位符被置空、`engine` 为 `null`。
 所以带 `requiresArtifact` 的用例必须断言 artifact 就绪，否则这两种失效都会被误读成"召回质量问题"。
 
-### 已确认的实现分歧：`Tag:` vs `Tags:`（这是 bug，不是设计）
+### `Tag:` vs `Tags:` 实现分歧（bug，已于 2026-07-31 修复）
 
-`::BM25` 的 tag 行召回有两条实现，**对标签行的识别不一致**：
+`::BM25` 的 tag 行召回曾有两条不一致的实现：JS 参照（`extractTagLine:572`）用
+`/^tags?\s*[:：]/i`（`s` 可选，兼容 `Tag:`），Rust 加速路径只认 `tags:`/`标签:` ——
+而生产语料 100% 只写 `Tag:`（写入端 `DailyNote` 插件产出的就是它）。
+后果是装了 Rust searcher 的机器上，tag 行召回对整个生产语料恒返回 0 条并静默回落
+`::LastN`（实测 `dailynote/Nexus架构设计` 35 篇：修复前 tag 模式 `total=0`，修复后 `total=1`）。
 
-| 实现 | 代码 | 识别 |
-| --- | --- | --- |
-| JS（兜底路径） | `DirectDiaryTextProcessor.extractTagLine:572` `/^tags?\s*[:：]/i` | `Tag:` `Tags:` `标签:` 全都认（`s` 可选） |
-| Rust（加速路径） | `DailyNoteSearcher/src/src/main.rs:861` `lower.starts_with("tags:")` | 只认 `tags:` / `标签:`，**看不见 `Tag:`** |
+**修复**：`main.rs` 新增 `tag_line_value()`，与 JS 正则逐点对齐（`Tag`/`Tags`/`标签`
+大小写不敏感、半角/全角冒号、marker 与冒号间允许空白），`extract_tag_line` 与
+`extract_body_for_bm25` 共用它 —— 顺带修掉了两个连带问题：
+`Tags：`（大写 + 全角冒号）两个分支各漏一半也匹配不上；`Tag:` 行泄漏进 body 模式打分。
+带 4 个单元测试（`cargo test`，`tag_line_tests`）。
 
-判定为 bug 的四条依据：
+回归防线：`t1_searcher_production_tag_invisible`（生产格式文件必须被 tag 模式召回）
+与 `t1_searcher_tagline_leaks_into_body`（`Tag:` 行必须被 body 模式过滤，total=0）。
+修复落地后语料也随之简化：不再双写 `Tags:` 行 —— 实测它被末行 `Tag:` 完全遮蔽
+（两套引擎都只取最后一条标签行），是读不到的死行；`corpus verify` 现在反过来
+用 `multiple-tag-lines` 断言每篇**只有一条**标签行，防止死行再被引入。
 
-1. 二者是**同一功能的两个实现**（`getBM25DiaryCandidates` 优先走 Rust，失败才回落 JS，
-   返回值里的 `acceleratedBy` 就是用来区分的），本应可互换。
-2. JS 那条正则写成 `tags?`——`s` 可选——说明作者**明确知道**存在两种写法并刻意兼容；Rust 侧没有。
-3. **生产语料 100% 只用 `Tag:`**，`Tags:` 一个都没有（写入端 `DailyNote` 插件产出的就是 `Tag:`）。
-4. **实测**：对真实的 `dailynote/Nexus架构设计`（35 篇，全部 `Tag:`），
-   Rust tag 模式 `total=0`，同一份数据 body 模式 `total=6`。
-
-后果：**装了 Rust searcher 的机器上，`{{X日记本::BM25}}` 的 tag 行召回对整个生产语料恒为无效**，
-且命中 0 会走 `no-positive-score` 分支静默回落到 `::LastN` —— 用户看到的是"返回了最近 N 篇"，
-不是错误。只有 Rust 不可用、回落到 JS 的机器上它才正常工作。
-
-修复只需 Rust 侧一行（把 `starts_with("tags:")` 放宽到同时接受 `tag:`）加一次
-`cargo build --release`。**本次未改动**，因为它属于生产行为变更，不在重建评测的范围内。
-`t1_searcher_production_tag_invisible` 已把当前行为钉成基线：一旦 Rust 侧修好，该用例会失败并提醒更新。
+> ⚠️ 仓库里提交的 `DailyNoteSearcher.exe` 与 aarch64-musl 二进制**仍是修复前的旧版**，
+> 本机无法交叉编译。Windows / ARM 机器上需各自 `cargo build --release` 后行为才一致
+> （wrapper 的候选顺序里平台预编译二进制优先于 `src/target/release/`）。
 
 ### 关于 rag_params 里的死键
 

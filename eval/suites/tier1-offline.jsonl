@@ -50,23 +50,20 @@
 {"id":"t1_searcher_traversal","tier":1,"mode":"searcher","family":"searcher","capability":"security","requires":["dailyNoteSearcher"],"payload":{"query":"x","folder":"../../"},"expect":{"status":"error","errorContains":"traversal"},"note":"路径穿越必须被拒绝"}
 // query_tokens 必须全部是**只出现在正文散文里、不出现在任何 tag 里**的词。
 // 早先这条用的是 入口配额/队列缓冲/驻留时长 —— 那三个都是 限流治理 的 tag，
-// 而 Rust 的 extract_body_for_bm25 只过滤 tags:/标签: 开头的行，**不认识 Tag:**，
-// 于是 Tag: 行整行留在 body 里，这条用例实际是被 tag 行满足的，根本没测到正文召回。
-// 这正是旧评估"gold snippet 能被 Tag 行满足"的同一个坑，换了个地方复现。
+// 当时 Rust 的 body 过滤器还不认识 Tag: 行，用例实际是被泄漏的 tag 行满足的。
+// 泄漏已修（见 t1_searcher_tagline_leaks_into_body），但这条的原则不变：
+// 正文召回用例的判别词取自正文散文，才能保证测的是正文而不是标签。
 {"id":"t1_searcher_bm25_body","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"压力峰值 配额账本 拒绝比例","query_tokens":["压力峰值","配额账本","拒绝比例"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","minTotal":1,"queryTokensEcho":true},"note":"必须传 query_tokens —— Rust 侧不做中文分词，不传则整句变成一个 token 且 total=0"}
-// 回归基线：把 Tag: 行（而非 Tags: 行）里的词拿去做 body 模式检索，仍然能命中。
-// 这固定住一个非对称行为：Rust 的 body 过滤器只认 tags:/标签:，Tag: 行会被当成正文。
-// 语料必须同时写两行，正是因为 KnowledgeBaseManager.extractTags 只认 Tag:、
-// 而 Rust 的 extract_tag_line 只认 tags:/标签: —— 缺任何一行就有一套引擎测不到。
-{"id":"t1_searcher_tagline_leaks_into_body","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"熔断影子流量","query_tokens":["熔断影子流量"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","minTotal":1},"note":"熔断影子流量 只作为 tag 出现、正文里没有这个词；body 模式仍能命中，证明 Tag: 行确实进了正文"}
+// body 过滤完整性：Tag: 行不得被当成正文参与 body 模式打分。
+// 历史：2026-07-31 之前 Rust 的 extract_body_for_bm25 只过滤 tags:/标签:，不认识 Tag:，
+// 导致 Tag: 行泄漏进正文（这条用例当时的期望是 minTotal:1，钉的是泄漏行为）。
+// 修复 main.rs 的 tag_line_value 与 JS 参照对齐后，泄漏消除，期望翻转为 total:0。
+{"id":"t1_searcher_tagline_leaks_into_body","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"熔断影子流量","query_tokens":["熔断影子流量"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","total":0},"note":"熔断影子流量 只作为 tag 出现、正文里没有这个词；body 模式必须过滤掉 Tag: 行，命中 0 才是正确行为"}
 {"id":"t1_searcher_bm25_no_tokens","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"入口配额与队列缓冲如何联动","folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","total":0},"note":"负控制：不传 query_tokens 时整句被当成单个 token，命中 0。这是已验证的行为"}
-{"id":"t1_searcher_bm25_tag","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-tag","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"流量整形 退避重试","query_tokens":["流量整形","退避重试"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"tag"},"expect":{"status":"success","minTotal":1},"note":"依赖语料里的 Tags: 行 —— DailyNoteSearcher 不认 Tag:，只认 Tags:/tags:/标签:"}
-// ⚠️ 已确认的实现分歧（当前行为基线，非期望行为）：
-// 同一个 ::BM25 tag 模式有两条实现，两者对标签行的识别不一致：
-//   JS  DirectDiaryTextProcessor.extractTagLine  /^tags?\s*[:：]/i   ← s 可选，兼容 Tag:
-//   Rust extract_tag_line (main.rs:861)          starts_with("tags:") ← s 必需，看不见 Tag:
-// 而 dailynote/ 下的真实语料 100% 只写 Tag:（实测 Nexus架构设计 35 篇，Rust tag 模式 total=0、
-// body 模式 total=6）。也就是说在装了 Rust searcher 的机器上，tag 行召回对整个生产语料
-// 恒为无效，并静默回落到 ::LastN。
-// 这条用例把该行为钉成基线：一旦 Rust 侧改为也接受 Tag:，它会失败并提示更新。
-{"id":"t1_searcher_production_tag_invisible","tier":1,"mode":"searcher","family":"searcher_format","capability":"bm25-tag","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"生产格式","query_tokens":["生产格式"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"tag"},"expect":{"status":"success","total":0},"note":"生产格式探针 只写 Tag: 行（与线上语料一致），Rust tag 模式看不见它 → total=0。这是当前行为基线，不是期望行为"}
+{"id":"t1_searcher_bm25_tag","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-tag","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"流量整形 退避重试","query_tokens":["流量整形","退避重试"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"tag"},"expect":{"status":"success","minTotal":1},"note":"打分对象是文件末行 Tag: 的内容（Rust 修复后与生产格式一致）"}
+// 生产格式回归：只写 Tag: 行的文件（= 线上日记的真实格式）必须能被 tag 模式召回。
+// 历史：2026-07-31 之前 Rust 侧只认 tags:/标签:，本用例当时钉的是 total:0 的失效基线
+//（实测 Nexus架构设计 35 篇全 Tag:，tag 模式 total=0 并静默回落 ::LastN）。
+// 修复后与 JS 参照（/^tags?\s*[:：]/i）对齐，Tag:/Tags:/标签: 及大小写、全角冒号、
+// marker 与冒号间空白全部接受，有单元测试兜底（main.rs tag_line_tests）。
+{"id":"t1_searcher_production_tag_invisible","tier":1,"mode":"searcher","family":"searcher_format","capability":"bm25-tag","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"生产格式","query_tokens":["生产格式"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"tag"},"expect":{"status":"success","minTotal":1},"note":"生产格式探针 只写 Tag: 行（与线上语料一致），修复后 tag 模式必须能召回它"}

@@ -1,0 +1,16 @@
+{
+  "$comment": [
+    "jy-gemini-embedding-001 @ 3072 维（旧评测的 baseline 模型）。",
+    "端点沿用根 config.env 的 API_URL/API_Key（本地网关），无需在 env 里覆盖。",
+    "maxToken 保持 512：让 expand 族文档真的分成多 chunk，与其它 profile 保持可比。"
+  ],
+  "description": "jy-gemini-embedding-001 @ 3072 维",
+  "corpusRoot": "dailynote_eval",
+  "ragParamsPath": "rag_params.json",
+  "embedding": {
+    "model": "jy-gemini-embedding-001",
+    "dimension": 3072,
+    "maxToken": 512
+  },
+  "env": {}
+}

@@ -118,14 +118,12 @@
 {"slug":"九五天前记录","family":"time_grid","role":"ninety_five_days","dayOffset":-95,"mtimeRank":21,"tags":["通用记录","归档策略","容量水位"],"body":"九十五天前的水位记录，当时的告警线还是按峰值单点设定。"}
 {"slug":"二百天前记录","family":"time_grid","role":"two_hundred_days","dayOffset":-200,"mtimeRank":2,"tags":["通用记录","配置基线","变更单号"],"body":"两百天前的配置基线快照，多数条目此后都已重写。"}
 
-// ── 生产格式探针：只写 Tag:，不写 Tags: ──────────────────────────────
-// searcherTags:false 让生成器省掉 Tags: 行，于是这篇的格式与**真实生产语料完全一致**
-// （dailynote/ 下 100% 的文件都只有 Tag:，没有任何一个用 Tags:）。
-// 用来钉住一个已确认的实现分歧：Rust 的 extract_tag_line 只认 tags:/标签:，
-// 看不见 Tag:，因此这篇对 bm25_search_mode=tag 恒不可见。
-// 对应用例 t1_searcher_production_tag_invisible。若哪天 Rust 侧改成也认 Tag:，
-// 该用例会失败并提醒我们更新基线 —— 这正是我们想要的信号。
-{"slug":"生产格式探针","family":"searcher_format","role":"production_format","dayOffset":-52,"mtimeRank":62,"searcherTags":false,"tags":["生产格式","巡检记录","归档策略"],"body":"这篇刻意只保留一种标签行写法，与线上日记的实际格式保持一致，用于验证两套检索引擎对标签行的识别差异。"}
+// ── 生产格式探针 ─────────────────────────────────────────────────────
+// t1_searcher_production_tag_invisible 的指名目标。历史：Rust searcher 修复前看不见
+// `Tag:` 行，这篇当时靠 searcherTags:false 强制只写 Tag:、把失效钉成 total=0 的基线；
+// 修复后整个语料都回归了生产格式（只写 Tag:），这篇不再特殊，但保留它作为该回归
+// 用例的稳定锚点——"生产格式" 这个 tag 在语料里唯一，tag 模式必须能召回它。
+{"slug":"生产格式探针","family":"searcher_format","role":"production_format","dayOffset":-52,"mtimeRank":62,"tags":["生产格式","巡检记录","归档策略"],"body":"这篇与线上日记的实际格式保持一致，用于验证检索引擎对标签行的识别。"}
 
 // ── 纯 hub 稀释填充 ──────────────────────────────────────────────────
 // 只为把 通用记录 的入度推到足够高，同时把 填充类 tag 的出现次数补到 ≥3 篇，

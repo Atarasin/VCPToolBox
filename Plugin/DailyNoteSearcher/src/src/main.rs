@@ -854,23 +854,42 @@ fn tokenize_for_bm25(text: &str, blacklist: &HashSet<String>) -> Vec<String> {
     tokens
 }
 
+/// 识别标签行并返回冒号后的内容；不是标签行则返回 None。
+///
+/// 必须与 JS 参照实现逐点对齐（DirectDiaryTextProcessor.extractTagLine:572 的
+/// /^tags?\s*[:：]/i 与 :586 的 body 过滤用的是同一条正则）：
+///   - `tag` / `tags` 大小写不敏感，`s` 可选 —— 生产语料（DailyNote 插件写出的日记）
+///     100% 用 `Tag:`，此前这里只认 `tags:`，导致 tag 模式对整个生产语料恒返回 0 条
+///     并静默回落 ::LastN
+///   - 冒号接受半角 `:` 与全角 `：`，且 marker 与冒号之间允许空白 —— 旧实现里
+///     `Tags：`（大写 T + 全角冒号）两个分支各漏一半，同样匹配不上
+///   - `标签` 前缀同理
+fn tag_line_value(trimmed: &str) -> Option<&str> {
+    // 先试 "tags" 再试 "tag"："tags:" 也以 "tag" 开头，顺序反了会把 "s:" 当正文
+    for marker in ["tags", "tag"] {
+        if trimmed.len() >= marker.len()
+            && trimmed.is_char_boundary(marker.len())
+            && trimmed[..marker.len()].eq_ignore_ascii_case(marker)
+        {
+            let rest = trimmed[marker.len()..].trim_start();
+            if let Some(value) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('：')) {
+                return Some(value.trim());
+            }
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("标签") {
+        let rest = rest.trim_start();
+        if let Some(value) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('：')) {
+            return Some(value.trim());
+        }
+    }
+    None
+}
+
 fn extract_tag_line(content: &str) -> String {
     for line in content.lines().rev() {
-        let trimmed = line.trim();
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("tags:") || trimmed.starts_with("tags：") {
-            return trimmed
-                .trim_start_matches("tags:")
-                .trim_start_matches("tags：")
-                .trim()
-                .to_string();
-        }
-        if trimmed.starts_with("标签:") || trimmed.starts_with("标签：") {
-            return trimmed
-                .trim_start_matches("标签:")
-                .trim_start_matches("标签：")
-                .trim()
-                .to_string();
+        if let Some(value) = tag_line_value(line.trim()) {
+            return value.to_string();
         }
     }
     String::new()
@@ -880,14 +899,7 @@ fn extract_body_for_bm25(content: &str) -> String {
     content
         .lines()
         .skip(1)
-        .filter(|line| {
-            let trimmed = line.trim();
-            let lower = trimmed.to_lowercase();
-            !(lower.starts_with("tags:")
-                || trimmed.starts_with("tags：")
-                || trimmed.starts_with("标签:")
-                || trimmed.starts_with("标签："))
-        })
+        .filter(|line| tag_line_value(line.trim()).is_none())
         .collect::<Vec<&str>>()
         .join("\n")
         .trim()
@@ -1157,5 +1169,50 @@ fn print_error(message: String) {
     };
     if let Ok(json) = serde_json::to_string(&output) {
         println!("{}", json);
+    }
+}
+
+#[cfg(test)]
+mod tag_line_tests {
+    use super::*;
+
+    /// 每个变体都对应一个实际踩过的坑：
+    ///   Tag:      —— 生产语料（DailyNote 插件写出）的唯一格式，旧实现完全不认
+    ///   Tags：    —— 大写 + 全角冒号，旧实现两个分支各漏一半
+    ///   tag ：    —— marker 与冒号间有空白，JS 正则允许（\s*）
+    #[test]
+    fn accepts_all_marker_variants() {
+        for line in [
+            "Tag: 甲, 乙",
+            "tag: 甲, 乙",
+            "Tags: 甲, 乙",
+            "tags: 甲, 乙",
+            "TAGS： 甲, 乙",
+            "Tag ： 甲, 乙",
+            "标签: 甲, 乙",
+            "标签： 甲, 乙",
+        ] {
+            assert_eq!(tag_line_value(line), Some("甲, 乙"), "未识别: {line}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_tag_lines() {
+        for line in ["正文提到 tag: 的用法", "tagsheet: x", "tag无冒号", "标签体系说明"] {
+            // 第一条以正文开头、后三条冒号缺失或 marker 被粘连，都不该被当成标签行
+            assert_eq!(tag_line_value(line), None, "误识别: {line}");
+        }
+    }
+
+    #[test]
+    fn extract_tag_line_takes_last_match() {
+        let content = "[2026-07-01] - x\n正文\nTags: 旧行\nTag: 新行";
+        assert_eq!(extract_tag_line(content), "新行");
+    }
+
+    #[test]
+    fn body_filters_every_tag_variant_and_header() {
+        let content = "[2026-07-01] - x\n正文第一句。\nTags: 甲, 乙\nTag: 甲, 乙\n标签： 丙";
+        assert_eq!(extract_body_for_bm25(content), "正文第一句。");
     }
 }

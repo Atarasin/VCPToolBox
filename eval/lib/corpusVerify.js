@@ -281,10 +281,14 @@ function verifyGenerated(corpusRoot) {
         check(findings, /^Tag:\s*.+/.test(lastLine),
             'error', 'tag-line-not-last',
             `${entry.id} 的最后一行不是 "Tag: ..."：extractTags 拿不到 tag，TagMemo/RiverMemo 对它完全失效`);
-        // Tags: 是 DailyNoteSearcher 的 tag 模式唯一认的 marker（它不认 Tag:）
-        check(findings, lines.some(l => /^Tags:\s*.+/.test(l)),
-            'warn', 'searcher-tag-line-missing',
-            `${entry.id} 缺少 "Tags: ..." 行：DailyNoteSearcher 的 bm25_search_mode=tag 对它返回 0 条`);
+        // Tag: 之外不应再有别的标签行：两套引擎都自底向上取最后一条匹配，
+        // 排在 Tag: 前面的 Tags:/标签: 行是永远读不到的死行，只会误导语料作者
+        //（双行探针实测：查 Tags: 行独有词 total=0）。历史上修 Rust marker bug 前
+        // 语料被迫写双行，修复后已回归生产格式。
+        const tagLikeLines = lines.filter(l => /^\s*(tags?\s*[:：]|标签\s*[:：])/i.test(l));
+        check(findings, tagLikeLines.length === 1,
+            'error', 'multiple-tag-lines',
+            `${entry.id} 有 ${tagLikeLines.length} 条标签形行：除最后的 Tag: 外全是读不到的死行`);
 
         const st = fs.statSync(abs);
         // 必须复刻被测代码的排序键 max(mtimeMs, birthtimeMs, ctimeMs)，
