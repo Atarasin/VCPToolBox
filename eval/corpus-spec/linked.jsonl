@@ -1,0 +1,26 @@
+// 评测容量运营库 —— 与主库共享实体的第三个日记本。
+//
+// 用途：
+//   1. 聚合虚拟索引 [[A|B日记本]] —— 需要 ≥2 个日记本、且主题有重叠，
+//      否则 perIndexK 扇出与 globalK 归并不会真的改变顺序，聚合语法测了等于没测。
+//   2. 跨库 ::Associate —— 需要同一实体在**不同**日记本的文档里出现，
+//      并且 ≥2 个种子命中同一个非种子 chunk，共现召回才有输出。
+//   3. folder scope —— LightMemo 的 folder 过滤是 SQL LIKE '%folder%' 子串匹配，
+//      所以三个库的名字刻意互不为前缀。
+//   4. ::Group 的正向目标 —— 这里的文档语义贴近"评测容量组"的组词
+//      （水位预估/容量护栏/扩容窗口/余量盘点），但**正文里一个组词都没有**。
+//      于是 ::Group 一旦把它们捞上来，就只能是向量混合的功劳。
+//
+// 共享实体：流量整形、数据库超时、容量水位、值班交接 —— 都在主库出现过。
+{"slug":"容量规划月报","family":"linked_group","role":"group_target","dayOffset":-5,"mtimeRank":62,"tags":["容量规划","容量水位","扩容评审"],"body":"本月的余量测算显示三个集群都还有富余，最紧的一个也留了两成空间。\n下一阶段的关注点是把测算周期从月度改成周度，以便更早看到趋势。"}
+{"slug":"容量护栏设计","family":"linked_group","role":"group_target","dayOffset":-7,"mtimeRank":63,"tags":["容量规划","流量整形","入口配额"],"body":"设计了一套上限约束：当集群接近承载极限时自动收紧入口配额，而不是等到超载再降级。\n约束的触发点按历史峰值的九成设定，留出反应时间。"}
+{"slug":"扩容时机判断","family":"linked_group","role":"group_target","dayOffset":-10,"mtimeRank":64,"tags":["容量规划","容量水位","值班交接"],"body":"判断何时该加机器的依据不是瞬时负载，而是连续三天的趋势斜率。\n交接时需把斜率图一并带上，避免下一班重复计算。"}
+{"slug":"数据库连接池调优","family":"linked_shared","role":"shared_entity","dayOffset":-12,"mtimeRank":65,"tags":["数据库超时","连接池","容量规划"],"body":"连接池的上限需要随实例规格同步调整，否则规格升级后反而更容易出现数据库超时。\n本次把上限与核数绑定，避免手工维护。"}
+{"slug":"整形策略跨库对照","family":"linked_shared","role":"shared_entity","dayOffset":-15,"mtimeRank":66,"tags":["流量整形","入口配额","容量规划"],"body":"把两套整形策略并列对照后发现，入口配额的档位划分方式差异最大。\n建议统一到按机型分档，减少认知负担。"}
+{"slug":"值班交接规范","family":"linked_shared","role":"shared_entity","dayOffset":-18,"mtimeRank":67,"tags":["值班交接","巡检记录","容量规划"],"body":"交接规范要求列出三项内容：未闭环告警、待观察指标、以及需要下一班重点确认的变更。\n规范本身每季度复核一次。"}
+{"slug":"跨库共现枢纽","family":"linked_associate","role":"associate_hub","dayOffset":-20,"mtimeRank":68,"tags":["流量整形","数据库超时","容量规划","值班交接"],"body":"这份汇总同时引用了整形策略与连接池两条线，是两个主题的交汇点。\n它既解释了整形为何要看队列，也解释了连接池为何要跟规格联动。"}
+{"slug":"容量复核记录一","family":"linked_group","role":"group_target","dayOffset":-24,"mtimeRank":69,"tags":["容量规划","容量水位","巡检记录"],"body":"复核了上一轮测算的准确度，实际用量比预估低了一成，偏保守但可接受。"}
+{"slug":"容量复核记录二","family":"linked_group","role":"group_target","dayOffset":-27,"mtimeRank":84,"tags":["容量规划","容量水位","归档策略"],"body":"第二轮复核把冷存部分单独拆出统计，主库的占用曲线明显平缓了。"}
+{"slug":"容量复核记录三","family":"linked_group","role":"group_target","dayOffset":-30,"mtimeRank":85,"tags":["容量规划","扩容评审","巡检记录"],"body":"第三轮复核后决定暂缓一次计划内扩容，等业务波动明确再定。"}
+{"slug":"交接遗留清单","family":"linked_shared","role":"shared_entity","dayOffset":-34,"mtimeRank":86,"tags":["值班交接","变更单号","容量规划"],"body":"遗留清单里还有两条未闭环：一条是采样对齐，另一条是冷存成本模型。"}
+{"slug":"跨库术语表","family":"linked_associate","role":"associate_hub","dayOffset":-39,"mtimeRank":87,"tags":["容量规划","流量整形","值班交接","巡检记录"],"body":"术语表统一了两个库里对同一概念的不同叫法，避免检索时被措辞差异割裂。\n表中每条都注明了首次出现的场景。"}

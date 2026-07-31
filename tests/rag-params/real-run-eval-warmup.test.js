@@ -3,7 +3,10 @@ const assert = require('node:assert/strict');
 
 const {
     warmupTagMemoArtifacts
-} = require('../../eval/real-run-eval');
+// 上一版评测脚本已冻结到 eval/legacy/（原因见 eval/README.md）。
+// 这个测试守的是 warmup / quiescence 逻辑本身，该逻辑已在 eval/lib/runtime.js 中复用，
+// 保留对 legacy 实现的测试以确保迁移没有改变语义。
+} = require('../../eval/legacy/real-run-eval');
 
 test('TagMemo artifact 已就绪时直接通过 warmup', async () => {
     const knowledgeBaseManager = {

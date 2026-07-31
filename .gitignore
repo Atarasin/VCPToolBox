@@ -21,10 +21,10 @@ lerna-debug.log*
 **/dream_logs/
 data/
 
-eval/results/
-eval/reports/
-eval/VectorStore_baseline/
-eval/VectorStore_candidate/
+# eval: generated corpus + per-run artifacts (see eval/README.md).
+# The corpus source of truth is eval/corpus-spec/, which IS tracked.
+eval/dailynote_eval/
+eval/runs/
 
 # python cache
 __pycache__/
@@ -367,3 +367,5 @@ Plugin/.backup/
 # ==== 开发SDK ====
 Plugin/VCPQQBotServer/bot-node-sdk-main
 开发日志/
+# eval 装入插件配置前留下的备份
+Plugin/RAGDiaryPlugin/*.eval-backup

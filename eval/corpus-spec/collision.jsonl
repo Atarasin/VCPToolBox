@@ -1,0 +1,16 @@
+// vcp知识库 —— 目录名故意与"冷知识库"这个概念撞名。
+//
+// 唯一职责：钉住一个已验证的解析歧义。
+//
+// [[X日记本]] 走 dailynote 向量检索；[[X知识库]] 走 knowledge/ 下的 TriviumDB 冷知识库，
+// 是两条完全不同的链路。当一个日记本目录本身就叫 "vcp知识库" 时，
+// [[vcp知识库日记本]] 必须解析成**日记本**（日记本正则在歧义时胜出，
+// isDiaryPlaceholderAmbiguity 已验证），而不是被误判成冷知识库。
+//
+// 这类命名冲突是重构时最容易改坏、又最不容易被发现的地方 —— 因为一旦判错，
+// 冷知识库那条路在 tdbKnowledgeManager 未注入时会把占位符静默置空，
+// 表现为"检索不到"而不是报错。
+{"slug":"占位符解析约定","family":"collision","role":"collision_probe","dayOffset":-4,"mtimeRank":88,"tags":["占位符","解析约定","命名冲突"],"body":"日记本与冷知识库使用不同的占位符后缀，当目录名本身包含知识库二字时以日记本后缀为准。\n这条约定的存在是为了让同名目录不至于被路由到另一条检索链路。"}
+{"slug":"链路差异说明","family":"collision","role":"collision_probe","dayOffset":-8,"mtimeRank":89,"tags":["解析约定","检索链路","占位符"],"body":"两条链路的差异在于底层存储与打分方式不同，因此同一个查询在两边的结果不可直接比较。\n评测中需要分别记录来源，避免混算。"}
+{"slug":"命名冲突登记","family":"collision","role":"collision_probe","dayOffset":-17,"mtimeRank":90,"tags":["命名冲突","解析约定","登记表"],"body":"已知的命名冲突集中登记在此，新增目录前需先比对，避免再引入歧义。"}
+{"slug":"歧义回归要点","family":"collision","role":"collision_probe","dayOffset":-29,"mtimeRank":91,"tags":["命名冲突","占位符","回归要点"],"body":"回归时至少要覆盖三种写法：只带日记本后缀、只带知识库后缀、以及目录名内含知识库二字的混合情形。"}

@@ -1,0 +1,21 @@
+// Tier 4 —— 冷知识库（TDBKnowledge / TriviumDB over knowledge/）。
+//
+// 与 Tier2 是两条完全不同的链路：
+//   Tier2  dailynote/ → KnowledgeBaseManager → knowledge_base.sqlite（热记忆）
+//   Tier4  knowledge/ → TDBKnowledge → TriviumDB .tdb 存储（冷知识）
+// 冷知识库有自己的 embedding 配置（TDBKnowledge 的 apiKey/apiUrl/model），
+// 不复用 RAGDiaryPlugin 的，而且完全没有 Tag 行语义 —— ::BM25 在那边只打全文。
+//
+// 前置条件（doctor 会检查）：
+//   * npm i triviumdb —— 当前**未安装**。缺失时 TDBKnowledge 静默 disabled 且 search() 返回 []，
+//     所以这些用例会被标记 SKIP 而不是 PASS。这是刻意的：一个静默 no-op 的"通过"
+//     比明确失败危险得多。
+//   * knowledge/ 下要有已入库的语料（仓库里有 TDBdocs / VCP知识 / VCP百科全书）
+{"id":"t4_coldkb_basic","tier":4,"mode":"placeholder","family":"coldkb","capability":"[[X知识库]]","requires":["coldKB"],"query":"VCP 的元思考系统是怎么工作的","arms":{"treatment":"[[VCP知识知识库]]"},"relevant":[],"irrelevant":[],"expect":{"minResults":1},"note":"冷知识库的真值不做文档级断言 —— knowledge/ 是真实语料，不由评测生成，只断言链路通且有结果"}
+{"id":"t4_coldkb_k","tier":4,"mode":"placeholder","family":"coldkb","capability":"[[X知识库:8]]","requires":["coldKB"],"query":"TriviumDB 的混合检索是如何实现的","arms":{"treatment":"[[VCP知识知识库:8]]"},"relevant":[],"irrelevant":[],"expect":{"minResults":1},"note":"冷知识库的 :K 只接受整数（:8 有效，:1.5 会退回默认 K）；日记本的 :K 是浮点倍率。两套语义不同"}
+{"id":"t4_coldkb_k_float_ignored","tier":4,"mode":"placeholder","family":"coldkb","capability":"[[X知识库:1.5]]","requires":["coldKB"],"query":"TriviumDB 的混合检索是如何实现的","arms":{"treatment":"[[VCP知识知识库:1.5]]","control":"[[VCP知识知识库]]"},"relevant":[],"irrelevant":[],"expect":{"minResults":1},"note":"负控制：浮点 :K 在冷知识库侧不生效，应与不带 :K 等价"}
+{"id":"t4_coldkb_gate_pass","tier":4,"mode":"placeholder","family":"coldkb","capability":"《《X知识库》》","requires":["coldKB"],"query":"VCP 的元思考链有哪些阶段","arms":{"treatment":"《《VCP知识知识库》》"},"relevant":[],"irrelevant":[],"gate":"passed","expect":{"gate":"passed"}}
+{"id":"t4_coldkb_gate_block","tier":4,"mode":"placeholder","family":"coldkb","capability":"《《X知识库》》","requires":["coldKB"],"query":"古城祭典的巡游路线绕城几圈","arms":{"treatment":"《《VCP知识知识库》》"},"relevant":[],"irrelevant":[],"gate":"blocked","expect":{"gate":"blocked"},"note":"与冷知识库主题无关的查询应被阈值拦下"}
+{"id":"t4_coldkb_aggregate","tier":4,"mode":"placeholder","family":"coldkb","capability":"[[A|B知识库]]","requires":["coldKB"],"query":"VCP 的插件体系与知识库检索之间的关系","arms":{"treatment":"[[VCP知识|VCP百科全书知识库:8]]"},"relevant":[],"irrelevant":[],"expect":{"minResults":1},"note":"多冷知识库聚合"}
+{"id":"t4_coldkb_rerank","tier":4,"mode":"placeholder","family":"coldkb","capability":"[[X知识库::Rerank+0.7]]","requires":["coldKB","rerank"],"query":"VCP 的元思考系统是怎么工作的","arms":{"treatment":"[[VCP知识知识库:8::Rerank+0.7]]","control":"[[VCP知识知识库:8]]"},"relevant":[],"irrelevant":[],"expect":{"minResults":1}}
+{"id":"t4_coldkb_lightmemo","tier":4,"mode":"lightmemo","family":"coldkb","capability":"[知识库:X] 查询语法","requires":["coldKB"],"args":{"query":"[知识库:VCP知识] VCP 的元思考系统是如何工作的","k":5},"relevant":[],"irrelevant":[],"expect":{"minResults":1},"note":"LightMemo 用查询内 [知识库:名称] 语法路由到冷知识库；未注入 tdbKnowledgeManager 时括号会留在查询里并退化成普通日记检索"}

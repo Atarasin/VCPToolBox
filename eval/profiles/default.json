@@ -1,0 +1,27 @@
+{
+  "$comment": [
+    "默认评估 profile。凭据不写在这里 —— API_Key / API_URL / Rerank* 由 profile.js 从",
+    "仓库根 config.env 与 Plugin/RAGDiaryPlugin/config.env 读取，落盘快照时只留指纹。",
+    "",
+    "env 里的几项不是偏好而是让评估能跑完、跑得可复现的硬要求，profile.js 已内置默认值：",
+    "  KNOWLEDGEBASE_DERIVED_STARTUP_COOLDOWN_MS=0  默认 300000，不清零则首次 artifact 构建干等 5 分钟",
+    "  TAGMEMO_MATRIX_REBUILD_QUIET_MS=1000         默认 300000，同上",
+    "  RAG_QUERY_CACHE_ENABLED=false                默认开启，会把冷启动的空结果缓存下来并在计分时重放",
+    "  KNOWLEDGEBASE_FULL_SCAN_ON_STARTUP=true      不开则语料根本不进索引"
+  ],
+  "description": "默认构型：本机 embedding 代理 + 仓库根 rag_params.json",
+  "corpusRoot": "dailynote_eval",
+  "ragParamsPath": "rag_params.json",
+  "embedding": {
+    "model": null,
+    "dimension": null,
+    "maxToken": 512
+  },
+  "$maxTokenComment": [
+    "maxToken 调到 512（safeMaxTokens = floor(512*0.85) = 435）是为了让 expand 族那两篇",
+    "约 450 字的纪要真的被切成多个 chunk。默认 8000 之下几乎任何现实长度的日记都是单 chunk，",
+    "于是 chunk_index>0、overlap 行为、以及 ::Expand 的父文档收拢全都测不到。",
+    "model 与 dimension 留 null 表示沿用 config.env 的当前值；换模型对比时在这里显式覆盖。"
+  ],
+  "env": {}
+}

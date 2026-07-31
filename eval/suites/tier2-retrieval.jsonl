@@ -1,0 +1,112 @@
+// Tier 2 —— embedding 检索主线。这是"VCP 的 RAG 能力"的主体。
+//
+// 核心设计：**双臂对照**。同语料、同查询、只差一个修饰符。
+// 单臂指标只能说"返回了东西"，说不了"这个能力有没有用"。旧评估没有对照臂，
+// 所谓 recall 0.875→0.975 的提升其实是两个 arm 用了不同的 topk 提取路径。
+//
+// relevant / irrelevant 用 "日记本/slug" 引用文档（不含日期 —— 日期是生成期决定的）。
+// 真值是文档级的，不是子串级的。
+//
+// mode：placeholder = 走完整 RAGDiaryPlugin.processMessages；lightmemo = 走 LightMemo 工具调用
+
+// ══ TagMemo：查询向量增强 + DTSC 曲线重排 ═══════════════════════════
+// gold 正文不含任何查询词，只能靠 Tag 向量被捞上来；hardneg 正文含完整查询词但 tag 无交集。
+// 断言 goldRankGain ≥ 1 —— 也就是 TagMemo 确实把 gold 往前挪了。
+// 真值只放 限流治理（正文零查询词、必须靠 Tag 向量才被捞出）。
+// 早先把 接口错误码 也列进 relevant 是设计错误：那篇正文里就有 "错误码429" 和
+// "指数退避重试"，纯 KNN 在两个臂里都把它排第 1，金标排名恒为 1，效应被完全掩盖。
+// 教训：真值里混入"不需要该能力也能命中"的文档，会让效应指标失去分辨力。
+//
+// 实测基线（本次运行）：不带 '+' 的 ::TagMemo 在本查询上产出的排序与不加任何修饰符
+// **逐位相同**（kendallTau=1，Top-K 重合 6/6）—— 也就是说单纯的查询向量增强在这里
+// 没有改变检索结果。这是一条如实记录的观测，不是期望值；若将来它开始改变排序，
+// rankingChanged 会翻成 true 并被 compare 标为变化，正是我们想要的回归信号。
+{"id":"t2_tagmemo_tagonly","tier":2,"mode":"placeholder","family":"tagmemo","capability":"::TagMemo","query":"错误码429当时如何处理，是否用了指数退避重试？","arms":{"treatment":"[[评测运维技术库日记本::TagMemo]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":["评测运维技术库/限流误报"],"expect":{"engine":"TagMemo","flags":{"useTagMemo":true},"minResults":1,"requiresArtifact":true}}
+// 同一查询上换成 ::TagMemo+（打开 DTSC 测地重排）：实测确实重排了 ——
+// 词面诱饵 限流误报 从第 2 位掉到第 4 位。这是本套件里 TagMemo 改变排序的直接证据。
+{"id":"t2_tagmemo_tagonly_field","tier":2,"mode":"placeholder","family":"tagmemo","capability":"::TagMemo+","query":"错误码429当时如何处理，是否用了指数退避重试？","arms":{"treatment":"[[评测运维技术库日记本::TagMemo+]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":["评测运维技术库/限流误报"],"expect":{"engine":"TagMemo","flags":{"useTagMemo":true,"useGeodesicRerank":true},"minResults":1,"requiresArtifact":true,"effect":{"rankingChanged":true}}}
+{"id":"t2_tagmemo_weight","tier":2,"mode":"placeholder","family":"tagmemo","capability":"::TagMemo0.3","query":"错误码429当时如何处理，是否用了指数退避重试？","arms":{"treatment":"[[评测运维技术库日记本::TagMemo0.3]]","control":"[[评测运维技术库日记本::TagMemo]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"engine":"TagMemo","flags":{"useTagMemo":true},"requiresArtifact":true},"note":"权重从默认降到 0.3，断言 tagWeight 真的变了（而不是被忽略）"}
+{"id":"t2_tagmemo_plus","tier":2,"mode":"placeholder","family":"tagmemo","capability":"::TagMemo+","query":"压力峰值时的三段式策略是怎么分工的，观测口径看什么？","arms":{"treatment":"[[评测运维技术库日记本::TagMemo+]]","control":"[[评测运维技术库日记本::TagMemo]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":["评测幻想设定库/古城祭典"],"expect":{"engine":"TagMemo","flags":{"useTagMemo":true,"useGeodesicRerank":true},"requiresArtifact":true},"note":"'+' 打开势能场/测地重排。若日志出现 🛡️ Fallback to original order，说明它静默退化成纯 KNN 了"}
+{"id":"t2_tagmemo_position","tier":2,"mode":"placeholder","family":"tagmemo","capability":"::TagMemo+","query":"灰度判别的规则变更要登记什么，跟基线配置什么关系？","arms":{"treatment":"[[评测运维技术库日记本::TagMemo+]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/网关灰度判别"],"irrelevant":[],"expect":{"engine":"TagMemo","flags":{"useTagMemo":true},"requiresArtifact":true},"note":"tag 集合相同、顺序相反的两篇。position 靠前的那篇应当占优（φ 与 positional 双重加权）"}
+{"id":"t2_tagmemo_closure_fail","tier":2,"mode":"placeholder","family":"tagmemo","capability":"::TagMemo+","query":"三段式流量整形的部署记录和配置快照在哪","arms":{"treatment":"[[评测运维技术库日记本::TagMemo+]]","control":"[[评测运维技术库日记本]]"},"relevant":[],"irrelevant":[],"expect":{"engine":"TagMemo","flags":{"useTagMemo":true},"requiresArtifact":true},"note":"负控制：整形部署记录 的 tag 与正文语义正交 → closure=0 → 不应获得 geo_bonus。证明闭合门是活的"}
+
+// ══ RiverMemo：连续记忆拓扑重排 ═════════════════════════════════════
+// 关键：查询必须是 narrative 型（≥90 字，或 ≥2 个 随后/之后/最终/过程/演变，
+// 或 ≥3 个 导致/因为/所以/通过），否则 query_mode 判成 atomic，
+// 边权从 0.85 掉到 0.25 且 direct_answer 角色被整体禁用，拓扑通道基本失效。
+{"id":"t2_rivermemo_narrative","tier":2,"mode":"placeholder","family":"rivermemo","capability":"::RiverMemo","query":"这次故障的演变过程是怎样的：先是机房搬迁导致连接池配置没跟上，随后数据库连接开始排队并出现超时，之后下单链路的写入失败，最终造成订单丢失，请把整条因果链梳理一遍","arms":{"treatment":"[[评测运维技术库日记本::RiverMemo]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/迁移复盘首轮","评测运维技术库/迁移复盘次轮","评测运维技术库/迁移复盘三轮"],"irrelevant":["评测运维技术库/迁移杂记甲","评测运维技术库/迁移杂记乙"],"expect":{"engine":"RiverMemo","flags":{"useRiverMemo":true,"useTagMemo":false},"minResults":1,"requiresArtifact":true},"note":"Tag 行按真实因果序的三篇应当压过倒序/插入外来概念的那几篇"}
+{"id":"t2_rivermemo_atomic_control","tier":2,"mode":"placeholder","family":"rivermemo","capability":"::RiverMemo","query":"订单为什么丢了","arms":{"treatment":"[[评测运维技术库日记本::RiverMemo]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/迁移复盘首轮"],"irrelevant":[],"expect":{"engine":"RiverMemo","flags":{"useRiverMemo":true},"requiresArtifact":true},"note":"同一语义问题的 atomic 措辞（7 字、无关系词）。与上一条配对，用于确认 query_mode 真的改变了权重构型"}
+{"id":"t2_rivermemo_corroboration","tier":2,"mode":"placeholder","family":"rivermemo","capability":"::RiverMemo","query":"缓存穿透之后是怎么一步步演变成服务雪崩的，过程中做了哪些补救，最终靠什么手段收敛下来的","arms":{"treatment":"[[评测运维技术库日记本::RiverMemo]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/缓存雪崩首例","评测运维技术库/缓存雪崩再现","评测运维技术库/缓存雪崩收敛"],"irrelevant":["评测运维技术库/证书握手异常"],"expect":{"engine":"RiverMemo","flags":{"useRiverMemo":true},"requiresArtifact":true},"note":"被 3 篇独立印证的因果边 vs 只在 1 篇里出现的边。隔离 independent_fraction 的反自证机制"}
+{"id":"t2_rivermemo_tagmemo_inert","tier":2,"mode":"placeholder","family":"rivermemo","capability":"::RiverMemo::TagMemo","query":"影子流量演练的过程是怎样的，旁路集群注入延迟之后熔断阈值是否按预期触发，最终结论如何","arms":{"treatment":"[[评测运维技术库日记本::RiverMemo::TagMemo]]","control":"[[评测运维技术库日记本::RiverMemo]]"},"relevant":["评测运维技术库/影子流量演练"],"irrelevant":[],"expect":{"engine":"RiverMemo","flags":{"useRiverMemo":true,"useTagMemo":false},"requiresArtifact":true},"note":"::RiverMemo 会让 ::TagMemo 完全失效（tagWeight=null）。断言 useTagMemo 为 false —— 这是静默互斥，文档里没写"}
+
+// ══ ::Time 时间双通道 ══════════════════════════════════════════════
+// 语料日期是按运行日锚定生成的，所以相对时间表达永远命中。
+// 必须断言 timeRangesParsed —— 没解析出区间时 ::Time 与不加它字节一致。
+{"id":"t2_time_today","tier":2,"mode":"placeholder","family":"time","capability":"::Time","query":"今天的巡检有没有发现异常","arms":{"treatment":"[[评测运维技术库日记本::Time]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/今日巡检"],"irrelevant":[],"expect":{"flags":{"useTime":true},"timeRangesParsed":true,"minResults":1}}
+{"id":"t2_time_last_week","tier":2,"mode":"placeholder","family":"time","capability":"::Time","query":"上周的值班交接补了什么清单","arms":{"treatment":"[[评测运维技术库日记本::Time]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/上周三记录","评测运维技术库/上周一记录"],"irrelevant":[],"expect":{"flags":{"useTime":true},"timeRangesParsed":true,"minResults":1}}
+{"id":"t2_time_prev_month","tier":2,"mode":"placeholder","family":"time","capability":"::Time","query":"上个月中旬的水位盘点结论是什么","arms":{"treatment":"[[评测运维技术库日记本::Time]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/上月中记录"],"irrelevant":[],"expect":{"flags":{"useTime":true},"timeRangesParsed":true}}
+{"id":"t2_time_ratio","tier":2,"mode":"placeholder","family":"time","capability":"::Time0.6","query":"上周的值班交接补了什么清单","arms":{"treatment":"[[评测运维技术库日记本::Time0.6]]","control":"[[评测运维技术库日记本::Time]]"},"relevant":["评测运维技术库/上周三记录","评测运维技术库/上周一记录"],"irrelevant":[],"expect":{"flags":{"useTime":true},"timeRangesParsed":true},"note":"时间通道占比从默认 0.2 提到 0.6，时间侧条数应明显增加"}
+{"id":"t2_time_no_expression","tier":2,"mode":"placeholder","family":"time","capability":"::Time","query":"流量整形的三段分别负责什么","arms":{"treatment":"[[评测运维技术库日记本::Time]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"flags":{"useTime":true},"timeRangesParsed":false},"note":"负控制：查询里没有时间表达 → 时间通道整体跳过"}
+
+// ══ ::TimeDecay 半衰期衰减 ═════════════════════════════════════════
+{"id":"t2_timedecay_plain","tier":2,"mode":"placeholder","family":"timedecay","capability":"::TimeDecay","query":"归档策略的保留窗口是怎么定的","arms":{"treatment":"[[评测运维技术库日记本::TimeDecay]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/衰减样本近期"],"irrelevant":[],"expect":{"minResults":1},"note":"注意 ::TimeDecay 也会被 ::Time 检测器匹配（D 满足 [^\\d.]），所以这其实是 时间+衰减 的组合，不存在纯衰减"}
+{"id":"t2_timedecay_whitelist_hit","tier":2,"mode":"placeholder","family":"timedecay","capability":"::TimeDecay30/0.5/boxDecay","query":"归档策略的保留窗口是怎么定的","arms":{"treatment":"[[评测运维技术库日记本::TimeDecay30/0.5/boxDecay]]","control":"[[评测运维技术库日记本::TimeDecay30/0.5]]"},"relevant":["评测运维技术库/衰减样本近期"],"irrelevant":[],"expect":{"minResults":1},"note":"白名单捕获组是 [\\w,]+，boxDecay 是 ASCII 所以能被捕获，衰减只作用于带该 tag 的结果"}
+{"id":"t2_timedecay_whitelist_miss","tier":2,"mode":"placeholder","family":"timedecay","capability":"::TimeDecay30/0.5/归档策略","query":"归档策略的保留窗口是怎么定的","arms":{"treatment":"[[评测运维技术库日记本::TimeDecay30/0.5/归档策略]]","control":"[[评测运维技术库日记本::TimeDecay30/0.5]]"},"relevant":["评测运维技术库/衰减样本近期"],"irrelevant":[],"expect":{"minResults":1},"note":"负控制：纯中文白名单捕获不到任何内容 → 衰减静默作用于**全部**结果。与上一条应当行为不同"}
+
+// ══ ::Group 语义组增强 ═════════════════════════════════════════════
+// 组词只出现在查询里、不出现在语料正文里 → 效果只能来自向量混合。
+{"id":"t2_group_full_activation","tier":2,"mode":"placeholder","family":"group","capability":"::Group","query":"帮我做一次水位预估和余量盘点，确认容量护栏与扩容窗口是否还够用","arms":{"treatment":"[[评测容量运营库日记本::Group]]","control":"[[评测容量运营库日记本]]"},"relevant":["评测容量运营库/容量规划月报","评测容量运营库/容量护栏设计","评测容量运营库/扩容时机判断"],"irrelevant":[],"expect":{"flags":{"useGroup":true},"groupBlended":true,"minResults":1},"note":"4 个组词全命中 → strength=1.0。组词在语料里一个都没有，所以命中只能靠向量混合"}
+{"id":"t2_group_partial_activation","tier":2,"mode":"placeholder","family":"group","capability":"::Group","query":"做一次水位预估","arms":{"treatment":"[[评测容量运营库日记本::Group]]","control":"[[评测容量运营库日记本]]"},"relevant":["评测容量运营库/容量规划月报"],"irrelevant":[],"expect":{"flags":{"useGroup":true},"groupBlended":true},"note":"1/4 命中 → strength=0.25，向量偏移应明显弱于全命中"}
+{"id":"t2_group_not_activated","tier":2,"mode":"placeholder","family":"group","capability":"::Group","query":"连接池上限为什么要跟实例规格绑定","arms":{"treatment":"[[评测容量运营库日记本::Group]]","control":"[[评测容量运营库日记本]]"},"relevant":["评测容量运营库/数据库连接池调优"],"irrelevant":[],"expect":{"flags":{"useGroup":true},"groupBlended":false,"effect":{"rankingChanged":false}},"note":"负控制：无组词命中 → 返回原向量，结果应与不加 ::Group 完全一致"}
+{"id":"t2_group_lowercase_noop","tier":2,"mode":"placeholder","family":"group","capability":"::group","query":"帮我做一次水位预估和余量盘点，确认容量护栏与扩容窗口是否还够用","arms":{"treatment":"[[评测容量运营库日记本::group]]","control":"[[评测容量运营库日记本]]"},"relevant":[],"irrelevant":[],"expect":{"flags":{"useGroup":false},"effect":{"rankingChanged":false}},"note":"负控制：::Group 的判定是 modifiers.includes('::Group')，大小写敏感。小写形式静默失效 —— 极易踩的坑"}
+
+// ══ BM25 稀疏召回（混入 [[]] 向量管线）═══════════════════════════════
+{"id":"t2_bm25_body_hybrid","tier":2,"mode":"placeholder","family":"bm25","capability":"::BM25+","query":"驻留时长和拒绝比例这两个观测口径","arms":{"treatment":"[[评测运维技术库日记本::BM25+]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"flags":{"useBM25":true},"minBm25Matched":1},"note":"必须断言 minBm25Matched —— BM25 无命中时会静默兜底，只看 useBM25 flag 分辨不出来"}
+{"id":"t2_bm25_tag_hybrid","tier":2,"mode":"placeholder","family":"bm25","capability":"::BM25","query":"流量整形与退避重试","arms":{"treatment":"[[评测运维技术库日记本::BM25]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流联动","评测运维技术库/限流治理"],"irrelevant":[],"expect":{"flags":{"useBM25":true},"minBm25Matched":1}}
+{"id":"t2_bm25_lexical_decoy","tier":2,"mode":"placeholder","family":"bm25","capability":"::BM25+","query":"驻留时长","arms":{"treatment":"[[评测运维技术库日记本::BM25+]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":["评测运维技术库/压测脚本说明"],"expect":{"flags":{"useBM25":true}},"note":"压测脚本说明 里有一模一样的词但语义无关。BM25 会把它捞上来，向量侧应把它压下去"}
+
+// ══ ::Rerank / ::Rerank+ ═══════════════════════════════════════════
+{"id":"t2_rerank","tier":2,"mode":"placeholder","family":"rerank","capability":"::Rerank","requires":["rerank"],"query":"入口配额和队列缓冲各自解决什么问题","arms":{"treatment":"[[评测运维技术库日记本::Rerank]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":["评测幻想设定库/陶土工艺"],"expect":{"flags":{"useRerank":true},"minResults":1},"note":"requires rerank：端点不可用时本条 SKIP。未配置时 rerank 会静默变成 slice(0,K) 并伪装通过"}
+{"id":"t2_rerank_rrf","tier":2,"mode":"placeholder","family":"rerank","capability":"::Rerank+0.7","requires":["rerank"],"query":"入口配额和队列缓冲各自解决什么问题","arms":{"treatment":"[[评测运维技术库日记本::Rerank+0.7]]","control":"[[评测运维技术库日记本::Rerank]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"flags":{"useRerank":true,"useRerankPlus":true}},"note":"RRF 融合，α=0.7"}
+
+// ══ ::Truncate / ::Expand / ::Associate ═══════════════════════════
+{"id":"t2_truncate","tier":2,"mode":"placeholder","family":"truncate","capability":"::Truncate0.5","query":"流量整形的三段分别负责什么","arms":{"treatment":"[[评测运维技术库日记本::Truncate0.5]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"minResults":1},"note":"::Truncate 是 [[]] 模式下唯一真正的相关性门。旧评估完全没覆盖它"}
+{"id":"t2_expand","tier":2,"mode":"placeholder","family":"expand","capability":"::Expand","query":"容量评审对水位口径和队列水线分档做了什么决定","arms":{"treatment":"[[评测运维技术库日记本::Expand]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/容量评审纪要"],"irrelevant":[],"expect":{"flags":{"useExpand":true},"minResults":1},"note":"依赖多 chunk 文档（profile 把 maxToken 压到 512 就是为了这个）。单 chunk 语料上 ::Expand 无从观察"}
+{"id":"t2_associate","tier":2,"mode":"placeholder","family":"associate","capability":"::Associate","query":"整形策略和连接池这两条线是怎么交汇的","arms":{"treatment":"[[评测容量运营库日记本::Associate]]","control":"[[评测容量运营库日记本]]"},"relevant":["评测容量运营库/跨库共现枢纽","评测容量运营库/跨库术语表"],"irrelevant":[],"expect":{"flags":{"useAssociate":true}},"note":"需要 ≥2 个种子命中同一个非种子 chunk，语料里的枢纽文档就是为此存在"}
+
+// ══ 聚合虚拟索引 ═══════════════════════════════════════════════════
+{"id":"t2_aggregate","tier":2,"mode":"placeholder","family":"aggregate","capability":"[[A|B]]","query":"流量整形与数据库超时在两个库里分别是怎么记录的","arms":{"treatment":"[[评测运维技术库|评测容量运营库日记本]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理","评测容量运营库/整形策略跨库对照"],"irrelevant":[],"expect":{"flags":{"virtualIndex":true},"minResults":1},"note":"两个库共享实体，聚合后 perIndexK 扇出与 globalK 归并才会真的改变顺序"}
+{"id":"t2_aggregate_k","tier":2,"mode":"placeholder","family":"aggregate","capability":"[[A|B:1.5]]","query":"流量整形与数据库超时在两个库里分别是怎么记录的","arms":{"treatment":"[[评测运维技术库|评测容量运营库日记本:1.5]]","control":"[[评测运维技术库|评测容量运营库日记本]]"},"relevant":["评测运维技术库/限流治理","评测容量运营库/整形策略跨库对照"],"irrelevant":[],"expect":{"flags":{"virtualIndex":true}},"note":"K 倍率 1.5。聚合模式下前导 :N 会被剥离以避免二次放大"}
+
+// ══ 门控三种占位符 ═════════════════════════════════════════════════
+// 关键修正：门控用例**不带** relevant —— 旧数据集给 gate_expect:false 的用例也配了
+// gold_snippets，于是门控正确拦截时反而扣 Recall/MRR，系统做对了却被罚分。
+{"id":"t2_gate_fulltext_pass","tier":2,"mode":"placeholder","family":"gate","capability":"<<>>","query":"请把流量整形和入口配额的原始记录完整给我看一下","arms":{"treatment":"<<评测运维技术库日记本>>"},"relevant":[],"irrelevant":[],"gate":"passed","expect":{"gate":"passed","directRecallAction":"DirectRecall"},"note":"门控放行 → 改写成 {{}} 并走纯文本全量注入"}
+{"id":"t2_gate_fulltext_block","tier":2,"mode":"placeholder","family":"gate","capability":"<<>>","query":"古城祭典的巡游路线和守钥人谱系是怎么写的","arms":{"treatment":"<<评测运维技术库日记本>>"},"relevant":[],"irrelevant":[],"gate":"blocked","expect":{"gate":"blocked"},"note":"小说设定查询打到技术主库 → 相似度应低于 0.34 阈值被拦下"}
+{"id":"t2_gate_fulltext_pass_distractor","tier":2,"mode":"placeholder","family":"gate","capability":"<<>>","query":"完整看一下梦境潮汐、星门回响和古城祭典的设定原文","arms":{"treatment":"<<评测幻想设定库日记本>>"},"relevant":[],"irrelevant":[],"gate":"passed","expect":{"gate":"passed"}}
+{"id":"t2_gate_fulltext_block_distractor","tier":2,"mode":"placeholder","family":"gate","capability":"<<>>","query":"错误码429的退避重试和接口参数变更","arms":{"treatment":"<<评测幻想设定库日记本>>"},"relevant":[],"irrelevant":[],"gate":"blocked","expect":{"gate":"blocked"}}
+{"id":"t2_gate_fulltext_last5","tier":2,"mode":"placeholder","family":"gate","capability":"<<>>::Last5","query":"请把流量整形和入口配额的最近几条原始记录给我","arms":{"treatment":"<<评测运维技术库日记本::Last5>>"},"relevant":[],"irrelevant":[],"gate":"passed","expect":{"gate":"passed","directRecallAction":"DirectRecall"},"note":"<<>> 放行后会把自己改写成 {{}}，所以继承 ::Last/::Random/::BM25，但 ::Rerank/::TagMemo/::Time 被静默丢弃"}
+{"id":"t2_gate_hybrid_pass","tier":2,"mode":"placeholder","family":"gate","capability":"《《》》","query":"汇总一下流量整形的三段分工与观测口径","arms":{"treatment":"《《评测运维技术库日记本》》"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"gate":"passed","expect":{"gate":"passed","minResults":1},"note":"混合模式：门控通过后走完整向量管线（返回 chunk，不是全文）"}
+{"id":"t2_gate_hybrid_block","tier":2,"mode":"placeholder","family":"gate","capability":"《《》》","query":"潮汐历法的十九年周期是怎么推算的","arms":{"treatment":"《《评测运维技术库日记本》》"},"relevant":[],"irrelevant":[],"gate":"blocked","expect":{"gate":"blocked"}}
+{"id":"t2_gate_hybrid_rerank","tier":2,"mode":"placeholder","family":"gate","capability":"《《》》::Rerank","requires":["rerank"],"query":"汇总一下流量整形的三段分工与观测口径","arms":{"treatment":"《《评测运维技术库日记本::Rerank》》"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"gate":"passed","expect":{"gate":"passed","flags":{"useRerank":true}}}
+
+// ══ {{}} 纯文本快速路径（走完整插件，验证它确实绕过了向量化）══════
+{"id":"t2_direct_fastpath","tier":2,"mode":"placeholder","family":"direct_text","capability":"{{}}","query":"看一下主库的全部原始记录","arms":{"treatment":"{{评测运维技术库日记本}}"},"relevant":[],"irrelevant":[],"expect":{"directRecallAction":"DirectRecall"},"note":"整个请求只含 {{}} 时走纯文本快速路径，不产生任何 embedding 调用"}
+{"id":"t2_direct_last5","tier":2,"mode":"placeholder","family":"direct_text","capability":"{{}}::Last5","query":"看一下主库最近五条记录","arms":{"treatment":"{{评测运维技术库日记本::Last5}}"},"relevant":[],"irrelevant":[],"expect":{"directRecallAction":"DirectRecall"}}
+{"id":"t2_direct_bm25","tier":2,"mode":"placeholder","family":"direct_text","capability":"{{}}::BM25+","query":"驻留时长与拒绝比例","arms":{"treatment":"{{评测运维技术库日记本::BM25+}}"},"relevant":[],"irrelevant":[],"expect":{"directRecallAction":"BM25BodyRecall"},"note":"断言 action 是 BM25BodyRecall 而不是 DirectRecall —— 后者意味着 BM25 未命中并兜底了"}
+
+// ══ 命名冲突 ═══════════════════════════════════════════════════════
+{"id":"t2_collision_diary_wins","tier":2,"mode":"placeholder","family":"collision","capability":"[[X知识库日记本]]","query":"占位符解析约定是怎么规定的","arms":{"treatment":"[[vcp知识库日记本]]"},"relevant":["vcp知识库/占位符解析约定"],"irrelevant":[],"expect":{"minResults":1},"note":"目录名含「知识库」二字时，日记本后缀必须胜出。判错会走冷知识库链路并在未注入时静默置空"}
+
+// ══ RoleValve ══════════════════════════════════════════════════════
+{"id":"t2_rolevalve_paren_noop","tier":2,"mode":"placeholder","family":"rolevalve","capability":"::RoleValve(...)","query":"流量整形的三段分别负责什么","arms":{"treatment":"[[评测运维技术库日记本::RoleValve(@User>=2&@Assistant<5)]]","control":"[[评测运维技术库日记本]]"},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"minResults":1},"note":"负控制：文档里写的括号形式其实匹配不上正则，valveMatch 为 null → 阀门恒开。等于这个修饰符被静默忽略"}
+
+// ══ LightMemo 工具调用 ═════════════════════════════════════════════
+{"id":"t2_lightmemo_knn","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"enginemode=knn","args":{"enginemode":"knn","query":"入口配额和队列缓冲各自解决什么问题","folder":"评测运维技术库","k":5,"BM25":false,"rerank":false},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"minResults":1},"note":"KNN 对照臂"}
+{"id":"t2_lightmemo_tagmemo","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"enginemode=tagmemo","args":{"enginemode":"tagmemo","query":"错误码429当时如何处理，是否用了指数退避重试","folder":"评测运维技术库","k":5,"tag_boost":0.6,"core_tags":["流量整形","退避重试"],"BM25":true},"relevant":["评测运维技术库/限流治理","评测运维技术库/接口错误码"],"irrelevant":[],"expect":{"minResults":1}}
+{"id":"t2_lightmemo_tagmemo_field","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"tag_boost=0.6+","args":{"enginemode":"tagmemo","query":"压力峰值时的三段式策略如何分工","folder":"评测运维技术库","k":5,"tag_boost":"0.6+","core_tags":["流量整形"]},"relevant":["评测运维技术库/限流治理"],"irrelevant":[],"expect":{"minResults":1},"note":"'+' 后缀只在 enginemode=tagmemo 下生效；rivermemo/knn 下会被静默丢弃"}
+{"id":"t2_lightmemo_rivermemo","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"enginemode=rivermemo","args":{"enginemode":"rivermemo","query":"机房搬迁之后连接池没跟上，随后数据库超时，最终导致订单丢失，整条链是怎么演变的","folder":"评测运维技术库","k":8,"tag_boost":0.6,"BM25":true},"relevant":["评测运维技术库/迁移复盘首轮","评测运维技术库/迁移复盘次轮"],"irrelevant":[],"expect":{"minResults":1}}
+{"id":"t2_lightmemo_anchor","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"core_tags 直锚","args":{"enginemode":"rivermemo","query":"影子流量演练的过程和熔断阈值验证结论","folder":"评测运维技术库","k":8,"tag_boost":0.6,"core_tags":["熔断影子流量"]},"relevant":["评测运维技术库/影子流量演练"],"irrelevant":[],"expect":{"minResults":1},"note":"稀有 tag 经 core_tags 提为 hop-0，走直锚通道（上限 0.10，位移最大）"}
+{"id":"t2_lightmemo_timerange","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"查询内时间范围","args":{"enginemode":"knn","query":"[__TIME_RANGE__] 巡检与交接","folder":"评测运维技术库","k":8},"relevant":[],"irrelevant":[],"expect":{"minResults":1},"note":"__TIME_RANGE__ 由 runner 按语料锚点日替换成 [YYYY-MM-DD~YYYY-MM-DD]"}
+{"id":"t2_lightmemo_ab","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"tagmemo_ab","args":{"command":"tagmemo_ab","query":"错误码429当时如何处理，是否用了指数退避重试","folder":"评测运维技术库","k":8,"candidate_k":40,"tag_boost":0.6,"core_tags":["流量整形"],"BM25":true,"compare_rerank":true},"relevant":[],"irrelevant":[],"expect":{"abReport":true},"note":"内建三轨 A/B：KNN ↔ TagMemo V9 ↔ Rust Topology V3，外加可选 Rerank 轨。重合度计数可直接解析"}
+{"id":"t2_lightmemo_bad_engine","tier":2,"mode":"lightmemo","family":"lightmemo","capability":"错误参数","args":{"enginemode":"不存在的引擎","query":"x","folder":"评测运维技术库"},"relevant":[],"irrelevant":[],"expect":{"pluginError":"enginemode"},"note":"负控制：非法 enginemode 必须报错而不是静默退化"}

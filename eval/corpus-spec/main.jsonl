@@ -1,0 +1,142 @@
+// 评测运维技术库 —— 技术与运维主线。
+//
+// 每一族（family）都是为了让某个能力"可被证伪"而设计的，不是泛泛的样例数据。
+// 关键约束（违反任何一条，对应能力会静默失效而非报错）：
+//   * tags 2-8 个，含中文的 tag ≤15 字，不含日期形字符串，跨 ≥3 篇复现才有共现边
+//   * TagMemo 只能加分不能减分（finalScore = knnScore + geoBonus，geoBonus ≤ 0.18），
+//     所以 gold 相对 hardneg 的 KNN 差距必须落在 [0.04, 0.15] —— gold 正文要"同域不同词"，
+//     不能写成完全无关的话题
+//   * Tag 行顺序 = file_tags.position = RiverMemo 的方向信号，因果相邻的 tag 要靠前且相邻
+//   * mtimeRank 越小 = mtime 越新。刻意与首行日期解耦，否则 ::LastN 和 {{}} 全量分不开
+//
+// ── seed：建立查询会感知到的共享 tag 词汇 ──────────────────────────────
+{"slug":"接口错误码","family":"seed","role":"seed","dayOffset":-6,"mtimeRank":22,"tags":["退避重试","流量整形","接口参数","并发上限"],"body":"错误码429的处理方案确定为指数退避重试，同时限制并发上限并补充本地缓存。\n接口参数从 pageSize 改为 limit，新增 cursor 字段，旧客户端兼容两个版本周期。"}
+
+// ── tagmemo_tagonly：TagMemo 严格胜出的核心对抗对 ──────────────────────
+// gold 正文**不含任何查询词**（无 429 / 退避 / 重试 / 错误码），只能靠 Tag 向量把查询
+// 向量拉过来被捞出；hardneg 正文**含完整查询词**但 tag 与查询毫无交集，只能拿到
+// interpolated thematic 接触（上限 0.035）。两者共享"限流"这个语域，保证 KNN 差距不过大。
+{"slug":"限流治理","family":"tagmemo_tagonly","role":"gold","dayOffset":-3,"mtimeRank":3,"tags":["流量整形","入口配额","队列缓冲","优雅降级","驻留时长"],"body":"服务端在压力峰值期间启用三段式策略：入口配额分配、队列缓冲、优雅降级。\n观测口径以队列驻留时长与拒绝比例为主，不看请求计数。\n三段之间通过共享配额账本联动，避免各自为政。"}
+{"slug":"限流联动","family":"tagmemo_tagonly","role":"bridge","dayOffset":-4,"mtimeRank":18,"tags":["退避重试","流量整形"],"body":"联动评审确认退避重试与整形策略共用同一套配额账本，两侧的计数窗口对齐到秒级。"}
+{"slug":"限流误报","family":"tagmemo_tagonly","role":"hardneg","dayOffset":-2,"mtimeRank":9,"tags":["监控采样","窗口错位","灰度误报","日志缺失"],"body":"错误码429在灰度环境出现误报，指数退避重试的日志里没有对应记录。\n排查后确认是监控采样窗口错位，与限流策略本身无关，已修正采样对齐。"}
+
+// ── tagmemo_position：隔离 tag 序号这一个变量 ──────────────────────────
+// tag 集合完全相同、顺序相反。正文写成两个平行但不同的子系统，避免余弦 >0.92 被
+// ResultDeduplicator 收掉（那样就什么都测不到了）。
+// φ = 0.9 - 0.4*(pos-1)/(n-1)，positional = exp(-0.035*(pos-1))：判别标签在位 1 拿满权重。
+{"slug":"网关灰度判别","family":"tagmemo_position","role":"position_first","dayOffset":-8,"mtimeRank":26,"tags":["灰度判别","巡检记录","配置基线","变更单号"],"body":"网关侧的灰度判别按请求头分流，命中规则后写入独立的观测通道。\n判别规则每次变更都要登记变更单号并回归一次基线配置。"}
+{"slug":"代理灰度判别","family":"tagmemo_position","role":"position_last","dayOffset":-9,"mtimeRank":27,"tags":["巡检记录","配置基线","变更单号","灰度判别"],"body":"反向代理层的分流依赖上游注入的标记位，命中后仅改写转发目标，不改写响应。\n代理规则的调整需要同步更新巡检清单，避免与网关规则冲突。"}
+
+// ── tagmemo_closure_fail：负控制 ───────────────────────────────────────
+// 正文与"流量整形"高度相关，但 tag 与正文语义正交 → cos(tagVec, chunkVec) < 0.2
+// → closure = 0 → candidateMass 掉到 0.02 地板。断言 TagMemo **不**给它加分，
+// 以此证明闭合门是真的在起作用，而不是 boost 无条件生效。
+{"slug":"整形部署记录","family":"tagmemo_closure_fail","role":"negative_control","dayOffset":-7,"mtimeRank":24,"tags":["陶土烧制","星象仪","潮汐历法"],"body":"三段式流量整形的部署记录与配置快照已归档，入口配额的初始值沿用上一版本。\n队列缓冲的水线按机型分档设置，优雅降级开关默认关闭。"}
+
+// ── rivermemo_order：因果链顺序同构（RiverMemo 最干净的胜出场景）──────
+// 真实因果：服务器迁移 → 数据库超时 → 订单丢失。
+// 3 篇按真实顺序写 Tag 行（拿 direction_similarity 1.0），3 篇倒序（拿 0.25），
+// 2 篇插入外来概念拉开 Δposition 削弱边强度。
+// 因果边在 8 篇中反复出现 → independent_fraction 高，不会被当成循环自证折价。
+{"slug":"迁移复盘首轮","family":"rivermemo_order","role":"gold_forward","dayOffset":-12,"mtimeRank":30,"tags":["服务器迁移","数据库超时","订单丢失","事故复盘"],"body":"机房搬迁当晚连接池配置未随实例规格调整，随后数据库连接排队，超时比例快速抬升。\n超时进一步导致下单链路的写入失败，最终出现订单丢失。复盘确认根因在迁移环节。"}
+{"slug":"迁移复盘次轮","family":"rivermemo_order","role":"gold_forward","dayOffset":-13,"mtimeRank":31,"tags":["服务器迁移","数据库超时","订单丢失","值班记录"],"body":"值班同学记录了迁移后的连接曲线：先是迁移批次切换，之后数据库超时告警连续触发。\n超时窗口内的下单请求有一部分没有落库，表现为订单丢失。处理过程按预案回切。"}
+{"slug":"迁移复盘三轮","family":"rivermemo_order","role":"gold_forward","dayOffset":-14,"mtimeRank":32,"tags":["服务器迁移","数据库超时","订单丢失","补偿对账"],"body":"迁移引发的数据库超时在两小时后收敛，此前积压的下单请求需要补偿对账。\n对账口径按订单丢失的时间窗切分，逐笔与支付流水比对，确认演变链条完整。"}
+{"slug":"迁移追溯甲","family":"rivermemo_order","role":"distractor_reverse","dayOffset":-15,"mtimeRank":33,"tags":["订单丢失","数据库超时","服务器迁移","工单归档"],"body":"从订单丢失的投诉工单往上追，先看到数据库超时的记录，再定位到服务器迁移批次。\n工单归档时补充了完整的时间线截图。"}
+{"slug":"迁移追溯乙","family":"rivermemo_order","role":"distractor_reverse","dayOffset":-16,"mtimeRank":34,"tags":["订单丢失","数据库超时","服务器迁移","客服反馈"],"body":"客服侧汇总的订单丢失反馈指向同一时段，与数据库超时曲线吻合，源头是服务器迁移。\n反馈量在回切后一小时内归零。"}
+{"slug":"迁移追溯丙","family":"rivermemo_order","role":"distractor_reverse","dayOffset":-17,"mtimeRank":35,"tags":["订单丢失","数据库超时","服务器迁移","报表偏差"],"body":"日报里的订单丢失口径与数据库超时时段重叠，追溯到服务器迁移的变更窗口。\n报表偏差在补数后修正。"}
+{"slug":"迁移杂记甲","family":"rivermemo_order","role":"distractor_interleaved","dayOffset":-18,"mtimeRank":36,"tags":["服务器迁移","陶土烧制","数据库超时","订单丢失"],"body":"迁移周的杂记：机柜标签重做，顺手记了一段陶土工艺的闲话，之后是数据库超时与订单丢失。"}
+{"slug":"迁移杂记乙","family":"rivermemo_order","role":"distractor_interleaved","dayOffset":-19,"mtimeRank":37,"tags":["数据库超时","服务器迁移","星象仪","订单丢失"],"body":"先记下数据库超时的现象，再补服务器迁移的批次号，中间插了一段星象仪的观测笔记，末尾是订单丢失统计。"}
+
+// ── rivermemo_corroboration：反自证机制 ───────────────────────────────
+// 缓存穿透 → 服务雪崩 这条边在 3 篇里各自被印证 → independent_fraction 高；
+// 证书过期 → 握手失败 只在 1 篇里出现 → 拓扑证据被当作循环自证折价。
+{"slug":"缓存雪崩首例","family":"rivermemo_corroboration","role":"corroborated","dayOffset":-21,"mtimeRank":38,"tags":["缓存穿透","服务雪崩","熔断降级"],"body":"热点键过期后请求直接打到底层，缓存穿透随即引发服务雪崩，熔断降级在两分钟后生效。"}
+{"slug":"缓存雪崩再现","family":"rivermemo_corroboration","role":"corroborated","dayOffset":-22,"mtimeRank":39,"tags":["缓存穿透","服务雪崩","预热策略"],"body":"第二次出现缓存穿透导致服务雪崩，原因是预热策略只覆盖了部分分片。"}
+{"slug":"缓存雪崩收敛","family":"rivermemo_corroboration","role":"corroborated","dayOffset":-23,"mtimeRank":40,"tags":["缓存穿透","服务雪崩","空值占位"],"body":"引入空值占位后缓存穿透的比例下降，服务雪崩不再复现，观察两周稳定。"}
+{"slug":"证书握手异常","family":"rivermemo_corroboration","role":"uncorroborated","dayOffset":-24,"mtimeRank":41,"tags":["证书过期","握手失败","证书轮换"],"body":"边缘节点的证书过期导致握手失败，证书轮换脚本漏掉了一个灰度集群。"}
+
+// ── rivermemo_anchor：稀有 hop-0 直锚（上限 0.10，位移最大的通道）──────
+// 熔断影子流量 在整个语料里只出现一次 → rarity = max(0.15, 1 - poolCount/numCandidates)
+// 接近 1，入度极低 → specificity 接近 1。用 core_tags 把它提成 source_type='core'。
+{"slug":"影子流量演练","family":"rivermemo_anchor","role":"anchor_gold","dayOffset":-26,"mtimeRank":42,"tags":["熔断影子流量","服务雪崩","演练脚本"],"body":"本次演练用影子流量复现熔断路径，真实请求不受影响，只镜像一份到旁路集群。\n演练脚本会在旁路侧注入延迟，观察熔断阈值是否按预期触发。"}
+
+// ── bm25：稀疏召回 vs 语义召回的分离 ──────────────────────────────────
+// 前者词面精确命中但语义偏（BM25 应捞到、向量不该排前）；
+// 后者语义对但词面不相交（向量应捞到、BM25 捞不到）。
+{"slug":"压测脚本说明","family":"bm25_lexical","role":"lexical_decoy","dayOffset":-28,"mtimeRank":43,"tags":["压测工具","脚本参数","巡检记录"],"body":"压测脚本的参数说明：驻留时长用于控制单连接保持的秒数，P95抖动只作为输出列展示。\n本文只讲工具用法，不涉及任何线上策略与容量结论。"}
+{"slug":"延迟归因","family":"bm25_lexical","role":"semantic_only","dayOffset":-29,"mtimeRank":44,"tags":["尾部延迟","归因分析","巡检记录"],"body":"长尾请求的耗时集中在下游一次串行调用上，去掉这次调用后曲线立刻平坦。\n结论是排队而不是计算，扩容对它几乎没有帮助。"}
+
+// ── timedecay：半衰期 30 天，需要跨多个半衰期的日期分布 ────────────────
+// 共享 ASCII tag boxDecay：::TimeDecay 的白名单捕获组是 [\w,]+，纯中文 tag 捕获不到，
+// 会导致衰减静默作用于全部结果。所以白名单命中用例必须用 ASCII tag。
+{"slug":"衰减样本近期","family":"timedecay","role":"fresh","dayOffset":-3,"mtimeRank":12,"tags":["boxDecay","归档策略","巡检记录"],"body":"归档策略的近期调整：保留窗口缩短到七天，超出部分转入冷存。"}
+{"slug":"衰减样本中期","family":"timedecay","role":"mid","dayOffset":-40,"mtimeRank":13,"tags":["boxDecay","归档策略","配置基线"],"body":"归档策略的上一版：保留窗口三十天，冷存路径尚未启用，配置基线记录在案。"}
+{"slug":"衰减样本远期","family":"timedecay","role":"stale","dayOffset":-120,"mtimeRank":1,"tags":["boxDecay","归档策略","变更单号"],"body":"归档策略最初的版本：不做冷存，全部保留在主库，变更单号可查。"}
+
+// ── dedup：结果去重的四个分支 ─────────────────────────────────────────
+// 前三篇正文一致（含全角变体）→ 走 text 归一化后的精确去重；
+// 后两篇是余弦落在 [0.92, 0.97) 的复述对 → 在候选池阶段被抑制、在 final-output 阶段存活。
+// 精确去重要求 chunk 文本**逐字节相同**。chunk 文本包含首行日期、[HH:MM] 前缀和 Tag 行，
+// 所以这三篇必须共用同一个 dayOffset、同一个 hhmm、同一组 tags —— 只有文件名（slug）不同。
+// 只改 body 而让日期/时间/tag 各不相同的话，文本根本不同，精确去重永远不会触发。
+{"slug":"重复样本甲","family":"dedup","role":"exact_a","dayOffset":-31,"hhmm":"09:30","mtimeRank":45,"tags":["值班交接","巡检记录","归档策略"],"body":"值班交接口径：P95 指标与未闭环告警需要逐条列出，交给下一班确认。"}
+{"slug":"重复样本乙","family":"dedup","role":"exact_b","dayOffset":-31,"hhmm":"09:30","mtimeRank":46,"tags":["值班交接","巡检记录","归档策略"],"body":"值班交接口径：P95 指标与未闭环告警需要逐条列出，交给下一班确认。"}
+// 全角变体：日期/时间/tag 与上面两篇完全一致，正文只把 "P95 " 换成全角的 "Ｐ９５　"（含表意空格 U+3000）。
+// ResultDeduplicator._normalizeText 做的是 NFKC + 空白折叠 + 小写，NFKC 会把全角字母数字折回半角、
+// 把 U+3000 折成普通空格，因此这三篇归一化后完全相同，必须折叠为一条。
+// 注意：单纯在顿号前后加空格**不会**被折叠 —— NFKC 不动 CJK 标点，空白折叠也只把连续空白并成一个。
+// 这是设计这条用例时踩过的坑，写在这里避免以后又改成不可折叠的形式。
+{"slug":"重复样本全角","family":"dedup","role":"fullwidth","dayOffset":-31,"hhmm":"09:30","mtimeRank":47,"tags":["值班交接","巡检记录","归档策略"],"body":"值班交接口径：Ｐ９５　指标与未闭环告警需要逐条列出，交给下一班确认。"}
+{"slug":"复述样本甲","family":"dedup","role":"paraphrase_a","dayOffset":-34,"mtimeRank":48,"tags":["容量水位","巡检记录","归档策略"],"body":"当前集群的水位按峰值的七成设定告警线，超过后先看队列长度再决定是否介入。"}
+{"slug":"复述样本乙","family":"dedup","role":"paraphrase_b","dayOffset":-35,"mtimeRank":49,"tags":["容量水位","巡检记录","配置基线"],"body":"集群水位的告警线定在峰值的百分之七十，触发之后优先观察队列长度，再判断要不要人工介入。"}
+
+// ── expand：多 chunk 文档（配 profile 的 embedding.maxToken=512）─────────
+// ::Expand 要把 chunk 收拢回完整文档，必须真的有 chunk_index>0 才看得出效果。
+// 不靠写两万字，而是靠调低 maxToken —— 这两篇约 700 字，会被切成 2 块以上。
+{"slug":"容量评审纪要","family":"expand","role":"multichunk","dayOffset":-37,"mtimeRank":50,"tags":["容量水位","扩容评审","队列缓冲","巡检记录"],"body":"容量评审第一部分讨论了当前的水位口径。现有告警线按峰值的七成设定，但峰值本身取的是近三十天的单点最高值，遇到一次异常抖动就会把基线整体抬高，导致后续所有判断都偏保守。评审决定改用近三十天的第九十五百分位作为基线，异常单点不再参与计算。\n第二部分讨论队列缓冲的水线分档。当前所有机型共用一套水线，但高配机型的内存余量明显更多，统一水线让它们提前进入降级。决定按机型分三档设置，档位边界写进配置基线，变更需要走变更单号。\n第三部分是扩容评审的流程收敛。此前扩容申请需要三方会签，平均耗时四天,已经跟不上业务波动。决定把常规扩容下放到值班角色，只有跨可用区的调整才需要会签，同时要求每次扩容后补一份水位复核记录。\n第四部分遗留了两个待办：一是压测口径与线上口径尚未对齐，二是冷存路径的成本模型还没有结论，都放到下一次评审。"}
+{"slug":"发布评审纪要","family":"expand","role":"multichunk","dayOffset":-38,"mtimeRank":51,"tags":["发布窗口","回滚阈值","灰度判别","巡检记录"],"body":"发布评审确认了本轮的窗口安排。主版本放在周三晚间的低峰段，次版本顺延到周四同一时段，两者之间保留至少二十小时的观察间隔，避免问题叠加后难以归因。\n回滚预案分两层。第一层是功能开关，覆盖所有新增路径，可以在不重启的前提下即时关闭；第二层是数据库快照，仅在涉及表结构变更时准备，恢复窗口按数据量估算。回滚阈值定为错误率连续五分钟超过百分之三，或者尾部延迟相比基线翻倍，任一条件满足即触发。\n灰度判别沿用请求头分流，第一阶段放量百分之一并观察三十分钟，第二阶段放到百分之十并观察两小时,之后才允许全量。每个阶段都要留一份指标快照，作为下一阶段放量的依据。\n评审还讨论了发布与容量的耦合：如果发布窗口和扩容窗口重叠，优先保证扩容先完成，否则容量不足会把发布问题放大成容量问题，增加归因难度。"}
+
+// ── 时间覆盖 + hub 稀释（一举两得）────────────────────────────────────
+// 这些文档同时承担两个职责：
+//   1. 覆盖 ::Time 需要的日期网格（今天/昨天/前天/N天前/上周/本周/上月初中末/三个月前）
+//   2. 共享 通用记录 这个 tag，把它的入度推高 → hub 惩罚（1 - sqrt(inbound/maxInbound)，
+//      地板 publicHubFloor 0.35）才成为可测量的量。7 篇语料下这条根本没法测。
+{"slug":"今日巡检","family":"time_grid","role":"today","dayOffset":0,"mtimeRank":4,"tags":["通用记录","巡检记录","值班交接"],"body":"今天的巡检没有发现新增异常，队列长度平稳，磁盘余量充足。"}
+{"slug":"昨日巡检","family":"time_grid","role":"yesterday","dayOffset":-1,"mtimeRank":5,"tags":["通用记录","巡检记录","配置基线"],"body":"昨天的巡检修正了一处采样对齐问题，其余指标正常。"}
+{"slug":"前日巡检","family":"time_grid","role":"day_before","dayOffset":-2,"mtimeRank":6,"tags":["通用记录","巡检记录","变更单号"],"body":"前天的巡检记录了一次短暂的连接抖动，持续不到一分钟，未触发告警。"}
+{"slug":"三日前巡检","family":"time_grid","role":"three_days","dayOffset":-3,"mtimeRank":7,"tags":["通用记录","巡检记录","归档策略"],"body":"三天前完成了一次冷存归档，主库体积下降明显。"}
+{"slug":"五日前巡检","family":"time_grid","role":"five_days","dayOffset":-5,"mtimeRank":8,"tags":["通用记录","巡检记录","容量水位"],"body":"五天前的水位复核结果与预估一致，暂不需要扩容。"}
+{"slug":"上周三记录","family":"time_grid","role":"last_week_wed","dateRule":"lastWeekWed","mtimeRank":14,"tags":["通用记录","值班交接","巡检记录"],"body":"上周三的值班交接补了一份未闭环告警清单，下一班已确认接手。"}
+{"slug":"上周一记录","family":"time_grid","role":"last_week_mon","dateRule":"lastWeekMon","mtimeRank":15,"tags":["通用记录","配置基线","巡检记录"],"body":"上周一同步了一次配置基线，两个集群的差异项清零。"}
+{"slug":"本周记录","family":"time_grid","role":"this_week","dateRule":"thisWeek","mtimeRank":10,"tags":["通用记录","巡检记录","扩容评审"],"body":"本周开了一次简短的扩容评审，结论是维持现状并继续观察。"}
+{"slug":"上月初记录","family":"time_grid","role":"prev_month_early","dateRule":"prevMonthEarly","mtimeRank":16,"tags":["通用记录","归档策略","巡检记录"],"body":"上个月月初调整了归档窗口，冷存路径首次投入使用。"}
+{"slug":"上月中记录","family":"time_grid","role":"prev_month_mid","dateRule":"prevMonthMid","mtimeRank":17,"tags":["通用记录","容量水位","巡检记录"],"body":"上个月中旬做了一轮水位盘点，三个集群的余量都在安全区。"}
+{"slug":"上月末记录","family":"time_grid","role":"prev_month_late","dateRule":"prevMonthLate","mtimeRank":19,"tags":["通用记录","变更单号","巡检记录"],"body":"上个月月末归拢了变更单号，未闭环的两条转入本月跟进。"}
+{"slug":"本月初记录","family":"time_grid","role":"this_month_early","dateRule":"thisMonthEarly","mtimeRank":11,"tags":["通用记录","巡检记录","值班交接"],"body":"本月月初的交接补充了冷存路径的观察项。"}
+{"slug":"三月前记录","family":"time_grid","role":"three_months","dateRule":"threeMonthsAgo","mtimeRank":4.5,"tags":["通用记录","归档策略","配置基线"],"body":"三个月前的归档策略还是全量保留，配置基线与现在差异较大。"}
+{"slug":"廿五天前记录","family":"time_grid","role":"twenty_five_days","dayOffset":-25,"mtimeRank":20,"tags":["通用记录","巡检记录","压测工具"],"body":"二十五天前跑过一轮压测，结论是队列而非计算受限。"}
+{"slug":"九五天前记录","family":"time_grid","role":"ninety_five_days","dayOffset":-95,"mtimeRank":21,"tags":["通用记录","归档策略","容量水位"],"body":"九十五天前的水位记录，当时的告警线还是按峰值单点设定。"}
+{"slug":"二百天前记录","family":"time_grid","role":"two_hundred_days","dayOffset":-200,"mtimeRank":2,"tags":["通用记录","配置基线","变更单号"],"body":"两百天前的配置基线快照，多数条目此后都已重写。"}
+
+// ── 生产格式探针：只写 Tag:，不写 Tags: ──────────────────────────────
+// searcherTags:false 让生成器省掉 Tags: 行，于是这篇的格式与**真实生产语料完全一致**
+// （dailynote/ 下 100% 的文件都只有 Tag:，没有任何一个用 Tags:）。
+// 用来钉住一个已确认的实现分歧：Rust 的 extract_tag_line 只认 tags:/标签:，
+// 看不见 Tag:，因此这篇对 bm25_search_mode=tag 恒不可见。
+// 对应用例 t1_searcher_production_tag_invisible。若哪天 Rust 侧改成也认 Tag:，
+// 该用例会失败并提醒我们更新基线 —— 这正是我们想要的信号。
+{"slug":"生产格式探针","family":"searcher_format","role":"production_format","dayOffset":-52,"mtimeRank":62,"searcherTags":false,"tags":["生产格式","巡检记录","归档策略"],"body":"这篇刻意只保留一种标签行写法，与线上日记的实际格式保持一致，用于验证两套检索引擎对标签行的识别差异。"}
+
+// ── 纯 hub 稀释填充 ──────────────────────────────────────────────────
+// 只为把 通用记录 的入度推到足够高，同时把 填充类 tag 的出现次数补到 ≥3 篇，
+// 让共现图有边、场熵能过 0.12 的门（否则 geodesicRerank 会因熵过低直接放弃重排）。
+{"slug":"杂项记录一","family":"hub_dilution","role":"filler","dayOffset":-41,"mtimeRank":52,"tags":["通用记录","脚本参数"],"body":"零散记录：脚本参数的默认值调整了两处，不影响既有调用方。"}
+{"slug":"杂项记录二","family":"hub_dilution","role":"filler","dayOffset":-42,"mtimeRank":53,"tags":["通用记录","熔断降级"],"body":"零散记录：熔断降级的观察窗从一分钟放宽到三分钟。"}
+{"slug":"杂项记录三","family":"hub_dilution","role":"filler","dayOffset":-43,"mtimeRank":54,"tags":["通用记录","预热策略"],"body":"零散记录：预热策略新增了一个分片维度的开关。"}
+{"slug":"杂项记录四","family":"hub_dilution","role":"filler","dayOffset":-44,"mtimeRank":55,"tags":["通用记录","空值占位"],"body":"零散记录：空值占位的过期时间统一为三十秒。"}
+{"slug":"杂项记录五","family":"hub_dilution","role":"filler","dayOffset":-45,"mtimeRank":56,"tags":["通用记录","证书轮换"],"body":"零散记录：证书轮换脚本补齐了灰度集群的覆盖。"}
+{"slug":"杂项记录六","family":"hub_dilution","role":"filler","dayOffset":-46,"mtimeRank":57,"tags":["通用记录","尾部延迟"],"body":"零散记录：尾部延迟的采样频率提高到每秒一次。"}
+{"slug":"杂项记录七","family":"hub_dilution","role":"filler","dayOffset":-47,"mtimeRank":58,"tags":["通用记录","归因分析"],"body":"零散记录：归因分析的看板增加了下游调用维度。"}
+{"slug":"杂项记录八","family":"hub_dilution","role":"filler","dayOffset":-48,"mtimeRank":59,"tags":["通用记录","入口配额"],"body":"零散记录：入口配额的默认档位从三档增加到四档。"}
+{"slug":"杂项记录九","family":"hub_dilution","role":"filler","dayOffset":-49,"mtimeRank":60,"tags":["通用记录","优雅降级"],"body":"零散记录：优雅降级的提示文案做了一次统一。"}
+{"slug":"杂项记录十","family":"hub_dilution","role":"filler","dayOffset":-50,"mtimeRank":61,"tags":["通用记录","演练脚本"],"body":"零散记录：演练脚本的旁路集群配置已固化到仓库。"}

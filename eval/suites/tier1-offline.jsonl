@@ -1,0 +1,72 @@
+// Tier 1 —— 纯离线，不发任何网络请求。
+//
+// 这些用例直接构造被测模块（DirectDiaryTextProcessor / TimeExpressionParser / ResultDeduplicator），
+// 不启动 KnowledgeBaseManager，因此不产生 embedding 调用。可以进 CI。
+//
+// mode 说明：
+//   direct   —— new DirectDiaryTextProcessor({dailyNoteRootPath})，覆盖 {{}} 的纯文本链路
+//   time     —— new TimeExpressionParser('zh-CN','Asia/Shanghai')，纯函数
+//   searcher —— DailyNoteSearcher（Rust）的 JSON 契约
+//   dedup    —— kbm.resultDeduplicator 的直接调用（不需要索引）
+//
+// ── {{}} 纯文本链路 ─────────────────────────────────────────────────
+{"id":"t1_direct_full","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}","book":"main","op":"full","expect":{"minFiles":50,"sortedBy":"filename"},"note":"全量模式按文件名排序（.sort()），与 ::LastN 的 mtime 排序不同"}
+{"id":"t1_direct_last3","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}::Last3","book":"main","op":"last","limit":3,"expect":{"exactFiles":["衰减样本远期","二百天前记录","限流治理"],"note":"按 mtimeRank 1/2/3。刻意不是日期最新的三篇 —— 若两者相同则 ::LastN 与全量模式无从区分"}}
+{"id":"t1_direct_last_default","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}::Last","book":"main","op":"last","limit":null,"expect":{"fileCount":10},"note":"裸 ::Last 默认 10"}
+{"id":"t1_direct_last0","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}::Last0","book":"main","op":"last","limit":0,"expect":{"fileCount":10},"note":"::Last0 归一化为 10，不是 0"}
+{"id":"t1_direct_random3","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}::Random3","book":"main","op":"random","limit":3,"expect":{"fileCount":3,"subsetOfBook":true},"note":"随机采样只断言数量与集合归属，不断言具体身份"}
+{"id":"t1_direct_random_default","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}::Random","book":"main","op":"random","limit":null,"expect":{"fileCount":1},"note":"裸 ::Random 默认 1"}
+{"id":"t1_direct_bm25_body","tier":1,"mode":"direct","family":"bm25","capability":"{{}}::BM25+","book":"main","op":"bm25","bm25Mode":"body","query":"驻留时长 拒绝比例 队列缓冲","limit":30,"expect":{"matched":true,"reasonNot":"no-positive-score","topFileAmong":["限流治理","压测脚本说明"]},"note":"body 模式剔除第 1 行与 Tag 行，判别词必须在正文里"}
+{"id":"t1_direct_bm25_tag","tier":1,"mode":"direct","family":"bm25","capability":"{{}}::BM25","book":"main","op":"bm25","bm25Mode":"tag","query":"流量整形 退避重试","limit":30,"expect":{"matched":true},"note":"tag 模式只打分最后一条 Tag 行"}
+{"id":"t1_direct_bm25_fallback","tier":1,"mode":"direct","family":"bm25","capability":"{{}}::BM25+","book":"main","op":"bm25","bm25Mode":"body","query":"就是 但是 感觉","limit":10,"expect":{"matched":false,"reason":"no-positive-score"},"note":"全是停用词/弱词 → 必须走 ::LastN 兜底并把 matched 置 false。这条兜底旧评估完全看不见"}
+{"id":"t1_direct_missing_book","tier":1,"mode":"direct","family":"direct_text","capability":"{{}}","book":"不存在的日记本","op":"full","expect":{"unreadable":true},"note":"不存在的日记本返回 [无法读取…]，不抛异常"}
+
+// ── TimeExpressionParser ────────────────────────────────────────────
+// 这一组刻意把被测系统的**既有行为**固化成回归基线，包括几处反直觉之处。
+// 重构时最容易"顺手修好"它们，而那会静默改变所有 ::Time 用例的语义。
+{"id":"t1_time_today","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"今天的巡检结果如何","expect":{"rangeCount":1,"spansDays":1}}
+{"id":"t1_time_yesterday","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"昨天有没有异常","expect":{"rangeCount":1,"spansDays":1}}
+{"id":"t1_time_day_before","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"前天的记录","expect":{"rangeCount":1,"spansDays":1}}
+{"id":"t1_time_few_days","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"前几天聊了什么","expect":{"rangeCount":1,"spansDays":1},"note":"回归基线：「前几天」解析成 5 天前那一天，不是 5 天的跨度"}
+{"id":"t1_time_last_week","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"上周讨论的内容","expect":{"rangeCount":1,"spansDays":7}}
+{"id":"t1_time_last_wednesday","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"上周三说了什么","expect":{"rangeCount":1,"spansDays":7},"note":"回归基线：「上周三」返回整个上周（周日起），不是单独那一天"}
+{"id":"t1_time_this_month_early","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"本月初的安排","expect":{"rangeCount":1,"spansDaysAtLeast":28},"note":"回归基线：「本月初」返回整个当月，不是 1-10 日"}
+{"id":"t1_time_month_early","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"月初的安排","expect":{"rangeCount":1,"spansDays":10},"note":"对比：单独的「月初」才是 1-10 日"}
+{"id":"t1_time_fifteen_days","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"十五天前的记录","expect":{"rangeCount":1,"spansDays":1,"daysAgo":5},"note":"回归基线：中文数字只捕获单字，「十五天前」被解析成 5 天前"}
+{"id":"t1_time_multi","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"上周和三个月前都聊了什么","expect":{"rangeCount":2},"note":"多表达式返回多个区间，按 start|end 去重"}
+{"id":"t1_time_none","tier":1,"mode":"time","family":"time_parse","capability":"::Time","query":"限流策略是怎么设计的","expect":{"rangeCount":0},"note":"无时间表达 → ::Time 分支整体跳过，输出与不加 ::Time 一致"}
+
+// ── ResultDeduplicator ──────────────────────────────────────────────
+{"id":"t1_dedup_exact","tier":1,"mode":"dedup","family":"dedup","capability":"resultDeduplication","op":"hard","expect":{"collapsesIdenticalText":true},"note":"两个不同文件里的逐字节相同文本必须折叠为一条"}
+{"id":"t1_dedup_fullwidth","tier":1,"mode":"dedup","family":"dedup","capability":"resultDeduplication","op":"hard","expect":{"collapsesFullwidthVariant":true},"note":"NFKC + 空白折叠后应与半角版本折叠"}
+{"id":"t1_dedup_vectorless_preserved","tier":1,"mode":"dedup","family":"dedup","capability":"resultDeduplication","op":"hard","expect":{"preservesVectorless":true},"note":"安全不变量：无向量的 BM25 候选永不被丢弃"}
+{"id":"t1_dedup_anonymous_preserved","tier":1,"mode":"dedup","family":"dedup","capability":"resultDeduplication","op":"hard","expect":{"preservesAnonymous":true},"note":"安全不变量：无 chunkId / 无 text / 无 path 的候选全部保留"}
+
+// ── DailyNoteSearcher（Rust JSON 契约）────────────────────────────
+{"id":"t1_searcher_text","tier":1,"mode":"searcher","family":"searcher","capability":"text","requires":["dailyNoteSearcher"],"payload":{"query":"驻留时长","folder":"评测运维技术库","max_results":20,"context_lines":1},"expect":{"status":"success","minTotal":1}}
+{"id":"t1_searcher_regex","tier":1,"mode":"searcher","family":"searcher","capability":"regex","requires":["dailyNoteSearcher"],"payload":{"query":"配额\\s*账本","folder":"评测运维技术库","is_regex":true,"max_results":20},"expect":{"status":"success","minTotal":1}}
+{"id":"t1_searcher_regex_lookaround","tier":1,"mode":"searcher","family":"searcher","capability":"regex","requires":["dailyNoteSearcher"],"payload":{"query":"(?=限流)","folder":"评测运维技术库","is_regex":true},"expect":{"status":"error","errorContains":"look-around"},"note":"Rust regex 不支持环视；错误在 HTTP 200 里以 status:error 返回，必须显式断言"}
+{"id":"t1_searcher_and","tier":1,"mode":"searcher","family":"searcher","capability":"queries-AND","requires":["dailyNoteSearcher"],"payload":{"queries":["配额","缓冲"],"folder":"评测运维技术库","max_results":20},"expect":{"status":"success","minTotal":1},"note":"queries 覆盖 query，做 AND 匹配"}
+{"id":"t1_searcher_traversal","tier":1,"mode":"searcher","family":"searcher","capability":"security","requires":["dailyNoteSearcher"],"payload":{"query":"x","folder":"../../"},"expect":{"status":"error","errorContains":"traversal"},"note":"路径穿越必须被拒绝"}
+// query_tokens 必须全部是**只出现在正文散文里、不出现在任何 tag 里**的词。
+// 早先这条用的是 入口配额/队列缓冲/驻留时长 —— 那三个都是 限流治理 的 tag，
+// 而 Rust 的 extract_body_for_bm25 只过滤 tags:/标签: 开头的行，**不认识 Tag:**，
+// 于是 Tag: 行整行留在 body 里，这条用例实际是被 tag 行满足的，根本没测到正文召回。
+// 这正是旧评估"gold snippet 能被 Tag 行满足"的同一个坑，换了个地方复现。
+{"id":"t1_searcher_bm25_body","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"压力峰值 配额账本 拒绝比例","query_tokens":["压力峰值","配额账本","拒绝比例"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","minTotal":1,"queryTokensEcho":true},"note":"必须传 query_tokens —— Rust 侧不做中文分词，不传则整句变成一个 token 且 total=0"}
+// 回归基线：把 Tag: 行（而非 Tags: 行）里的词拿去做 body 模式检索，仍然能命中。
+// 这固定住一个非对称行为：Rust 的 body 过滤器只认 tags:/标签:，Tag: 行会被当成正文。
+// 语料必须同时写两行，正是因为 KnowledgeBaseManager.extractTags 只认 Tag:、
+// 而 Rust 的 extract_tag_line 只认 tags:/标签: —— 缺任何一行就有一套引擎测不到。
+{"id":"t1_searcher_tagline_leaks_into_body","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"熔断影子流量","query_tokens":["熔断影子流量"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","minTotal":1},"note":"熔断影子流量 只作为 tag 出现、正文里没有这个词；body 模式仍能命中，证明 Tag: 行确实进了正文"}
+{"id":"t1_searcher_bm25_no_tokens","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-body","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"入口配额与队列缓冲如何联动","folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"body"},"expect":{"status":"success","total":0},"note":"负控制：不传 query_tokens 时整句被当成单个 token，命中 0。这是已验证的行为"}
+{"id":"t1_searcher_bm25_tag","tier":1,"mode":"searcher","family":"searcher","capability":"bm25-tag","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"流量整形 退避重试","query_tokens":["流量整形","退避重试"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"tag"},"expect":{"status":"success","minTotal":1},"note":"依赖语料里的 Tags: 行 —— DailyNoteSearcher 不认 Tag:，只认 Tags:/tags:/标签:"}
+// ⚠️ 已确认的实现分歧（当前行为基线，非期望行为）：
+// 同一个 ::BM25 tag 模式有两条实现，两者对标签行的识别不一致：
+//   JS  DirectDiaryTextProcessor.extractTagLine  /^tags?\s*[:：]/i   ← s 可选，兼容 Tag:
+//   Rust extract_tag_line (main.rs:861)          starts_with("tags:") ← s 必需，看不见 Tag:
+// 而 dailynote/ 下的真实语料 100% 只写 Tag:（实测 Nexus架构设计 35 篇，Rust tag 模式 total=0、
+// body 模式 total=6）。也就是说在装了 Rust searcher 的机器上，tag 行召回对整个生产语料
+// 恒为无效，并静默回落到 ::LastN。
+// 这条用例把该行为钉成基线：一旦 Rust 侧改为也接受 Tag:，它会失败并提示更新。
+{"id":"t1_searcher_production_tag_invisible","tier":1,"mode":"searcher","family":"searcher_format","capability":"bm25-tag","requires":["dailyNoteSearcher"],"payload":{"mode":"bm25","query":"生产格式","query_tokens":["生产格式"],"folder":"评测运维技术库","bm25_limit":60,"bm25_search_mode":"tag"},"expect":{"status":"success","total":0},"note":"生产格式探针 只写 Tag: 行（与线上语料一致），Rust tag 模式看不见它 → total=0。这是当前行为基线，不是期望行为"}
