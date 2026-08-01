@@ -12,9 +12,11 @@ class SemanticGroupManager {
         this.config = {};
         this.groupVectorCache = new Map(); // 使用 Map 存储向量缓存
         this.saveLock = false; // 添加保存锁以防止并发写入
-        this.groupsFilePath = path.join(__dirname, 'semantic_groups.json');
+        this.isolatedVectorCache = Boolean(process.env.SEMANTIC_VECTOR_CACHE_DIR);
+        this.groupsFilePath = process.env.SEMANTIC_GROUPS_CONFIG_PATH || path.join(__dirname, 'semantic_groups.json');
         this.vectorsDirPath = process.env.SEMANTIC_VECTOR_CACHE_DIR || path.join(__dirname, 'semantic_vectors');
-        this.editFilePath = path.join(__dirname, 'semantic_groups.edit.json');
+        this.editFilePath = process.env.SEMANTIC_GROUPS_EDIT_PATH || path.join(__dirname, 'semantic_groups.edit.json');
+        this.isolatedGroupData = null;
         this.initializePromise = this.initialize();
     }
 
@@ -48,8 +50,13 @@ class SemanticGroupManager {
                 // 智能合并：使用 edit.json 的词元，保留 main.json 的 vector_id 等元数据
                 const newMainData = this._mergeGroupData(editData, mainData);
 
-                await fs.writeFile(this.groupsFilePath, JSON.stringify(newMainData, null, 2), 'utf-8');
-                console.log('[SemanticGroup] 同步完成。');
+                if (this.isolatedVectorCache) {
+                    this.isolatedGroupData = newMainData;
+                    console.log('[SemanticGroup] 隔离缓存模式：已在内存中同步，不回写共享配置。');
+                } else {
+                    await fs.writeFile(this.groupsFilePath, JSON.stringify(newMainData, null, 2), 'utf-8');
+                    console.log('[SemanticGroup] 同步完成。');
+                }
             } else {
                 console.log('[SemanticGroup] .edit.json 与主文件核心内容相同，无需同步。');
             }
@@ -144,8 +151,7 @@ class SemanticGroupManager {
 
     async loadGroups() {
         try {
-            const data = await fs.readFile(this.groupsFilePath, 'utf-8');
-            const groupData = JSON.parse(data);
+            const groupData = this.isolatedGroupData || JSON.parse(await fs.readFile(this.groupsFilePath, 'utf-8'));
             this.config = groupData.config || {};
             this.groups = groupData.groups || {};
             console.log('[SemanticGroup] 语义组配置文件加载成功。');
@@ -160,9 +166,12 @@ class SemanticGroupManager {
                     console.log(`[SemanticGroup] 检测到无 provenance 的旧格式组 "${groupName}"，将重新计算向量...`);
                     delete group.vector;
                     needsResave = true;
-                } else if (group.vector_id) {
+                } else {
+                    const allWords = [...(group.words || []), ...(group.auto_learned || [])];
+                    const vectorId = this.isolatedVectorCache ? this._getWordsHash(allWords) : group.vector_id;
+                    if (!vectorId) continue;
                     try {
-                        const vectorPath = path.join(this.vectorsDirPath, `${group.vector_id}.json`);
+                        const vectorPath = path.join(this.vectorsDirPath, `${vectorId}.json`);
                         const vectorData = await fs.readFile(vectorPath, 'utf-8');
                         const parsed = JSON.parse(vectorData);
                         const identity = this._embeddingIdentity();
@@ -177,8 +186,10 @@ class SemanticGroupManager {
                     } catch (error) {
                         console.error(`[SemanticGroupManager] ❌ 更新向量缓存失败 (${groupName}):`, error.message);
                         // 如果向量文件丢失，清除ID以便重新计算
-                        delete group.vector_id;
-                        needsResave = true;
+                        if (!this.isolatedVectorCache) {
+                            delete group.vector_id;
+                            needsResave = true;
+                        }
                     }
                 }
             }
@@ -199,6 +210,10 @@ class SemanticGroupManager {
     }
 
     async saveGroups() {
+        if (this.isolatedVectorCache) {
+            console.log('[SemanticGroup] 隔离缓存模式：跳过共享 semantic_groups.json 写入。');
+            return;
+        }
         if (this.saveLock) {
             const busyError = new Error('A save operation is already in progress. Please wait a moment and try again.');
             console.warn(`[SemanticGroup] ${busyError.message}`);
@@ -379,7 +394,7 @@ class SemanticGroupManager {
                 if (vector) {
                     // If a vector existed before (even with a different ID), we should clean it up.
                     // This case is mostly for when words change.
-                    if (groupData.vector_id) {
+                    if (groupData.vector_id && !this.isolatedVectorCache) {
                         try {
                             const oldVectorPath = path.join(this.vectorsDirPath, `${groupData.vector_id}.json`);
                             await fs.unlink(oldVectorPath);
@@ -406,9 +421,11 @@ class SemanticGroupManager {
             }
         }
 
-        if (changesMade) {
+        if (changesMade && !this.isolatedVectorCache) {
             console.log('[SemanticGroup] 检测到向量变更，正在保存主配置文件...');
             await this.saveGroups();
+        } else if (changesMade) {
+            console.log('[SemanticGroup] 隔离缓存模式：向量已写入 per-run 目录，共享配置保持不变。');
         } else {
             console.log('[SemanticGroup] 所有组向量均是最新，无需更新。');
         }

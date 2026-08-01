@@ -173,15 +173,49 @@ test('cold threshold hot reload does not replay the threshold stored with cached
 
 test('semantic vector directory follows the per-run environment path', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-semantic-cache-'));
-    const previous = process.env.SEMANTIC_VECTOR_CACHE_DIR;
+    const groupsPath = path.join(dir, 'groups.json');
+    const editPath = path.join(dir, 'groups.edit.json');
+    const groupData = {
+        config: {},
+        groups: { EvalGroup: { words: ['alpha'], auto_learned: [], weight: 1, vector_id: 'shared-id' } }
+    };
+    const originalGroups = JSON.stringify(groupData);
+    fs.writeFileSync(groupsPath, originalGroups);
+    fs.writeFileSync(editPath, originalGroups);
+    const previous = {
+        vectors: process.env.SEMANTIC_VECTOR_CACHE_DIR,
+        groups: process.env.SEMANTIC_GROUPS_CONFIG_PATH,
+        edit: process.env.SEMANTIC_GROUPS_EDIT_PATH,
+        model: process.env.WhitelistEmbeddingModel,
+        dimension: process.env.VECTORDB_DIMENSION,
+        apiUrl: process.env.API_URL
+    };
     process.env.SEMANTIC_VECTOR_CACHE_DIR = dir;
+    process.env.SEMANTIC_GROUPS_CONFIG_PATH = groupsPath;
+    process.env.SEMANTIC_GROUPS_EDIT_PATH = editPath;
+    process.env.WhitelistEmbeddingModel = 'model-a';
+    process.env.VECTORDB_DIMENSION = '3';
+    process.env.API_URL = 'https://embedding.example.test';
     t.after(() => {
         fs.rmSync(dir, { recursive: true, force: true });
-        if (previous === undefined) delete process.env.SEMANTIC_VECTOR_CACHE_DIR; else process.env.SEMANTIC_VECTOR_CACHE_DIR = previous;
+        for (const [key, value] of Object.entries({
+            SEMANTIC_VECTOR_CACHE_DIR: previous.vectors,
+            SEMANTIC_GROUPS_CONFIG_PATH: previous.groups,
+            SEMANTIC_GROUPS_EDIT_PATH: previous.edit,
+            WhitelistEmbeddingModel: previous.model,
+            VECTORDB_DIMENSION: previous.dimension,
+            API_URL: previous.apiUrl
+        })) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
     });
-    const manager = new SemanticGroupManager({});
+    const manager = new SemanticGroupManager({ getSingleEmbeddingCached: async () => [1, 0, 0] });
     assert.equal(manager.vectorsDirPath, dir);
+    assert.equal(manager.groupsFilePath, groupsPath);
     await manager.waitUntilReady();
+    assert.equal(fs.readFileSync(groupsPath, 'utf-8'), originalGroups);
+    const vectorPath = path.join(dir, `${manager._getWordsHash(['alpha'])}.json`);
+    assert.equal(JSON.parse(fs.readFileSync(vectorPath, 'utf-8')).schemaVersion, 2);
 });
 
 test('RAGDiaryPlugin initialization waits for the actual semanticGroups manager', async () => {
