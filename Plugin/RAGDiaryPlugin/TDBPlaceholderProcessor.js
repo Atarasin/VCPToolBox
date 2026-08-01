@@ -15,6 +15,7 @@
 const path = require('path');
 const fs = require('fs').promises;
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
+const { endpointFingerprint } = require('../../modules/embeddingProvenance');
 
 const DEFAULT_TDB_THRESHOLD = 0.30; // 《《》》门控的默认相似度阈值（冷知识库通常比日记本更宽松）
 
@@ -310,7 +311,8 @@ class TDBPlaceholderProcessor {
             expandDepth: 1,
             minScore: 0.1,
             hybridAlpha: 0.65,
-            expand: useExpand
+            expand: useExpand,
+            vectorMeta: this._queryVectorMeta(queryVector)
         });
 
         if (!hits || hits.length === 0) return [];
@@ -339,6 +341,33 @@ class TDBPlaceholderProcessor {
         }
 
         return hits;
+    }
+
+    _queryVectorMeta(queryVector) {
+        const model = process.env.WhitelistEmbeddingModel || '';
+        const dimension = Array.isArray(queryVector) || queryVector instanceof Float32Array
+            ? queryVector.length
+            : Number(process.env.VECTORDB_DIMENSION || process.env.EMBEDDING_DIMENSIONS || 0);
+        return {
+            model,
+            dimension,
+            endpointFingerprint: endpointFingerprint({ apiUrl: process.env.API_URL || '', model })
+        };
+    }
+
+    _broadcastRetrievalError(libraryNames, query, error) {
+        const reasonCode = error?.code || 'TDB_RETRIEVAL_FAILED';
+        const payload = {
+            type: 'RAG_RETRIEVAL_DETAILS',
+            dbName: libraryNames.join(','),
+            sourceType: 'TDBKnowledge',
+            libraries: libraryNames,
+            query,
+            error: error?.message || String(error),
+            reasonCode,
+            integrity: { clean: false, reasonCode }
+        };
+        try { this.host.pushVcpInfo(payload); } catch (_) { /* 日志仍保留原错误 */ }
     }
 
     // ────────────────────────────────────────────────────────────
@@ -488,6 +517,7 @@ class TDBPlaceholderProcessor {
             return this._format(libraryNames, queryForDisplay, hits);
         } catch (e) {
             console.error(`[TDBPlaceholder] [[${rawName}知识库]] 检索失败:`, e.message);
+            this._broadcastRetrievalError(libraryNames, queryForDisplay, e);
             return `[冷知识库检索失败: ${e.message}]`;
         }
     }
@@ -531,6 +561,7 @@ class TDBPlaceholderProcessor {
             return this._format(libraryNames, queryForDisplay, hits);
         } catch (e) {
             console.error(`[TDBPlaceholder] 《《${rawName}知识库》》 检索失败:`, e.message);
+            this._broadcastRetrievalError(libraryNames, queryForDisplay, e);
             return `[冷知识库检索失败: ${e.message}]`;
         }
     }
