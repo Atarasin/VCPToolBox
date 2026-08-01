@@ -15,6 +15,7 @@
 const path = require('path');
 const fs = require('fs').promises;
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
+const { endpointFingerprint } = require('../../modules/embeddingProvenance');
 
 const DEFAULT_TDB_THRESHOLD = 0.30; // 《《》》门控的默认相似度阈值（冷知识库通常比日记本更宽松）
 
@@ -194,22 +195,45 @@ class TDBPlaceholderProcessor {
         let maxSim = 0;
         let totalThreshold = 0;
         let count = 0;
+        const perLibrary = {};
 
         for (const name of libraryNames) {
             const { nameVector, enhancedVector, threshold } = await this._getLibraryVectors(name);
             totalThreshold += threshold;
             count++;
 
-            if (nameVector) {
-                maxSim = Math.max(maxSim, this.host.cosineSimilarity(queryVector, nameVector));
-            }
-            if (enhancedVector) {
-                maxSim = Math.max(maxSim, this.host.cosineSimilarity(queryVector, enhancedVector));
-            }
+            const libraryNameCosine = nameVector
+                ? this.host.cosineSimilarity(queryVector, nameVector) : null;
+            const enhancedVectorCosine = enhancedVector
+                ? this.host.cosineSimilarity(queryVector, enhancedVector) : null;
+            const score = Math.max(
+                Number.isFinite(libraryNameCosine) ? libraryNameCosine : 0,
+                Number.isFinite(enhancedVectorCosine) ? enhancedVectorCosine : 0
+            );
+            maxSim = Math.max(maxSim, score);
+            perLibrary[name] = { score, threshold, libraryNameCosine, enhancedVectorCosine };
         }
 
         const avgThreshold = count > 0 ? totalThreshold / count : DEFAULT_TDB_THRESHOLD;
-        return { maxSim, avgThreshold };
+        return { maxSim, avgThreshold, perLibrary };
+    }
+
+    _broadcastGateDecision(libraryNames, score, threshold, decision, scoreComponents) {
+        const meta = this._queryVectorMeta(null);
+        try {
+            this.host.pushVcpInfo({
+                type: 'RAG_GATE_DECISION',
+                targetType: 'cold',
+                library: libraryNames.join('|'),
+                score,
+                threshold,
+                decision,
+                scoreComponents,
+                embeddingFingerprint: meta.endpointFingerprint,
+                calibrationId: process.env.RAG_GATE_CALIBRATION_ID || null,
+                scoringFormulaVersion: 'gate-score-v1'
+            });
+        } catch (_) { /* 门控主路径不因观测 sink 失败而改变 */ }
     }
 
     // ────────────────────────────────────────────────────────────
@@ -310,7 +334,8 @@ class TDBPlaceholderProcessor {
             expandDepth: 1,
             minScore: 0.1,
             hybridAlpha: 0.65,
-            expand: useExpand
+            expand: useExpand,
+            vectorMeta: this._queryVectorMeta(queryVector)
         });
 
         if (!hits || hits.length === 0) return [];
@@ -339,6 +364,33 @@ class TDBPlaceholderProcessor {
         }
 
         return hits;
+    }
+
+    _queryVectorMeta(queryVector) {
+        const model = process.env.WhitelistEmbeddingModel || '';
+        const dimension = Array.isArray(queryVector) || queryVector instanceof Float32Array
+            ? queryVector.length
+            : Number(process.env.VECTORDB_DIMENSION || process.env.EMBEDDING_DIMENSIONS || 0);
+        return {
+            model,
+            dimension,
+            endpointFingerprint: endpointFingerprint({ apiUrl: process.env.API_URL || '', model })
+        };
+    }
+
+    _broadcastRetrievalError(libraryNames, query, error) {
+        const reasonCode = error?.code || 'TDB_RETRIEVAL_FAILED';
+        const payload = {
+            type: 'RAG_RETRIEVAL_DETAILS',
+            dbName: libraryNames.join(','),
+            sourceType: 'TDBKnowledge',
+            libraries: libraryNames,
+            query,
+            error: error?.message || String(error),
+            reasonCode,
+            integrity: { clean: false, reasonCode }
+        };
+        try { this.host.pushVcpInfo(payload); } catch (_) { /* 日志仍保留原错误 */ }
     }
 
     // ────────────────────────────────────────────────────────────
@@ -488,6 +540,7 @@ class TDBPlaceholderProcessor {
             return this._format(libraryNames, queryForDisplay, hits);
         } catch (e) {
             console.error(`[TDBPlaceholder] [[${rawName}知识库]] 检索失败:`, e.message);
+            this._broadcastRetrievalError(libraryNames, queryForDisplay, e);
             return `[冷知识库检索失败: ${e.message}]`;
         }
     }
@@ -514,12 +567,17 @@ class TDBPlaceholderProcessor {
 
         try {
             // 门控：库名/增强向量相似度
-            const { maxSim, avgThreshold } = await this._computeGate(queryVector, libraryNames);
+            const { maxSim, avgThreshold, perLibrary } = await this._computeGate(queryVector, libraryNames);
 
             // Truncate 后缀也可抬高门控阈值
             const effectiveThreshold = Math.max(avgThreshold, opts.truncateThreshold || 0);
+            const decision = maxSim < effectiveThreshold ? 'blocked' : 'passed';
+            this._broadcastGateDecision(libraryNames, maxSim, effectiveThreshold, decision, {
+                aggregation: 'max-score-vs-average-threshold',
+                perLibrary
+            });
 
-            if (maxSim < effectiveThreshold) {
+            if (decision === 'blocked') {
                 console.log(`[TDBPlaceholder] 《《${rawName}知识库》》 门控未通过: 相似度 ${maxSim.toFixed(4)} < 阈值 ${effectiveThreshold.toFixed(4)}，跳过注入。`);
                 return '';
             }
@@ -531,6 +589,7 @@ class TDBPlaceholderProcessor {
             return this._format(libraryNames, queryForDisplay, hits);
         } catch (e) {
             console.error(`[TDBPlaceholder] 《《${rawName}知识库》》 检索失败:`, e.message);
+            this._broadcastRetrievalError(libraryNames, queryForDisplay, e);
             return `[冷知识库检索失败: ${e.message}]`;
         }
     }

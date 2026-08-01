@@ -241,7 +241,18 @@ function summarize(params) {
             dailyNote: direct.length,
             total: events.length
         },
-        retrievalErrors: errors.map(e => ({ dbName: e.dbName, error: e.error })),
+        retrievalErrors: errors.map(e => ({
+            dbName: e.dbName,
+            error: e.error,
+            reasonCode: e.reasonCode || null
+        })),
+        integrity: {
+            clean: errors.length === 0,
+            errors: errors.map(e => ({
+                reasonCode: e.reasonCode || 'retrieval-error',
+                error: e.error || 'unknown retrieval error'
+            }))
+        },
         degradations: scanMarkers(logText, DEGRADATION_MARKERS),
         positives: scanMarkers(logText, POSITIVE_MARKERS),
         // 命中零结果的哨兵串。旧评估把这些算作 gatePassed=true，等于把失败记成成功。

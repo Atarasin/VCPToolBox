@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const embeddingProvenance = require('../../modules/embeddingProvenance');
 
 const { PROJECT_ROOT } = require('./profile');
 
@@ -191,44 +191,10 @@ function checkDailyNoteSearcher() {
 }
 
 function coldCorpusFingerprint(resolved) {
-    const root = resolved.coldKnowledge.rootPath;
-    if (!fs.existsSync(root)) return null;
-    const splitList = (value, fallback = []) => {
-        const raw = value == null || value === '' ? fallback.join(',') : String(value);
-        return raw.split(/[,，]/).map(item => item.trim()).filter(Boolean);
-    };
-    const normalizeExt = value => {
-        const ext = String(value || '').trim().toLowerCase();
-        return ext && (ext.startsWith('.') ? ext : `.${ext}`);
-    };
-    const extensions = new Set(splitList(resolved.env.TDB_KNOWLEDGE_EXTENSIONS, ['.md', '.txt', '.json', '.html']).map(normalizeExt));
-    const excluded = new Set(splitList(resolved.env.TDB_KNOWLEDGE_EXCLUDE_FOLDERS, ['TDBdocs']));
-    const ignorePrefixes = splitList(resolved.env.TDB_KNOWLEDGE_IGNORE_PREFIXES);
-    const ignoreSuffixes = splitList(resolved.env.TDB_KNOWLEDGE_IGNORE_SUFFIXES);
-    const rows = [];
-    const walk = dir => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            const absolute = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                if (!excluded.has(entry.name)) walk(absolute);
-                continue;
-            }
-            if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
-            const relative = path.relative(root, absolute).split(path.sep).join('/');
-            const parts = relative.split('/').filter(Boolean);
-            const library = parts.length > 1 ? parts[0] : 'Root';
-            if (excluded.has(library)) continue;
-            if (ignorePrefixes.some(prefix => library.startsWith(prefix) || entry.name.startsWith(prefix))) continue;
-            if (ignoreSuffixes.some(suffix => library.endsWith(suffix) || entry.name.endsWith(suffix))) continue;
-            const contentHash = crypto.createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
-            rows.push(`${relative}:${contentHash}`);
-        }
-    };
-    walk(root);
-    rows.sort();
-    return rows.length
-        ? `sha256:${crypto.createHash('sha256').update(rows.join('\n')).digest('hex')}`
-        : null;
+    return embeddingProvenance.coldCorpusFingerprint(
+        resolved.coldKnowledge.rootPath,
+        resolved.env
+    ).fingerprint;
 }
 
 /** 冷知识库：triviumdb 缺失时 TDBKnowledge 静默 disabled，search() 返回 []。 */
@@ -238,6 +204,7 @@ function checkColdKB(resolved) {
     } catch (_) {
         return {
             ok: false, level: 'warn',
+            reasonCode: 'cold-kb-unavailable',
             detail: 'triviumdb 未安装（package.json 声明了 ^0.7.1，npm 上存在但 node_modules 里没有）。' +
                     'TDBKnowledge 会静默 disabled 并让 search() 返回空数组，因此 Tier4 冷知识库用例将 SKIP。' +
                     '需要时执行 `npm i triviumdb`'
@@ -245,13 +212,90 @@ function checkColdKB(resolved) {
     }
     const knowledgeDir = resolved.coldKnowledge.rootPath;
     if (!fs.existsSync(knowledgeDir)) {
-        return { ok: false, level: 'warn', detail: 'knowledge/ 目录不存在，Tier4 用例将 SKIP' };
+        return { ok: false, level: 'warn', reasonCode: 'cold-kb-unavailable', detail: 'knowledge/ 目录不存在，Tier4 用例将 SKIP' };
     }
     const corpusFingerprint = coldCorpusFingerprint(resolved);
     if (!corpusFingerprint) {
         return { ok: false, level: 'warn', reasonCode: 'cold-kb-unavailable', detail: 'knowledge/ 没有可索引文件' };
     }
     return { ok: true, detail: 'triviumdb 已安装且 knowledge/ 存在可索引语料', corpusFingerprint };
+}
+
+function checkColdEmbeddingAlignment(resolved) {
+    const expected = {
+        model: resolved.embedding.model,
+        dimension: resolved.embedding.dimension,
+        endpointFingerprint: resolved.embedding.endpointFingerprint
+    };
+    const actual = {
+        model: resolved.coldKnowledge.model,
+        dimension: resolved.coldKnowledge.dimension,
+        endpointFingerprint: resolved.coldKnowledge.endpointFingerprint
+    };
+    const ok = resolved.coldKnowledge.mode === 'aligned'
+        && expected.model === actual.model
+        && expected.dimension === actual.dimension
+        && expected.endpointFingerprint === actual.endpointFingerprint;
+    return ok
+        ? { ok: true, detail: `${actual.model} @ ${actual.dimension} 与热路径 aligned`, expected, actual }
+        : {
+            ok: false, level: 'warn', reasonCode: 'cold-embedding-mismatch',
+            detail: `hot=${expected.model}@${expected.dimension}, cold=${actual.model}@${actual.dimension}`,
+            expected, actual, action: 'Tier4 cases will be skipped'
+        };
+}
+
+function checkColdStoreProvenance(resolved) {
+    if (resolved.coldKnowledge.storePolicy === 'per-run' && !resolved.coldKnowledge.storePath) {
+        return {
+            ok: true, level: 'info',
+            detail: 'per-run policy：运行时将创建全新 ColdVectorStore 并写入 manifest',
+            action: 'runtime creates and validates a new store'
+        };
+    }
+    const storePath = resolved.coldKnowledge.storePath;
+    if (!storePath || !fs.existsSync(storePath)) {
+        return { ok: true, level: 'info', detail: '目标 cold store 尚不存在，将作为 empty store 初始化' };
+    }
+    const manifestPath = path.join(storePath, 'embedding-manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+        const hasData = fs.readdirSync(storePath).length > 0;
+        return hasData
+            ? {
+                ok: false, level: 'warn', reasonCode: 'cold-store-rebuild-required',
+                detail: 'cold store 有数据但缺失 embedding-manifest.json', action: 'Tier4 cases will be skipped'
+            }
+            : { ok: true, level: 'info', detail: 'empty cold store 将在初始化时写入 manifest' };
+    }
+    try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const embedding = manifest.embedding || {};
+        const expectedCorpusFingerprint = coldCorpusFingerprint(resolved);
+        let expectedChunkerVersion = null;
+        try {
+            expectedChunkerVersion = embeddingProvenance.sha256(
+                fs.readFileSync(path.join(PROJECT_ROOT, 'TextChunker.js'))
+            );
+        } catch (_) { /* runtime 将再次严格校验 */ }
+        const ok = manifest.schemaVersion === 1
+            && embedding.model === resolved.coldKnowledge.model
+            && Number(embedding.dimension) === resolved.coldKnowledge.dimension
+            && embedding.endpointFingerprint === resolved.coldKnowledge.endpointFingerprint
+            && manifest.source?.corpusFingerprint === expectedCorpusFingerprint
+            && (!expectedChunkerVersion || manifest.chunker?.version === expectedChunkerVersion);
+        return ok
+            ? { ok: true, detail: 'cold store manifest 与 effective embedding 匹配', actual: manifest }
+            : {
+                ok: false, level: 'warn', reasonCode: 'cold-store-rebuild-required',
+                detail: 'cold store manifest 与 effective embedding 不匹配', actual: manifest,
+                action: 'Tier4 cases will be skipped'
+            };
+    } catch (error) {
+        return {
+            ok: false, level: 'warn', reasonCode: 'cold-store-rebuild-required',
+            detail: `cold store manifest 损坏：${error.message}`, action: 'Tier4 cases will be skipped'
+        };
+    }
 }
 
 function checkGateCalibration(resolved) {
@@ -314,6 +358,8 @@ async function run(resolved, options = {}) {
     checks.ragParams = checkRagParamsDeadKeys(resolved);
     checks.dailyNoteSearcher = checkDailyNoteSearcher();
     checks.coldKB = checkColdKB(resolved);
+    checks.coldEmbeddingAlignment = checkColdEmbeddingAlignment(resolved);
+    checks.coldStoreProvenance = checkColdStoreProvenance(resolved);
     checks.gateCalibration = checkGateCalibration(resolved);
 
     if (options.skipNetwork) {
@@ -329,7 +375,7 @@ async function run(resolved, options = {}) {
         embedding: checks.embedding.ok,
         nativeMemo: checks.nativeMemo.ok,
         rerank: checks.rerank.ok,
-        coldKB: checks.coldKB.ok,
+        coldKB: checks.coldKB.ok && checks.coldEmbeddingAlignment.ok && checks.coldStoreProvenance.ok,
         dailyNoteSearcher: checks.dailyNoteSearcher.ok
     };
 
@@ -340,6 +386,12 @@ async function run(resolved, options = {}) {
         blocking: blocking.map(([name, c]) => ({ name, detail: c.detail })),
         checks,
         capabilities,
+        capabilityReasons: {
+            coldKB: checks.coldKB.reasonCode
+                || checks.coldEmbeddingAlignment.reasonCode
+                || checks.coldStoreProvenance.reasonCode
+                || null
+        },
         coldCorpusFingerprint: checks.coldKB.corpusFingerprint || coldCorpusFingerprint(resolved)
     };
 }
@@ -352,6 +404,8 @@ module.exports = {
     checkNativeMemo,
     checkSqlite,
     checkColdKB,
+    checkColdEmbeddingAlignment,
+    checkColdStoreProvenance,
     coldCorpusFingerprint,
     checkGateCalibration,
     checkCorpus,
