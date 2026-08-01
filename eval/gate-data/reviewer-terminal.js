@@ -69,6 +69,8 @@ function help() {
 命令：
   p / n / a       标为 positive / negative / ambiguous，并前进
   c               接受候选标签，并前进（仍代表你亲自确认）
+  group           展示当前 intentGroup 的全部等义改写
+  gp/gn/ga/gc     审阅整组后，将组内全部改写标为同一标签
   b / next        上一条 / 下一条
   u               跳到下一条未审样本
   note <文本>     给当前样本添加或替换备注
@@ -77,6 +79,13 @@ function help() {
   export          全部完成后输入人工声明并导出
   q               保存进度并退出
 `;
+}
+
+function groupRows(rows, row) {
+    if (!row?.intentGroup) return [row].filter(Boolean);
+    return rows.filter(candidate => candidate.targetType === row.targetType
+        && candidate.library === row.library
+        && candidate.intentGroup === row.intentGroup);
 }
 
 function question(rl, prompt) {
@@ -98,6 +107,7 @@ async function run(flags) {
     const decisions = progress.decisions;
     let index = progress.index;
     let expanded = false;
+    let groupExpanded = false;
     let closed = false;
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
 
@@ -122,6 +132,17 @@ async function run(flags) {
         if (flags['no-clear'] !== 'true') process.stdout.write('\x1b[2J\x1b[H');
         const row = current();
         const decision = decisions[row.caseId];
+        const grouped = groupRows(loaded.rows, row);
+        const groupSummary = grouped.reduce((counts, item) => {
+            const label = decisions[item.caseId]?.label || 'pending';
+            counts[label] = (counts[label] || 0) + 1;
+            return counts;
+        }, {});
+        const groupSection = groupExpanded ? [
+            '',
+            `INTENT GROUP ${row.intentGroup || '(none)'} · ${grouped.length} 条`,
+            ...grouped.map((item, groupIndex) => `${groupIndex + 1}. [${decisions[item.caseId]?.label || 'pending'}] ${item.query}`)
+        ] : [];
         process.stdout.write([
             `VCP Gate 人工审阅  ${index + 1}/${loaded.rows.length}  已完成 ${completeCount()}/${loaded.rows.length}`,
             `dataset: ${loaded.meta.datasetHash}`,
@@ -130,12 +151,14 @@ async function run(flags) {
             `candidate: ${row.candidateLabel}  difficulty: ${row.difficulty}  current: ${decision?.label || '未选择'}`,
             '',
             `QUERY\n${row.query}`,
+            ...groupSection,
             '',
             `SOURCE\n${sourceText(row)}`,
             '',
             `notes: ${decision?.notes || '无'}`,
             '',
             '[p]positive [n]negative [a]ambiguous [c]确认候选 [b]上一条 [next]下一条',
+            `[group]查看组(${JSON.stringify(groupSummary)}) [gp/gn/ga/gc]整组确认`,
             '[u]下一未审 [note 文本]备注 [show]展开 [goto N]跳转 [export]导出 [q]退出',
             ''
         ].join('\n'));
@@ -161,6 +184,21 @@ async function run(flags) {
                 decisions[current().caseId] = { ...decisions[current().caseId], label };
                 if (index < loaded.rows.length - 1) move(1);
                 persist();
+            } else if (['gp', 'gn', 'ga', 'gc'].includes(command)) {
+                const grouped = groupRows(loaded.rows, current());
+                const candidateLabels = new Set(grouped.map(row => row.candidateLabel));
+                if (command === 'gc' && candidateLabels.size !== 1) {
+                    process.stdout.write('\n该组候选标签不一致，不能使用 gc；请用 gp/gn/ga 明确选择。按回车继续。');
+                    await question(rl, '');
+                    continue;
+                }
+                const label = command === 'gp' ? 'positive'
+                    : command === 'gn' ? 'negative'
+                        : command === 'ga' ? 'ambiguous' : current().candidateLabel;
+                for (const row of grouped) decisions[row.caseId] = { ...decisions[row.caseId], label };
+                groupExpanded = false;
+                nextPending();
+                persist();
             } else if (command === 'b') {
                 move(-1);
             } else if (command === 'next' || command === '') {
@@ -169,6 +207,8 @@ async function run(flags) {
                 nextPending();
             } else if (command === 'show') {
                 expanded = !expanded;
+            } else if (command === 'group') {
+                groupExpanded = !groupExpanded;
             } else if (command === 'goto') {
                 const requested = Number(rest[0]);
                 if (Number.isInteger(requested) && requested >= 1 && requested <= loaded.rows.length) index = requested - 1;
@@ -214,4 +254,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { parseArgs, defaultOutput, defaultProgress, loadProgress, saveProgress, help, run };
+module.exports = { parseArgs, defaultOutput, defaultProgress, loadProgress, saveProgress, groupRows, help, run };

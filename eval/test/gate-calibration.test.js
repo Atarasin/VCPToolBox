@@ -397,7 +397,7 @@ test('gate-v1 review export embeds only allowlisted source context', t => {
     const output = path.join(dir, 'context.jsonl');
     review.exportReview({
         datasetPath: path.resolve(__dirname, '../gate-data/gate-v1.jsonl'),
-        output, reviewerId: 'context-reviewer', scope: 'all', batchCount: 1500, batchIndex: 0
+        output, reviewerId: 'context-reviewer', scope: 'all', batchCount: 150, batchIndex: 0
     });
     const header = JSON.parse(fs.readFileSync(output, 'utf8').split('\n')[0]);
     const refs = Object.keys(header.sourceContexts);
@@ -405,4 +405,24 @@ test('gate-v1 review export embeds only allowlisted source context', t => {
     assert.ok(refs[0].startsWith('评测'));
     assert.ok(header.sourceContexts[refs[0]].length > 20);
     assert.equal(Object.hasOwn(header.sourceContexts, '/etc/passwd'), false);
+});
+
+test('review export keeps one target intentGroup atomic across deterministic shards', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-review-group-shard-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const datasetPath = path.resolve(__dirname, '../gate-data/gate-v1.jsonl');
+    const observed = new Map();
+    for (let batchIndex = 0; batchIndex < 4; batchIndex++) {
+        const output = path.join(dir, `batch-${batchIndex}.jsonl`);
+        review.exportReview({
+            datasetPath, output, reviewerId: 'shard-reviewer', scope: 'all', batchCount: 4, batchIndex
+        });
+        for (const row of dataset.readJsonl(output).slice(1)) {
+            const key = `${row.targetType}:${row.library}:${row.intentGroup}`;
+            const prior = observed.get(key);
+            assert.ok(prior === undefined || prior === batchIndex);
+            observed.set(key, batchIndex);
+        }
+    }
+    assert.equal(observed.size, 150);
 });

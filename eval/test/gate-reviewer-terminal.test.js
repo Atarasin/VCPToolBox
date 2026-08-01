@@ -35,3 +35,13 @@ test('terminal reviewer progress is dataset-bound and keeps only valid case deci
         /another dataset/u
     );
 });
+
+test('terminal reviewer groups paraphrases only within one target decision', () => {
+    const rows = [
+        { caseId: 'a', targetType: 'diary', library: 'A', intentGroup: 'intent' },
+        { caseId: 'b', targetType: 'diary', library: 'A', intentGroup: 'intent' },
+        { caseId: 'c', targetType: 'diary', library: 'B', intentGroup: 'intent' },
+        { caseId: 'd', targetType: 'diary', library: 'A', intentGroup: 'other' }
+    ];
+    assert.deepEqual(terminal.groupRows(rows, rows[0]).map(row => row.caseId), ['a', 'b']);
+});

@@ -65,3 +65,7 @@ node eval/gate-data/reviewer-terminal.js \
 终端逐条显示 query、候选标签和内嵌来源正文；`p/n/a` 选择标签，`c` 表示人工确认候选标签，
 `q` 保存退出，之后执行同一命令自动恢复。全部完成后输入 `export`，亲自键入声明并生成
 `*.reviewed.jsonl`。进度文件权限为 `0600`，不会写入源模板。
+
+gate-v1 的每个目标决策包含 10 条同 `intentGroup` 的等义改写。输入 `group` 会一次展示整组；
+确认所有改写语义和标签一致后，使用 `gp/gn/ga/gc` 整组标注。导出分片按
+`targetType + library + intentGroup` 原子分配，同一组不会跨分片。

@@ -78,17 +78,20 @@ function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = '
         throw codedError('GATE_REVIEW_BATCH_INVALID', 'batchCount/batchIndex must identify a valid zero-based shard');
     }
     if (!['all', 'double-review'].includes(scope)) throw codedError('GATE_REVIEW_SCOPE_INVALID', 'scope must be all or double-review');
-    const selected = [...dataset.rows].sort((a, b) => a.id.localeCompare(b.id))
+    const scoped = [...dataset.rows].sort((a, b) => a.id.localeCompare(b.id))
         .filter(row => scope === 'all' || newlyAmbiguous.has(row.id)
-            || row.label === 'ambiguous' || (row.label === 'negative' && row.difficulty === 'hard'))
-        .filter((row, rowIndex) => rowIndex % count === index);
+            || row.label === 'ambiguous' || (row.label === 'negative' && row.difficulty === 'hard'));
+    const groupKey = row => `${row.targetType}:${row.library}:${row.intentGroup || row.id}`;
+    const groups = [...new Set(scoped.map(groupKey))].sort();
+    const groupShard = new Map(groups.map((key, groupIndex) => [key, groupIndex % count]));
+    const selected = scoped.filter(row => groupShard.get(groupKey(row)) === index);
     const rows = [{
         recordType: 'review-meta',
         schemaVersion: 1,
         datasetId: dataset.manifest.datasetId,
         datasetHash: dataset.verification.datasetHash,
         scope,
-        batch: { index, count },
+        batch: { index, count, unit: 'target-intentGroup' },
         reviewerId: reviewerId || null,
         reviewedAt: null,
         attestation: null,
@@ -103,12 +106,23 @@ function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = '
         query: row.query,
         sourceRefs: row.sourceRefs,
         difficulty: row.difficulty,
+        source: row.source,
+        intentGroup: row.intentGroup,
+        split: row.split,
         candidateLabel: row.label,
         label: null,
         notes: null
     }))];
     const reviewPath = writeJsonl(output, rows);
-    return { ok: true, output: reviewPath, datasetHash: dataset.verification.datasetHash, scope, batch: { index, count }, cases: selected.length };
+    return {
+        ok: true,
+        output: reviewPath,
+        datasetHash: dataset.verification.datasetHash,
+        scope,
+        batch: { index, count, unit: 'target-intentGroup' },
+        groups: new Set(selected.map(groupKey)).size,
+        cases: selected.length
+    };
 }
 
 function readReview(filePath) {
