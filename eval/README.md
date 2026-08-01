@@ -131,10 +131,18 @@ eval/
 ├── corpus-spec/          语料源头（提交）：books.json + 四个日记本的 jsonl
 ├── suites/               用例集：tier1-offline / tier2-retrieval / tier4-coldkb
 ├── profiles/             运行构型：embedding 模型、维度、rag_params 路径、env 覆盖
+├── docs/                 专题文档（踩坑记录与分析）
 ├── dailynote_eval/       生成的语料（gitignore）
 ├── runs/                 每次运行的完整产物（gitignore）
 └── legacy/               冻结的上一版评估
 ```
+
+### 专题文档
+
+- [`docs/cross-model-eval-pitfalls.md`](docs/cross-model-eval-pitfalls.md) —
+  跨模型评测的两个陷阱：冷知识库配置裂脑（热/冷链路 embedding 不一致导致静默返回空）、
+  门控阈值的跨模型标定问题（余弦尺度整体偏移，绝对值不可比、只有分离度可比）。
+  **在用不同 embedding 模型做对比之前建议先读**。
 
 ### 一次运行留下什么
 
