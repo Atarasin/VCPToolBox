@@ -3,6 +3,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
+const { endpointFingerprint } = require('../../modules/embeddingProvenance');
 
 class SemanticGroupManager {
     constructor(ragPlugin) {
@@ -12,9 +13,9 @@ class SemanticGroupManager {
         this.groupVectorCache = new Map(); // 使用 Map 存储向量缓存
         this.saveLock = false; // 添加保存锁以防止并发写入
         this.groupsFilePath = path.join(__dirname, 'semantic_groups.json');
-        this.vectorsDirPath = path.join(__dirname, 'semantic_vectors');
+        this.vectorsDirPath = process.env.SEMANTIC_VECTOR_CACHE_DIR || path.join(__dirname, 'semantic_vectors');
         this.editFilePath = path.join(__dirname, 'semantic_groups.edit.json');
-        this.initialize();
+        this.initializePromise = this.initialize();
     }
 
     async initialize() {
@@ -153,22 +154,26 @@ class SemanticGroupManager {
 
             // 加载向量并处理旧格式迁移
             for (const [groupName, group] of Object.entries(this.groups)) {
-                // 迁移逻辑：如果存在 vector 字段但不存在 vector_id
+                // 旧的内联向量没有 embedding provenance，不能冒充当前模型产物。
+                // 丢弃后由 precomputeGroupVectors 使用当前 embedding 重新生成。
                 if (group.vector && !group.vector_id) {
-                    console.log(`[SemanticGroup] 检测到旧格式组 "${groupName}"，正在迁移向量...`);
-                    const vectorId = crypto.randomUUID();
-                    const vectorPath = path.join(this.vectorsDirPath, `${vectorId}.json`);
-                    await fs.writeFile(vectorPath, JSON.stringify(group.vector));
-
-                    this.groupVectorCache.set(groupName, group.vector);
-                    group.vector_id = vectorId;
-                    delete group.vector; // 从主配置中删除向量
+                    console.log(`[SemanticGroup] 检测到无 provenance 的旧格式组 "${groupName}"，将重新计算向量...`);
+                    delete group.vector;
                     needsResave = true;
                 } else if (group.vector_id) {
                     try {
                         const vectorPath = path.join(this.vectorsDirPath, `${group.vector_id}.json`);
                         const vectorData = await fs.readFile(vectorPath, 'utf-8');
-                        this.groupVectorCache.set(groupName, JSON.parse(vectorData));
+                        const parsed = JSON.parse(vectorData);
+                        const identity = this._embeddingIdentity();
+                        const compatible = parsed?.schemaVersion === 2
+                            && parsed.embedding?.model === identity.model
+                            && Number(parsed.embedding?.dimension) === identity.dimension
+                            && parsed.embedding?.endpointFingerprint === identity.endpointFingerprint
+                            && Array.isArray(parsed.vector)
+                            && (!identity.dimension || parsed.vector.length === identity.dimension);
+                        if (!compatible) throw new Error('semantic vector provenance mismatch');
+                        this.groupVectorCache.set(groupName, parsed.vector);
                     } catch (error) {
                         console.error(`[SemanticGroupManager] ❌ 更新向量缓存失败 (${groupName}):`, error.message);
                         // 如果向量文件丢失，清除ID以便重新计算
@@ -319,6 +324,15 @@ class SemanticGroupManager {
         return crypto.createHash('sha256').update(JSON.stringify(sortedWords)).digest('hex');
     }
 
+    _embeddingIdentity() {
+        const model = process.env.WhitelistEmbeddingModel || '';
+        return {
+            model,
+            dimension: Number(process.env.VECTORDB_DIMENSION || process.env.EMBEDDING_DIMENSIONS || 0),
+            endpointFingerprint: endpointFingerprint({ apiUrl: process.env.API_URL || '', model })
+        };
+    }
+
     async precomputeGroupVectors() {
         console.log('[SemanticGroup] 开始检查并预计算所有组向量...');
         let changesMade = false;
@@ -370,9 +384,13 @@ class SemanticGroupManager {
                         }
                     }
 
-                    const vectorId = crypto.randomUUID();
+                    const vectorId = currentWordsHash;
                     const vectorPath = path.join(this.vectorsDirPath, `${vectorId}.json`);
-                    await fs.writeFile(vectorPath, JSON.stringify(vector), 'utf-8');
+                    await fs.writeFile(vectorPath, JSON.stringify({
+                        schemaVersion: 2,
+                        embedding: this._embeddingIdentity(),
+                        vector
+                    }), 'utf-8');
 
                     this.groupVectorCache.set(groupName, vector);
                     this.groups[groupName].vector_id = vectorId;
