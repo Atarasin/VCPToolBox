@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
 const { endpointFingerprint } = require('../../modules/embeddingProvenance');
+const { mergeThresholdOverride } = require('../../modules/gateProvenance');
 
 const DEFAULT_TDB_THRESHOLD = 0.30; // 《《》》门控的默认相似度阈值（冷知识库通常比日记本更宽松）
 
@@ -57,7 +58,23 @@ class TDBPlaceholderProcessor {
         const configPath = path.join(__dirname, 'tdb_tags.json');
         try {
             const data = await fs.readFile(configPath, 'utf-8');
-            this.libraryConfig = JSON.parse(data);
+            const baseConfig = JSON.parse(data);
+            let override = null;
+            if (process.env.RAG_GATE_CONFIG_PATH) {
+                try {
+                    override = JSON.parse(await fs.readFile(process.env.RAG_GATE_CONFIG_PATH, 'utf-8'));
+                } catch (error) {
+                    if (error.code !== 'ENOENT') throw error;
+                }
+            }
+            const merged = mergeThresholdOverride(baseConfig, override, 'cold', {
+                allowedTargets: override?.allowedTargets?.cold,
+                requireAllowedTargets: String(process.env.EVAL_STRICT_PROVENANCE || '').toLowerCase() === 'true'
+            });
+            this.libraryConfig = merged.effective;
+            if (merged.rejected.length) {
+                console.warn(`[TDBPlaceholder] 冷门控覆盖拒绝 ${merged.rejected.length} 项：${JSON.stringify(merged.rejected)}`);
+            }
             console.log(`[TDBPlaceholder] ✅ 已加载 tdb_tags.json，共 ${Object.keys(this.libraryConfig).length} 个库配置。`);
         } catch (e) {
             if (e.code === 'ENOENT') {
@@ -150,11 +167,13 @@ class TDBPlaceholderProcessor {
     // ────────────────────────────────────────────────────────────
 
     async _getLibraryVectors(libraryName) {
+        const conf = this.libraryConfig[libraryName] || {};
+        const threshold = typeof conf.threshold === 'number' ? conf.threshold : DEFAULT_TDB_THRESHOLD;
         if (this.libraryVectorCache.has(libraryName)) {
-            return this.libraryVectorCache.get(libraryName);
+            // threshold 属于热更新配置，不是向量身份的一部分，不能固化在向量缓存里。
+            return { ...this.libraryVectorCache.get(libraryName), threshold };
         }
 
-        const conf = this.libraryConfig[libraryName] || {};
         const texts = [libraryName];
 
         // 增强文本：库名 + 描述 + tags（若配置）
@@ -181,11 +200,10 @@ class TDBPlaceholderProcessor {
 
         const entry = {
             nameVector,
-            enhancedVector,
-            threshold: typeof conf.threshold === 'number' ? conf.threshold : DEFAULT_TDB_THRESHOLD
+            enhancedVector
         };
         this.libraryVectorCache.set(libraryName, entry);
-        return entry;
+        return { ...entry, threshold };
     }
 
     /**

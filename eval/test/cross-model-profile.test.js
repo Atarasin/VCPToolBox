@@ -96,20 +96,22 @@ test('calibration validation rejects stale gate definition, scoring formula and 
             gateDefinitionHash: 'sha256:old-definition',
             protocol: { scoringFormulaVersion: 'gate-score-old' },
             dataset: { id: 'gate-v1' },
-            thresholds: { diary: {}, cold: {} }
+            thresholds: { diary: { ProductionDiary: 0.1 }, cold: {} }
         },
         status: 'validated'
     };
     profile.validateGateCalibration(calibration, {
         effectiveEmbedding,
         gateDefinitionHash: 'sha256:new-definition',
-        scoringFormulaVersion: 'gate-score-v1'
+        scoringFormulaVersion: 'gate-score-v1',
+        allowedTargets: { diary: ['EvalDiary'], cold: ['VCP知识'] }
     });
     assert.equal(calibration.status, 'stale');
     assert.equal(calibration.reasonCode, 'gate-calibration-stale');
     assert.ok(calibration.validationReasons.some(reason => reason.includes('gate definition')));
     assert.ok(calibration.validationReasons.some(reason => reason.includes('scoring formula')));
     assert.ok(calibration.validationReasons.some(reason => reason.includes('dataset provenance')));
+    assert.ok(calibration.validationReasons.some(reason => reason.includes('outside eval namespace')));
 });
 
 test('cold corpus fingerprint is content-based and available to the real preflight chain', () => {

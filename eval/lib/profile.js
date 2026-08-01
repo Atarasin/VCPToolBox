@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const gateProvenance = require('../../modules/gateProvenance');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const EVAL_ROOT = path.resolve(__dirname, '..');
@@ -139,7 +140,7 @@ function loadGateCalibration(profile, name, effectiveEmbedding) {
 
 function validateGateCalibration(calibration, context) {
     if (!calibration.artifact) return calibration;
-    const { effectiveEmbedding, gateDefinitionHash, scoringFormulaVersion } = context;
+    const { effectiveEmbedding, gateDefinitionHash, scoringFormulaVersion, allowedTargets } = context;
     const artifact = calibration.artifact;
     const reasons = [];
     if (artifact.schemaVersion !== 1) reasons.push('schemaVersion must be 1');
@@ -158,6 +159,14 @@ function validateGateCalibration(calibration, context) {
         || !artifact.thresholds.cold || typeof artifact.thresholds.cold !== 'object') {
         reasons.push('threshold namespaces are incomplete');
     }
+    if (allowedTargets) {
+        for (const targetType of ['diary', 'cold']) {
+            const allowed = new Set(allowedTargets[targetType] || []);
+            for (const target of Object.keys(artifact.thresholds?.[targetType] || {})) {
+                if (!allowed.has(target)) reasons.push(`${targetType} target is outside eval namespace: ${target}`);
+            }
+        }
+    }
     calibration.validationReasons = reasons;
     if (reasons.length) {
         calibration.status = 'stale';
@@ -166,14 +175,16 @@ function validateGateCalibration(calibration, context) {
     return calibration;
 }
 
-function gateDefinitionFromBaseConfig() {
-    const stripThreshold = value => {
-        if (Array.isArray(value)) return value.map(stripThreshold);
-        if (!value || typeof value !== 'object') return value;
-        return Object.fromEntries(Object.entries(value)
-            .filter(([key]) => key !== 'threshold')
-            .map(([key, child]) => [key, stripThreshold(child)]));
+function evalGateAllowedTargets() {
+    const specPath = path.join(EVAL_ROOT, 'corpus-spec', 'books.json');
+    const spec = fs.existsSync(specPath) ? readJson(specPath) : { books: {} };
+    return {
+        diary: Object.values(spec.books || {}).map(book => book.folder).filter(Boolean).sort(),
+        cold: ['VCP知识']
     };
+}
+
+function gateDefinitionFromBaseConfig() {
     const resolve = candidates => candidates.find(candidate => fs.existsSync(candidate)) || null;
     const diary = resolve([
         path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json'),
@@ -184,11 +195,12 @@ function gateDefinitionFromBaseConfig() {
         path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'tdb_tags.json.example'),
         path.join(PROJECT_ROOT, 'tdb_tags.json')
     ]);
-    const definition = stableValue({
-        diary: diary ? stripThreshold(readJson(diary)) : {},
-        cold: cold ? stripThreshold(readJson(cold)) : {}
-    });
-    return { paths: { diary, cold }, definition, hash: sha256(JSON.stringify(definition)) };
+    const baseConfigs = {
+        diary: diary ? readJson(diary) : {},
+        cold: cold ? readJson(cold) : {}
+    };
+    const definition = gateProvenance.combinedGateDefinition(baseConfigs);
+    return { paths: { diary, cold }, baseConfigs, definition: definition.definition, hash: definition.hash };
 }
 
 function listProfiles() {
@@ -346,15 +358,27 @@ function loadProfile(name = 'default', overrides = {}) {
     const gateDefinition = gateDefinitionFromBaseConfig();
     const scoringFormulaVersion = 'gate-score-v1';
     const gateDefinitionHash = gateDefinition.hash;
+    const allowedTargets = evalGateAllowedTargets();
     validateGateCalibration(gateCalibration, {
         effectiveEmbedding,
         gateDefinitionHash,
-        scoringFormulaVersion
+        scoringFormulaVersion,
+        allowedTargets
     });
-    const effectiveGateConfigHash = sha256(JSON.stringify(stableValue({
-        gateDefinitionHash,
-        thresholds: gateCalibration.artifact?.thresholds || {}
-    })));
+    const gateState = gateProvenance.resolveGateState(
+        gateDefinition.baseConfigs,
+        gateCalibration.artifact,
+        {
+            embedding: {
+                model: effectiveEmbedding.model,
+                dimension: effectiveEmbedding.dimension,
+                endpointFingerprint: effectiveEmbedding.endpointFingerprint
+            },
+            artifactHash: gateCalibration.artifactHash,
+            allowedTargets
+        }
+    );
+    const effectiveGateConfigHash = gateState.effectiveConfigHash;
 
     return {
         name,
@@ -375,6 +399,9 @@ function loadProfile(name = 'default', overrides = {}) {
             definitionPaths: gateDefinition.paths,
             definitionHash: gateDefinitionHash,
             effectiveConfigHash: effectiveGateConfigHash,
+            thresholds: gateState.thresholds,
+            thresholdOverrides: gateState.thresholdOverrides,
+            allowedTargets,
             datasetHash: gateCalibration.artifact?.dataset?.hash || null,
             holdoutHash: gateCalibration.artifact?.dataset?.holdoutSplitHash || null
         },
