@@ -310,6 +310,37 @@ async function cmdRun(flags) {
 
     const suiteHash = profileLib.hashOf(allCases.map(x => x.id).sort().join('|'));
 
+    // ── 并发锁：同一时间只允许一次 run ────────────────────────────
+    // vector_cache / 语义组向量 / DailyNoteSearcher 端口 / TDB 存储是跨进程共享的，
+    // 并发跑不会报错，只会悄悄互相污染结果（详见 README「不要同时跑多个 run」）。
+    // 在任何会触碰共享状态的步骤之前拿锁；被 kill -9 留下的陈旧锁靠 PID 探活自愈。
+    let runLock;
+    try {
+        runLock = runstore.acquireRunLock({
+            profile: resolved.name,
+            label: typeof flags.label === 'string' ? flags.label : null
+        });
+    } catch (error) {
+        if (error.code === 'EVAL_RUN_LOCKED') {
+            out(c('red', `\n${error.message}\n`));
+            return 1;
+        }
+        throw error;
+    }
+
+    try {
+        return await cmdRunLocked({
+            flags, resolved, corpusManifest, cases, suiteFiles, suiteHash
+        });
+    } finally {
+        runLock.release();
+    }
+}
+
+async function cmdRunLocked(params) {
+    const { flags, resolved, corpusManifest, cases, suiteFiles, suiteHash } = params;
+    const runner = require('./runner');
+
     // ── 前置校验：不通过就中止 ────────────────────────────────────
     const needsNetwork = cases.some(x => x.mode === 'placeholder' || x.mode === 'lightmemo');
     const pf = await preflight.run(resolved, { skipNetwork: !needsNetwork });

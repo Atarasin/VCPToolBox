@@ -30,6 +30,7 @@ const { EVAL_ROOT, PROJECT_ROOT } = require('./profile');
 
 const RUNS_DIR = path.join(EVAL_ROOT, 'runs');
 const LATEST_LINK = path.join(RUNS_DIR, 'latest');
+const LOCK_FILE = path.join(RUNS_DIR, '.lock');
 
 function shortHash(value) {
     return crypto.createHash('sha256')
@@ -62,6 +63,83 @@ function gitDirty() {
         return out.trim().length > 0;
     } catch (_) {
         return null;
+    }
+}
+
+/**
+ * 运行并发锁。
+ *
+ * 为什么必须是工具强制而不是文档约定：每次 run 的向量库虽然隔离，但四处跨进程
+ * 共享的可变状态没有隔离 —— Plugin/RAGDiaryPlugin/vector_cache.json（不同维度的
+ * 日记本名向量互相污染）、semantic_groups.json + semantic_vectors/（组向量互相删改）、
+ * DailyNoteSearcher 的固定端口 38765、TDBKnowledge 的单一 .tdb 存储与摄取队列
+ * （其"清理锁文件"逻辑会把活着的另一进程的锁清掉）。并发跑不会报错，
+ * 只会悄悄产出被污染的结果 —— 恰恰是这套评测最要防的那类失败。
+ *
+ * 实现：`open(path, 'wx')` 原子独占创建。锁文件里记 pid/label/时间，
+ * 拿锁失败时先探测持有者进程是否还活着 —— 死了就当作陈旧锁清掉重试
+ * （进程被 kill -9 时 finally 不会执行，必须有这条自愈路径）。
+ */
+function acquireRunLock(info = {}) {
+    fs.mkdirSync(RUNS_DIR, { recursive: true });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const fd = fs.openSync(LOCK_FILE, 'wx');
+            fs.writeSync(fd, JSON.stringify({
+                pid: process.pid,
+                startedAt: new Date().toISOString(),
+                label: info.label ?? null,
+                profile: info.profile ?? null
+            }, null, 2));
+            fs.closeSync(fd);
+            return {
+                release() {
+                    // 只释放自己的锁：极端时序下（本进程被判死、锁被抢）不要误删别人的
+                    try {
+                        const current = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf-8'));
+                        if (current.pid === process.pid) fs.rmSync(LOCK_FILE, { force: true });
+                    } catch (_) { /* 锁已不在，无事可做 */ }
+                }
+            };
+        } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+        }
+
+        // 锁已存在：判断持有者死活
+        let holder = null;
+        try {
+            holder = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf-8'));
+        } catch (_) { /* 内容损坏也按持有者未知处理 */ }
+
+        if (holder?.pid && isProcessAlive(holder.pid)) {
+            const err = new Error(
+                `另一次评估运行正在进行（pid ${holder.pid}` +
+                `${holder.profile ? `，profile ${holder.profile}` : ''}` +
+                `${holder.label ? `，label "${holder.label}"` : ''}` +
+                `，始于 ${holder.startedAt ?? '未知时间'}）。\n` +
+                `并发运行会互相污染 vector_cache / 语义组向量 / DailyNoteSearcher 端口 / TDB 存储，` +
+                `详见 eval/README.md 的「不要同时跑多个 run」。\n` +
+                `请等它结束；若确认它已经不在了，删除 ${path.relative(PROJECT_ROOT, LOCK_FILE)} 后重试。`
+            );
+            err.code = 'EVAL_RUN_LOCKED';
+            throw err;
+        }
+
+        // 持有者已死（或锁文件损坏）：陈旧锁，清掉后重试一次
+        fs.rmSync(LOCK_FILE, { force: true });
+    }
+
+    throw new Error('获取运行锁失败：陈旧锁清理后仍无法创建（竞态过于频繁？）。');
+}
+
+function isProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        // EPERM = 进程存在但属于别的用户 —— 算活着
+        return error.code === 'EPERM';
     }
 }
 
@@ -263,6 +341,8 @@ function pruneRuns(keep = 5) {
 
 module.exports = {
     RUNS_DIR,
+    LOCK_FILE,
+    acquireRunLock,
     createRun,
     finalizeRun,
     writeManifest,

@@ -233,16 +233,52 @@ npm 快捷方式：`npm run eval:doctor` / `eval:corpus` / `eval:run` / `eval:ti
 
 ### 对比两个 embedding 模型
 
-复制 `profiles/default.json` 改 `embedding.model` 与 `dimension`，然后：
+复制 `profiles/default.json` 改 `embedding.model` 与 `dimension`（仓库已带两个现成的：
+`gemini3072` = jy-gemini-embedding-001 @ 3072、`qwen8b4096` = Qwen/Qwen3-Embedding-8B @ 4096），然后：
 
 ```bash
-node eval/vcp-eval.js run --profile default   --label baseline
-node eval/vcp-eval.js run --profile qwen4096  --label candidate
+node eval/vcp-eval.js doctor --profile gemini3072      # 先探端点与维度
+node eval/vcp-eval.js run --profile gemini3072 --label baseline
+node eval/vcp-eval.js run --profile qwen8b4096 --label candidate
 node eval/vcp-eval.js compare <runA> <runB>
 ```
 
-两次运行各自持有独立的 `VectorStore/`，不会互相污染 —— 旧实现共用committed 的
+两次运行各自持有独立的 `VectorStore/`，不会互相污染 —— 旧实现共用 committed 的
 `VectorStore_baseline/` 与 `VectorStore_candidate/`，一个陈旧索引就能悄悄带偏整轮对比。
+
+profile 里 `embedding.model`/`dimension` 留 `null` 表示沿用根 `config.env` 的当前值；
+显式填写即覆盖。**dimension 必须与模型实际输出一致**——doctor 会真发一次探针请求核对，
+不一致直接中止（否则 `search()` 会静默返回空数组）。候选模型走另一个网关时在
+profile 的 `env` 里覆盖 `API_URL`/`API_Key`。RAG 参数同理：把改过的 rag_params
+副本存成文件、用 `ragParamsPath` 指向它（注意 doctor 会提示的死键调了没有效果）。
+
+### ⚠️ 不要同时跑多个 run（串行约束）
+
+每次 run 的向量库确实互相隔离，但以下**跨进程共享的可变状态**没有隔离，
+并发跑会互相破坏：
+
+| 共享点 | 位置 | 并发后果 |
+| --- | --- | --- |
+| 插件向量缓存 | `Plugin/RAGDiaryPlugin/vector_cache.json`（路径硬编码 `__dirname`） | 两个进程各自读-改-写整个文件，后写覆盖先写；**换模型对比时最危险**——不同维度的日记本名向量会互相污染对方缓存 |
+| 语义组向量 | `SemanticGroupManager` 写 `semantic_groups.json` + `semantic_vectors/*.json` | 不同维度的进程互相删改对方刚算好的组向量 |
+| DailyNoteSearcher 常驻服务 | 固定端口 38765 | 第二个进程绑定失败，或复用第一个进程起的服务导致生命周期归属混乱 |
+| 冷知识库（tier4） | `Plugin/TDBKnowledge/VectorStoreTDB/` 单一 `.tdb` + meta SQLite + 摄取队列 | 两进程撞锁；TDBKnowledge 的"发现锁文件尝试清理"逻辑会把**活着的**另一进程的锁清掉 |
+
+另有两个软性问题：embedding 端点被双倍并发打（gemini 网关已实测出现过 429）；
+两个进程抢 CPU 会让 `latencyMs` 失真，跨 run 的成本对比失去意义。
+
+**这条约束由工具强制**：`run` 启动时会在 `eval/runs/.lock` 上取原子并发锁
+（在任何触碰共享状态的步骤之前）。已有 run 在跑时，第二个 `run` 会**立即拒绝并
+非零退出**，错误信息里带持有者的 pid / profile / label / 开始时间。被 `kill -9`
+留下的陈旧锁靠 PID 探活自动清理，不需要人工干预；只有在确认持有进程已不存在而
+锁仍未被清掉的极端情况下，才需要手动删除 `eval/runs/.lock`。
+
+串行链式执行即可：
+
+```bash
+node eval/vcp-eval.js run --profile gemini3072 --label baseline && \
+node eval/vcp-eval.js run --profile qwen8b4096 --label candidate
+```
 
 ---
 
