@@ -11,6 +11,7 @@ const TDBPlaceholderProcessor = require('../../Plugin/RAGDiaryPlugin/TDBPlacehol
 const probes = require('../lib/probes');
 const runtime = require('../lib/runtime');
 const runner = require('../lib/runner');
+const metrics = require('../lib/metrics');
 const { deriveRunStatus } = require('../lib/cli');
 const { _getEmbeddingModelCandidates } = require('../../EmbeddingUtils');
 
@@ -154,6 +155,44 @@ test('placeholder broadcasts structured retrieval errors and probes mark integri
     const observation = probes.summarize({ collector, injectedContent: result });
     assert.equal(observation.integrity.clean, false);
     assert.equal(observation.integrity.errors[0].reasonCode, 'TDB_QUERY_VECTOR_MODEL_MISMATCH');
+});
+
+test('cold gate emits structured events for both blocked and passed decisions', async () => {
+    const events = [];
+    const processor = new TDBPlaceholderProcessor({ pushVcpInfo: event => events.push(event) });
+    processor.setTdbKnowledgeManager({ initialized: true });
+    processor._retrieve = async () => [];
+    processor._format = () => '';
+    processor._computeGate = async () => ({
+        maxSim: 0.2,
+        avgThreshold: 0.3,
+        perLibrary: { VCP知识: { score: 0.2, threshold: 0.3 } }
+    });
+    await processor.processHybrid('VCP知识', '', [1, 2, 3], 'blocked query', 5);
+    processor._computeGate = async () => ({
+        maxSim: 0.4,
+        avgThreshold: 0.3,
+        perLibrary: { VCP知识: { score: 0.4, threshold: 0.3 } }
+    });
+    await processor.processHybrid('VCP知识', '', [1, 2, 3], 'passed query', 5);
+    const gates = events.filter(event => event.type === 'RAG_GATE_DECISION');
+    assert.deepEqual(gates.map(event => event.decision), ['blocked', 'passed']);
+    assert.ok(gates.every(event => event.targetType === 'cold' && event.scoringFormulaVersion === 'gate-score-v1'));
+});
+
+test('run metrics keep retrieval mismatch integrity dirty', () => {
+    const result = metrics.aggregate([{
+        id: 'mismatch',
+        status: 'error',
+        reasonCode: 'TDB_QUERY_VECTOR_MODEL_MISMATCH',
+        integrity: {
+            clean: false,
+            errors: [{ reasonCode: 'TDB_QUERY_VECTOR_MODEL_MISMATCH', error: 'wrong model' }]
+        },
+        degradations: {}
+    }]);
+    assert.equal(result.integrity.clean, false);
+    assert.equal(result.integrity.errorReasons.TDB_QUERY_VECTOR_MODEL_MISMATCH, 1);
 });
 
 test('VT-009: cold ingestion timeout has a stable skip reason', async () => {

@@ -380,6 +380,14 @@ function aggregate(perCase) {
             degradationTally[key] = (degradationTally[key] || 0) + (info.count || 1);
         }
     }
+    const integrityErrors = perCase
+        .filter(c => c.integrity?.clean === false)
+        .flatMap(c => (c.integrity.errors || []).map(error => ({ caseId: c.id, ...error })));
+    const integrityErrorReasons = integrityErrors.reduce((acc, error) => {
+        const code = error.reasonCode || 'integrity-error';
+        acc[code] = (acc[code] || 0) + 1;
+        return acc;
+    }, {});
 
     return {
         counts: {
@@ -419,8 +427,10 @@ function aggregate(perCase) {
         },
         integrity: {
             silentDegradations: degradationTally,
+            errors: integrityErrors,
+            errorReasons: integrityErrorReasons,
             // 出现任何静默降级都意味着这次运行的部分结论不可信
-            clean: Object.keys(degradationTally).length === 0
+            clean: Object.keys(degradationTally).length === 0 && integrityErrors.length === 0
         },
         byTier: bucket(c => `tier${c.tier}`),
         byFamily: bucket(c => c.family),
