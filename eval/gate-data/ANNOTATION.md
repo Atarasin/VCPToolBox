@@ -53,3 +53,15 @@ python3 -m http.server 8765 --directory eval/gate-data
 
 页面不会联网或预填标签/声明；进度只存于当前浏览器 localStorage。全部逐条选择后，审阅者亲自
 键入声明，页面导出的 `*.reviewed.jsonl` 可直接传给 `gate review merge`。
+
+服务器没有浏览器或无法做 SSH 端口转发时，直接使用纯终端版本：
+
+```bash
+node eval/gate-data/reviewer-terminal.js \
+  --input /tmp/reviewer-a-0.jsonl \
+  --reviewer <真实审阅者ID>
+```
+
+终端逐条显示 query、候选标签和内嵌来源正文；`p/n/a` 选择标签，`c` 表示人工确认候选标签，
+`q` 保存退出，之后执行同一命令自动恢复。全部完成后输入 `export`，亲自键入声明并生成
+`*.reviewed.jsonl`。进度文件权限为 `0600`，不会写入源模板。
