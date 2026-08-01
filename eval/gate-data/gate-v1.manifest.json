@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "datasetId": "gate-v1",
-  "annotationVersion": "candidate-2",
+  "annotationVersion": "candidate-3-mined",
   "qualityLevel": "candidate",
   "status": "awaiting-human-review",
   "splitProtocol": {
@@ -36,11 +36,44 @@
     "negativePerTarget": 200,
     "hardNegativeReviewCount": 2
   },
-  "generatedCandidateNotice": "Natural-language candidates only. Labels require human confirmation; no mined or human-reviewed provenance is claimed.",
+  "generatedCandidateNotice": "Natural-language candidates with real dual-profile score mining. Labels remain pending human confirmation.",
+  "miningEvidence": {
+    "evidenceId": "sha256:6ee4c59d0814f0958e1d33edefd0a3d63658a82e6af9fb2d472231a317a1b0a3",
+    "inputDatasetHash": "sha256:ab2bdd2707fd76b370596691ad95c3122156e84951e3c329b9a2a08c48aacad5",
+    "algorithm": {
+      "name": "mean-within-target-profile-percentile",
+      "hardPerTarget": 66,
+      "nearDomainPerTarget": 67,
+      "easyPerTarget": 67,
+      "tieBreak": "caseId-ascending"
+    },
+    "scoreEvidence": [
+      {
+        "profile": "gemini3072",
+        "embedding": {
+          "model": "jy-gemini-embedding-001",
+          "dimension": 3072,
+          "endpointFingerprint": "sha256:2ddbc9ce94c74edbf449b26f6f1c1c81a04c51f89ac14589cd1571f19dfeba49"
+        },
+        "calibrationRowsHash": "sha256:07a5a255f5002e36a5d7234d0283146823f3a3da87e6c77905031f252bbc2d72",
+        "holdoutRowsHash": "sha256:ede4bdb647fc076b1fd57ce49aec8472e8f8daad2f4c5a9601f0e2598f08140c"
+      },
+      {
+        "profile": "qwen8b4096",
+        "embedding": {
+          "model": "Qwen/Qwen3-Embedding-8B",
+          "dimension": 4096,
+          "endpointFingerprint": "sha256:25c356c72d8f89d679db3b6147caa1149a80f61961fe069859646bf77b7b977e"
+        },
+        "calibrationRowsHash": "sha256:d2a33d61c516e8f4b21f8df7f1191bd02d7ea16647a1c3545b404239d74d0c0f",
+        "holdoutRowsHash": "sha256:3abf554acb2f4b1753547fc17007fd194b185d5ca3c862f2771772c6f1be7745"
+      }
+    ]
+  },
   "hashes": {
-    "dataset": "sha256:ab2bdd2707fd76b370596691ad95c3122156e84951e3c329b9a2a08c48aacad5",
-    "calibration": "sha256:27e16fc73d99fba3043cae774d1f5534d8ef6bd709ac29173abb18391b7cf088",
-    "holdout": "sha256:87ff3b65cd480d89da55fffc8af3bb39e7ca97a751fe3ebfe43cda057c07735c"
+    "dataset": "sha256:b330f408208a4188d1d663334bd100bfc57e8a26548974a606a6fa5ae8619b26",
+    "calibration": "sha256:e7b5583c606ca3978fb998475c8a90abffbf858d932d9e30d824baa2359097be",
+    "holdout": "sha256:51ed638bb51052b0a87e68942252169673466bde01f9d7d1f60818ef32e4e21b"
   },
   "counts": {
     "total": 1500,

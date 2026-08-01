@@ -13,6 +13,11 @@
 `intentGroup`，同一源文档固定在一个 split。它有完整数量和 split 结构，但 manifest 明确标为
 `candidate`；校准 CLI 默认拒绝用未验证标签生成正式产物。
 
+其中 330 条 `source=mined` 的 hard-negative 候选来自 Gemini 3072 与 Qwen 4096 的真实
+score-only 结果：在每个目标内分别计算两个模型的分数百分位，取均值最高的 66 条。完整分数、
+profile embedding 指纹、输入 score bundle hash 与稳定算法记录在 `gate-v1.mining.json`。
+`mined` 只说明候选发现方式，`annotation.status` 仍是 `pending`，不能代替人工判负。
+
 ## 双人复核工作流
 
 第一名审阅者复核全部样本；第二名审阅者至少复核 `hard negative` 与 `ambiguous`。大数据集可按稳定分片分派：

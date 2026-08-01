@@ -161,10 +161,34 @@ for (const target of normalizedTargets) {
     }
 }
 
+const baseVerification = verifyRows(rows, {
+    targets: normalizedTargets.map(({ targetType, library }) => ({ targetType, library }))
+});
+const miningPath = path.join(__dirname, 'gate-v1.mining.json');
+let miningEvidence = null;
+if (fs.existsSync(miningPath)) {
+    miningEvidence = JSON.parse(fs.readFileSync(miningPath, 'utf8'));
+    if (miningEvidence.inputDatasetHash !== baseVerification.datasetHash) {
+        throw new Error('gate-v1 mining evidence does not match the generated base candidate');
+    }
+    const assignments = new Map((miningEvidence.cases || []).map(item => [item.caseId, item]));
+    for (const row of rows) {
+        if (row.label !== 'negative') continue;
+        const assignment = assignments.get(row.id);
+        if (!assignment || !['easy', 'near-domain', 'hard'].includes(assignment.assignedDifficulty)) {
+            throw new Error(`gate-v1 mining evidence is incomplete for ${row.id}`);
+        }
+        row.difficulty = assignment.assignedDifficulty;
+        row.source = assignment.source;
+        row.id = assignment.outputCaseId;
+        if (row.source === 'mined') row.annotation.notes = `mining-candidate:${miningEvidence.evidenceId}`;
+    }
+}
+
 const manifest = {
     schemaVersion: 1,
     datasetId: 'gate-v1',
-    annotationVersion: 'candidate-2',
+    annotationVersion: miningEvidence ? 'candidate-3-mined' : 'candidate-2',
     qualityLevel: 'candidate',
     status: 'awaiting-human-review',
     splitProtocol: {
@@ -174,7 +198,15 @@ const manifest = {
     },
     targets: normalizedTargets.map(({ targetType, library }) => ({ targetType, library })),
     requirements: { positivePerTarget: 100, negativePerTarget: 200, hardNegativeReviewCount: 2 },
-    generatedCandidateNotice: 'Natural-language candidates only. Labels require human confirmation; no mined or human-reviewed provenance is claimed.'
+    generatedCandidateNotice: miningEvidence
+        ? 'Natural-language candidates with real dual-profile score mining. Labels remain pending human confirmation.'
+        : 'Natural-language candidates only. Labels require human confirmation; no mined or human-reviewed provenance is claimed.',
+    miningEvidence: miningEvidence ? {
+        evidenceId: miningEvidence.evidenceId,
+        inputDatasetHash: miningEvidence.inputDatasetHash,
+        algorithm: miningEvidence.algorithm,
+        scoreEvidence: miningEvidence.scoreEvidence
+    } : null
 };
 const verification = verifyRows(rows, manifest);
 if (!verification.ok) {

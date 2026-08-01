@@ -10,6 +10,7 @@ const test = require('node:test');
 const dataset = require('../lib/gateDataset');
 const calibration = require('../lib/gateCalibration');
 const review = require('../lib/gateReview');
+const mining = require('../gate-data/mine-candidates');
 const { scoreGateVectors } = require('../../modules/gateScoring');
 
 function scoreBundle(split, rows, qualityLevel = 'decision') {
@@ -128,6 +129,14 @@ test('gate-v1 candidate uses grouped natural paraphrases and decision-level coun
     assert.equal(candidate.rows.length, 1500);
     assert.equal(new Set(candidate.rows.map(row => row.intentGroup)).size, 50);
     assert.equal(candidate.rows.some(row => /第\s*\d+\s*个(?:表述|检查角度)/u.test(row.query)), false);
+    assert.equal(candidate.rows.filter(row => row.source === 'mined').length, 330);
+    assert.equal(candidate.rows.filter(row => row.label === 'negative' && row.difficulty === 'hard' && row.source !== 'mined').length, 0);
+    assert.equal(candidate.rows.some(row => /_neg_(?:easy|neardomain|hard)_/u.test(row.id)), false);
+    const evidence = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../gate-data/gate-v1.mining.json'), 'utf8'));
+    const { evidenceId, generatedAt, ...hashable } = evidence;
+    assert.ok(Number.isFinite(Date.parse(generatedAt)));
+    assert.equal(evidenceId, mining.artifactHash(hashable));
+    assert.equal(candidate.manifest.miningEvidence.evidenceId, evidenceId);
     for (const stats of Object.values(candidate.verification.counts.targets)) {
         assert.equal(stats.positive, 100);
         assert.equal(stats.negative, 200);
