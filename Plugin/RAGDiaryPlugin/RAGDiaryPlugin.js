@@ -169,17 +169,21 @@ class RAGDiaryPlugin {
             if (process.env.RAG_GATE_CONFIG_PATH) {
                 gateOverride = await this._readJsonFileStable(process.env.RAG_GATE_CONFIG_PATH, {}, { label: 'RAG_GATE_CONFIG_PATH' });
             }
-            const merged = gateProvenance.mergeThresholdOverride(baseConfig, gateOverride, 'diary');
-            if (merged.rejected.length) {
-                console.warn(`[RAGDiaryPlugin] 门控覆盖拒绝 ${merged.rejected.length} 项：${JSON.stringify(merged.rejected)}`);
-            }
-            this.ragConfig = merged.effective;
-            this.gateIdentity = gateProvenance.gateIdentity(baseConfig);
-            this.effectiveGateConfigHash = gateProvenance.effectiveGateConfigHash(
-                this.gateIdentity,
-                this.ragConfig,
+            const coldBaseConfig = await this._readJsonFileStable(
+                path.join(__dirname, 'tdb_tags.json'),
+                {},
+                { label: 'tdb_tags.json' }
+            );
+            const gateState = gateProvenance.resolveGateState(
+                { diary: baseConfig, cold: coldBaseConfig },
                 gateOverride
             );
+            if (gateState.rejected.length) {
+                console.warn(`[RAGDiaryPlugin] 门控覆盖拒绝 ${gateState.rejected.length} 项：${JSON.stringify(gateState.rejected)}`);
+            }
+            this.ragConfig = gateState.effective.diary;
+            this.gateIdentity = gateProvenance.gateIdentity(baseConfig);
+            this.effectiveGateConfigHash = gateState.effectiveConfigHash;
             const currentConfigHash = this.effectiveGateConfigHash;
 
             // 如果配置哈希变化，清空查询缓存
@@ -520,14 +524,18 @@ class RAGDiaryPlugin {
             const gateOverride = process.env.RAG_GATE_CONFIG_PATH
                 ? await this._readJsonFileStable(process.env.RAG_GATE_CONFIG_PATH, {}, { label: 'RAG_GATE_CONFIG_PATH' })
                 : null;
-            const merged = gateProvenance.mergeThresholdOverride(baseConfig, gateOverride, 'diary');
-            const nextConfig = merged.effective;
-            const nextIdentity = gateProvenance.gateIdentity(baseConfig);
-            const currentConfigHash = gateProvenance.effectiveGateConfigHash(
-                nextIdentity,
-                nextConfig,
+            const coldBaseConfig = await this._readJsonFileStable(
+                path.join(__dirname, 'tdb_tags.json'),
+                {},
+                { label: 'tdb_tags.json' }
+            );
+            const gateState = gateProvenance.resolveGateState(
+                { diary: baseConfig, cold: coldBaseConfig },
                 gateOverride
             );
+            const nextConfig = gateState.effective.diary;
+            const nextIdentity = gateProvenance.gateIdentity(baseConfig);
+            const currentConfigHash = gateState.effectiveConfigHash;
 
             // 同一 override 文件同时承载 diary/cold 阈值。即使 diary 哈希未变，
             // cold 配置也必须在本次 watcher 回调里刷新。

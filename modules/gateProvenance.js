@@ -34,29 +34,84 @@ function gateIdentity(config, env = process.env) {
     const definition = stableValue(stripThresholds(config || {}));
     const vectorSourceHash = sha256(JSON.stringify(definition));
     const gateDefinitionHash = sha256(JSON.stringify(stableValue({ vectorSourceHash, scoringFormulaVersion: SCORING_FORMULA_VERSION })));
-    const embedding = {
-        model: env.WhitelistEmbeddingModel || '',
-        dimension: Number(env.VECTORDB_DIMENSION || env.EMBEDDING_DIMENSIONS || 0),
-        endpointFingerprint: endpointFingerprint({ apiUrl: env.API_URL || '', model: env.WhitelistEmbeddingModel || '' })
-    };
+    const embedding = embeddingIdentity(env);
     return { vectorSourceHash, gateDefinitionHash, scoringFormulaVersion: SCORING_FORMULA_VERSION, embedding };
 }
 
-function effectiveGateConfigHash(identity, effectiveConfig, overrideArtifact = null) {
-    const thresholds = Object.fromEntries(Object.entries(effectiveConfig || {})
-        .filter(([, value]) => Number.isFinite(value?.threshold))
-        .map(([target, value]) => [target, value.threshold]));
+function embeddingIdentity(env = process.env) {
+    const model = env.WhitelistEmbeddingModel || '';
+    return {
+        model,
+        dimension: Number(env.VECTORDB_DIMENSION || env.EMBEDDING_DIMENSIONS || 0),
+        endpointFingerprint: endpointFingerprint({ apiUrl: env.API_URL || '', model })
+    };
+}
+
+function thresholdNamespaces(configs) {
+    return Object.fromEntries(['diary', 'cold'].map(targetType => [
+        targetType,
+        Object.fromEntries(Object.entries(configs?.[targetType] || {})
+            .filter(([, value]) => Number.isFinite(value?.threshold))
+            .map(([target, value]) => [target, value.threshold]))
+    ]));
+}
+
+function combinedGateDefinition(configs) {
+    const definition = stableValue({
+        diary: stripThresholds(configs?.diary || {}),
+        cold: stripThresholds(configs?.cold || {})
+    });
+    return { definition, hash: sha256(JSON.stringify(definition)) };
+}
+
+function effectiveGateConfigHash({
+    gateDefinitionHash,
+    thresholds,
+    embedding,
+    scoringFormulaVersion = SCORING_FORMULA_VERSION,
+    calibrationId = null,
+    artifactHash = null
+}) {
     return sha256(JSON.stringify(stableValue({
-        gateDefinitionHash: identity.gateDefinitionHash,
+        gateDefinitionHash,
         thresholds,
-        embedding: identity.embedding,
-        scoringFormulaVersion: identity.scoringFormulaVersion,
-        calibrationId: overrideArtifact?.calibrationId || null,
-        artifactHash: overrideArtifact?.artifactHash || null,
-        artifactContentHash: overrideArtifact
-            ? sha256(JSON.stringify(stableValue(overrideArtifact)))
-            : null
+        embedding,
+        scoringFormulaVersion,
+        calibrationId,
+        artifactHash
     })));
+}
+
+function resolveGateState(baseConfigs, overrideArtifact = null, options = {}) {
+    const diary = mergeThresholdOverride(baseConfigs?.diary, overrideArtifact, 'diary');
+    const cold = mergeThresholdOverride(baseConfigs?.cold, overrideArtifact, 'cold');
+    const effective = { diary: diary.effective, cold: cold.effective };
+    const definition = combinedGateDefinition(baseConfigs);
+    const embedding = options.embedding || embeddingIdentity(options.env);
+    const thresholds = thresholdNamespaces(effective);
+    const artifactHash = options.artifactHash ?? overrideArtifact?.artifactHash ?? null;
+    return {
+        effective,
+        rejected: [
+            ...diary.rejected.map(item => ({ targetType: 'diary', ...item })),
+            ...cold.rejected.map(item => ({ targetType: 'cold', ...item }))
+        ],
+        gateDefinitionHash: definition.hash,
+        definition: definition.definition,
+        thresholds,
+        embedding,
+        scoringFormulaVersion: SCORING_FORMULA_VERSION,
+        calibrationId: overrideArtifact?.calibrationId || null,
+        artifactHash,
+        effectiveConfigHash: effectiveGateConfigHash({
+            gateDefinitionHash: definition.hash,
+            thresholds,
+            embedding,
+            scoringFormulaVersion: SCORING_FORMULA_VERSION,
+            calibrationId: overrideArtifact?.calibrationId || null,
+            artifactHash
+        })
+    };
 }
 
 function cacheMatches(cache, identity) {
@@ -76,6 +131,10 @@ module.exports = {
     stripThresholds,
     mergeThresholdOverride,
     gateIdentity,
+    embeddingIdentity,
+    thresholdNamespaces,
+    combinedGateDefinition,
     effectiveGateConfigHash,
+    resolveGateState,
     cacheMatches
 };

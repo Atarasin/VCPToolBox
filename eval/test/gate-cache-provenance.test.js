@@ -43,13 +43,42 @@ test('VT-004: cache schema v2 is threshold-independent and embedding-bound', () 
     assert.equal(gate.cacheMatches({ sourceHash: identityA.vectorSourceHash, vectors: cache.vectors }, identityA), false);
     const otherModel = gate.gateIdentity(baseA, { ...ENV, WhitelistEmbeddingModel: 'model-b' });
     assert.equal(gate.cacheMatches(cache, otherModel), false);
-    const lowThresholdHash = gate.effectiveGateConfigHash(identityA, baseA, { calibrationId: 'c1' });
-    const highThresholdHash = gate.effectiveGateConfigHash(identityB, baseB, { calibrationId: 'c1' });
+    const lowThresholdHash = gate.resolveGateState(
+        { diary: baseA, cold: {} },
+        { calibrationId: 'c1' },
+        { env: ENV }
+    ).effectiveConfigHash;
+    const highThresholdHash = gate.resolveGateState(
+        { diary: baseB, cold: {} },
+        { calibrationId: 'c1' },
+        { env: ENV }
+    ).effectiveConfigHash;
     assert.notEqual(lowThresholdHash, highThresholdHash);
     assert.notEqual(
-        gate.effectiveGateConfigHash(identityA, baseA, { calibrationId: 'c1', artifactHash: 'sha256:a' }),
-        gate.effectiveGateConfigHash(identityA, baseA, { calibrationId: 'c1', artifactHash: 'sha256:b' })
+        gate.resolveGateState({ diary: baseA, cold: {} }, { calibrationId: 'c1' }, { env: ENV, artifactHash: 'sha256:a' }).effectiveConfigHash,
+        gate.resolveGateState({ diary: baseA, cold: {} }, { calibrationId: 'c1' }, { env: ENV, artifactHash: 'sha256:b' }).effectiveConfigHash
     );
+});
+
+test('profile and runtime share one effective gate config hash', () => {
+    const resolved = require('../lib/profile').loadProfile('default');
+    const read = file => file && fs.existsSync(file)
+        ? JSON.parse(fs.readFileSync(file, 'utf-8'))
+        : {};
+    const runtimeState = gate.resolveGateState({
+        diary: read(resolved.gate.definitionPaths.diary),
+        cold: read(resolved.gate.definitionPaths.cold)
+    }, resolved.gateCalibration.artifact, {
+        embedding: {
+            model: resolved.embedding.model,
+            dimension: resolved.embedding.dimension,
+            endpointFingerprint: resolved.embedding.endpointFingerprint
+        },
+        artifactHash: resolved.gateCalibration.artifactHash
+    });
+    assert.equal(runtimeState.gateDefinitionHash, resolved.gate.definitionHash);
+    assert.deepEqual(runtimeState.thresholds, resolved.gate.thresholds);
+    assert.equal(runtimeState.effectiveConfigHash, resolved.gate.effectiveConfigHash);
 });
 
 test('plugin config installs definitions without overwriting model-specific thresholds', t => {

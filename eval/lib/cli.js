@@ -398,7 +398,15 @@ async function cmdRunLocked(params) {
         schemaVersion: 1,
         calibrationId: resolved.gateCalibration.artifact?.calibrationId || null,
         artifactHash: resolved.gateCalibration.artifactHash || null,
-        thresholds: resolved.gateCalibration.artifact?.thresholds || {}
+        gateDefinitionHash: resolved.gate.definitionHash,
+        scoringFormulaVersion: resolved.gate.scoringFormulaVersion,
+        embedding: {
+            model: resolved.embedding.model,
+            dimension: resolved.embedding.dimension,
+            endpointFingerprint: resolved.embedding.endpointFingerprint
+        },
+        effectiveConfigHash: resolved.gate.effectiveConfigHash,
+        thresholds: resolved.gate.thresholds
     });
     if (resolved.gateCalibration.artifact?.dataset) {
         runstore.writeJson(handle.paths.gateDatasetManifest, resolved.gateCalibration.artifact.dataset);
