@@ -67,7 +67,9 @@ class TDBPlaceholderProcessor {
                     if (error.code !== 'ENOENT') throw error;
                 }
             }
-            const merged = mergeThresholdOverride(baseConfig, override, 'cold');
+            const merged = mergeThresholdOverride(baseConfig, override, 'cold', {
+                allowedTargets: override?.allowedTargets?.cold
+            });
             this.libraryConfig = merged.effective;
             if (merged.rejected.length) {
                 console.warn(`[TDBPlaceholder] 冷门控覆盖拒绝 ${merged.rejected.length} 项：${JSON.stringify(merged.rejected)}`);

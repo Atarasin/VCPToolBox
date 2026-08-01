@@ -26,6 +26,16 @@ test('threshold-only override changes existing targets and rejects semantic muta
     assert.deepEqual(result.effective.EvalA.tags, ['a']);
     assert.equal(result.effective.Unknown, undefined);
     assert.deepEqual(result.rejected.map(item => item.target), ['Unknown', 'Bad']);
+    const strict = gate.mergeThresholdOverride(
+        { EvalA: { threshold: 0.6 }, ProductionA: { threshold: 0.7 } },
+        { thresholds: { diary: { EvalA: 0, ProductionA: 0.1 } } },
+        'diary',
+        { allowedTargets: ['EvalA'] }
+    );
+    assert.equal(strict.effective.EvalA.threshold, 0);
+    assert.equal(strict.effective.ProductionA.threshold, 0.7);
+    assert.equal(strict.rejected[0].reason, 'target-outside-eval-namespace');
+    assert.equal(gate.resolveThreshold(0, 0.6), 0);
 });
 
 test('VT-004: cache schema v2 is threshold-independent and embedding-bound', () => {

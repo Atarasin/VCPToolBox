@@ -606,6 +606,7 @@ class RAGDiaryPlugin {
         await this.loadConfig();
         await this.loadRagParams();
         await this.tdbProcessor.loadConfig(); // 🧊 加载 tdb_tags.json（可选）
+        await this.semanticGroupManager.initializePromise;
         this._startRagParamsWatcher();
         this._startRagTagsWatcher();
 
@@ -1816,7 +1817,10 @@ class RAGDiaryPlugin {
 
             processingPromises.push((async () => {
                 const diaryConfig = this.ragConfig[dbName] || {};
-                const localThreshold = diaryConfig.threshold || GLOBAL_SIMILARITY_THRESHOLD;
+                const localThreshold = gateProvenance.resolveThreshold(
+                    diaryConfig.threshold,
+                    GLOBAL_SIMILARITY_THRESHOLD
+                );
                 const diarySimilarity = await this._getDiarySimilarityCached(dbName, queryVector, requestCache);
                 if (!diarySimilarity) {
                     console.warn(`[RAGDiaryPlugin] Could not find cached vector for diary name: "${dbName}". Skipping.`);
@@ -1973,7 +1977,10 @@ class RAGDiaryPlugin {
             processingPromises.push((async () => {
                 try {
                     const diaryConfig = this.ragConfig[dbName] || {};
-                    const localThreshold = diaryConfig.threshold || GLOBAL_SIMILARITY_THRESHOLD;
+                    const localThreshold = gateProvenance.resolveThreshold(
+                        diaryConfig.threshold,
+                        GLOBAL_SIMILARITY_THRESHOLD
+                    );
                     const diarySimilarity = await this._getDiarySimilarityCached(dbName, queryVector, requestCache);
                     if (!diarySimilarity) {
                         console.warn(`[RAGDiaryPlugin] Could not find cached vector for diary name: "${dbName}". Skipping.`);
@@ -2501,7 +2508,10 @@ class RAGDiaryPlugin {
         let count = 0;
         for (const name of diaryNames) {
             const diaryConfig = this.ragConfig[name] || {};
-            totalThreshold += diaryConfig.threshold || GLOBAL_SIMILARITY_THRESHOLD;
+            totalThreshold += gateProvenance.resolveThreshold(
+                diaryConfig.threshold,
+                GLOBAL_SIMILARITY_THRESHOLD
+            );
             count++;
         }
         return count > 0 ? totalThreshold / count : GLOBAL_SIMILARITY_THRESHOLD;

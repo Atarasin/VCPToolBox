@@ -406,6 +406,7 @@ async function cmdRunLocked(params) {
             endpointFingerprint: resolved.embedding.endpointFingerprint
         },
         effectiveConfigHash: resolved.gate.effectiveConfigHash,
+        allowedTargets: resolved.gate.allowedTargets,
         thresholds: resolved.gate.thresholds
     });
     if (resolved.gateCalibration.artifact?.dataset) {
