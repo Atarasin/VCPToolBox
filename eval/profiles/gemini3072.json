@@ -12,5 +12,11 @@
     "dimension": 3072,
     "maxToken": 512
   },
+  "coldKnowledge": {
+    "mode": "aligned",
+    "storePolicy": "per-run",
+    "strictVectorMetadata": true
+  },
+  "gateCalibrationPath": "gate-calibration/gemini3072.json",
   "env": {}
 }

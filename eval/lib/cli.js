@@ -85,6 +85,7 @@ async function cmdDoctor(flags) {
         emitJson({
             ok: result.ok,
             profile: resolved.name,
+            resolved: profileLib.snapshotConfig(resolved),
             checks: result.checks,
             capabilities: result.capabilities,
             blocking: result.blocking
@@ -93,6 +94,10 @@ async function cmdDoctor(flags) {
     }
 
     out(c('bold', `\nVCP RAG 评估 · 环境自检（profile: ${resolved.name}）`));
+    out('');
+    out(`  effective embedding  ${resolved.embedding.model} @ ${resolved.embedding.dimension}`);
+    out(`  effective cold       ${resolved.coldKnowledge.model} @ ${resolved.coldKnowledge.dimension} (${resolved.coldKnowledge.mode})`);
+    out(`  gate calibration     ${resolved.gateCalibration.artifact?.calibrationId || resolved.gateCalibration.status}`);
     out('');
     for (const [name, check] of Object.entries(result.checks)) {
         out(`  ${statusIcon(check.ok, check.level)} ${name.padEnd(20)} ${check.detail}`);
@@ -357,21 +362,42 @@ async function cmdRunLocked(params) {
         corpusHash: corpusManifest.corpusHash,
         suiteHash,
         suites: suiteFiles.map(f => f.replace(/\.jsonl$/, '')),
-        label: typeof flags.label === 'string' ? flags.label : null
+        label: typeof flags.label === 'string' ? flags.label : null,
+        coldCorpusFingerprint: pf.coldCorpusFingerprint || null,
+        includesTier4: cases.some(x => x.tier === 4)
     });
 
     // 向量库落在运行目录内 —— 这就是"保存评估后留下的向量数据"
     resolved.storePath = handle.storePath;
+    resolved.coldKnowledge.storePath = handle.coldStorePath;
+    resolved.modelCache = {
+        ragVectorCachePath: handle.paths.ragVectorCache,
+        semanticVectorDir: handle.paths.semanticVectorDir
+    };
+    resolved.gate.configPath = handle.paths.gateConfig;
     profileLib.applyEnv(resolved);
 
     runstore.writeJson(handle.paths.resolvedConfig, profileLib.snapshotConfig(resolved));
     runstore.writeJson(handle.paths.ragParams, resolved.ragParams);
     runstore.writeJson(handle.paths.corpusManifest, corpusManifest);
+    if (resolved.gateCalibration.artifact) {
+        runstore.writeJson(handle.paths.gateCalibration, resolved.gateCalibration.artifact);
+    }
+    runstore.writeJson(handle.paths.gateConfig, {
+        schemaVersion: 1,
+        calibrationId: resolved.gateCalibration.artifact?.calibrationId || null,
+        thresholds: resolved.gateCalibration.artifact?.thresholds || {}
+    });
+    if (resolved.gateCalibration.artifact?.dataset) {
+        runstore.writeJson(handle.paths.gateDatasetManifest, resolved.gateCalibration.artifact.dataset);
+    }
 
     out(c('bold', `\n运行 ${handle.runId}`));
     out('');
     out(`  profile     ${resolved.name}`);
     out(`  embedding   ${resolved.embedding.model} @ ${resolved.embedding.dimension} 维（maxToken ${resolved.embedding.maxToken}）`);
+    out(`  cold        ${resolved.coldKnowledge.model} @ ${resolved.coldKnowledge.dimension} 维（${resolved.coldKnowledge.mode}/${resolved.coldKnowledge.storePolicy}）`);
+    out(`  gate        ${resolved.gateCalibration.artifact?.calibrationId || resolved.gateCalibration.status}`);
     out(`  语料        ${corpusManifest.docCount} 篇，锚点日 ${corpusManifest.anchorDate}`);
     out(`  用例        ${cases.length} 条（来自 ${suiteFiles.join(', ')}）`);
     out(`  产物        ${path.relative(PROJECT_ROOT, handle.dir)}`);

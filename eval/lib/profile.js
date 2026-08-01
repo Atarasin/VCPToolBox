@@ -68,6 +68,129 @@ function hashOf(value) {
     return crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 }
 
+function sha256(value) {
+    return `sha256:${hashOf(value)}`;
+}
+
+function stableValue(value) {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
+}
+
+function normalizeApiUrl(value) {
+    if (!value) return '';
+    try {
+        const url = new URL(String(value));
+        url.hash = '';
+        url.search = '';
+        url.pathname = url.pathname.replace(/\/+$/, '');
+        return url.toString().replace(/\/$/, '');
+    } catch (_) {
+        return String(value).trim().replace(/\/+$/, '');
+    }
+}
+
+function embeddingEndpointFingerprint(embedding) {
+    return sha256(JSON.stringify(stableValue({
+        apiBase: normalizeApiUrl(embedding.apiUrl),
+        model: embedding.model || '',
+        routeVersion: 'openai-embeddings-v1'
+    })));
+}
+
+function createCodedError(code, message, detail = {}) {
+    const error = new Error(message);
+    error.code = code;
+    Object.assign(error, detail);
+    return error;
+}
+
+function loadGateCalibration(profile, name, effectiveEmbedding) {
+    const configured = profile.gateCalibrationPath;
+    if (!configured) {
+        return { path: null, artifact: null, artifactHash: null, status: 'missing' };
+    }
+    const artifactPath = path.resolve(EVAL_ROOT, configured);
+    if (!fs.existsSync(artifactPath)) {
+        return { path: artifactPath, artifact: null, artifactHash: null, status: 'missing' };
+    }
+    try {
+        const artifact = readJson(artifactPath);
+        const artifactEmbedding = artifact.embedding || {};
+        const stale = artifactEmbedding.model !== effectiveEmbedding.model
+            || Number(artifactEmbedding.dimension) !== effectiveEmbedding.dimension
+            || artifactEmbedding.endpointFingerprint !== effectiveEmbedding.endpointFingerprint;
+        return {
+            path: artifactPath,
+            artifact,
+            artifactHash: sha256(JSON.stringify(stableValue(artifact))),
+            status: stale ? 'stale' : (artifact.status || 'unknown'),
+            reasonCode: stale ? 'gate-calibration-stale' : null
+        };
+    } catch (error) {
+        throw createCodedError(
+            'PROFILE_GATE_CALIBRATION_INVALID',
+            `profile "${name}" 的 gate calibration 无法解析：${artifactPath}（${error.message}）`,
+            { artifactPath }
+        );
+    }
+}
+
+function validateGateCalibration(calibration, context) {
+    if (!calibration.artifact) return calibration;
+    const { effectiveEmbedding, gateDefinitionHash, scoringFormulaVersion } = context;
+    const artifact = calibration.artifact;
+    const reasons = [];
+    if (artifact.schemaVersion !== 1) reasons.push('schemaVersion must be 1');
+    if (artifact.status !== 'validated') reasons.push('artifact status must be validated');
+    if (artifact.embedding?.model !== effectiveEmbedding.model) reasons.push('embedding model differs');
+    if (Number(artifact.embedding?.dimension) !== effectiveEmbedding.dimension) reasons.push('embedding dimension differs');
+    if (artifact.embedding?.endpointFingerprint !== effectiveEmbedding.endpointFingerprint) reasons.push('embedding endpoint differs');
+    if (artifact.gateDefinitionHash !== gateDefinitionHash) reasons.push('gate definition differs');
+    if (artifact.protocol?.scoringFormulaVersion !== scoringFormulaVersion) reasons.push('scoring formula differs');
+    if (!artifact.dataset?.id || !artifact.dataset?.hash
+        || !artifact.dataset?.calibrationSplitHash || !artifact.dataset?.holdoutSplitHash) {
+        reasons.push('dataset provenance is incomplete');
+    }
+    if (!artifact.thresholds || typeof artifact.thresholds !== 'object' || Array.isArray(artifact.thresholds)
+        || !artifact.thresholds.diary || typeof artifact.thresholds.diary !== 'object'
+        || !artifact.thresholds.cold || typeof artifact.thresholds.cold !== 'object') {
+        reasons.push('threshold namespaces are incomplete');
+    }
+    calibration.validationReasons = reasons;
+    if (reasons.length) {
+        calibration.status = 'stale';
+        calibration.reasonCode = 'gate-calibration-stale';
+    }
+    return calibration;
+}
+
+function gateDefinitionFromBaseConfig() {
+    const stripThreshold = value => {
+        if (Array.isArray(value)) return value.map(stripThreshold);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value)
+            .filter(([key]) => key !== 'threshold')
+            .map(([key, child]) => [key, stripThreshold(child)]));
+    };
+    const resolve = candidates => candidates.find(candidate => fs.existsSync(candidate)) || null;
+    const diary = resolve([
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json'),
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json.example')
+    ]);
+    const cold = resolve([
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'tdb_tags.json'),
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'tdb_tags.json.example'),
+        path.join(PROJECT_ROOT, 'tdb_tags.json')
+    ]);
+    const definition = stableValue({
+        diary: diary ? stripThreshold(readJson(diary)) : {},
+        cold: cold ? stripThreshold(readJson(cold)) : {}
+    });
+    return { paths: { diary, cold }, definition, hash: sha256(JSON.stringify(definition)) };
+}
+
 function listProfiles() {
     if (!fs.existsSync(PROFILES_DIR)) return [];
     return fs.readdirSync(PROFILES_DIR)
@@ -136,6 +259,7 @@ function loadProfile(name = 'default', overrides = {}) {
     //   parseInt(process.env.KNOWLEDGEBASE_DERIVED_STARTUP_COOLDOWN_MS, 10) || 5 * 60 * 1000
     // 而 parseInt('0') === 0 是 falsy，会被 || 吞掉并落回 5 分钟默认值。
     // 传 '0' 的效果与不传完全一样 —— 这个坑已经害预热超时过一次。
+    const explicitEnv = { ...(profile.env || {}), ...(overrides.env || {}) };
     const env = {
         KNOWLEDGEBASE_ROOT_PATH: corpusRoot,
         KNOWLEDGEBASE_FULL_SCAN_ON_STARTUP: 'true',
@@ -150,8 +274,7 @@ function loadProfile(name = 'default', overrides = {}) {
         API_Key: embedding.apiKey,
         PROJECT_BASE_PATH: PROJECT_ROOT,
         ...(rerank.url ? { RerankUrl: rerank.url, RerankApi: rerank.api, RerankModel: rerank.model } : {}),
-        ...(profile.env || {}),
-        ...(overrides.env || {})
+        ...explicitEnv
     };
 
     // profile.env / overrides.env 允许直接覆盖 WhitelistEmbeddingModel、VECTORDB_DIMENSION、
@@ -166,6 +289,73 @@ function loadProfile(name = 'default', overrides = {}) {
         apiKey: env.API_Key || embedding.apiKey
     };
 
+    if (!effectiveEmbedding.model || !Number.isInteger(effectiveEmbedding.dimension) || effectiveEmbedding.dimension <= 0) {
+        throw createCodedError(
+            'PROFILE_EMBEDDING_INVALID',
+            `profile "${name}" 的 effective embedding model/dimension 无效`
+        );
+    }
+
+    const coldSchema = profile.coldKnowledge || {};
+    const coldMode = coldSchema.mode || 'aligned';
+    if (coldMode !== 'aligned') {
+        throw createCodedError('PROFILE_COLD_MODE_UNSUPPORTED', `coldKnowledge.mode 仅支持 aligned，收到 ${coldMode}`);
+    }
+    const conflictModel = explicitEnv.TDB_KNOWLEDGE_MODEL;
+    const conflictDimension = explicitEnv.TDB_KNOWLEDGE_DIMENSION;
+    if ((conflictModel && conflictModel !== effectiveEmbedding.model)
+        || (conflictDimension && Number(conflictDimension) !== effectiveEmbedding.dimension)) {
+        throw createCodedError(
+            'PROFILE_COLD_EMBEDDING_CONFLICT',
+            `aligned 冷路径必须使用 ${effectiveEmbedding.model} @ ${effectiveEmbedding.dimension}，` +
+            `但 profile/CLI env 声明了 ${conflictModel || effectiveEmbedding.model} @ ${conflictDimension || effectiveEmbedding.dimension}`,
+            {
+                expected: { model: effectiveEmbedding.model, dimension: effectiveEmbedding.dimension },
+                actual: { model: conflictModel || null, dimension: conflictDimension ? Number(conflictDimension) : null }
+            }
+        );
+    }
+
+    effectiveEmbedding.endpointFingerprint = embeddingEndpointFingerprint(effectiveEmbedding);
+    const coldKnowledge = {
+        mode: coldMode,
+        model: effectiveEmbedding.model,
+        dimension: effectiveEmbedding.dimension,
+        rootPath: path.resolve(PROJECT_ROOT, coldSchema.rootPath || 'knowledge'),
+        storePolicy: coldSchema.storePolicy || 'per-run',
+        storePath: null,
+        strictVectorMetadata: coldSchema.strictVectorMetadata !== false,
+        endpointFingerprint: effectiveEmbedding.endpointFingerprint
+    };
+    if (coldKnowledge.storePolicy !== 'per-run') {
+        throw createCodedError('PROFILE_COLD_STORE_POLICY_UNSUPPORTED', '评测期 coldKnowledge.storePolicy 仅支持 per-run');
+    }
+
+    // aligned 派生结果最后写入，根 config.env 与 profile.env 都不能暗中覆盖它。
+    Object.assign(env, {
+        WhitelistEmbeddingModel: effectiveEmbedding.model,
+        WhitelistEmbeddingModelMaxToken: String(effectiveEmbedding.maxToken),
+        VECTORDB_DIMENSION: String(effectiveEmbedding.dimension),
+        EMBEDDING_DIMENSIONS: String(effectiveEmbedding.dimension),
+        TDB_KNOWLEDGE_MODEL: coldKnowledge.model,
+        TDB_KNOWLEDGE_DIMENSION: String(coldKnowledge.dimension),
+        EVAL_STRICT_PROVENANCE: 'true'
+    });
+
+    const gateCalibration = loadGateCalibration(profile, name, effectiveEmbedding);
+    const gateDefinition = gateDefinitionFromBaseConfig();
+    const scoringFormulaVersion = 'gate-score-v1';
+    const gateDefinitionHash = gateDefinition.hash;
+    validateGateCalibration(gateCalibration, {
+        effectiveEmbedding,
+        gateDefinitionHash,
+        scoringFormulaVersion
+    });
+    const effectiveGateConfigHash = sha256(JSON.stringify(stableValue({
+        gateDefinitionHash,
+        thresholds: gateCalibration.artifact?.thresholds || {}
+    })));
+
     return {
         name,
         profileFile: file,
@@ -178,6 +368,16 @@ function loadProfile(name = 'default', overrides = {}) {
         ragParams,
         ragParamsHash: hashOf(ragParams),
         embedding: effectiveEmbedding,
+        coldKnowledge,
+        gateCalibration,
+        gate: {
+            scoringFormulaVersion,
+            definitionPaths: gateDefinition.paths,
+            definitionHash: gateDefinitionHash,
+            effectiveConfigHash: effectiveGateConfigHash,
+            datasetHash: gateCalibration.artifact?.dataset?.hash || null,
+            holdoutHash: gateCalibration.artifact?.dataset?.holdoutSplitHash || null
+        },
         rerank,
         env,
         // storePath 每次运行都不同（落在 run 目录里），由 runstore 注入。
@@ -196,6 +396,18 @@ function applyEnv(resolved) {
     if (resolved.storePath) {
         process.env.KNOWLEDGEBASE_STORE_PATH = resolved.storePath;
     }
+    if (resolved.coldKnowledge?.storePath) {
+        process.env.TDB_KNOWLEDGE_STORE_PATH = resolved.coldKnowledge.storePath;
+    }
+    if (resolved.modelCache?.ragVectorCachePath) {
+        process.env.RAG_VECTOR_CACHE_PATH = resolved.modelCache.ragVectorCachePath;
+    }
+    if (resolved.modelCache?.semanticVectorDir) {
+        process.env.SEMANTIC_VECTOR_CACHE_DIR = resolved.modelCache.semanticVectorDir;
+    }
+    if (resolved.gate?.configPath) {
+        process.env.RAG_GATE_CONFIG_PATH = resolved.gate.configPath;
+    }
     return resolved;
 }
 
@@ -206,7 +418,9 @@ function applyEnv(resolved) {
 function snapshotConfig(resolved) {
     const env = {};
     for (const [key, value] of Object.entries(resolved.env)) {
-        env[key] = isSecretName(key) ? fingerprint(value) : value;
+        env[key] = /url/i.test(key)
+            ? fingerprint(normalizeApiUrl(value))
+            : (isSecretName(key) ? fingerprint(value) : value);
     }
     return {
         profile: resolved.name,
@@ -219,11 +433,32 @@ function snapshotConfig(resolved) {
             model: resolved.embedding.model,
             dimension: resolved.embedding.dimension,
             maxToken: resolved.embedding.maxToken,
-            apiUrl: resolved.embedding.apiUrl,
+            endpointFingerprint: resolved.embedding.endpointFingerprint,
             apiKeyFingerprint: fingerprint(resolved.embedding.apiKey)
         },
+        coldKnowledge: {
+            ...resolved.coldKnowledge,
+            rootPath: path.relative(resolved.projectRoot, resolved.coldKnowledge.rootPath),
+            storePath: resolved.coldKnowledge.storePath
+                ? path.relative(resolved.projectRoot, resolved.coldKnowledge.storePath) : null
+        },
+        gateCalibration: {
+            path: resolved.gateCalibration.path
+                ? path.relative(resolved.projectRoot, resolved.gateCalibration.path) : null,
+            artifactHash: resolved.gateCalibration.artifactHash,
+            status: resolved.gateCalibration.status,
+            calibrationId: resolved.gateCalibration.artifact?.calibrationId || null,
+            reasonCode: resolved.gateCalibration.reasonCode || null,
+            validationReasons: resolved.gateCalibration.validationReasons || []
+        },
+        gate: { ...resolved.gate },
+        modelCache: resolved.modelCache ? {
+            ragVectorCachePath: path.relative(resolved.projectRoot, resolved.modelCache.ragVectorCachePath),
+            semanticVectorDir: path.relative(resolved.projectRoot, resolved.modelCache.semanticVectorDir)
+        } : null,
         rerank: {
-            url: resolved.rerank.url || null,
+            endpointFingerprint: resolved.rerank.url
+                ? fingerprint(normalizeApiUrl(resolved.rerank.url)) : null,
             model: resolved.rerank.model || null,
             apiFingerprint: fingerprint(resolved.rerank.api)
         },
@@ -242,6 +477,11 @@ module.exports = {
     parseEnvFile,
     readJson,
     hashOf,
+    sha256,
+    stableValue,
+    normalizeApiUrl,
+    embeddingEndpointFingerprint,
+    validateGateCalibration,
     fingerprint,
     isSecretName
 };
