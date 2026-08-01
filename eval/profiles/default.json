@@ -13,8 +13,8 @@
   "corpusRoot": "dailynote_eval",
   "ragParamsPath": "rag_params.json",
   "embedding": {
-    "model": null,
-    "dimension": null,
+    "model": "Qwen/Qwen3-Embedding-8B",
+    "dimension": 4096,
     "maxToken": 512
   },
   "coldKnowledge": {

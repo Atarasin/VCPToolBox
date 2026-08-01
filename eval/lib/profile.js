@@ -106,7 +106,7 @@ function createCodedError(code, message, detail = {}) {
     return error;
 }
 
-function loadGateCalibration(profile, name) {
+function loadGateCalibration(profile, name, effectiveEmbedding) {
     const configured = profile.gateCalibrationPath;
     if (!configured) {
         return { path: null, artifact: null, artifactHash: null, status: 'missing' };
@@ -117,11 +117,16 @@ function loadGateCalibration(profile, name) {
     }
     try {
         const artifact = readJson(artifactPath);
+        const artifactEmbedding = artifact.embedding || {};
+        const stale = artifactEmbedding.model !== effectiveEmbedding.model
+            || Number(artifactEmbedding.dimension) !== effectiveEmbedding.dimension
+            || artifactEmbedding.endpointFingerprint !== effectiveEmbedding.endpointFingerprint;
         return {
             path: artifactPath,
             artifact,
             artifactHash: sha256(JSON.stringify(stableValue(artifact))),
-            status: artifact.status || 'unknown'
+            status: stale ? 'stale' : (artifact.status || 'unknown'),
+            reasonCode: stale ? 'gate-calibration-stale' : null
         };
     } catch (error) {
         throw createCodedError(
@@ -133,11 +138,6 @@ function loadGateCalibration(profile, name) {
 }
 
 function gateDefinitionFromBaseConfig() {
-    const file = path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json');
-    const fallback = `${file}.example`;
-    const source = fs.existsSync(file) ? file : (fs.existsSync(fallback) ? fallback : null);
-    if (!source) return { path: null, definition: {}, hash: sha256('{}') };
-    const raw = readJson(source);
     const stripThreshold = value => {
         if (Array.isArray(value)) return value.map(stripThreshold);
         if (!value || typeof value !== 'object') return value;
@@ -145,8 +145,21 @@ function gateDefinitionFromBaseConfig() {
             .filter(([key]) => key !== 'threshold')
             .map(([key, child]) => [key, stripThreshold(child)]));
     };
-    const definition = stableValue(stripThreshold(raw));
-    return { path: source, definition, hash: sha256(JSON.stringify(definition)) };
+    const resolve = candidates => candidates.find(candidate => fs.existsSync(candidate)) || null;
+    const diary = resolve([
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json'),
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json.example')
+    ]);
+    const cold = resolve([
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'tdb_tags.json'),
+        path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'tdb_tags.json.example'),
+        path.join(PROJECT_ROOT, 'tdb_tags.json')
+    ]);
+    const definition = stableValue({
+        diary: diary ? stripThreshold(readJson(diary)) : {},
+        cold: cold ? stripThreshold(readJson(cold)) : {}
+    });
+    return { paths: { diary, cold }, definition, hash: sha256(JSON.stringify(definition)) };
 }
 
 function listProfiles() {
@@ -296,17 +309,13 @@ function loadProfile(name = 'default', overrides = {}) {
         EVAL_STRICT_PROVENANCE: 'true'
     });
 
-    const gateCalibration = loadGateCalibration(profile, name);
+    const gateCalibration = loadGateCalibration(profile, name, effectiveEmbedding);
     const gateDefinition = gateDefinitionFromBaseConfig();
     const scoringFormulaVersion = 'gate-score-v1';
-    const gateDefinitionHash = sha256(JSON.stringify(stableValue({
-        definition: gateDefinition.definition,
-        scoringFormulaVersion
-    })));
+    const gateDefinitionHash = gateDefinition.hash;
     const effectiveGateConfigHash = sha256(JSON.stringify(stableValue({
         gateDefinitionHash,
-        thresholds: gateCalibration.artifact?.thresholds || {},
-        calibrationArtifactHash: gateCalibration.artifactHash
+        thresholds: gateCalibration.artifact?.thresholds || {}
     })));
 
     return {
@@ -325,7 +334,7 @@ function loadProfile(name = 'default', overrides = {}) {
         gateCalibration,
         gate: {
             scoringFormulaVersion,
-            definitionPath: gateDefinition.path,
+            definitionPaths: gateDefinition.paths,
             definitionHash: gateDefinitionHash,
             effectiveConfigHash: effectiveGateConfigHash,
             datasetHash: gateCalibration.artifact?.dataset?.hash || null,
@@ -371,7 +380,7 @@ function applyEnv(resolved) {
 function snapshotConfig(resolved) {
     const env = {};
     for (const [key, value] of Object.entries(resolved.env)) {
-        env[key] = /(?:^|_)API_URL$/i.test(key)
+        env[key] = /url/i.test(key)
             ? fingerprint(normalizeApiUrl(value))
             : (isSecretName(key) ? fingerprint(value) : value);
     }
@@ -400,7 +409,8 @@ function snapshotConfig(resolved) {
                 ? path.relative(resolved.projectRoot, resolved.gateCalibration.path) : null,
             artifactHash: resolved.gateCalibration.artifactHash,
             status: resolved.gateCalibration.status,
-            calibrationId: resolved.gateCalibration.artifact?.calibrationId || null
+            calibrationId: resolved.gateCalibration.artifact?.calibrationId || null,
+            reasonCode: resolved.gateCalibration.reasonCode || null
         },
         gate: { ...resolved.gate },
         modelCache: resolved.modelCache ? {
@@ -408,7 +418,8 @@ function snapshotConfig(resolved) {
             semanticVectorDir: path.relative(resolved.projectRoot, resolved.modelCache.semanticVectorDir)
         } : null,
         rerank: {
-            url: resolved.rerank.url || null,
+            endpointFingerprint: resolved.rerank.url
+                ? fingerprint(normalizeApiUrl(resolved.rerank.url)) : null,
             model: resolved.rerank.model || null,
             apiFingerprint: fingerprint(resolved.rerank.api)
         },

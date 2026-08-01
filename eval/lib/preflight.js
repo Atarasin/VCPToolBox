@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const { PROJECT_ROOT } = require('./profile');
 
@@ -189,8 +190,34 @@ function checkDailyNoteSearcher() {
     };
 }
 
+function coldCorpusFingerprint(resolved) {
+    const root = resolved.coldKnowledge.rootPath;
+    if (!fs.existsSync(root)) return null;
+    const extensions = new Set(['.md', '.txt', '.json', '.html']);
+    const excluded = new Set(['TDBdocs']);
+    const rows = [];
+    const walk = dir => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const absolute = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (!excluded.has(entry.name)) walk(absolute);
+                continue;
+            }
+            if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
+            const relative = path.relative(root, absolute).split(path.sep).join('/');
+            const contentHash = crypto.createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
+            rows.push(`${relative}:${contentHash}`);
+        }
+    };
+    walk(root);
+    rows.sort();
+    return rows.length
+        ? `sha256:${crypto.createHash('sha256').update(rows.join('\n')).digest('hex')}`
+        : null;
+}
+
 /** 冷知识库：triviumdb 缺失时 TDBKnowledge 静默 disabled，search() 返回 []。 */
-function checkColdKB() {
+function checkColdKB(resolved) {
     try {
         require('triviumdb');
     } catch (_) {
@@ -201,11 +228,28 @@ function checkColdKB() {
                     '需要时执行 `npm i triviumdb`'
         };
     }
-    const knowledgeDir = path.join(PROJECT_ROOT, 'knowledge');
+    const knowledgeDir = resolved.coldKnowledge.rootPath;
     if (!fs.existsSync(knowledgeDir)) {
         return { ok: false, level: 'warn', detail: 'knowledge/ 目录不存在，Tier4 用例将 SKIP' };
     }
-    return { ok: true, detail: 'triviumdb 已安装且 knowledge/ 存在' };
+    const corpusFingerprint = coldCorpusFingerprint(resolved);
+    if (!corpusFingerprint) {
+        return { ok: false, level: 'warn', reasonCode: 'cold-kb-unavailable', detail: 'knowledge/ 没有可索引文件' };
+    }
+    return { ok: true, detail: 'triviumdb 已安装且 knowledge/ 存在可索引语料', corpusFingerprint };
+}
+
+function checkGateCalibration(resolved) {
+    if (!resolved.gateCalibration.artifact) {
+        return { ok: false, level: 'warn', reasonCode: 'gate-calibration-missing', detail: '当前 profile 没有 calibration artifact' };
+    }
+    if (resolved.gateCalibration.status === 'stale') {
+        return { ok: false, level: 'warn', reasonCode: 'gate-calibration-stale', detail: 'calibration artifact 与 effective embedding identity 不一致' };
+    }
+    if (resolved.gateCalibration.status !== 'validated') {
+        return { ok: false, level: 'warn', reasonCode: 'gate-calibration-stale', detail: `calibration 状态 ${resolved.gateCalibration.status} 不是 validated` };
+    }
+    return { ok: true, detail: `${resolved.gateCalibration.artifact.calibrationId || 'calibration'} 已验证` };
 }
 
 /** 语料是否已生成且通过不变量校验。 */
@@ -254,7 +298,8 @@ async function run(resolved, options = {}) {
     checks.corpus = checkCorpus(resolved);
     checks.ragParams = checkRagParamsDeadKeys(resolved);
     checks.dailyNoteSearcher = checkDailyNoteSearcher();
-    checks.coldKB = checkColdKB();
+    checks.coldKB = checkColdKB(resolved);
+    checks.gateCalibration = checkGateCalibration(resolved);
 
     if (options.skipNetwork) {
         checks.embedding = { ok: true, level: 'info', detail: '已跳过网络探测（--offline）' };
@@ -279,7 +324,8 @@ async function run(resolved, options = {}) {
         ok: blocking.length === 0,
         blocking: blocking.map(([name, c]) => ({ name, detail: c.detail })),
         checks,
-        capabilities
+        capabilities,
+        coldCorpusFingerprint: checks.coldKB.corpusFingerprint || coldCorpusFingerprint(resolved)
     };
 }
 
@@ -291,6 +337,8 @@ module.exports = {
     checkNativeMemo,
     checkSqlite,
     checkColdKB,
+    coldCorpusFingerprint,
+    checkGateCalibration,
     checkCorpus,
     checkDailyNoteSearcher
 };
