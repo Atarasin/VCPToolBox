@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "gate-v1",
+  "annotationVersion": "candidate-1",
+  "qualityLevel": "candidate",
+  "status": "awaiting-human-review",
+  "splitProtocol": {
+    "unit": "intentGroup",
+    "calibrationRatio": 0.7,
+    "holdoutRatio": 0.3
+  },
+  "targets": [
+    {
+      "targetType": "diary",
+      "library": "评测运维技术库"
+    },
+    {
+      "targetType": "diary",
+      "library": "评测幻想设定库"
+    },
+    {
+      "targetType": "diary",
+      "library": "评测容量运营库"
+    },
+    {
+      "targetType": "diary",
+      "library": "vcp知识库"
+    },
+    {
+      "targetType": "cold",
+      "library": "VCP知识"
+    }
+  ],
+  "requirements": {
+    "positivePerTarget": 100,
+    "negativePerTarget": 200,
+    "hardNegativeReviewCount": 2
+  },
+  "generatedCandidateNotice": "Labels are candidates only. No human review is claimed.",
+  "hashes": {
+    "dataset": "sha256:62cf700700d059be611f2236f4e1b1063c426bcdd5793b43a137e074d881ce1f",
+    "calibration": "sha256:07fdd65c7a60aff0927d3f43454786fa4fe2761defd2205f4fcbaf12901359ab",
+    "holdout": "sha256:c57d6aec467617b33aaf668a15b823c312d1004c22bccc69ec001ed1da215c88"
+  },
+  "counts": {
+    "total": 1500,
+    "targets": {
+      "diary:评测运维技术库": {
+        "targetType": "diary",
+        "library": "评测运维技术库",
+        "total": 300,
+        "positive": 100,
+        "negative": 200,
+        "ambiguous": 0,
+        "verified": 0,
+        "splits": {
+          "calibration": 210,
+          "holdout": 90
+        },
+        "negativeDifficulty": {
+          "easy": 67,
+          "near-domain": 67,
+          "hard": 66
+        }
+      },
+      "diary:评测幻想设定库": {
+        "targetType": "diary",
+        "library": "评测幻想设定库",
+        "total": 300,
+        "positive": 100,
+        "negative": 200,
+        "ambiguous": 0,
+        "verified": 0,
+        "splits": {
+          "calibration": 210,
+          "holdout": 90
+        },
+        "negativeDifficulty": {
+          "easy": 67,
+          "near-domain": 67,
+          "hard": 66
+        }
+      },
+      "diary:评测容量运营库": {
+        "targetType": "diary",
+        "library": "评测容量运营库",
+        "total": 300,
+        "positive": 100,
+        "negative": 200,
+        "ambiguous": 0,
+        "verified": 0,
+        "splits": {
+          "calibration": 210,
+          "holdout": 90
+        },
+        "negativeDifficulty": {
+          "easy": 67,
+          "near-domain": 67,
+          "hard": 66
+        }
+      },
+      "diary:vcp知识库": {
+        "targetType": "diary",
+        "library": "vcp知识库",
+        "total": 300,
+        "positive": 100,
+        "negative": 200,
+        "ambiguous": 0,
+        "verified": 0,
+        "splits": {
+          "calibration": 210,
+          "holdout": 90
+        },
+        "negativeDifficulty": {
+          "easy": 67,
+          "near-domain": 67,
+          "hard": 66
+        }
+      },
+      "cold:VCP知识": {
+        "targetType": "cold",
+        "library": "VCP知识",
+        "total": 300,
+        "positive": 100,
+        "negative": 200,
+        "ambiguous": 0,
+        "verified": 0,
+        "splits": {
+          "calibration": 210,
+          "holdout": 90
+        },
+        "negativeDifficulty": {
+          "easy": 67,
+          "near-domain": 67,
+          "hard": 66
+        }
+      }
+    }
+  },
+  "annotation": {
+    "verified": 0,
+    "pending": 1500
+  }
+}

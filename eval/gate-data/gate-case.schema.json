@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vcp.local/eval/gate-case.schema.json",
+  "title": "VCP gate calibration decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "targetType", "library", "query", "label", "difficulty", "source", "sourceRefs", "intentGroup", "split", "annotation"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "targetType": { "enum": ["diary", "cold"] },
+    "library": { "type": "string", "minLength": 1 },
+    "query": { "type": "string", "minLength": 1 },
+    "label": { "enum": ["positive", "negative", "ambiguous"] },
+    "difficulty": { "enum": ["easy", "near-domain", "hard"] },
+    "source": { "enum": ["corpus-derived", "cross-library", "mined", "production-sanitized"] },
+    "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "intentGroup": { "type": "string", "minLength": 1 },
+    "split": { "enum": ["calibration", "holdout"] },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reviewCount"],
+      "properties": {
+        "status": { "enum": ["pending", "verified", "rejected"] },
+        "reviewCount": { "type": "integer", "minimum": 0 },
+        "reviewBatch": { "type": ["string", "null"] },
+        "notes": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
