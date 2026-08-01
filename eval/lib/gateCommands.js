@@ -183,7 +183,10 @@ function review(flags, positional = []) {
             reviewerId: flags.reviewer && flags.reviewer !== true ? String(flags.reviewer) : null,
             scope: flags.scope && flags.scope !== true ? String(flags.scope) : 'all',
             batchCount: flags['batch-count'] ?? 1,
-            batchIndex: flags['batch-index'] ?? 0
+            batchIndex: flags['batch-index'] ?? 0,
+            reviewPaths: flags.reviews && flags.reviews !== true
+                ? String(flags.reviews).split(',').map(value => value.trim()).filter(Boolean)
+                : []
         });
     }
     if (action === 'merge') {

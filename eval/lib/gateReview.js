@@ -25,9 +25,18 @@ function reviewerAlias(reviewerId) {
     return `reviewer-${sha256(String(reviewerId)).slice('sha256:'.length, 'sha256:'.length + 16)}`;
 }
 
-function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = 'all', batchCount = 1, batchIndex = 0 }) {
+function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = 'all', batchCount = 1, batchIndex = 0, reviewPaths = [] }) {
     const dataset = loadDataset(datasetPath, { manifestPath });
     if (!dataset.verification.ok) throw codedError('GATE_DATASET_INVALID', 'cannot review a structurally invalid dataset');
+    const priorReviews = reviewPaths.map(readReview);
+    for (const review of priorReviews) {
+        if (review.meta.datasetHash !== dataset.verification.datasetHash) {
+            throw codedError('GATE_REVIEW_DATASET_MISMATCH', `${review.path}: dataset hash differs`);
+        }
+    }
+    const newlyAmbiguous = new Set(priorReviews.flatMap(review => [...review.decisions]
+        .filter(([, decision]) => decision.label === 'ambiguous')
+        .map(([caseId]) => caseId)));
     const count = Number(batchCount);
     const index = Number(batchIndex);
     if (!Number.isInteger(count) || count < 1 || !Number.isInteger(index) || index < 0 || index >= count) {
@@ -35,7 +44,8 @@ function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = '
     }
     if (!['all', 'double-review'].includes(scope)) throw codedError('GATE_REVIEW_SCOPE_INVALID', 'scope must be all or double-review');
     const selected = [...dataset.rows].sort((a, b) => a.id.localeCompare(b.id))
-        .filter(row => scope === 'all' || row.label === 'ambiguous' || (row.label === 'negative' && row.difficulty === 'hard'))
+        .filter(row => scope === 'all' || newlyAmbiguous.has(row.id)
+            || row.label === 'ambiguous' || (row.label === 'negative' && row.difficulty === 'hard'))
         .filter((row, rowIndex) => rowIndex % count === index);
     const rows = [{
         recordType: 'review-meta',
@@ -47,7 +57,8 @@ function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = '
         reviewerId: reviewerId || null,
         reviewedAt: null,
         attestation: null,
-        requiredAttestation: ATTESTATION
+        requiredAttestation: ATTESTATION,
+        selectionEvidence: priorReviews.map(review => review.evidenceHash).sort()
     }, ...selected.map(row => ({
         recordType: 'gate-review',
         caseId: row.id,

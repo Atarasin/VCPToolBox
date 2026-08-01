@@ -22,10 +22,14 @@ node eval/vcp-eval.js gate review export --dataset eval/gate-data/gate-v1.jsonl 
   --reviewer reviewer-a --scope all --batch-count 4 --batch-index 0 --out /tmp/reviewer-a-0.jsonl
 
 node eval/vcp-eval.js gate review export --dataset eval/gate-data/gate-v1.jsonl \
-  --reviewer reviewer-b --scope double-review --out /tmp/reviewer-b.jsonl
+  --reviewer reviewer-b --scope double-review \
+  --reviews /tmp/reviewer-a-0.jsonl,/tmp/reviewer-a-1.jsonl,/tmp/reviewer-a-2.jsonl,/tmp/reviewer-a-3.jsonl \
+  --out /tmp/reviewer-b.jsonl
 ```
 
-审阅者逐行填写 `label`，并在首行填写 `reviewedAt` 与完全一致的 `requiredAttestation`。工具不会自动生成这份声明。汇总时传入所有分片和第二审文件：
+先完成第一审，再用其证据导出第二审；这样第一审新增的 `ambiguous` 也会进入第二审，模板不会泄露
+第一审的选择。审阅者逐行填写 `label`，并在首行填写 `reviewedAt` 与完全一致的
+`requiredAttestation`。工具不会自动生成这份声明。汇总时传入所有分片和第二审文件：
 
 ```bash
 node eval/vcp-eval.js gate review merge --dataset eval/gate-data/gate-v1.jsonl \

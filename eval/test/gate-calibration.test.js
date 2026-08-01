@@ -346,3 +346,38 @@ test('review merge rejects missing attestation and conflicting labels', t => {
     });
     assert.equal(staged.cases, 1);
 });
+
+test('double-review export includes newly ambiguous first-review decisions without revealing labels', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-review-followup-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const row = {
+        id: 'easy-negative', targetType: 'diary', library: 'EvalDiary', query: 'question', label: 'negative',
+        difficulty: 'easy', source: 'cross-library', sourceRefs: ['doc'], intentGroup: 'intent', split: 'calibration',
+        annotation: { status: 'pending', reviewCount: 0 }
+    };
+    const manifest = { schemaVersion: 1, datasetId: 'followup-test', targets: [{ targetType: 'diary', library: 'EvalDiary' }] };
+    const verified = dataset.verifyRows([row], manifest);
+    manifest.hashes = { dataset: verified.datasetHash, calibration: verified.calibrationSplitHash, holdout: verified.holdoutSplitHash };
+    const datasetPath = path.join(dir, 'dataset.jsonl');
+    fs.writeFileSync(datasetPath, `${JSON.stringify(row)}\n`);
+    fs.writeFileSync(datasetPath.replace('.jsonl', '.manifest.json'), JSON.stringify(manifest));
+
+    const firstPath = path.join(dir, 'first.jsonl');
+    review.exportReview({ datasetPath, output: firstPath, reviewerId: 'first', scope: 'all' });
+    const first = fs.readFileSync(firstPath, 'utf8').trim().split('\n').map(JSON.parse);
+    first[0].reviewedAt = '2026-08-01T00:00:00.000Z';
+    first[0].attestation = review.ATTESTATION;
+    first[1].label = 'ambiguous';
+    fs.writeFileSync(firstPath, `${first.map(record => JSON.stringify(record)).join('\n')}\n`);
+
+    const secondPath = path.join(dir, 'second.jsonl');
+    const exported = review.exportReview({
+        datasetPath, output: secondPath, reviewerId: 'second', scope: 'double-review', reviewPaths: [firstPath]
+    });
+    assert.equal(exported.cases, 1);
+    const second = fs.readFileSync(secondPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(second[1].caseId, 'easy-negative');
+    assert.equal(second[1].candidateLabel, 'negative');
+    assert.equal(Object.hasOwn(second[1], 'priorLabel'), false);
+    assert.deepEqual(second[0].selectionEvidence, [review.readReview(firstPath).evidenceHash]);
+});
