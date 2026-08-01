@@ -7,6 +7,13 @@ const { hashRows, loadDataset, sha256, verifyRows } = require('./gateDataset');
 
 const ATTESTATION = 'I personally reviewed these gate labels against their source references.';
 const LABELS = new Set(['positive', 'negative', 'ambiguous']);
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const CORPUS_SPECS = {
+    '评测运维技术库': 'main.jsonl',
+    '评测幻想设定库': 'distractor.jsonl',
+    '评测容量运营库': 'linked.jsonl',
+    'vcp知识库': 'collision.jsonl'
+};
 
 function codedError(code, message) {
     const error = new Error(message);
@@ -23,6 +30,34 @@ function writeJsonl(filePath, rows) {
 
 function reviewerAlias(reviewerId) {
     return `reviewer-${sha256(String(reviewerId)).slice('sha256:'.length, 'sha256:'.length + 16)}`;
+}
+
+function sourceContexts(rows) {
+    const requested = new Set(rows.flatMap(row => row.sourceRefs || []));
+    const contexts = {};
+    const specDir = path.join(PROJECT_ROOT, 'eval', 'corpus-spec');
+    for (const [library, fileName] of Object.entries(CORPUS_SPECS)) {
+        const filePath = path.join(specDir, fileName);
+        if (!fs.existsSync(filePath)) continue;
+        for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/u)) {
+            if (!line.trim().startsWith('{')) continue;
+            const record = JSON.parse(line);
+            const ref = `${library}/${record.slug}`;
+            if (requested.has(ref)) contexts[ref] = String(record.body || '').slice(0, 6000);
+        }
+    }
+    const knowledgeRoot = path.join(PROJECT_ROOT, 'knowledge');
+    const realKnowledgeRoot = fs.existsSync(knowledgeRoot) ? fs.realpathSync(knowledgeRoot) : knowledgeRoot;
+    for (const ref of requested) {
+        if (!String(ref).startsWith('knowledge/')) continue;
+        const absolute = path.resolve(PROJECT_ROOT, ref);
+        if (absolute !== knowledgeRoot && !absolute.startsWith(`${knowledgeRoot}${path.sep}`)) continue;
+        if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
+        const realPath = fs.realpathSync(absolute);
+        if (realPath !== realKnowledgeRoot && !realPath.startsWith(`${realKnowledgeRoot}${path.sep}`)) continue;
+        contexts[ref] = fs.readFileSync(realPath, 'utf8').slice(0, 6000);
+    }
+    return Object.fromEntries(Object.entries(contexts).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = 'all', batchCount = 1, batchIndex = 0, reviewPaths = [] }) {
@@ -58,7 +93,8 @@ function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = '
         reviewedAt: null,
         attestation: null,
         requiredAttestation: ATTESTATION,
-        selectionEvidence: priorReviews.map(review => review.evidenceHash).sort()
+        selectionEvidence: priorReviews.map(review => review.evidenceHash).sort(),
+        sourceContexts: sourceContexts(selected)
     }, ...selected.map(row => ({
         recordType: 'gate-review',
         caseId: row.id,
@@ -197,4 +233,4 @@ function mergeReviews({ datasetPath, manifestPath, reviewPaths, output }) {
     };
 }
 
-module.exports = { ATTESTATION, exportReview, readReview, mergeReviews, codedError, reviewerAlias };
+module.exports = { ATTESTATION, exportReview, readReview, mergeReviews, codedError, reviewerAlias, sourceContexts };

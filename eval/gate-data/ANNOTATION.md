@@ -43,3 +43,13 @@ node eval/vcp-eval.js gate review merge --dataset eval/gate-data/gate-v1.jsonl \
 ```
 
 不同审阅者必须使用不同 `reviewerId`；同一 case 标签冲突、缺少复核或声明不完整都会保留为 pending。manifest 只保存脱敏 reviewer ID、时间与证据文件哈希。
+
+不建议直接手改 1500 行 JSONL。可以启动仓库内的纯静态离线审阅器：
+
+```bash
+python3 -m http.server 8765 --directory eval/gate-data
+# 浏览器打开 http://127.0.0.1:8765/reviewer.html，再选择待审 JSONL
+```
+
+页面不会联网或预填标签/声明；进度只存于当前浏览器 localStorage。全部逐条选择后，审阅者亲自
+键入声明，页面导出的 `*.reviewed.jsonl` 可直接传给 `gate review merge`。

@@ -390,3 +390,19 @@ test('double-review export includes newly ambiguous first-review decisions witho
     assert.equal(Object.hasOwn(second[1], 'priorLabel'), false);
     assert.deepEqual(second[0].selectionEvidence, [review.readReview(firstPath).evidenceHash]);
 });
+
+test('gate-v1 review export embeds only allowlisted source context', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-review-context-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const output = path.join(dir, 'context.jsonl');
+    review.exportReview({
+        datasetPath: path.resolve(__dirname, '../gate-data/gate-v1.jsonl'),
+        output, reviewerId: 'context-reviewer', scope: 'all', batchCount: 1500, batchIndex: 0
+    });
+    const header = JSON.parse(fs.readFileSync(output, 'utf8').split('\n')[0]);
+    const refs = Object.keys(header.sourceContexts);
+    assert.equal(refs.length, 1);
+    assert.ok(refs[0].startsWith('评测'));
+    assert.ok(header.sourceContexts[refs[0]].length > 20);
+    assert.equal(Object.hasOwn(header.sourceContexts, '/etc/passwd'), false);
+});
