@@ -9,8 +9,19 @@ const profile = require('../lib/profile');
 const runstore = require('../lib/runstore');
 const preflight = require('../lib/preflight');
 
+const ISOLATED_SOURCES = Object.freeze({
+    rootEnv: Object.freeze({}),
+    ragEnv: Object.freeze({}),
+    processEnv: Object.freeze({}),
+    gateBaseConfigs: Object.freeze({ diary: Object.freeze({}), cold: Object.freeze({}) })
+});
+
+function loadProfile(name, overrides = {}) {
+    return profile.loadProfile(name, { ...overrides, sources: ISOLATED_SOURCES });
+}
+
 test('VT-001: aligned cold embedding is derived from the effective profile', () => {
-    const resolved = profile.loadProfile('gemini3072');
+    const resolved = loadProfile('gemini3072');
     assert.equal(resolved.embedding.model, 'jy-gemini-embedding-001');
     assert.equal(resolved.embedding.dimension, 3072);
     assert.deepEqual(
@@ -23,7 +34,7 @@ test('VT-001: aligned cold embedding is derived from the effective profile', () 
 
 test('VT-002: an explicit aligned cold embedding conflict has a stable code', () => {
     assert.throws(
-        () => profile.loadProfile('gemini3072', {
+        () => loadProfile('gemini3072', {
             env: { TDB_KNOWLEDGE_MODEL: 'Qwen/Qwen3-Embedding-8B' }
         }),
         error => error.code === 'PROFILE_COLD_EMBEDDING_CONFLICT'
@@ -31,7 +42,7 @@ test('VT-002: an explicit aligned cold embedding conflict has a stable code', ()
 });
 
 test('effective dimension overrides are normalized across both hot aliases and cold config', () => {
-    const resolved = profile.loadProfile('gemini3072', { env: { VECTORDB_DIMENSION: '1024' } });
+    const resolved = loadProfile('gemini3072', { env: { VECTORDB_DIMENSION: '1024' } });
     assert.equal(resolved.embedding.dimension, 1024);
     assert.equal(resolved.env.VECTORDB_DIMENSION, '1024');
     assert.equal(resolved.env.EMBEDDING_DIMENSIONS, '1024');
@@ -39,7 +50,7 @@ test('effective dimension overrides are normalized across both hot aliases and c
 });
 
 test('snapshot stores endpoint and credential fingerprints, never raw values', () => {
-    const resolved = profile.loadProfile('gemini3072', {
+    const resolved = loadProfile('gemini3072', {
         env: {
             API_URL: 'https://embedding.example.test/base/',
             API_Key: 'top-secret',
@@ -78,7 +89,7 @@ test('VT-003: calibration embedding mismatch is reported as stale', t => {
         fs.rmSync(tempProfilePath, { force: true });
     });
 
-    const resolved = profile.loadProfile('test-stale');
+    const resolved = loadProfile('test-stale');
     assert.equal(resolved.gateCalibration.status, 'stale');
     assert.equal(resolved.gateCalibration.reasonCode, 'gate-calibration-stale');
     assert.equal(preflight.checkGateCalibration(resolved).reasonCode, 'gate-calibration-stale');
@@ -115,7 +126,7 @@ test('calibration validation rejects stale gate definition, scoring formula and 
 });
 
 test('cold corpus fingerprint is content-based and available to the real preflight chain', () => {
-    const resolved = profile.loadProfile('gemini3072');
+    const resolved = loadProfile('gemini3072');
     const first = preflight.coldCorpusFingerprint(resolved);
     const second = preflight.coldCorpusFingerprint(resolved);
     assert.match(first, /^sha256:[a-f0-9]{64}$/);
@@ -131,7 +142,7 @@ test('cold corpus fingerprint follows TDB extensions and library ignore rules', 
     fs.writeFileSync(path.join(temporaryRoot, 'Keep', 'ignored.txt'), 'wrong extension');
     fs.writeFileSync(path.join(temporaryRoot, 'SkipLib', 'ignored.foo'), 'ignored library');
 
-    const resolved = profile.loadProfile('gemini3072', { env: {
+    const resolved = loadProfile('gemini3072', { env: {
         TDB_KNOWLEDGE_EXTENSIONS: '.foo',
         TDB_KNOWLEDGE_EXCLUDE_FOLDERS: 'SkipLib'
     } });
@@ -146,13 +157,15 @@ test('cold corpus fingerprint follows TDB extensions and library ignore rules', 
 });
 
 test('default profile resolves without relying on a local config.env', () => {
-    const resolved = profile.loadProfile('default');
+    const resolved = loadProfile('default');
     assert.equal(resolved.embedding.model, 'Qwen/Qwen3-Embedding-8B');
     assert.equal(resolved.embedding.dimension, 4096);
+    assert.deepEqual(resolved.gate.definitionPaths, { diary: null, cold: null });
+    assert.equal(resolved.embedding.apiKey, '');
 });
 
 test('runstore creates isolated model assets and records cross-model provenance', t => {
-    const resolved = profile.loadProfile('gemini3072');
+    const resolved = loadProfile('gemini3072');
     const handle = runstore.createRun({
         resolved,
         corpusHash: 'corpus-test',

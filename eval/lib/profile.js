@@ -184,7 +184,15 @@ function evalGateAllowedTargets() {
     };
 }
 
-function gateDefinitionFromBaseConfig() {
+function gateDefinitionFromBaseConfig(baseConfigOverride) {
+    if (baseConfigOverride) {
+        const baseConfigs = {
+            diary: baseConfigOverride.diary || {},
+            cold: baseConfigOverride.cold || {}
+        };
+        const definition = gateProvenance.combinedGateDefinition(baseConfigs);
+        return { paths: { diary: null, cold: null }, baseConfigs, definition: definition.definition, hash: definition.hash };
+    }
     const resolve = candidates => candidates.find(candidate => fs.existsSync(candidate)) || null;
     const diary = resolve([
         path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'rag_tags.json'),
@@ -231,8 +239,15 @@ function loadProfile(name = 'default', overrides = {}) {
     }
 
     const profile = readJson(file);
-    const rootEnv = parseEnvFile(path.join(PROJECT_ROOT, 'config.env'));
-    const ragEnv = parseEnvFile(path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'config.env'));
+    const sources = overrides.sources || {};
+    const hasSource = key => Object.prototype.hasOwnProperty.call(sources, key);
+    const rootEnv = hasSource('rootEnv')
+        ? { ...(sources.rootEnv || {}) }
+        : parseEnvFile(path.join(PROJECT_ROOT, 'config.env'));
+    const ragEnv = hasSource('ragEnv')
+        ? { ...(sources.ragEnv || {}) }
+        : parseEnvFile(path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin', 'config.env'));
+    const runtimeEnv = hasSource('processEnv') ? (sources.processEnv || {}) : process.env;
 
     const corpusRoot = path.resolve(EVAL_ROOT, profile.corpusRoot || 'dailynote_eval');
     const ragParamsPath = path.resolve(PROJECT_ROOT, profile.ragParamsPath || 'rag_params.json');
@@ -243,7 +258,7 @@ function loadProfile(name = 'default', overrides = {}) {
 
     // 凭据来源优先级：真实 process.env > 根 config.env > 插件 config.env。
     // profile 永远不携带凭据。
-    const credential = key => process.env[key] || rootEnv[key] || ragEnv[key] || '';
+    const credential = key => runtimeEnv[key] || rootEnv[key] || ragEnv[key] || '';
 
     const embedding = {
         model: profile.embedding?.model || rootEnv.WhitelistEmbeddingModel || '',
@@ -355,7 +370,7 @@ function loadProfile(name = 'default', overrides = {}) {
     });
 
     const gateCalibration = loadGateCalibration(profile, name, effectiveEmbedding);
-    const gateDefinition = gateDefinitionFromBaseConfig();
+    const gateDefinition = gateDefinitionFromBaseConfig(sources.gateBaseConfigs);
     const scoringFormulaVersion = 'gate-score-v1';
     const gateDefinitionHash = gateDefinition.hash;
     const allowedTargets = evalGateAllowedTargets();
