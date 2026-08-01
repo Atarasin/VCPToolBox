@@ -5,9 +5,8 @@
  *
  * 为什么必须动这两个文件：
  *
- *   rag_tags.json        —— <<>> 与《《》》的门控要拿查询向量与日记本名向量比相似度。
- *                           没有注册的日记本会用**硬编码的 0.6** 阈值，太高，导致门控用例
- *                           两个方向都测不出来（正样本也被拦、负样本也被拦）。
+ *   rag_tags.json        —— 仅安装影响库名向量的 tags/description 基础定义；模型相关阈值
+ *                           由当前 profile 的 RAG_GATE_CONFIG_PATH 只读覆盖。
  *   semantic_groups.json —— ::Group 的组词表。文件里没有对应组时，
  *                           detectAndActivateGroups 返回空 Map，查询向量原样返回，
  *                           ::Group 静默变成 no-op —— 不报错、不告警。
@@ -29,6 +28,7 @@ const { loadSpec } = require('./corpusBuild');
 
 const PLUGIN_DIR = path.join(PROJECT_ROOT, 'Plugin', 'RAGDiaryPlugin');
 const RAG_TAGS = path.join(PLUGIN_DIR, 'rag_tags.json');
+const TDB_TAGS = path.join(PLUGIN_DIR, 'tdb_tags.json');
 const SEMANTIC_GROUPS = path.join(PLUGIN_DIR, 'semantic_groups.json');
 // SemanticGroupManager.initialize() 第一步就是 synchronizeFromEditFile()：
 // 只要 .edit.json 存在，它就用 edit 的**组集合**覆盖主文件（只保留主文件里的 vector_id 等元数据）。
@@ -58,6 +58,7 @@ function evalOwnedKeys() {
     const { books } = loadSpec();
     return {
         ragTags: Object.values(books.books).map(b => b.folder),
+        tdbTags: ['VCP知识'],
         groups: Object.keys(books.semanticGroups || {})
     };
 }
@@ -76,25 +77,45 @@ function install() {
     for (const book of Object.values(books.books)) {
         const desired = {
             tags: book.ragTags || [],
-            threshold: book.threshold ?? 0.35
+            description: book.description || ''
         };
         const existing = ragTags[book.folder];
         const same = existing
             && JSON.stringify(existing.tags || []) === JSON.stringify(desired.tags)
-            && existing.threshold === desired.threshold;
+            && (existing.description || '') === desired.description;
         if (same) {
             report.unchanged.push(`rag_tags:${book.folder}`);
             continue;
         }
         if (existing) report.updated.push(`rag_tags:${book.folder}`);
         else report.added.push(`rag_tags:${book.folder}`);
-        ragTags[book.folder] = desired;
+        ragTags[book.folder] = { ...existing, ...desired };
         ragTagsChanged = true;
     }
     if (ragTagsChanged) {
         const b = backupOnce(RAG_TAGS);
         if (b) report.backups.push(path.relative(PROJECT_ROOT, b));
         fs.writeFileSync(RAG_TAGS, JSON.stringify(ragTags, null, 2), 'utf-8');
+    }
+
+    // ── tdb_tags.json：只安装冷库向量定义，不携带模型阈值 ───────
+    const tdbTags = readJsonSafe(TDB_TAGS, {});
+    const coldDesired = {
+        tags: ['VCP系统', '插件开发', '知识库'],
+        description: 'VCP 系统、插件生态与技术文档冷知识库'
+    };
+    const coldExisting = tdbTags['VCP知识'];
+    if (!coldExisting
+        || JSON.stringify(coldExisting.tags || []) !== JSON.stringify(coldDesired.tags)
+        || (coldExisting.description || '') !== coldDesired.description) {
+        if (coldExisting) report.updated.push('tdb_tags:VCP知识');
+        else report.added.push('tdb_tags:VCP知识');
+        tdbTags['VCP知识'] = { ...coldExisting, ...coldDesired };
+        const b = backupOnce(TDB_TAGS);
+        if (b) report.backups.push(path.relative(PROJECT_ROOT, b));
+        fs.writeFileSync(TDB_TAGS, JSON.stringify(tdbTags, null, 2), 'utf-8');
+    } else {
+        report.unchanged.push('tdb_tags:VCP知识');
     }
 
     // ── semantic_groups.json（主文件 + .edit.json）────────────────
@@ -164,6 +185,13 @@ function uninstall() {
     }
     if (ragChanged) fs.writeFileSync(RAG_TAGS, JSON.stringify(ragTags, null, 2), 'utf-8');
 
+    const tdbTags = readJsonSafe(TDB_TAGS, {});
+    let tdbChanged = false;
+    for (const key of owned.tdbTags) {
+        if (tdbTags[key]) { delete tdbTags[key]; removed.push(`tdb_tags:${key}`); tdbChanged = true; }
+    }
+    if (tdbChanged) fs.writeFileSync(TDB_TAGS, JSON.stringify(tdbTags, null, 2), 'utf-8');
+
     for (const [filePath, label] of [[SEMANTIC_GROUPS, 'group'], [SEMANTIC_GROUPS_EDIT, 'group.edit']]) {
         if (!fs.existsSync(filePath)) continue;
         const file = readJsonSafe(filePath, { config: {}, groups: {} });
@@ -185,6 +213,7 @@ function status() {
     const { books } = loadSpec();
     const ragTags = readJsonSafe(RAG_TAGS, {});
     const groupsFile = readJsonSafe(SEMANTIC_GROUPS, { groups: {} });
+    const tdbTags = readJsonSafe(TDB_TAGS, {});
     const editExists = fs.existsSync(SEMANTIC_GROUPS_EDIT);
     const editFile = editExists ? readJsonSafe(SEMANTIC_GROUPS_EDIT, { groups: {} }) : null;
 
@@ -197,12 +226,21 @@ function status() {
         .filter(name => !groupsFile.groups?.[name] || (editExists && !editFile.groups?.[name]));
 
     return {
-        ok: missingBooks.length === 0 && missingGroups.length === 0,
+        ok: missingBooks.length === 0 && missingGroups.length === 0 && Boolean(tdbTags['VCP知识']),
         missingBooks,
         missingGroups,
+        missingColdLibraries: tdbTags['VCP知识'] ? [] : ['VCP知识'],
         ragTagsPath: path.relative(PROJECT_ROOT, RAG_TAGS),
         semanticGroupsPath: path.relative(PROJECT_ROOT, SEMANTIC_GROUPS)
     };
 }
 
-module.exports = { install, uninstall, status, RAG_TAGS, SEMANTIC_GROUPS };
+module.exports = {
+    install,
+    uninstall,
+    status,
+    RAG_TAGS,
+    TDB_TAGS,
+    SEMANTIC_GROUPS,
+    SEMANTIC_GROUPS_EDIT
+};

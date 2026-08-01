@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
 const { endpointFingerprint } = require('../../modules/embeddingProvenance');
+const { mergeThresholdOverride } = require('../../modules/gateProvenance');
 
 const DEFAULT_TDB_THRESHOLD = 0.30; // 《《》》门控的默认相似度阈值（冷知识库通常比日记本更宽松）
 
@@ -57,7 +58,20 @@ class TDBPlaceholderProcessor {
         const configPath = path.join(__dirname, 'tdb_tags.json');
         try {
             const data = await fs.readFile(configPath, 'utf-8');
-            this.libraryConfig = JSON.parse(data);
+            const baseConfig = JSON.parse(data);
+            let override = null;
+            if (process.env.RAG_GATE_CONFIG_PATH) {
+                try {
+                    override = JSON.parse(await fs.readFile(process.env.RAG_GATE_CONFIG_PATH, 'utf-8'));
+                } catch (error) {
+                    if (error.code !== 'ENOENT') throw error;
+                }
+            }
+            const merged = mergeThresholdOverride(baseConfig, override, 'cold');
+            this.libraryConfig = merged.effective;
+            if (merged.rejected.length) {
+                console.warn(`[TDBPlaceholder] 冷门控覆盖拒绝 ${merged.rejected.length} 项：${JSON.stringify(merged.rejected)}`);
+            }
             console.log(`[TDBPlaceholder] ✅ 已加载 tdb_tags.json，共 ${Object.keys(this.libraryConfig).length} 个库配置。`);
         } catch (e) {
             if (e.code === 'ENOENT') {
