@@ -153,7 +153,10 @@ function isProcessAlive(pid) {
  * @param {string} [params.label]    人给的标签，便于回忆"这次跑的是啥"
  */
 function createRun(params) {
-    const { resolved, corpusHash, suiteHash, suites = [], label = null } = params;
+    const {
+        resolved, corpusHash, suiteHash, suites = [], label = null,
+        coldCorpusFingerprint = null, includesTier4 = false
+    } = params;
 
     const configHash = shortHash({
         profile: resolved.name,
@@ -162,7 +165,18 @@ function createRun(params) {
         dimension: resolved.embedding.dimension,
         maxToken: resolved.embedding.maxToken,
         corpusHash,
-        suiteHash
+        suiteHash,
+        coldKnowledge: {
+            mode: resolved.coldKnowledge.mode,
+            model: resolved.coldKnowledge.model,
+            dimension: resolved.coldKnowledge.dimension,
+            corpusFingerprint: coldCorpusFingerprint
+        },
+        gateCalibrationArtifactHash: resolved.gateCalibration.artifactHash,
+        gateDatasetHash: resolved.gate.datasetHash,
+        gateScoringFormulaVersion: resolved.gate.scoringFormulaVersion,
+        gateDefinitionHash: resolved.gate.definitionHash,
+        effectiveGateConfigHash: resolved.gate.effectiveConfigHash
     });
 
     const runId = `${timestampSlug()}-${resolved.name}-${configHash}`;
@@ -171,11 +185,14 @@ function createRun(params) {
         throw new Error(`运行目录已存在：${dir}`);
     }
 
-    for (const sub of ['config', 'VectorStore', 'results', 'metrics', 'logs']) {
+    const subdirs = ['config', 'VectorStore', 'ModelCache', 'ModelCache/semantic-vectors', 'results', 'metrics', 'logs'];
+    if (includesTier4) subdirs.push('ColdVectorStore');
+    for (const sub of subdirs) {
         fs.mkdirSync(path.join(dir, sub), { recursive: true });
     }
 
     const manifest = {
+        schemaVersion: 2,
         runId,
         label,
         configHash,
@@ -188,6 +205,43 @@ function createRun(params) {
         ragParamsHash: resolved.ragParamsHash,
         embeddingModel: resolved.embedding.model,
         embeddingDimension: resolved.embedding.dimension,
+        provenance: {
+            embedding: {
+                model: resolved.embedding.model,
+                dimension: resolved.embedding.dimension,
+                endpointFingerprint: resolved.embedding.endpointFingerprint
+            },
+            coldKnowledge: includesTier4 ? {
+                mode: resolved.coldKnowledge.mode,
+                model: resolved.coldKnowledge.model,
+                dimension: resolved.coldKnowledge.dimension,
+                endpointFingerprint: resolved.coldKnowledge.endpointFingerprint,
+                corpusFingerprint: coldCorpusFingerprint
+            } : null,
+            gate: {
+                calibrationArtifactHash: resolved.gateCalibration.artifactHash,
+                datasetHash: resolved.gate.datasetHash,
+                holdoutHash: resolved.gate.holdoutHash,
+                scoringFormulaVersion: resolved.gate.scoringFormulaVersion,
+                definitionHash: resolved.gate.definitionHash,
+                effectiveConfigHash: resolved.gate.effectiveConfigHash
+            },
+            axes: {
+                retrieval: { corpusHash, suiteHash, metricsSchemaVersion: 2 },
+                gateRaw: {
+                    datasetHash: resolved.gate.datasetHash,
+                    gateDefinitionHash: resolved.gate.definitionHash,
+                    scoringFormulaVersion: resolved.gate.scoringFormulaVersion,
+                    embeddingFingerprint: resolved.embedding.endpointFingerprint
+                },
+                gateCalibrated: {
+                    artifactHash: resolved.gateCalibration.artifactHash,
+                    holdoutHash: resolved.gate.holdoutHash,
+                    protocol: resolved.gateCalibration.artifact?.protocol || null,
+                    qualityLevel: resolved.gateCalibration.artifact?.qualityLevel || null
+                }
+            }
+        },
         git: { sha: gitSha(), dirty: gitDirty() },
         node: process.version,
         platform: `${process.platform}-${process.arch}`,
@@ -203,11 +257,18 @@ function createRun(params) {
         configHash,
         manifest,
         storePath: path.join(dir, 'VectorStore'),
+        coldStorePath: includesTier4 ? path.join(dir, 'ColdVectorStore') : null,
+        modelCachePath: path.join(dir, 'ModelCache'),
         paths: {
             manifest: path.join(dir, 'manifest.json'),
             resolvedConfig: path.join(dir, 'config', 'resolved.json'),
             ragParams: path.join(dir, 'config', 'rag_params.json'),
             corpusManifest: path.join(dir, 'config', 'corpus.manifest.json'),
+            gateCalibration: path.join(dir, 'config', 'gate-calibration.json'),
+            gateDatasetManifest: path.join(dir, 'config', 'gate-dataset.manifest.json'),
+            gateConfig: path.join(dir, 'config', 'effective-gate-config.json'),
+            ragVectorCache: path.join(dir, 'ModelCache', 'rag-vector-cache.json'),
+            semanticVectorDir: path.join(dir, 'ModelCache', 'semantic-vectors'),
             rawResults: path.join(dir, 'results', 'raw.jsonl'),
             metrics: path.join(dir, 'metrics', 'metrics.json'),
             perCase: path.join(dir, 'metrics', 'per-case.jsonl'),
@@ -308,16 +369,29 @@ function resolveRun(idOrLatest) {
 function loadRun(runId) {
     const dir = path.join(RUNS_DIR, runId);
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf-8'));
+    if (!Number.isInteger(manifest.schemaVersion) || manifest.schemaVersion < 2 || !manifest.provenance?.axes) {
+        manifest.legacy = true;
+        manifest.legacyReason = 'missing-cross-model-provenance';
+    } else {
+        manifest.legacy = false;
+    }
     return {
         runId,
         dir,
         manifest,
         storePath: path.join(dir, 'VectorStore'),
+        coldStorePath: fs.existsSync(path.join(dir, 'ColdVectorStore')) ? path.join(dir, 'ColdVectorStore') : null,
+        modelCachePath: path.join(dir, 'ModelCache'),
         paths: {
             manifest: path.join(dir, 'manifest.json'),
             resolvedConfig: path.join(dir, 'config', 'resolved.json'),
             ragParams: path.join(dir, 'config', 'rag_params.json'),
             corpusManifest: path.join(dir, 'config', 'corpus.manifest.json'),
+            gateCalibration: path.join(dir, 'config', 'gate-calibration.json'),
+            gateDatasetManifest: path.join(dir, 'config', 'gate-dataset.manifest.json'),
+            gateConfig: path.join(dir, 'config', 'effective-gate-config.json'),
+            ragVectorCache: path.join(dir, 'ModelCache', 'rag-vector-cache.json'),
+            semanticVectorDir: path.join(dir, 'ModelCache', 'semantic-vectors'),
             rawResults: path.join(dir, 'results', 'raw.jsonl'),
             metrics: path.join(dir, 'metrics', 'metrics.json'),
             perCase: path.join(dir, 'metrics', 'per-case.jsonl'),
