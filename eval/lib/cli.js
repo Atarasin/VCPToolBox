@@ -70,6 +70,13 @@ function emitJson(value) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function deriveRunStatus(counts) {
+    if (counts.scored === 0) return 'not_evaluable';
+    if (counts.errored > 0) return 'failed';
+    if (counts.skipped > 0) return 'completed_with_skips';
+    return 'completed';
+}
+
 function statusIcon(ok, level) {
     if (ok) return c('green', '✔');
     return level === 'error' ? c('red', '✘') : c('yellow', '!');
@@ -424,6 +431,16 @@ async function cmdRunLocked(params) {
                 });
                 const warm = await runtime.warmup(Object.values(corpusManifest.books).map(b => b.folder));
                 artifactReady = warm.ready;
+                if (cases.some(x => x.tier === 4)) {
+                    const coldReason = runtime.coldKBReason || warm.coldKB?.reasonCode || warm.coldKB?.reason || null;
+                    if (!runtime.coldKBAvailable || !warm.coldKB?.ready) {
+                        pf.capabilities.coldKB = false;
+                        pf.capabilityReasons = {
+                            ...(pf.capabilityReasons || {}),
+                            coldKB: coldReason || 'cold-kb-unavailable'
+                        };
+                    }
+                }
             } finally {
                 restore();
             }
@@ -471,6 +488,7 @@ async function cmdRunLocked(params) {
             resolved,
             corpusManifest,
             capabilities: pf.capabilities,
+            capabilityReasons: pf.capabilityReasons || {},
             artifactReady,
             onProgress: ({ index, total, id, mode }) => {
                 const pad = String(index).padStart(String(total).length);
@@ -488,8 +506,9 @@ async function cmdRunLocked(params) {
 
         // 先 finalize 再渲染报告：finalizeRun 才会写入 finishedAt / durationMs / status，
         // 顺序反了报告里会永远显示"进行中（0.0s）"。
+        const finalStatus = deriveRunStatus(metrics.counts);
         runstore.finalizeRun(handle, {
-            status: metrics.counts.errored > 0 ? 'completed_with_errors' : 'completed',
+            status: finalStatus,
             preflight: pf,
             artifactReady,
             storeStats: storeStats ? {
@@ -511,7 +530,7 @@ async function cmdRunLocked(params) {
             printRunSummary(handle, metrics, perCase);
         }
 
-        return metrics.counts.errored > 0 ? 1 : 0;
+        return metrics.counts.errored > 0 || metrics.counts.scored === 0 ? 1 : 0;
     } catch (error) {
         runstore.finalizeRun(handle, { status: 'failed', error: error.message || String(error), preflight: pf });
         out('');
@@ -868,4 +887,4 @@ async function main(argv) {
     }
 }
 
-module.exports = { main, parseArgs };
+module.exports = { main, parseArgs, deriveRunStatus };

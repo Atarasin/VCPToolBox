@@ -153,8 +153,8 @@ async function warmupMemoArtifacts(params) {
  * 表现为"检索不到"，而不是"还没准备好"。首次运行会产生大量 embedding 调用，耗时可观。
  */
 async function warmupColdKB(params) {
-    const { tdb, timeoutMs = 900000, onLog = () => {} } = params;
-    if (!tdb) return { ready: false, reason: 'cold-kb-unavailable' };
+    const { tdb, timeoutMs = 900000, pollMs = 2000, onLog = () => {} } = params;
+    if (!tdb) return { ready: false, reason: 'cold-kb-unavailable', reasonCode: 'cold-kb-unavailable' };
 
     const startedAt = Date.now();
     let lastPending = null;
@@ -163,12 +163,22 @@ async function warmupColdKB(params) {
     while (Date.now() - startedAt < timeoutMs) {
         let queue = null;
         try {
-            queue = tdb.getMemoryProfile?.()?.queue || null;
+            queue = tdb.getIngestStatus?.() || tdb.getMemoryProfile?.()?.queues || null;
         } catch (_) { /* profile 失败就按未知处理，继续轮询 */ }
 
         const pending = queue
             ? (queue.pending || 0) + (queue.retry || 0) + (queue.processing || 0)
             : null;
+
+        if (queue && (queue.failed || 0) > 0) {
+            onLog(`⚠️ 冷知识库有 ${queue.failed} 个永久失败的摄取任务。`);
+            return {
+                ready: false,
+                reason: 'cold-ingest-not-ready',
+                reasonCode: 'cold-ingest-not-ready',
+                failed: queue.failed
+            };
+        }
 
         if (pending !== null && pending === 0) {
             // 队列可能瞬时为空但下一批还没入队，连续几次为 0 才认为收敛
@@ -183,11 +193,11 @@ async function warmupColdKB(params) {
                 lastPending = pending;
             }
         }
-        await delay(2000);
+        await delay(pollMs);
     }
 
     onLog('⚠️ 冷知识库摄取超时；相关用例结果不可信。');
-    return { ready: false, reason: 'ingest-timeout' };
+    return { ready: false, reason: 'cold-ingest-not-ready', reasonCode: 'cold-ingest-not-ready' };
 }
 
 /**
@@ -224,6 +234,7 @@ async function boot(params) {
     await kbm.initialize();
 
     let tdb = null;
+    let coldKBReason = null;
     if (withColdKB) {
         try {
             tdb = require(path.join(PROJECT_ROOT, 'TDBKnowledge'));
@@ -231,10 +242,17 @@ async function boot(params) {
             // triviumdb 缺失时 TDBKnowledge 会静默 disabled 并让 search() 返回 []。
             // 必须显式判断，否则冷知识库用例会"通过"得毫无意义。
             if (tdb.initialized !== true) {
-                onLog('⚠️ 冷知识库未启用（triviumdb 缺失或初始化失败）；Tier4 用例将 SKIP。');
+                const status = tdb.getInitializationStatus?.() || {};
+                coldKBReason = status.reasonCode === 'TDB_STORE_REBUILD_REQUIRED'
+                    ? 'cold-store-rebuild-required'
+                    : 'cold-kb-unavailable';
+                onLog(`⚠️ 冷知识库未启用（${status.reasonCode || 'unavailable'}）；Tier4 用例将 SKIP。`);
                 tdb = null;
             }
         } catch (error) {
+            coldKBReason = error.code === 'TDB_STORE_REBUILD_REQUIRED'
+                ? 'cold-store-rebuild-required'
+                : 'cold-kb-unavailable';
             onLog(`⚠️ 冷知识库不可用：${error.message || error}`);
             tdb = null;
         }
@@ -270,6 +288,7 @@ async function boot(params) {
         tdb,
         sink,
         coldKBAvailable: Boolean(tdb),
+        coldKBReason,
         lightMemoAvailable: Boolean(lightMemo),
         async warmup(books) {
             const memo = await warmupMemoArtifacts({ kbm, ragPlugin, books, onLog });

@@ -530,7 +530,7 @@ function checkSearcherExpectations(theCase, result) {
 async function runSuite(params) {
     const {
         cases, runtime, resolved, corpusManifest, capabilities,
-        artifactReady, onProgress = () => {}
+        capabilityReasons = {}, artifactReady, onProgress = () => {}
     } = params;
 
     const matcher = metrics.makeDocMatcher(corpusManifest);
@@ -554,7 +554,11 @@ async function runSuite(params) {
         // 依赖不可用 → SKIP。绝不当成 PASS。
         const missingCap = (theCase.requires || []).find(cap => !capabilities[cap]);
         if (missingCap) {
-            perCase.push({ ...base, status: 'skipped', skipReason: `capability-unavailable:${missingCap}` });
+            perCase.push({
+                ...base,
+                status: 'skipped',
+                skipReason: capabilityReasons[missingCap] || `capability-unavailable:${missingCap}`
+            });
             continue;
         }
 
@@ -677,6 +681,27 @@ async function runOneCase(params) {
         return {
             raw: { error: treatmentArm.error, latencyMs: treatmentArm.latencyMs },
             scored: { status: 'error', error: treatmentArm.error, latencyMs: treatmentArm.latencyMs, relevantCount: relevant.length, irrelevantCount: irrelevant.length, degradations: {} }
+        };
+    }
+    if (treatmentArm.observation?.integrity?.clean === false) {
+        const first = treatmentArm.observation.integrity.errors[0] || {};
+        return {
+            raw: {
+                error: first.error || 'retrieval integrity failure',
+                reasonCode: first.reasonCode || 'retrieval-error',
+                integrity: treatmentArm.observation.integrity,
+                latencyMs: treatmentArm.latencyMs
+            },
+            scored: {
+                status: 'error',
+                error: first.error || 'retrieval integrity failure',
+                reasonCode: first.reasonCode || 'retrieval-error',
+                integrity: treatmentArm.observation.integrity,
+                latencyMs: treatmentArm.latencyMs,
+                relevantCount: relevant.length,
+                irrelevantCount: irrelevant.length,
+                degradations: {}
+            }
         };
     }
 
