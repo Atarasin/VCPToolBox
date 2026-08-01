@@ -117,46 +117,34 @@ test('profile and runtime share one effective gate config hash', () => {
 });
 
 test('plugin config installs definitions without overwriting model-specific thresholds', t => {
-    const files = [
-        pluginConfig.RAG_TAGS,
-        pluginConfig.TDB_TAGS,
-        pluginConfig.SEMANTIC_GROUPS,
-        pluginConfig.SEMANTIC_GROUPS_EDIT
-    ];
-    const tracked = files.flatMap(file => [file, `${file}.eval-backup`]);
-    const snapshots = new Map(tracked.map(file => [file, fs.existsSync(file) ? fs.readFileSync(file) : null]));
-    t.after(() => {
-        for (const [file, content] of snapshots) {
-            if (content === null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, content);
-        }
-    });
-    fs.mkdirSync(path.dirname(pluginConfig.RAG_TAGS), { recursive: true });
-    fs.writeFileSync(pluginConfig.RAG_TAGS, JSON.stringify({
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-plugin-config-'));
+    const paths = pluginConfig.resolvePaths({ projectRoot });
+    t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+    fs.mkdirSync(paths.PLUGIN_DIR, { recursive: true });
+    fs.writeFileSync(paths.RAG_TAGS, JSON.stringify({
         '评测运维技术库': { tags: ['old'], threshold: 0.123 }
     }));
-    pluginConfig.install();
-    const rag = JSON.parse(fs.readFileSync(pluginConfig.RAG_TAGS, 'utf-8'));
+    pluginConfig.install({ projectRoot });
+    const rag = JSON.parse(fs.readFileSync(paths.RAG_TAGS, 'utf-8'));
     assert.equal(rag['评测运维技术库'].threshold, 0.123);
     assert.equal(Object.hasOwn(rag['评测幻想设定库'], 'threshold'), false);
-    const cold = JSON.parse(fs.readFileSync(pluginConfig.TDB_TAGS, 'utf-8'));
+    const cold = JSON.parse(fs.readFileSync(paths.TDB_TAGS, 'utf-8'));
     assert.equal(Object.hasOwn(cold['VCP知识'], 'threshold'), false);
 });
 
 test('cold gate consumes the cold threshold namespace', async t => {
-    const pluginPath = pluginConfig.TDB_TAGS;
-    const previousFile = fs.existsSync(pluginPath) ? fs.readFileSync(pluginPath) : null;
     const overrideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-override-'));
+    const pluginPath = path.join(overrideDir, 'tdb_tags.json');
     const overridePath = path.join(overrideDir, 'gate.json');
     const previousEnv = process.env.RAG_GATE_CONFIG_PATH;
     t.after(() => {
-        if (previousFile === null) fs.rmSync(pluginPath, { force: true }); else fs.writeFileSync(pluginPath, previousFile);
         fs.rmSync(overrideDir, { recursive: true, force: true });
         if (previousEnv === undefined) delete process.env.RAG_GATE_CONFIG_PATH; else process.env.RAG_GATE_CONFIG_PATH = previousEnv;
     });
     fs.writeFileSync(pluginPath, JSON.stringify({ VCP知识: { tags: ['VCP'], threshold: 0.9 } }));
     fs.writeFileSync(overridePath, JSON.stringify({ thresholds: { cold: { VCP知识: 0.41 } } }));
     process.env.RAG_GATE_CONFIG_PATH = overridePath;
-    const processor = new TDBPlaceholderProcessor({});
+    const processor = new TDBPlaceholderProcessor({}, { configPath: pluginPath });
     await processor.loadConfig();
     assert.equal(processor.libraryConfig.VCP知识.threshold, 0.41);
 });

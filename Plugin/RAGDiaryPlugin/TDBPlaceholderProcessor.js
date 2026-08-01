@@ -24,9 +24,10 @@ class TDBPlaceholderProcessor {
     /**
      * @param {object} host - RAGDiaryPlugin 实例，复用其向量化 / Rerank / 广播 / 缓存能力
      */
-    constructor(host) {
+    constructor(host, options = {}) {
         this.host = host;
         this.tdbKnowledgeManager = null;
+        this.configPath = options.configPath || path.join(__dirname, 'tdb_tags.json');
 
         // 库名增强向量缓存：libraryName -> { nameVector, enhancedVector, threshold }
         this.libraryConfig = {};        // 从 tdb_tags.json 加载的 { 库名: { threshold, tags, description } }
@@ -55,7 +56,7 @@ class TDBPlaceholderProcessor {
      * }
      */
     async loadConfig() {
-        const configPath = path.join(__dirname, 'tdb_tags.json');
+        const configPath = this.configPath;
         try {
             const data = await fs.readFile(configPath, 'utf-8');
             const baseConfig = JSON.parse(data);
