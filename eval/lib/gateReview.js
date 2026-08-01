@@ -22,7 +22,7 @@ function writeJsonl(filePath, rows) {
 }
 
 function reviewerAlias(reviewerId) {
-    return `reviewer-${sha256(String(reviewerId)).slice(0, 16)}`;
+    return `reviewer-${sha256(String(reviewerId)).slice('sha256:'.length, 'sha256:'.length + 16)}`;
 }
 
 function exportReview({ datasetPath, manifestPath, output, reviewerId, scope = 'all', batchCount = 1, batchIndex = 0 }) {
@@ -128,7 +128,10 @@ function mergeReviews({ datasetPath, manifestPath, reviewPaths, output }) {
         const required = candidateNeedsDoubleReview || finalLabel === 'ambiguous' ? 2 : 1;
         if (decisions.length < required) {
             missing.push({ caseId: row.id, required, actual: decisions.length });
-            return { ...row, label: finalLabel };
+            // Keep the source candidate immutable until its full review quorum is met.
+            // Otherwise an incomplete merge could be used as the source of a later
+            // merge and silently downgrade a hard-negative case to single review.
+            return row;
         }
         return {
             ...row,

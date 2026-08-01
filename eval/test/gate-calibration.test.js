@@ -307,4 +307,13 @@ test('review merge rejects missing attestation and conflicting labels', t => {
         datasetPath, reviewPaths: [relabeled], output: path.join(dir, 'relabeled.jsonl')
     });
     assert.deepEqual(stillNeedsSecondReview.missing, [{ caseId: 'hard-negative', required: 2, actual: 1 }]);
+    assert.equal(dataset.readJsonl(stillNeedsSecondReview.output)[0].label, 'negative');
+
+    const staged = review.exportReview({
+        datasetPath: stillNeedsSecondReview.output,
+        output: path.join(dir, 'staged.jsonl'),
+        reviewerId: 'staged-reviewer',
+        scope: 'double-review'
+    });
+    assert.equal(staged.cases, 1);
 });
