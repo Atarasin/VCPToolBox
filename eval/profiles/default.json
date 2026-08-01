@@ -27,7 +27,7 @@
     "maxToken 调到 512（safeMaxTokens = floor(512*0.85) = 435）是为了让 expand 族那两篇",
     "约 450 字的纪要真的被切成多个 chunk。默认 8000 之下几乎任何现实长度的日记都是单 chunk，",
     "于是 chunk_index>0、overlap 行为、以及 ::Expand 的父文档收拢全都测不到。",
-    "model 与 dimension 留 null 表示沿用 config.env 的当前值；换模型对比时在这里显式覆盖。"
+    "default 显式固化为 Qwen 4096，避免本地 config.env 缺失或变化时 profile 身份漂移。"
   ],
   "env": {}
 }

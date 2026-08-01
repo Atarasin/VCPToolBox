@@ -193,8 +193,18 @@ function checkDailyNoteSearcher() {
 function coldCorpusFingerprint(resolved) {
     const root = resolved.coldKnowledge.rootPath;
     if (!fs.existsSync(root)) return null;
-    const extensions = new Set(['.md', '.txt', '.json', '.html']);
-    const excluded = new Set(['TDBdocs']);
+    const splitList = (value, fallback = []) => {
+        const raw = value == null || value === '' ? fallback.join(',') : String(value);
+        return raw.split(/[,，]/).map(item => item.trim()).filter(Boolean);
+    };
+    const normalizeExt = value => {
+        const ext = String(value || '').trim().toLowerCase();
+        return ext && (ext.startsWith('.') ? ext : `.${ext}`);
+    };
+    const extensions = new Set(splitList(resolved.env.TDB_KNOWLEDGE_EXTENSIONS, ['.md', '.txt', '.json', '.html']).map(normalizeExt));
+    const excluded = new Set(splitList(resolved.env.TDB_KNOWLEDGE_EXCLUDE_FOLDERS, ['TDBdocs']));
+    const ignorePrefixes = splitList(resolved.env.TDB_KNOWLEDGE_IGNORE_PREFIXES);
+    const ignoreSuffixes = splitList(resolved.env.TDB_KNOWLEDGE_IGNORE_SUFFIXES);
     const rows = [];
     const walk = dir => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -205,6 +215,11 @@ function coldCorpusFingerprint(resolved) {
             }
             if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
             const relative = path.relative(root, absolute).split(path.sep).join('/');
+            const parts = relative.split('/').filter(Boolean);
+            const library = parts.length > 1 ? parts[0] : 'Root';
+            if (excluded.has(library)) continue;
+            if (ignorePrefixes.some(prefix => library.startsWith(prefix) || entry.name.startsWith(prefix))) continue;
+            if (ignoreSuffixes.some(suffix => library.endsWith(suffix) || entry.name.endsWith(suffix))) continue;
             const contentHash = crypto.createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
             rows.push(`${relative}:${contentHash}`);
         }

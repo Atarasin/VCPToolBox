@@ -137,6 +137,35 @@ function loadGateCalibration(profile, name, effectiveEmbedding) {
     }
 }
 
+function validateGateCalibration(calibration, context) {
+    if (!calibration.artifact) return calibration;
+    const { effectiveEmbedding, gateDefinitionHash, scoringFormulaVersion } = context;
+    const artifact = calibration.artifact;
+    const reasons = [];
+    if (artifact.schemaVersion !== 1) reasons.push('schemaVersion must be 1');
+    if (artifact.status !== 'validated') reasons.push('artifact status must be validated');
+    if (artifact.embedding?.model !== effectiveEmbedding.model) reasons.push('embedding model differs');
+    if (Number(artifact.embedding?.dimension) !== effectiveEmbedding.dimension) reasons.push('embedding dimension differs');
+    if (artifact.embedding?.endpointFingerprint !== effectiveEmbedding.endpointFingerprint) reasons.push('embedding endpoint differs');
+    if (artifact.gateDefinitionHash !== gateDefinitionHash) reasons.push('gate definition differs');
+    if (artifact.protocol?.scoringFormulaVersion !== scoringFormulaVersion) reasons.push('scoring formula differs');
+    if (!artifact.dataset?.id || !artifact.dataset?.hash
+        || !artifact.dataset?.calibrationSplitHash || !artifact.dataset?.holdoutSplitHash) {
+        reasons.push('dataset provenance is incomplete');
+    }
+    if (!artifact.thresholds || typeof artifact.thresholds !== 'object' || Array.isArray(artifact.thresholds)
+        || !artifact.thresholds.diary || typeof artifact.thresholds.diary !== 'object'
+        || !artifact.thresholds.cold || typeof artifact.thresholds.cold !== 'object') {
+        reasons.push('threshold namespaces are incomplete');
+    }
+    calibration.validationReasons = reasons;
+    if (reasons.length) {
+        calibration.status = 'stale';
+        calibration.reasonCode = 'gate-calibration-stale';
+    }
+    return calibration;
+}
+
 function gateDefinitionFromBaseConfig() {
     const stripThreshold = value => {
         if (Array.isArray(value)) return value.map(stripThreshold);
@@ -304,6 +333,10 @@ function loadProfile(name = 'default', overrides = {}) {
 
     // aligned 派生结果最后写入，根 config.env 与 profile.env 都不能暗中覆盖它。
     Object.assign(env, {
+        WhitelistEmbeddingModel: effectiveEmbedding.model,
+        WhitelistEmbeddingModelMaxToken: String(effectiveEmbedding.maxToken),
+        VECTORDB_DIMENSION: String(effectiveEmbedding.dimension),
+        EMBEDDING_DIMENSIONS: String(effectiveEmbedding.dimension),
         TDB_KNOWLEDGE_MODEL: coldKnowledge.model,
         TDB_KNOWLEDGE_DIMENSION: String(coldKnowledge.dimension),
         EVAL_STRICT_PROVENANCE: 'true'
@@ -313,6 +346,11 @@ function loadProfile(name = 'default', overrides = {}) {
     const gateDefinition = gateDefinitionFromBaseConfig();
     const scoringFormulaVersion = 'gate-score-v1';
     const gateDefinitionHash = gateDefinition.hash;
+    validateGateCalibration(gateCalibration, {
+        effectiveEmbedding,
+        gateDefinitionHash,
+        scoringFormulaVersion
+    });
     const effectiveGateConfigHash = sha256(JSON.stringify(stableValue({
         gateDefinitionHash,
         thresholds: gateCalibration.artifact?.thresholds || {}
@@ -410,7 +448,8 @@ function snapshotConfig(resolved) {
             artifactHash: resolved.gateCalibration.artifactHash,
             status: resolved.gateCalibration.status,
             calibrationId: resolved.gateCalibration.artifact?.calibrationId || null,
-            reasonCode: resolved.gateCalibration.reasonCode || null
+            reasonCode: resolved.gateCalibration.reasonCode || null,
+            validationReasons: resolved.gateCalibration.validationReasons || []
         },
         gate: { ...resolved.gate },
         modelCache: resolved.modelCache ? {
@@ -442,6 +481,7 @@ module.exports = {
     stableValue,
     normalizeApiUrl,
     embeddingEndpointFingerprint,
+    validateGateCalibration,
     fingerprint,
     isSecretName
 };
