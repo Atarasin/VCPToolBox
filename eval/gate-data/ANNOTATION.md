@@ -9,7 +9,9 @@
 - 不得把 LLM 生成标签、文件归属或脚本推断伪装成人工复核。
 - 冲突无法解决时改为 `ambiguous`；ambiguous 不参与拟合。
 
-`gate-v1.jsonl` 当前是待人工标注队列。它有完整数量和 split 结构，但 manifest 明确标为 `candidate`；校准 CLI 默认拒绝用未验证标签生成正式产物。
+`gate-v1.jsonl` 当前是待人工标注队列。candidate-2 使用自然问题改写，同一语义共享
+`intentGroup`，同一源文档固定在一个 split。它有完整数量和 split 结构，但 manifest 明确标为
+`candidate`；校准 CLI 默认拒绝用未验证标签生成正式产物。
 
 ## 双人复核工作流
 

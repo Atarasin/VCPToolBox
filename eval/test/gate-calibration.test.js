@@ -69,14 +69,14 @@ test('VT-012: verified data below decision counts is development quality', () =>
     const rows = [];
     for (let index = 0; index < 40; index++) rows.push({
         id: `p-${index}`, targetType: 'diary', library: 'EvalDiary', query: `positive ${index}`,
-        label: 'positive', difficulty: 'easy', source: 'corpus-derived', sourceRefs: ['doc'],
+        label: 'positive', difficulty: 'easy', source: 'corpus-derived', sourceRefs: [`doc-${index < 28 ? 'calibration' : 'holdout'}`],
         intentGroup: `p-${index}`, split: index < 28 ? 'calibration' : 'holdout',
         annotation: { status: 'verified', reviewCount: 1 }
     });
     for (let index = 0; index < 60; index++) rows.push({
         id: `n-${index}`, targetType: 'diary', library: 'EvalDiary', query: `negative ${index}`,
         label: 'negative', difficulty: index % 3 === 2 ? 'hard' : (index % 3 === 1 ? 'near-domain' : 'easy'),
-        source: 'cross-library', sourceRefs: ['other-doc'], intentGroup: `n-${index}`,
+        source: 'cross-library', sourceRefs: [`other-doc-${index < 42 ? 'calibration' : 'holdout'}`], intentGroup: `n-${index}`,
         split: index < 42 ? 'calibration' : 'holdout',
         annotation: { status: 'verified', reviewCount: index % 3 === 2 ? 2 : 1 }
     });
@@ -104,6 +104,35 @@ test('VT-014: one intentGroup cannot cross calibration and holdout', () => {
     ], { targets: [{ targetType: 'diary', library: 'EvalDiary' }] });
     assert.equal(result.ok, false);
     assert.ok(result.findings.some(finding => finding.code === 'intent-split-leakage'));
+});
+
+test('VT-014: questions derived from one source document cannot cross splits', () => {
+    const base = {
+        targetType: 'diary', library: 'EvalDiary', label: 'positive', difficulty: 'easy',
+        source: 'corpus-derived', sourceRefs: ['shared-document'],
+        annotation: { status: 'verified', reviewCount: 1 }
+    };
+    const result = dataset.verifyRows([
+        { ...base, id: 'source-a', query: 'first paraphrase', intentGroup: 'intent-a', split: 'calibration' },
+        { ...base, id: 'source-b', query: 'second intent', intentGroup: 'intent-b', split: 'holdout' }
+    ], { targets: [{ targetType: 'diary', library: 'EvalDiary' }] });
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some(finding => finding.code === 'source-ref-split-leakage'));
+});
+
+test('gate-v1 candidate uses grouped natural paraphrases and decision-level counts', () => {
+    const candidatePath = path.resolve(__dirname, '../gate-data/gate-v1.jsonl');
+    const candidate = dataset.loadDataset(candidatePath);
+    assert.equal(candidate.verification.ok, true);
+    assert.equal(candidate.verification.qualityLevel, 'candidate');
+    assert.equal(candidate.rows.length, 1500);
+    assert.equal(new Set(candidate.rows.map(row => row.intentGroup)).size, 50);
+    assert.equal(candidate.rows.some(row => /第\s*\d+\s*个(?:表述|检查角度)/u.test(row.query)), false);
+    for (const stats of Object.values(candidate.verification.counts.targets)) {
+        assert.equal(stats.positive, 100);
+        assert.equal(stats.negative, 200);
+        assert.deepEqual(stats.splits, { calibration: 210, holdout: 90 });
+    }
 });
 
 test('production-shared gate formula reports both cosine components', () => {

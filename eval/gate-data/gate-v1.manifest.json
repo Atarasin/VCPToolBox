@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "datasetId": "gate-v1",
-  "annotationVersion": "candidate-1",
+  "annotationVersion": "candidate-2",
   "qualityLevel": "candidate",
   "status": "awaiting-human-review",
   "splitProtocol": {
-    "unit": "intentGroup",
+    "unit": "intentGroup-and-source-document",
     "calibrationRatio": 0.7,
     "holdoutRatio": 0.3
   },
@@ -36,11 +36,11 @@
     "negativePerTarget": 200,
     "hardNegativeReviewCount": 2
   },
-  "generatedCandidateNotice": "Labels are candidates only. No human review is claimed.",
+  "generatedCandidateNotice": "Natural-language candidates only. Labels require human confirmation; no mined or human-reviewed provenance is claimed.",
   "hashes": {
-    "dataset": "sha256:62cf700700d059be611f2236f4e1b1063c426bcdd5793b43a137e074d881ce1f",
-    "calibration": "sha256:07fdd65c7a60aff0927d3f43454786fa4fe2761defd2205f4fcbaf12901359ab",
-    "holdout": "sha256:c57d6aec467617b33aaf668a15b823c312d1004c22bccc69ec001ed1da215c88"
+    "dataset": "sha256:ab2bdd2707fd76b370596691ad95c3122156e84951e3c329b9a2a08c48aacad5",
+    "calibration": "sha256:27e16fc73d99fba3043cae774d1f5534d8ef6bd709ac29173abb18391b7cf088",
+    "holdout": "sha256:87ff3b65cd480d89da55fffc8af3bb39e7ca97a751fe3ebfe43cda057c07735c"
   },
   "counts": {
     "total": 1500,

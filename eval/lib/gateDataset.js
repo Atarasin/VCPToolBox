@@ -47,6 +47,7 @@ function verifyRows(rows, manifest = {}, options = {}) {
     const findings = [];
     const ids = new Set();
     const intentSplits = new Map();
+    const sourceRefSplits = new Map();
     const targetStats = {};
     const targets = new Set((manifest.targets || []).map(item => `${item.targetType}:${item.library}`));
     const add = (code, message, detail = {}) => findings.push({ level: 'error', code, message, ...detail });
@@ -76,6 +77,17 @@ function verifyRows(rows, manifest = {}, options = {}) {
             const prior = intentSplits.get(row.intentGroup);
             if (prior && prior !== row.split) add('intent-split-leakage', `intentGroup ${row.intentGroup} occurs in ${prior} and ${row.split}`, at);
             else intentSplits.set(row.intentGroup, row.split);
+        }
+        if (Array.isArray(row.sourceRefs) && SPLITS.has(row.split)) {
+            for (const sourceRef of row.sourceRefs) {
+                if (typeof sourceRef !== 'string' || !sourceRef.trim()) continue;
+                const prior = sourceRefSplits.get(sourceRef);
+                if (prior && prior !== row.split) {
+                    add('source-ref-split-leakage', `sourceRef ${sourceRef} occurs in ${prior} and ${row.split}`, at);
+                } else {
+                    sourceRefSplits.set(sourceRef, row.split);
+                }
+            }
         }
 
         const annotation = row.annotation || {};
