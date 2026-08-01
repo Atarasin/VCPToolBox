@@ -9,6 +9,17 @@ const Database = require('better-sqlite3');
 const chokidar = require('chokidar');
 const { chunkText } = require('./TextChunker');
 const { getEmbeddingsBatch } = require('./EmbeddingUtils');
+const embeddingProvenance = require('./modules/embeddingProvenance');
+
+const STORE_MANIFEST_SCHEMA_VERSION = 1;
+const STORE_MANIFEST_FILE = 'embedding-manifest.json';
+
+function codedError(code, message, detail = {}) {
+    const error = new Error(message);
+    error.code = code;
+    Object.assign(error, detail);
+    return error;
+}
 
 let TriviumDB = null;
 try {
@@ -71,8 +82,13 @@ class TDBKnowledgeManager {
             syncMode: process.env.TDB_KNOWLEDGE_SYNC_MODE || 'normal',
             idleUnloadHours: parseFloat(process.env.TDB_KNOWLEDGE_IDLE_UNLOAD_HOURS || '0') || 0,
             idleSweepIntervalMs: parseInt(process.env.TDB_KNOWLEDGE_IDLE_SWEEP_INTERVAL_MS, 10) || 15 * 60 * 1000,
+            strictVectorMetadata: (process.env.EVAL_STRICT_PROVENANCE || 'false').toLowerCase() === 'true',
             ...config
         };
+        this.config.endpointFingerprint = config.endpointFingerprint || embeddingProvenance.endpointFingerprint({
+            apiUrl: this.config.apiUrl,
+            model: this.config.model
+        });
 
         this.initialized = false;
         this.metaDb = null;
@@ -92,21 +108,141 @@ class TDBKnowledgeManager {
         this.libraryQueues = new Map();
         this.fileEventVersions = new Map();
         this.pendingFileVersions = new Map();
+        this.initializationState = 'uninitialized';
+        this.initializationError = null;
+        this.storeManifest = null;
+        this.storeManifestHash = null;
+    }
+
+    _setInitializationState(state, detail = {}) {
+        this.initializationState = state;
+        this.initializationError = detail.error || null;
+        return this.getInitializationStatus();
+    }
+
+    getInitializationStatus() {
+        return {
+            state: this.initializationState,
+            initialized: this.initialized,
+            reasonCode: this.initializationError?.code || null,
+            detail: this.initializationError?.message || null,
+            manifestHash: this.storeManifestHash,
+            expected: this.initializationError?.expected || null,
+            actual: this.initializationError?.actual || null
+        };
+    }
+
+    _chunkerVersion() {
+        try {
+            return embeddingProvenance.sha256(fsSync.readFileSync(path.join(__dirname, 'TextChunker.js')));
+        } catch (_) {
+            return 'sha256:unavailable';
+        }
+    }
+
+    _coldCorpusIdentity() {
+        return embeddingProvenance.coldCorpusFingerprint(this.config.rootPath, this.config);
+    }
+
+    _expectedStoreManifest() {
+        const corpus = this._coldCorpusIdentity();
+        return {
+            schemaVersion: STORE_MANIFEST_SCHEMA_VERSION,
+            embedding: {
+                model: this.config.model,
+                dimension: this.config.dimension,
+                endpointFingerprint: this.config.endpointFingerprint
+            },
+            source: {
+                root: path.basename(this.config.rootPath),
+                corpusFingerprint: corpus.fingerprint
+            },
+            chunker: { version: this._chunkerVersion() }
+        };
+    }
+
+    _manifestComparable(value) {
+        if (!value || typeof value !== 'object') return value;
+        const { createdAt, ...rest } = value;
+        return rest;
+    }
+
+    _storeHasData(manifestPath) {
+        if (!fsSync.existsSync(this.config.storePath)) return false;
+        return fsSync.readdirSync(this.config.storePath).some(name => path.join(this.config.storePath, name) !== manifestPath);
+    }
+
+    async _prepareStoreIdentity() {
+        const manifestPath = path.join(this.config.storePath, STORE_MANIFEST_FILE);
+        const expected = this._expectedStoreManifest();
+        if (!fsSync.existsSync(manifestPath)) {
+            if (this._storeHasData(manifestPath)) {
+                const error = codedError(
+                    'TDB_STORE_REBUILD_REQUIRED',
+                    `冷知识库 store 有数据但缺少 ${STORE_MANIFEST_FILE}`,
+                    { expected, actual: null, storeState: 'legacy_unknown', storePath: this.config.storePath }
+                );
+                this._setInitializationState('legacy_unknown', { error });
+                throw error;
+            }
+            const manifest = { ...expected, createdAt: new Date().toISOString() };
+            const temporary = `${manifestPath}.${process.pid}.tmp`;
+            await fs.writeFile(temporary, JSON.stringify(manifest, null, 2), 'utf-8');
+            await fs.rename(temporary, manifestPath);
+            this.storeManifest = manifest;
+            this.storeManifestHash = embeddingProvenance.sha256(JSON.stringify(embeddingProvenance.stableValue(manifest)));
+            this._setInitializationState('empty');
+            return;
+        }
+
+        let actual;
+        try {
+            actual = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+        } catch (cause) {
+            const error = codedError('TDB_STORE_REBUILD_REQUIRED', `冷知识库 manifest 损坏：${cause.message}`, {
+                expected, actual: null, storeState: 'failed', storePath: this.config.storePath
+            });
+            this._setInitializationState('failed', { error });
+            throw error;
+        }
+        this.storeManifest = actual;
+        this.storeManifestHash = embeddingProvenance.sha256(JSON.stringify(embeddingProvenance.stableValue(actual)));
+        const same = JSON.stringify(embeddingProvenance.stableValue(this._manifestComparable(actual)))
+            === JSON.stringify(embeddingProvenance.stableValue(expected));
+        if (!same) {
+            const error = codedError('TDB_STORE_REBUILD_REQUIRED', '冷知识库 store provenance 与当前配置不兼容', {
+                expected, actual, storeState: 'rebuild_required', storePath: this.config.storePath
+            });
+            this._setInitializationState('rebuild_required', { error });
+            throw error;
+        }
+        this._setInitializationState('compatible');
     }
 
     async initialize() {
         if (this.initialized) return;
         if (!this.config.enabled) {
+            this._setInitializationState('disabled');
             console.log('[TDBKnowledge] Disabled by TDB_KNOWLEDGE_ENABLED=false.');
             return;
         }
         if (!TriviumDB) {
+            this._setInitializationState('disabled', {
+                error: codedError('TDB_UNAVAILABLE', 'triviumdb package is unavailable')
+            });
             console.warn('[TDBKnowledge] Disabled because triviumdb package is unavailable.');
             return;
         }
 
         await fs.mkdir(this.config.rootPath, { recursive: true });
         await fs.mkdir(this.config.storePath, { recursive: true });
+        try {
+            await this._prepareStoreIdentity();
+        } catch (error) {
+            console.error(`[TDBKnowledge] ⛔ ${error.code}: ${error.message}`);
+            if (this.config.strictVectorMetadata) throw error;
+            return;
+        }
 
         const metaPath = path.join(this.config.storePath, 'tdb_knowledge_meta.sqlite');
         this.metaDb = new Database(metaPath);
@@ -783,14 +919,89 @@ class TDBKnowledgeManager {
     }
 
     async search(queryText, options = {}) {
-        if (!this.initialized || !TriviumDB) return [];
+        if (!this.initialized || !TriviumDB) {
+            if (this.config.strictVectorMetadata) this._throwNotQueryable();
+            return [];
+        }
         const [queryVector] = await getEmbeddingsBatch([queryText], {
             apiKey: this.config.apiKey,
             apiUrl: this.config.apiUrl,
             model: this.config.model
         });
-        if (!queryVector) return [];
-        return this.searchWithVector(queryVector, queryText, options);
+        if (!queryVector) {
+            throw codedError('TDB_QUERY_VECTOR_INVALID', 'embedding 端点没有返回查询向量');
+        }
+        return this.searchWithVector(queryVector, queryText, {
+            ...options,
+            vectorMeta: {
+                model: this.config.model,
+                dimension: this.config.dimension,
+                endpointFingerprint: this.config.endpointFingerprint
+            }
+        });
+    }
+
+    _throwNotQueryable() {
+        if (['rebuild_required', 'legacy_unknown', 'failed'].includes(this.initializationState)) {
+            throw this.initializationError || codedError('TDB_STORE_REBUILD_REQUIRED', '冷知识库 store 不可查询');
+        }
+        throw codedError('TDB_INGEST_NOT_READY', `冷知识库尚未就绪（state=${this.initializationState}）`);
+    }
+
+    getIngestStatus() {
+        const counts = { pending: 0, retry: 0, processing: 0, failed: 0 };
+        if (this.metaDb) {
+            try {
+                for (const row of this.metaDb.prepare('SELECT status, COUNT(*) AS count FROM ingest_queue GROUP BY status').all()) {
+                    counts[row.status] = Number(row.count) || 0;
+                }
+            } catch (_) { /* 初始化期间按空队列处理 */ }
+        }
+        return {
+            ...counts,
+            ready: this.initialized && counts.pending === 0 && counts.retry === 0 && counts.processing === 0 && counts.failed === 0
+        };
+    }
+
+    _validateQueryVector(queryVector, vectorMeta) {
+        if (!(Array.isArray(queryVector) || queryVector instanceof Float32Array) || queryVector.length === 0
+            || Array.from(queryVector).some(value => !Number.isFinite(value))) {
+            throw codedError('TDB_QUERY_VECTOR_INVALID', 'queryVector 必须是非空且仅含有限数的 Array/Float32Array');
+        }
+        const actualDimension = queryVector.length;
+        const manifestEmbedding = this.storeManifest?.embedding || null;
+        if (actualDimension !== this.config.dimension
+            || (manifestEmbedding && actualDimension !== Number(manifestEmbedding.dimension))) {
+            throw codedError(
+                'TDB_QUERY_VECTOR_DIMENSION_MISMATCH',
+                `queryVector=${actualDimension}, manager=${this.config.dimension}, store=${manifestEmbedding?.dimension ?? 'unknown'}`,
+                {
+                    expected: { manager: this.config.dimension, store: manifestEmbedding?.dimension ?? null },
+                    actual: { dimension: actualDimension }
+                }
+            );
+        }
+        if (this.config.strictVectorMetadata && !vectorMeta) {
+            throw codedError('TDB_QUERY_VECTOR_MODEL_MISMATCH', '严格模式要求 vectorMeta');
+        }
+        if (vectorMeta) {
+            if (Number(vectorMeta.dimension) !== actualDimension) {
+                throw codedError('TDB_QUERY_VECTOR_DIMENSION_MISMATCH', 'vectorMeta.dimension 与实际向量长度不一致');
+            }
+            const expectedModel = manifestEmbedding?.model || this.config.model;
+            const expectedEndpoint = manifestEmbedding?.endpointFingerprint || this.config.endpointFingerprint;
+            if (vectorMeta.model !== expectedModel || vectorMeta.endpointFingerprint !== expectedEndpoint) {
+                throw codedError(
+                    'TDB_QUERY_VECTOR_MODEL_MISMATCH',
+                    'query vector embedding identity 与冷知识库 store 不一致',
+                    {
+                        expected: { model: expectedModel, endpointFingerprint: expectedEndpoint },
+                        actual: { model: vectorMeta.model || null, endpointFingerprint: vectorMeta.endpointFingerprint || null }
+                    }
+                );
+            }
+        }
+        return queryVector;
     }
 
     /**
@@ -801,7 +1012,16 @@ class TDBKnowledgeManager {
      * @param {object} options - { libraries, topK, expandDepth, minScore, hybridAlpha, expand }
      */
     async searchWithVector(queryVector, queryText, options = {}) {
-        if (!this.initialized || !TriviumDB || !queryVector) return [];
+        if (!this.initialized || !TriviumDB) {
+            if (this.config.strictVectorMetadata) this._throwNotQueryable();
+            return [];
+        }
+        this._validateQueryVector(queryVector, options.vectorMeta);
+        if (this.config.strictVectorMetadata && !this.getIngestStatus().ready) {
+            throw codedError('TDB_INGEST_NOT_READY', '冷知识库摄取队列尚未收敛', {
+                actual: this.getIngestStatus()
+            });
+        }
 
         const libraries = Array.isArray(options.libraries) && options.libraries.length > 0
             ? options.libraries.map(safeLibraryName)
@@ -1216,6 +1436,7 @@ class TDBKnowledgeManager {
             module: 'TDBKnowledge',
             enabled: this.config.enabled,
             initialized: this.initialized,
+            initialization: this.getInitializationStatus(),
             dimension: this.config.dimension,
             rootPath: this.config.rootPath,
             storePath: this.config.storePath,
@@ -1288,3 +1509,7 @@ class TDBKnowledgeManager {
 }
 
 module.exports = new TDBKnowledgeManager();
+module.exports.TDBKnowledgeManager = TDBKnowledgeManager;
+module.exports.STORE_MANIFEST_SCHEMA_VERSION = STORE_MANIFEST_SCHEMA_VERSION;
+module.exports.STORE_MANIFEST_FILE = STORE_MANIFEST_FILE;
+module.exports.codedError = codedError;
