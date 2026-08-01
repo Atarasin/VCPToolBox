@@ -172,4 +172,30 @@ function validate(flags) {
     return { ok: true, command: 'validate', output, artifact };
 }
 
-module.exports = { verify, collect, calibrate, validate };
+function review(flags, positional = []) {
+    const action = positional[0];
+    const gateReview = require('./gateReview');
+    if (action === 'export') {
+        return gateReview.exportReview({
+            datasetPath: requireFlag(flags, 'dataset'),
+            manifestPath: flags.manifest && flags.manifest !== true ? String(flags.manifest) : undefined,
+            output: requireFlag(flags, 'out'),
+            reviewerId: flags.reviewer && flags.reviewer !== true ? String(flags.reviewer) : null,
+            scope: flags.scope && flags.scope !== true ? String(flags.scope) : 'all',
+            batchCount: flags['batch-count'] ?? 1,
+            batchIndex: flags['batch-index'] ?? 0
+        });
+    }
+    if (action === 'merge') {
+        const reviewPaths = String(requireFlag(flags, 'reviews')).split(',').map(value => value.trim()).filter(Boolean);
+        return gateReview.mergeReviews({
+            datasetPath: requireFlag(flags, 'dataset'),
+            manifestPath: flags.manifest && flags.manifest !== true ? String(flags.manifest) : undefined,
+            reviewPaths,
+            output: requireFlag(flags, 'out')
+        });
+    }
+    throw gateCalibration.codedError('GATE_REVIEW_ACTION_INVALID', 'gate review requires export or merge');
+}
+
+module.exports = { verify, collect, calibrate, validate, review };

@@ -686,11 +686,11 @@ function loadRules(flags) {
 }
 
 async function cmdGate(positional, flags) {
-    const calibrationCommands = new Set(['verify', 'collect', 'calibrate', 'validate']);
+    const calibrationCommands = new Set(['verify', 'collect', 'calibrate', 'validate', 'review']);
     if (calibrationCommands.has(positional[0])) {
         const subcommand = positional[0];
         try {
-            const result = await require('./gateCommands')[subcommand](flags);
+            const result = await require('./gateCommands')[subcommand](flags, positional.slice(1));
             if (flags.json) emitJson(result);
             else {
                 out(c('bold', `\nGate ${subcommand}`));
@@ -710,6 +710,12 @@ async function cmdGate(positional, flags) {
                     out(`  quality      ${result.qualityLevel}`);
                     out(`  calibration  ${result.files.calibration.scores}`);
                     out(`  holdout      ${result.files.holdout.scores}`);
+                } else if (subcommand === 'review') {
+                    out(`  output       ${result.output}`);
+                    if (result.qualityLevel) out(`  quality      ${result.qualityLevel}`);
+                    if (Number.isFinite(result.cases)) out(`  cases        ${result.cases}`);
+                    if (Number.isFinite(result.pending)) out(`  pending      ${result.pending}`);
+                    if (result.conflicts?.length) out(`  conflicts    ${result.conflicts.length}`);
                 } else {
                     out(`  output       ${result.output}`);
                     out(`  status       ${result.artifact.status}`);
@@ -888,6 +894,8 @@ ${c('bold', '命令')}
   gate collect --profile <p>      使用生产共享公式采集 calibration/holdout 原始分数
   gate calibrate --scores <jsonl> 仅用 calibration 分数拟合 draft 阈值
   gate validate --calibration <p> 用 holdout 验证固定阈值并生成 finalized artifact
+  gate review export              导出人工复核表（支持 all/double-review 与分片）
+  gate review merge               合并不同审阅者证据，冲突/缺失保持 pending
   runs list                       列出所有运行
   runs show [runId|latest]        查看某次运行的报告
   runs prune --keep N             只保留最近 N 次运行（向量库很占地方）

@@ -9,6 +9,7 @@ const test = require('node:test');
 
 const dataset = require('../lib/gateDataset');
 const calibration = require('../lib/gateCalibration');
+const review = require('../lib/gateReview');
 const { scoreGateVectors } = require('../../modules/gateScoring');
 
 function scoreBundle(split, rows, qualityLevel = 'decision') {
@@ -202,4 +203,108 @@ test('gate calibrate/validate --json emit one stable machine-readable document',
     assert.equal(validatedJson.ok, true);
     assert.equal(validatedJson.artifact.status, 'validated');
     assert.ok(fs.existsSync(finalPath));
+});
+
+test('review evidence requires two distinct humans for hard negatives', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-review-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const rows = [
+        {
+            id: 'easy-positive', targetType: 'diary', library: 'EvalDiary', query: 'relevant question',
+            label: 'positive', difficulty: 'easy', source: 'corpus-derived', sourceRefs: ['doc-a'],
+            intentGroup: 'intent-a', split: 'calibration', annotation: { status: 'pending', reviewCount: 0 }
+        },
+        {
+            id: 'hard-negative', targetType: 'diary', library: 'EvalDiary', query: 'deceptive unrelated question',
+            label: 'negative', difficulty: 'hard', source: 'cross-library', sourceRefs: ['doc-b'],
+            intentGroup: 'intent-b', split: 'holdout', annotation: { status: 'pending', reviewCount: 0 }
+        }
+    ];
+    const manifest = {
+        schemaVersion: 1, datasetId: 'review-test', qualityLevel: 'candidate', status: 'awaiting-human-review',
+        targets: [{ targetType: 'diary', library: 'EvalDiary' }]
+    };
+    const verified = dataset.verifyRows(rows, manifest);
+    manifest.hashes = { dataset: verified.datasetHash, calibration: verified.calibrationSplitHash, holdout: verified.holdoutSplitHash };
+    const datasetPath = path.join(dir, 'dataset.jsonl');
+    fs.writeFileSync(datasetPath, `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+    fs.writeFileSync(datasetPath.replace('.jsonl', '.manifest.json'), JSON.stringify(manifest));
+
+    const fill = (filePath, reviewerId) => {
+        const records = fs.readFileSync(filePath, 'utf-8').trim().split('\n').map(JSON.parse);
+        records[0].reviewerId = reviewerId;
+        records[0].reviewedAt = '2026-08-01T00:00:00.000Z';
+        records[0].attestation = review.ATTESTATION;
+        for (const record of records.slice(1)) record.label = record.candidateLabel;
+        fs.writeFileSync(filePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
+    };
+    const firstPath = path.join(dir, 'review-a.jsonl');
+    const secondPath = path.join(dir, 'review-b.jsonl');
+    review.exportReview({ datasetPath, output: firstPath, reviewerId: 'reviewer-a', scope: 'all' });
+    review.exportReview({ datasetPath, output: secondPath, reviewerId: 'reviewer-b', scope: 'double-review' });
+    fill(firstPath, 'reviewer-a');
+
+    const incomplete = review.mergeReviews({
+        datasetPath, reviewPaths: [firstPath], output: path.join(dir, 'incomplete.jsonl')
+    });
+    assert.equal(incomplete.ok, false);
+    assert.equal(incomplete.verified, 1);
+    assert.equal(incomplete.pending, 1);
+    assert.deepEqual(incomplete.missing, [{ caseId: 'hard-negative', required: 2, actual: 1 }]);
+
+    fill(secondPath, 'reviewer-b');
+    const complete = review.mergeReviews({
+        datasetPath, reviewPaths: [firstPath, secondPath], output: path.join(dir, 'reviewed.jsonl')
+    });
+    assert.equal(complete.ok, true);
+    assert.equal(complete.verified, 2);
+    assert.equal(complete.pending, 0);
+    const mergedRows = dataset.readJsonl(complete.output);
+    assert.equal(mergedRows.find(row => row.id === 'hard-negative').annotation.reviewCount, 2);
+    assert.equal(new Set(complete.evidence.map(item => item.reviewerId)).size, 2);
+    assert.ok(complete.evidence.every(item => item.reviewerId.startsWith('reviewer-')));
+    assert.ok(complete.evidence.every(item => !['reviewer-a', 'reviewer-b'].includes(item.reviewerId)));
+});
+
+test('review merge rejects missing attestation and conflicting labels', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-review-conflict-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const row = {
+        id: 'hard-negative', targetType: 'diary', library: 'EvalDiary', query: 'question', label: 'negative',
+        difficulty: 'hard', source: 'cross-library', sourceRefs: ['doc'], intentGroup: 'intent', split: 'calibration',
+        annotation: { status: 'pending', reviewCount: 0 }
+    };
+    const manifest = { schemaVersion: 1, datasetId: 'review-test', targets: [{ targetType: 'diary', library: 'EvalDiary' }] };
+    const verified = dataset.verifyRows([row], manifest);
+    manifest.hashes = { dataset: verified.datasetHash, calibration: verified.calibrationSplitHash, holdout: verified.holdoutSplitHash };
+    const datasetPath = path.join(dir, 'dataset.jsonl');
+    fs.writeFileSync(datasetPath, `${JSON.stringify(row)}\n`);
+    fs.writeFileSync(datasetPath.replace('.jsonl', '.manifest.json'), JSON.stringify(manifest));
+    const make = (name, label, attest = true) => {
+        const file = path.join(dir, `${name}.jsonl`);
+        review.exportReview({ datasetPath, output: file, reviewerId: name, scope: 'all' });
+        const records = fs.readFileSync(file, 'utf-8').trim().split('\n').map(JSON.parse);
+        records[0].reviewedAt = '2026-08-01T00:00:00.000Z';
+        records[0].attestation = attest ? review.ATTESTATION : null;
+        records[1].label = label;
+        fs.writeFileSync(file, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
+        return file;
+    };
+    const invalid = make('invalid', 'negative', false);
+    assert.throws(
+        () => review.mergeReviews({ datasetPath, reviewPaths: [invalid], output: path.join(dir, 'invalid-out.jsonl') }),
+        error => error.code === 'GATE_REVIEW_ATTESTATION_MISSING'
+    );
+    const a = make('a', 'negative');
+    const b = make('b', 'positive');
+    const conflict = review.mergeReviews({ datasetPath, reviewPaths: [a, b], output: path.join(dir, 'conflict.jsonl') });
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.conflicts.length, 1);
+    assert.equal(conflict.pending, 1);
+
+    const relabeled = make('relabeled', 'positive');
+    const stillNeedsSecondReview = review.mergeReviews({
+        datasetPath, reviewPaths: [relabeled], output: path.join(dir, 'relabeled.jsonl')
+    });
+    assert.deepEqual(stillNeedsSecondReview.missing, [{ caseId: 'hard-negative', required: 2, actual: 1 }]);
 });
