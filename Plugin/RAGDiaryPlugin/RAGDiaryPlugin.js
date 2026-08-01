@@ -606,7 +606,7 @@ class RAGDiaryPlugin {
         await this.loadConfig();
         await this.loadRagParams();
         await this.tdbProcessor.loadConfig(); // 🧊 加载 tdb_tags.json（可选）
-        await this.semanticGroupManager.initializePromise;
+        await this.semanticGroups.waitUntilReady();
         this._startRagParamsWatcher();
         this._startRagTagsWatcher();
 

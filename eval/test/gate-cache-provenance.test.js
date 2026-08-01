@@ -36,6 +36,13 @@ test('threshold-only override changes existing targets and rejects semantic muta
     assert.equal(strict.effective.ProductionA.threshold, 0.7);
     assert.equal(strict.rejected[0].reason, 'target-outside-eval-namespace');
     assert.equal(gate.resolveThreshold(0, 0.6), 0);
+    const missingNamespace = gate.resolveGateState(
+        { diary: { EvalA: { threshold: 0.6 } }, cold: {} },
+        { thresholds: { diary: { EvalA: 0.2 }, cold: {} } },
+        { env: { ...ENV, EVAL_STRICT_PROVENANCE: 'true' } }
+    );
+    assert.equal(missingNamespace.effective.diary.EvalA.threshold, 0.6);
+    assert.equal(missingNamespace.rejected[0].reason, 'eval-namespace-not-declared');
 });
 
 test('VT-004: cache schema v2 is threshold-independent and embedding-bound', () => {
@@ -68,6 +75,23 @@ test('VT-004: cache schema v2 is threshold-independent and embedding-bound', () 
         gate.resolveGateState({ diary: baseA, cold: {} }, { calibrationId: 'c1' }, { env: ENV, artifactHash: 'sha256:a' }).effectiveConfigHash,
         gate.resolveGateState({ diary: baseA, cold: {} }, { calibrationId: 'c1' }, { env: ENV, artifactHash: 'sha256:b' }).effectiveConfigHash
     );
+    const profileState = gate.resolveGateState(
+        { diary: baseA, cold: {} },
+        { calibrationId: 'c1', thresholds: { diary: { EvalA: 0.2 }, cold: {} } },
+        { env: ENV, artifactHash: 'sha256:artifact', allowedTargets: { diary: ['EvalA'], cold: [] } }
+    );
+    const snapshot = {
+        calibrationId: profileState.calibrationId,
+        artifactHash: profileState.artifactHash,
+        allowedTargets: { diary: ['EvalA'], cold: [] },
+        thresholds: profileState.thresholdOverrides
+    };
+    const runtimeState = gate.resolveGateState(
+        { diary: baseA, cold: {} },
+        snapshot,
+        { env: ENV }
+    );
+    assert.equal(runtimeState.effectiveConfigHash, profileState.effectiveConfigHash);
 });
 
 test('profile and runtime share one effective gate config hash', () => {
@@ -88,6 +112,7 @@ test('profile and runtime share one effective gate config hash', () => {
     });
     assert.equal(runtimeState.gateDefinitionHash, resolved.gate.definitionHash);
     assert.deepEqual(runtimeState.thresholds, resolved.gate.thresholds);
+    assert.deepEqual(runtimeState.thresholdOverrides, resolved.gate.thresholdOverrides);
     assert.equal(runtimeState.effectiveConfigHash, resolved.gate.effectiveConfigHash);
 });
 
@@ -156,5 +181,24 @@ test('semantic vector directory follows the per-run environment path', async t =
     });
     const manager = new SemanticGroupManager({});
     assert.equal(manager.vectorsDirPath, dir);
-    await manager.initializePromise;
+    await manager.waitUntilReady();
+});
+
+test('RAGDiaryPlugin initialization waits for the actual semanticGroups manager', async () => {
+    const pluginInstance = require('../../Plugin/RAGDiaryPlugin/RAGDiaryPlugin');
+    let semanticReady = false;
+    const fake = {
+        vectorDBManager: null,
+        pushVcpInfo: null,
+        tdbProcessor: { loadConfig: async () => {} },
+        loadConfig: async () => {},
+        loadRagParams: async () => {},
+        semanticGroups: { waitUntilReady: async () => { semanticReady = true; } },
+        _startRagParamsWatcher: () => {},
+        _startRagTagsWatcher: () => {},
+        queryCacheEnabled: false,
+        cacheManager: { startCleanup: () => {} }
+    };
+    await pluginInstance.constructor.prototype.initialize.call(fake, {}, {});
+    assert.equal(semanticReady, true);
 });

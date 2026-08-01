@@ -23,7 +23,12 @@ function mergeThresholdOverride(baseConfig, overrideArtifact, targetType, option
         ? new Set(options.allowedTargets)
         : null;
     const rejected = [];
+    const applied = {};
     for (const [target, threshold] of Object.entries(thresholds)) {
+        if (options.requireAllowedTargets && !allowedTargets) {
+            rejected.push({ target, reason: 'eval-namespace-not-declared' });
+            continue;
+        }
         if (allowedTargets && !allowedTargets.has(target)) {
             rejected.push({ target, reason: 'target-outside-eval-namespace' });
             continue;
@@ -37,8 +42,9 @@ function mergeThresholdOverride(baseConfig, overrideArtifact, targetType, option
             continue;
         }
         effective[target] = { ...effective[target], threshold };
+        applied[target] = threshold;
     }
-    return { effective, rejected };
+    return { effective, rejected, applied };
 }
 
 function gateIdentity(config, env = process.env) {
@@ -95,11 +101,15 @@ function effectiveGateConfigHash({
 
 function resolveGateState(baseConfigs, overrideArtifact = null, options = {}) {
     const allowedTargets = options.allowedTargets || overrideArtifact?.allowedTargets || {};
+    const env = options.env || process.env;
+    const strict = options.strict ?? String(env.EVAL_STRICT_PROVENANCE || '').toLowerCase() === 'true';
     const diary = mergeThresholdOverride(baseConfigs?.diary, overrideArtifact, 'diary', {
-        allowedTargets: allowedTargets.diary
+        allowedTargets: allowedTargets.diary,
+        requireAllowedTargets: strict
     });
     const cold = mergeThresholdOverride(baseConfigs?.cold, overrideArtifact, 'cold', {
-        allowedTargets: allowedTargets.cold
+        allowedTargets: allowedTargets.cold,
+        requireAllowedTargets: strict
     });
     const effective = { diary: diary.effective, cold: cold.effective };
     const definition = combinedGateDefinition(baseConfigs);
@@ -115,6 +125,7 @@ function resolveGateState(baseConfigs, overrideArtifact = null, options = {}) {
         gateDefinitionHash: definition.hash,
         definition: definition.definition,
         thresholds,
+        thresholdOverrides: { diary: diary.applied, cold: cold.applied },
         embedding,
         scoringFormulaVersion: SCORING_FORMULA_VERSION,
         calibrationId: overrideArtifact?.calibrationId || null,

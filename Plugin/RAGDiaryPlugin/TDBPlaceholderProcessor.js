@@ -68,7 +68,8 @@ class TDBPlaceholderProcessor {
                 }
             }
             const merged = mergeThresholdOverride(baseConfig, override, 'cold', {
-                allowedTargets: override?.allowedTargets?.cold
+                allowedTargets: override?.allowedTargets?.cold,
+                requireAllowedTargets: String(process.env.EVAL_STRICT_PROVENANCE || '').toLowerCase() === 'true'
             });
             this.libraryConfig = merged.effective;
             if (merged.rejected.length) {

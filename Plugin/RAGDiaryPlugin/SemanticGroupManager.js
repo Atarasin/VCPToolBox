@@ -324,6 +324,10 @@ class SemanticGroupManager {
         return crypto.createHash('sha256').update(JSON.stringify(sortedWords)).digest('hex');
     }
 
+    async waitUntilReady() {
+        return this.initializePromise;
+    }
+
     _embeddingIdentity() {
         const model = process.env.WhitelistEmbeddingModel || '';
         return {

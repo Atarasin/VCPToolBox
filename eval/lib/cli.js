@@ -407,7 +407,7 @@ async function cmdRunLocked(params) {
         },
         effectiveConfigHash: resolved.gate.effectiveConfigHash,
         allowedTargets: resolved.gate.allowedTargets,
-        thresholds: resolved.gate.thresholds
+        thresholds: resolved.gate.thresholdOverrides
     });
     if (resolved.gateCalibration.artifact?.dataset) {
         runstore.writeJson(handle.paths.gateDatasetManifest, resolved.gateCalibration.artifact.dataset);

@@ -159,10 +159,12 @@ function validateGateCalibration(calibration, context) {
         || !artifact.thresholds.cold || typeof artifact.thresholds.cold !== 'object') {
         reasons.push('threshold namespaces are incomplete');
     }
-    for (const targetType of ['diary', 'cold']) {
-        const allowed = new Set(allowedTargets?.[targetType] || []);
-        for (const target of Object.keys(artifact.thresholds?.[targetType] || {})) {
-            if (!allowed.has(target)) reasons.push(`${targetType} target is outside eval namespace: ${target}`);
+    if (allowedTargets) {
+        for (const targetType of ['diary', 'cold']) {
+            const allowed = new Set(allowedTargets[targetType] || []);
+            for (const target of Object.keys(artifact.thresholds?.[targetType] || {})) {
+                if (!allowed.has(target)) reasons.push(`${targetType} target is outside eval namespace: ${target}`);
+            }
         }
     }
     calibration.validationReasons = reasons;
@@ -398,6 +400,7 @@ function loadProfile(name = 'default', overrides = {}) {
             definitionHash: gateDefinitionHash,
             effectiveConfigHash: effectiveGateConfigHash,
             thresholds: gateState.thresholds,
+            thresholdOverrides: gateState.thresholdOverrides,
             allowedTargets,
             datasetHash: gateCalibration.artifact?.dataset?.hash || null,
             holdoutHash: gateCalibration.artifact?.dataset?.holdoutSplitHash || null
