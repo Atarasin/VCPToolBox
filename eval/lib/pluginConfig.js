@@ -36,6 +36,19 @@ const SEMANTIC_GROUPS = path.join(PLUGIN_DIR, 'semantic_groups.json');
 // 因此两个文件都要写。
 const SEMANTIC_GROUPS_EDIT = path.join(PLUGIN_DIR, 'semantic_groups.edit.json');
 
+function resolvePaths(options = {}) {
+    const projectRoot = options.projectRoot || PROJECT_ROOT;
+    const pluginDir = options.pluginDir || path.join(projectRoot, 'Plugin', 'RAGDiaryPlugin');
+    return {
+        PROJECT_ROOT: projectRoot,
+        PLUGIN_DIR: pluginDir,
+        RAG_TAGS: path.join(pluginDir, 'rag_tags.json'),
+        TDB_TAGS: path.join(pluginDir, 'tdb_tags.json'),
+        SEMANTIC_GROUPS: path.join(pluginDir, 'semantic_groups.json'),
+        SEMANTIC_GROUPS_EDIT: path.join(pluginDir, 'semantic_groups.edit.json')
+    };
+}
+
 function readJsonSafe(filePath, fallback) {
     try {
         const text = fs.readFileSync(filePath, 'utf-8').trim();
@@ -67,12 +80,19 @@ function evalOwnedKeys() {
  * 装入评测配置。
  * @returns {{added:string[], updated:string[], unchanged:string[], backups:string[]}}
  */
-function install() {
+function install(options = {}) {
+    const {
+        PROJECT_ROOT: projectRoot,
+        RAG_TAGS: ragTagsPath,
+        TDB_TAGS: tdbTagsPath,
+        SEMANTIC_GROUPS: semanticGroupsPath,
+        SEMANTIC_GROUPS_EDIT: semanticGroupsEditPath
+    } = resolvePaths(options);
     const { books } = loadSpec();
     const report = { added: [], updated: [], unchanged: [], backups: [] };
 
     // ── rag_tags.json ───────────────────────────────────────────
-    const ragTags = readJsonSafe(RAG_TAGS, {});
+    const ragTags = readJsonSafe(ragTagsPath, {});
     let ragTagsChanged = false;
     for (const book of Object.values(books.books)) {
         const desired = {
@@ -93,13 +113,13 @@ function install() {
         ragTagsChanged = true;
     }
     if (ragTagsChanged) {
-        const b = backupOnce(RAG_TAGS);
-        if (b) report.backups.push(path.relative(PROJECT_ROOT, b));
-        fs.writeFileSync(RAG_TAGS, JSON.stringify(ragTags, null, 2), 'utf-8');
+        const b = backupOnce(ragTagsPath);
+        if (b) report.backups.push(path.relative(projectRoot, b));
+        fs.writeFileSync(ragTagsPath, JSON.stringify(ragTags, null, 2), 'utf-8');
     }
 
     // ── tdb_tags.json：只安装冷库向量定义，不携带模型阈值 ───────
-    const tdbTags = readJsonSafe(TDB_TAGS, {});
+    const tdbTags = readJsonSafe(tdbTagsPath, {});
     const coldDesired = {
         tags: ['VCP系统', '插件开发', '知识库'],
         description: 'VCP 系统、插件生态与技术文档冷知识库'
@@ -111,9 +131,9 @@ function install() {
         if (coldExisting) report.updated.push('tdb_tags:VCP知识');
         else report.added.push('tdb_tags:VCP知识');
         tdbTags['VCP知识'] = { ...coldExisting, ...coldDesired };
-        const b = backupOnce(TDB_TAGS);
-        if (b) report.backups.push(path.relative(PROJECT_ROOT, b));
-        fs.writeFileSync(TDB_TAGS, JSON.stringify(tdbTags, null, 2), 'utf-8');
+        const b = backupOnce(tdbTagsPath);
+        if (b) report.backups.push(path.relative(projectRoot, b));
+        fs.writeFileSync(tdbTagsPath, JSON.stringify(tdbTags, null, 2), 'utf-8');
     } else {
         report.unchanged.push('tdb_tags:VCP知识');
     }
@@ -134,7 +154,7 @@ function install() {
     const writeGroupsInto = (filePath, label) => {
         // .edit.json 不存在就不要凭空造一个 —— 它一旦存在就会成为组集合的唯一真相，
         // 平白引入一个用户没有的文件是过度侵入。
-        if (filePath === SEMANTIC_GROUPS_EDIT && !fs.existsSync(filePath)) return;
+        if (filePath === semanticGroupsEditPath && !fs.existsSync(filePath)) return;
 
         const file = readJsonSafe(filePath, { config: {}, groups: {} });
         if (!file.groups) file.groups = {};
@@ -162,37 +182,43 @@ function install() {
 
         if (changed) {
             const b = backupOnce(filePath);
-            if (b) report.backups.push(path.relative(PROJECT_ROOT, b));
+            if (b) report.backups.push(path.relative(projectRoot, b));
             fs.writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8');
         }
     };
 
-    writeGroupsInto(SEMANTIC_GROUPS, 'group');
-    writeGroupsInto(SEMANTIC_GROUPS_EDIT, 'group.edit');
+    writeGroupsInto(semanticGroupsPath, 'group');
+    writeGroupsInto(semanticGroupsEditPath, 'group.edit');
 
     return report;
 }
 
 /** 只移除评测自己的键，保留用户原有条目。 */
-function uninstall() {
+function uninstall(options = {}) {
+    const {
+        RAG_TAGS: ragTagsPath,
+        TDB_TAGS: tdbTagsPath,
+        SEMANTIC_GROUPS: semanticGroupsPath,
+        SEMANTIC_GROUPS_EDIT: semanticGroupsEditPath
+    } = resolvePaths(options);
     const owned = evalOwnedKeys();
     const removed = [];
 
-    const ragTags = readJsonSafe(RAG_TAGS, {});
+    const ragTags = readJsonSafe(ragTagsPath, {});
     let ragChanged = false;
     for (const key of owned.ragTags) {
         if (ragTags[key]) { delete ragTags[key]; removed.push(`rag_tags:${key}`); ragChanged = true; }
     }
-    if (ragChanged) fs.writeFileSync(RAG_TAGS, JSON.stringify(ragTags, null, 2), 'utf-8');
+    if (ragChanged) fs.writeFileSync(ragTagsPath, JSON.stringify(ragTags, null, 2), 'utf-8');
 
-    const tdbTags = readJsonSafe(TDB_TAGS, {});
+    const tdbTags = readJsonSafe(tdbTagsPath, {});
     let tdbChanged = false;
     for (const key of owned.tdbTags) {
         if (tdbTags[key]) { delete tdbTags[key]; removed.push(`tdb_tags:${key}`); tdbChanged = true; }
     }
-    if (tdbChanged) fs.writeFileSync(TDB_TAGS, JSON.stringify(tdbTags, null, 2), 'utf-8');
+    if (tdbChanged) fs.writeFileSync(tdbTagsPath, JSON.stringify(tdbTags, null, 2), 'utf-8');
 
-    for (const [filePath, label] of [[SEMANTIC_GROUPS, 'group'], [SEMANTIC_GROUPS_EDIT, 'group.edit']]) {
+    for (const [filePath, label] of [[semanticGroupsPath, 'group'], [semanticGroupsEditPath, 'group.edit']]) {
         if (!fs.existsSync(filePath)) continue;
         const file = readJsonSafe(filePath, { config: {}, groups: {} });
         let changed = false;
@@ -209,13 +235,20 @@ function uninstall() {
  * 检查评测配置是否已就位。
  * run 之前调用 —— 不然 ::Group 与门控用例会静默失效并给出误导性的失败。
  */
-function status() {
+function status(options = {}) {
+    const {
+        PROJECT_ROOT: projectRoot,
+        RAG_TAGS: ragTagsPath,
+        TDB_TAGS: tdbTagsPath,
+        SEMANTIC_GROUPS: semanticGroupsPath,
+        SEMANTIC_GROUPS_EDIT: semanticGroupsEditPath
+    } = resolvePaths(options);
     const { books } = loadSpec();
-    const ragTags = readJsonSafe(RAG_TAGS, {});
-    const groupsFile = readJsonSafe(SEMANTIC_GROUPS, { groups: {} });
-    const tdbTags = readJsonSafe(TDB_TAGS, {});
-    const editExists = fs.existsSync(SEMANTIC_GROUPS_EDIT);
-    const editFile = editExists ? readJsonSafe(SEMANTIC_GROUPS_EDIT, { groups: {} }) : null;
+    const ragTags = readJsonSafe(ragTagsPath, {});
+    const groupsFile = readJsonSafe(semanticGroupsPath, { groups: {} });
+    const tdbTags = readJsonSafe(tdbTagsPath, {});
+    const editExists = fs.existsSync(semanticGroupsEditPath);
+    const editFile = editExists ? readJsonSafe(semanticGroupsEditPath, { groups: {} }) : null;
 
     const missingBooks = Object.values(books.books)
         .filter(b => !ragTags[b.folder])
@@ -230,8 +263,8 @@ function status() {
         missingBooks,
         missingGroups,
         missingColdLibraries: tdbTags['VCP知识'] ? [] : ['VCP知识'],
-        ragTagsPath: path.relative(PROJECT_ROOT, RAG_TAGS),
-        semanticGroupsPath: path.relative(PROJECT_ROOT, SEMANTIC_GROUPS)
+        ragTagsPath: path.relative(projectRoot, ragTagsPath),
+        semanticGroupsPath: path.relative(projectRoot, semanticGroupsPath)
     };
 }
 
@@ -242,5 +275,6 @@ module.exports = {
     RAG_TAGS,
     TDB_TAGS,
     SEMANTIC_GROUPS,
-    SEMANTIC_GROUPS_EDIT
+    SEMANTIC_GROUPS_EDIT,
+    resolvePaths
 };

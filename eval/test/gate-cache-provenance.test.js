@@ -95,68 +95,62 @@ test('VT-004: cache schema v2 is threshold-independent and embedding-bound', () 
 });
 
 test('profile and runtime share one effective gate config hash', () => {
-    const resolved = require('../lib/profile').loadProfile('default');
-    const read = file => file && fs.existsSync(file)
-        ? JSON.parse(fs.readFileSync(file, 'utf-8'))
-        : {};
-    const runtimeState = gate.resolveGateState({
-        diary: read(resolved.gate.definitionPaths.diary),
-        cold: read(resolved.gate.definitionPaths.cold)
-    }, resolved.gateCalibration.artifact, {
-        embedding: {
-            model: resolved.embedding.model,
-            dimension: resolved.embedding.dimension,
-            endpointFingerprint: resolved.embedding.endpointFingerprint
-        },
-        artifactHash: resolved.gateCalibration.artifactHash
+    const baseConfigs = {
+        diary: { EvalDiary: { tags: ['ops'], description: 'operations', threshold: 0.6 } },
+        cold: { EvalCold: { tags: ['docs'], description: 'documentation', threshold: 0.3 } }
+    };
+    const artifact = {
+        calibrationId: 'synthetic-calibration',
+        allowedTargets: { diary: ['EvalDiary'], cold: ['EvalCold'] },
+        thresholds: { diary: { EvalDiary: 0.51 }, cold: { EvalCold: 0.27 } }
+    };
+    const profileState = gate.resolveGateState(baseConfigs, artifact, {
+        env: ENV,
+        artifactHash: 'sha256:synthetic-artifact'
     });
-    assert.equal(runtimeState.gateDefinitionHash, resolved.gate.definitionHash);
-    assert.deepEqual(runtimeState.thresholds, resolved.gate.thresholds);
-    assert.deepEqual(runtimeState.thresholdOverrides, resolved.gate.thresholdOverrides);
-    assert.equal(runtimeState.effectiveConfigHash, resolved.gate.effectiveConfigHash);
+    const runtimeState = gate.resolveGateState(baseConfigs, {
+        calibrationId: profileState.calibrationId,
+        allowedTargets: artifact.allowedTargets,
+        thresholds: profileState.thresholdOverrides
+    }, {
+        env: ENV,
+        artifactHash: profileState.artifactHash
+    });
+    assert.equal(runtimeState.gateDefinitionHash, profileState.gateDefinitionHash);
+    assert.deepEqual(runtimeState.thresholds, profileState.thresholds);
+    assert.deepEqual(runtimeState.thresholdOverrides, profileState.thresholdOverrides);
+    assert.equal(runtimeState.effectiveConfigHash, profileState.effectiveConfigHash);
 });
 
 test('plugin config installs definitions without overwriting model-specific thresholds', t => {
-    const files = [
-        pluginConfig.RAG_TAGS,
-        pluginConfig.TDB_TAGS,
-        pluginConfig.SEMANTIC_GROUPS,
-        pluginConfig.SEMANTIC_GROUPS_EDIT
-    ];
-    const tracked = files.flatMap(file => [file, `${file}.eval-backup`]);
-    const snapshots = new Map(tracked.map(file => [file, fs.existsSync(file) ? fs.readFileSync(file) : null]));
-    t.after(() => {
-        for (const [file, content] of snapshots) {
-            if (content === null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, content);
-        }
-    });
-    fs.mkdirSync(path.dirname(pluginConfig.RAG_TAGS), { recursive: true });
-    fs.writeFileSync(pluginConfig.RAG_TAGS, JSON.stringify({
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-plugin-config-'));
+    const paths = pluginConfig.resolvePaths({ projectRoot });
+    t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+    fs.mkdirSync(paths.PLUGIN_DIR, { recursive: true });
+    fs.writeFileSync(paths.RAG_TAGS, JSON.stringify({
         '评测运维技术库': { tags: ['old'], threshold: 0.123 }
     }));
-    pluginConfig.install();
-    const rag = JSON.parse(fs.readFileSync(pluginConfig.RAG_TAGS, 'utf-8'));
+    pluginConfig.install({ projectRoot });
+    const rag = JSON.parse(fs.readFileSync(paths.RAG_TAGS, 'utf-8'));
     assert.equal(rag['评测运维技术库'].threshold, 0.123);
     assert.equal(Object.hasOwn(rag['评测幻想设定库'], 'threshold'), false);
-    const cold = JSON.parse(fs.readFileSync(pluginConfig.TDB_TAGS, 'utf-8'));
+    const cold = JSON.parse(fs.readFileSync(paths.TDB_TAGS, 'utf-8'));
     assert.equal(Object.hasOwn(cold['VCP知识'], 'threshold'), false);
 });
 
 test('cold gate consumes the cold threshold namespace', async t => {
-    const pluginPath = pluginConfig.TDB_TAGS;
-    const previousFile = fs.existsSync(pluginPath) ? fs.readFileSync(pluginPath) : null;
     const overrideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-override-'));
+    const pluginPath = path.join(overrideDir, 'tdb_tags.json');
     const overridePath = path.join(overrideDir, 'gate.json');
     const previousEnv = process.env.RAG_GATE_CONFIG_PATH;
     t.after(() => {
-        if (previousFile === null) fs.rmSync(pluginPath, { force: true }); else fs.writeFileSync(pluginPath, previousFile);
         fs.rmSync(overrideDir, { recursive: true, force: true });
         if (previousEnv === undefined) delete process.env.RAG_GATE_CONFIG_PATH; else process.env.RAG_GATE_CONFIG_PATH = previousEnv;
     });
     fs.writeFileSync(pluginPath, JSON.stringify({ VCP知识: { tags: ['VCP'], threshold: 0.9 } }));
     fs.writeFileSync(overridePath, JSON.stringify({ thresholds: { cold: { VCP知识: 0.41 } } }));
     process.env.RAG_GATE_CONFIG_PATH = overridePath;
-    const processor = new TDBPlaceholderProcessor({});
+    const processor = new TDBPlaceholderProcessor({}, { configPath: pluginPath });
     await processor.loadConfig();
     assert.equal(processor.libraryConfig.VCP知识.threshold, 0.41);
 });
@@ -173,19 +167,76 @@ test('cold threshold hot reload does not replay the threshold stored with cached
 
 test('semantic vector directory follows the per-run environment path', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-semantic-cache-'));
-    const previous = process.env.SEMANTIC_VECTOR_CACHE_DIR;
+    const groupsPath = path.join(dir, 'groups.json');
+    const editPath = path.join(dir, 'groups.edit.json');
+    const groupData = {
+        config: {},
+        groups: { EvalGroup: { words: ['alpha'], auto_learned: [], weight: 1, vector_id: 'shared-id' } }
+    };
+    const originalGroups = JSON.stringify(groupData);
+    fs.writeFileSync(groupsPath, originalGroups);
+    fs.writeFileSync(editPath, originalGroups);
+    const previous = {
+        vectors: process.env.SEMANTIC_VECTOR_CACHE_DIR,
+        groups: process.env.SEMANTIC_GROUPS_CONFIG_PATH,
+        edit: process.env.SEMANTIC_GROUPS_EDIT_PATH,
+        model: process.env.WhitelistEmbeddingModel,
+        dimension: process.env.VECTORDB_DIMENSION,
+        apiUrl: process.env.API_URL
+    };
     process.env.SEMANTIC_VECTOR_CACHE_DIR = dir;
+    process.env.SEMANTIC_GROUPS_CONFIG_PATH = groupsPath;
+    process.env.SEMANTIC_GROUPS_EDIT_PATH = editPath;
+    process.env.WhitelistEmbeddingModel = 'model-a';
+    process.env.VECTORDB_DIMENSION = '3';
+    process.env.API_URL = 'https://embedding.example.test';
     t.after(() => {
         fs.rmSync(dir, { recursive: true, force: true });
-        if (previous === undefined) delete process.env.SEMANTIC_VECTOR_CACHE_DIR; else process.env.SEMANTIC_VECTOR_CACHE_DIR = previous;
+        for (const [key, value] of Object.entries({
+            SEMANTIC_VECTOR_CACHE_DIR: previous.vectors,
+            SEMANTIC_GROUPS_CONFIG_PATH: previous.groups,
+            SEMANTIC_GROUPS_EDIT_PATH: previous.edit,
+            WhitelistEmbeddingModel: previous.model,
+            VECTORDB_DIMENSION: previous.dimension,
+            API_URL: previous.apiUrl
+        })) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
     });
-    const manager = new SemanticGroupManager({});
+    const manager = new SemanticGroupManager({ getSingleEmbeddingCached: async () => [1, 0, 0] });
     assert.equal(manager.vectorsDirPath, dir);
+    assert.equal(manager.groupsFilePath, groupsPath);
     await manager.waitUntilReady();
+    assert.equal(fs.readFileSync(groupsPath, 'utf-8'), originalGroups);
+    const vectorPath = path.join(dir, `${manager._getWordsHash(['alpha'])}.json`);
+    assert.equal(JSON.parse(fs.readFileSync(vectorPath, 'utf-8')).schemaVersion, 2);
 });
 
-test('RAGDiaryPlugin initialization waits for the actual semanticGroups manager', async () => {
+test('RAGDiaryPlugin initialization waits for the actual semanticGroups manager', async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-plugin-singleton-'));
+    const previous = {
+        vectors: process.env.SEMANTIC_VECTOR_CACHE_DIR,
+        groups: process.env.SEMANTIC_GROUPS_CONFIG_PATH,
+        edit: process.env.SEMANTIC_GROUPS_EDIT_PATH
+    };
+    process.env.SEMANTIC_VECTOR_CACHE_DIR = path.join(dir, 'vectors');
+    process.env.SEMANTIC_GROUPS_CONFIG_PATH = path.join(dir, 'groups.json');
+    process.env.SEMANTIC_GROUPS_EDIT_PATH = path.join(dir, 'groups.edit.json');
+    const emptyGroups = JSON.stringify({ config: {}, groups: {} });
+    fs.writeFileSync(process.env.SEMANTIC_GROUPS_CONFIG_PATH, emptyGroups);
+    fs.writeFileSync(process.env.SEMANTIC_GROUPS_EDIT_PATH, emptyGroups);
+    t.after(() => {
+        fs.rmSync(dir, { recursive: true, force: true });
+        for (const [key, value] of Object.entries({
+            SEMANTIC_VECTOR_CACHE_DIR: previous.vectors,
+            SEMANTIC_GROUPS_CONFIG_PATH: previous.groups,
+            SEMANTIC_GROUPS_EDIT_PATH: previous.edit
+        })) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+    });
     const pluginInstance = require('../../Plugin/RAGDiaryPlugin/RAGDiaryPlugin');
+    await pluginInstance.semanticGroups.waitUntilReady();
     let semanticReady = false;
     const fake = {
         vectorDBManager: null,
