@@ -164,11 +164,13 @@ class TDBPlaceholderProcessor {
     // ────────────────────────────────────────────────────────────
 
     async _getLibraryVectors(libraryName) {
+        const conf = this.libraryConfig[libraryName] || {};
+        const threshold = typeof conf.threshold === 'number' ? conf.threshold : DEFAULT_TDB_THRESHOLD;
         if (this.libraryVectorCache.has(libraryName)) {
-            return this.libraryVectorCache.get(libraryName);
+            // threshold 属于热更新配置，不是向量身份的一部分，不能固化在向量缓存里。
+            return { ...this.libraryVectorCache.get(libraryName), threshold };
         }
 
-        const conf = this.libraryConfig[libraryName] || {};
         const texts = [libraryName];
 
         // 增强文本：库名 + 描述 + tags（若配置）
@@ -195,11 +197,10 @@ class TDBPlaceholderProcessor {
 
         const entry = {
             nameVector,
-            enhancedVector,
-            threshold: typeof conf.threshold === 'number' ? conf.threshold : DEFAULT_TDB_THRESHOLD
+            enhancedVector
         };
         this.libraryVectorCache.set(libraryName, entry);
-        return entry;
+        return { ...entry, threshold };
     }
 
     /**

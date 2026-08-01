@@ -52,8 +52,10 @@ function effectiveGateConfigHash(identity, effectiveConfig, overrideArtifact = n
         embedding: identity.embedding,
         scoringFormulaVersion: identity.scoringFormulaVersion,
         calibrationId: overrideArtifact?.calibrationId || null,
-        artifactHash: overrideArtifact?.artifactHash
-            || (overrideArtifact ? sha256(JSON.stringify(stableValue(overrideArtifact))) : null)
+        artifactHash: overrideArtifact?.artifactHash || null,
+        artifactContentHash: overrideArtifact
+            ? sha256(JSON.stringify(stableValue(overrideArtifact)))
+            : null
     })));
 }
 

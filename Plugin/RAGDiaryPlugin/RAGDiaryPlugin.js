@@ -342,6 +342,7 @@ class RAGDiaryPlugin {
         };
         this.ragTagsWatcher.on('add', scheduleReload);
         this.ragTagsWatcher.on('change', scheduleReload);
+        this.ragTagsWatcher.on('unlink', scheduleReload);
     }
 
     async _buildAndSaveCache(configHash, cachePath) {
@@ -527,6 +528,10 @@ class RAGDiaryPlugin {
                 nextConfig,
                 gateOverride
             );
+
+            // 同一 override 文件同时承载 diary/cold 阈值。即使 diary 哈希未变，
+            // cold 配置也必须在本次 watcher 回调里刷新。
+            await this.tdbProcessor.loadConfig();
 
             if (!currentConfigHash) {
                 console.warn('[RAGDiaryPlugin] 热重载: rag_tags.json 文件不存在或为空，跳过。');

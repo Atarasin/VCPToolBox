@@ -97,6 +97,16 @@ test('cold gate consumes the cold threshold namespace', async t => {
     assert.equal(processor.libraryConfig.VCP知识.threshold, 0.41);
 });
 
+test('cold threshold hot reload does not replay the threshold stored with cached vectors', async () => {
+    const processor = new TDBPlaceholderProcessor({
+        getSingleEmbeddingCached: async () => [1, 0, 0]
+    });
+    processor.libraryConfig = { VCP知识: { threshold: 0.9 } };
+    assert.equal((await processor._getLibraryVectors('VCP知识')).threshold, 0.9);
+    processor.libraryConfig = { VCP知识: { threshold: 0.41 } };
+    assert.equal((await processor._getLibraryVectors('VCP知识')).threshold, 0.41);
+});
+
 test('semantic vector directory follows the per-run environment path', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-semantic-cache-'));
     const previous = process.env.SEMANTIC_VECTOR_CACHE_DIR;
