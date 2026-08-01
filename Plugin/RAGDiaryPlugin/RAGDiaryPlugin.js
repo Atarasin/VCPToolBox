@@ -22,6 +22,7 @@ const AttachmentMemoUtils = require('./AttachmentMemoUtils.js');
 const RAGResultFormatter = require('./RAGResultFormatter.js');
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
 const gateProvenance = require('../../modules/gateProvenance.js');
+const { scoreGateVectors } = require('../../modules/gateScoring.js');
 const { chunkText } = require('../../TextChunker.js');
 const { getEmbeddingsBatch } = require('../../EmbeddingUtils.js');
 const {
@@ -3853,16 +3854,48 @@ class RAGDiaryPlugin {
         const enhancedVector = this.enhancedVectorCache[dbName];
         if (!dbNameVector && !enhancedVector) return null;
 
-        const baseSimilarity = dbNameVector ? this.cosineSimilarity(queryVector, dbNameVector) : 0;
-        const enhancedSimilarity = enhancedVector ? this.cosineSimilarity(queryVector, enhancedVector) : 0;
+        const scored = scoreGateVectors({
+            queryVector,
+            libraryNameVector: dbNameVector,
+            enhancedVector,
+            cosineSimilarity: this.cosineSimilarity.bind(this)
+        });
         const result = {
-            baseSimilarity,
-            enhancedSimilarity,
-            finalSimilarity: Math.max(baseSimilarity, enhancedSimilarity)
+            baseSimilarity: scored.scoreComponents.libraryNameCosine ?? 0,
+            enhancedSimilarity: scored.scoreComponents.enhancedVectorCosine ?? 0,
+            finalSimilarity: scored.score,
+            scoreComponents: scored.scoreComponents
         };
 
         requestCache?.diarySimilarity?.set(cacheKey, result);
         return result;
+    }
+
+    async scoreGate({ targetType, library, query, queryVector = null }) {
+        const type = String(targetType || '').trim();
+        const name = String(library || '').trim();
+        const text = String(query || '').trim();
+        if (!['diary', 'cold'].includes(type)) throw new TypeError('targetType must be diary or cold');
+        if (!name) throw new TypeError('library is required');
+        if (!queryVector && !text) throw new TypeError('query or queryVector is required');
+        const vector = queryVector || await this.getSingleEmbeddingCached(text);
+        const scored = type === 'cold'
+            ? await this.tdbProcessor.scoreGate({ library: name, query: text, queryVector: vector })
+            : await (async () => {
+                const similarity = await this._getDiarySimilarityCached(name, vector);
+                if (!similarity) throw new Error(`gate target has no vectors: ${name}`);
+                return {
+                    score: similarity.finalSimilarity,
+                    scoreComponents: similarity.scoreComponents,
+                    scoringFormulaVersion: gateProvenance.SCORING_FORMULA_VERSION
+                };
+            })();
+        const embedding = gateProvenance.embeddingIdentity(process.env);
+        return {
+            ...scored,
+            embeddingFingerprint: embedding.endpointFingerprint,
+            embedding
+        };
     }
 
     async _getTimeRangeFilePathsCached(dbName, timeRange, requestCache = null) {
