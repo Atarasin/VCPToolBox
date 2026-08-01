@@ -32,6 +32,12 @@ function _getEmbeddingModelCandidates(config = {}) {
 
     addModel(config.model || process.env.WhitelistEmbeddingModel);
 
+    // 严格评测模式下，备用模型会让“标记为模型 A”的向量实际来自模型 B，破坏整个
+    // provenance 契约。主模型不可用应显式失败，由 preflight/run 归因，不能透明降级。
+    if ((process.env.EVAL_STRICT_PROVENANCE || 'false').toLowerCase() === 'true') {
+        return candidates;
+    }
+
     if (Array.isArray(config.modelBackups)) {
         config.modelBackups.forEach(addModel);
     } else if (config.modelBackups) {
@@ -275,4 +281,4 @@ function cosineSimilarity(a, b) {
     return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
 }
 
-module.exports = { getEmbeddingsBatch, cosineSimilarity };
+module.exports = { getEmbeddingsBatch, cosineSimilarity, _getEmbeddingModelCandidates };

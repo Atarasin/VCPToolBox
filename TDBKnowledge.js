@@ -257,7 +257,10 @@ class TDBKnowledgeManager {
         this._startIdleEvictor();
 
         this.initialized = true;
-        console.log(`[TDBKnowledge] ✅ Ready. root=${this.config.rootPath}, dim=${this.config.dimension}`);
+        console.log(
+            `[TDBKnowledge] ✅ Ready. state=${this.initializationState}, root=${this.config.rootPath}, ` +
+            `model=${this.config.model}, dim=${this.config.dimension}, manifest=${this.storeManifestHash || 'none'}`
+        );
     }
 
     _initSchema() {
@@ -957,10 +960,14 @@ class TDBKnowledgeManager {
                 }
             } catch (_) { /* 初始化期间按空队列处理 */ }
         }
-        return {
+        const status = {
             ...counts,
             ready: this.initialized && counts.pending === 0 && counts.retry === 0 && counts.processing === 0 && counts.failed === 0
         };
+        if (status.ready && this.initializationState === 'empty') {
+            this._setInitializationState('compatible');
+        }
+        return status;
     }
 
     _validateQueryVector(queryVector, vectorMeta) {

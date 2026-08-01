@@ -12,6 +12,7 @@ const probes = require('../lib/probes');
 const runtime = require('../lib/runtime');
 const runner = require('../lib/runner');
 const { deriveRunStatus } = require('../lib/cli');
+const { _getEmbeddingModelCandidates } = require('../../EmbeddingUtils');
 
 const { TDBKnowledgeManager } = tdbModule;
 
@@ -182,4 +183,25 @@ test('runner propagates stable capability skip reasons', async () => {
 test('zero scored cases produce not_evaluable instead of a green run', () => {
     assert.equal(deriveRunStatus({ scored: 0, skipped: 4, errored: 0 }), 'not_evaluable');
     assert.equal(deriveRunStatus({ scored: 2, skipped: 1, errored: 0 }), 'completed_with_skips');
+});
+
+test('strict provenance disables transparent embedding model fallback', t => {
+    const previous = {
+        strict: process.env.EVAL_STRICT_PROVENANCE,
+        primary: process.env.WhitelistEmbeddingModel,
+        backups: process.env.EmbeddingModelBackups
+    };
+    t.after(() => {
+        for (const [key, value] of Object.entries({
+            EVAL_STRICT_PROVENANCE: previous.strict,
+            WhitelistEmbeddingModel: previous.primary,
+            EmbeddingModelBackups: previous.backups
+        })) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+    });
+    process.env.EVAL_STRICT_PROVENANCE = 'true';
+    process.env.WhitelistEmbeddingModel = 'model-a';
+    process.env.EmbeddingModelBackups = 'model-b,model-c';
+    assert.deepEqual(_getEmbeddingModelCandidates(), ['model-a']);
 });
