@@ -294,6 +294,10 @@ async function cmdRun(flags) {
             out(c('red', `  ${pluginStatus.semanticGroupsPath} 缺少语义组：${pluginStatus.missingGroups.join('、')}`));
             out(c('dim', '    组不存在时 ::Group 静默返回原向量，等于没生效'));
         }
+        if (pluginStatus.missingColdLibraries.length) {
+            out(c('red', `  缺少冷知识库门控定义：${pluginStatus.missingColdLibraries.join('、')}`));
+            out(c('dim', '    冷库定义缺失时无法应用 profile 级 cold threshold'));
+        }
         out('\n执行 `node eval/vcp-eval.js corpus build`（或 `corpus install-config`）后重试。\n');
         return 1;
     }
@@ -393,6 +397,7 @@ async function cmdRunLocked(params) {
     runstore.writeJson(handle.paths.gateConfig, {
         schemaVersion: 1,
         calibrationId: resolved.gateCalibration.artifact?.calibrationId || null,
+        artifactHash: resolved.gateCalibration.artifactHash || null,
         thresholds: resolved.gateCalibration.artifact?.thresholds || {}
     });
     if (resolved.gateCalibration.artifact?.dataset) {

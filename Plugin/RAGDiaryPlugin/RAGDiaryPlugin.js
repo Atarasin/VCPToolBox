@@ -21,6 +21,7 @@ const VectorMathUtils = require('./VectorMathUtils.js');
 const AttachmentMemoUtils = require('./AttachmentMemoUtils.js');
 const RAGResultFormatter = require('./RAGResultFormatter.js');
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
+const gateProvenance = require('../../modules/gateProvenance.js');
 const { chunkText } = require('../../TextChunker.js');
 const { getEmbeddingsBatch } = require('../../EmbeddingUtils.js');
 const {
@@ -160,10 +161,26 @@ class RAGDiaryPlugin {
         console.log('[RAGDiaryPlugin] AIMemo handler initialized.');
 
         const configPath = path.join(__dirname, 'rag_tags.json');
-        const cachePath = path.join(__dirname, 'vector_cache.json');
+        const cachePath = process.env.RAG_VECTOR_CACHE_PATH || path.join(__dirname, 'vector_cache.json');
 
         try {
-            const currentConfigHash = await this._getFileHash(configPath);
+            const baseConfig = await this._readJsonFileStable(configPath, {}, { label: 'rag_tags.json' });
+            let gateOverride = null;
+            if (process.env.RAG_GATE_CONFIG_PATH) {
+                gateOverride = await this._readJsonFileStable(process.env.RAG_GATE_CONFIG_PATH, {}, { label: 'RAG_GATE_CONFIG_PATH' });
+            }
+            const merged = gateProvenance.mergeThresholdOverride(baseConfig, gateOverride, 'diary');
+            if (merged.rejected.length) {
+                console.warn(`[RAGDiaryPlugin] 门控覆盖拒绝 ${merged.rejected.length} 项：${JSON.stringify(merged.rejected)}`);
+            }
+            this.ragConfig = merged.effective;
+            this.gateIdentity = gateProvenance.gateIdentity(baseConfig);
+            this.effectiveGateConfigHash = gateProvenance.effectiveGateConfigHash(
+                this.gateIdentity,
+                this.ragConfig,
+                gateOverride
+            );
+            const currentConfigHash = this.effectiveGateConfigHash;
 
             // 如果配置哈希变化，清空查询缓存
             if (this.lastConfigHash && this.lastConfigHash !== currentConfigHash) {
@@ -189,10 +206,9 @@ class RAGDiaryPlugin {
                     console.log('[RAGDiaryPlugin] 缓存文件不存在或已损坏，将重新构建。');
                 }
 
-                if (cache && cache.sourceHash === currentConfigHash) {
+                if (gateProvenance.cacheMatches(cache, this.gateIdentity)) {
                     // --- 缓存命中 ---
                     console.log('[RAGDiaryPlugin] 缓存有效，从磁盘加载向量...');
-                    this.ragConfig = await this._readJsonFileStable(configPath, {}, { label: 'rag_tags.json' });
                     this.enhancedVectorCache = cache.vectors;
                     console.log(`[RAGDiaryPlugin] 成功从缓存加载 ${Object.keys(this.enhancedVectorCache).length} 个向量。`);
                 } else {
@@ -202,8 +218,6 @@ class RAGDiaryPlugin {
                     } else {
                         console.log('[RAGDiaryPlugin] 未找到有效缓存，首次构建向量缓存...');
                     }
-
-                    this.ragConfig = await this._readJsonFileStable(configPath, {}, { label: 'rag_tags.json' });
 
                     // 调用 _buildAndSaveCache 来生成向量
                     await this._buildAndSaveCache(currentConfigHash, cachePath);
@@ -311,11 +325,13 @@ class RAGDiaryPlugin {
         const configPath = path.join(__dirname, 'rag_tags.json');
         if (this.ragTagsWatcher) return;
 
-        this.ragTagsWatcher = chokidar.watch(configPath, {
+        this.ragTagsWatcher = chokidar.watch(
+            [configPath, process.env.RAG_GATE_CONFIG_PATH].filter(Boolean), {
             ignoreInitial: true,
             awaitWriteFinish: { stabilityThreshold: 700, pollInterval: 100 }
-        });
-        this.ragTagsWatcher.on('change', () => {
+            }
+        );
+        const scheduleReload = () => {
             console.log('[RAGDiaryPlugin] 🔄 检测到 rag_tags.json 变更，准备防抖热重载配置与向量缓存...');
             clearTimeout(this.ragTagsReloadTimer);
             this.ragTagsReloadTimer = setTimeout(() => {
@@ -323,7 +339,9 @@ class RAGDiaryPlugin {
                     .catch(() => { })
                     .then(() => this._reloadRagTagsConfig(configPath));
             }, 300);
-        });
+        };
+        this.ragTagsWatcher.on('add', scheduleReload);
+        this.ragTagsWatcher.on('change', scheduleReload);
     }
 
     async _buildAndSaveCache(configHash, cachePath) {
@@ -374,7 +392,11 @@ class RAGDiaryPlugin {
 
         // 构建新的缓存对象并保存到磁盘
         const newCache = {
-            sourceHash: configHash,
+            schemaVersion: 2,
+            vectorSourceHash: this.gateIdentity.vectorSourceHash,
+            gateDefinitionHash: this.gateIdentity.gateDefinitionHash,
+            embedding: this.gateIdentity.embedding,
+            scoringFormulaVersion: this.gateIdentity.scoringFormulaVersion,
             createdAt: new Date().toISOString(),
             vectors: this.enhancedVectorCache,
         };
@@ -484,6 +506,7 @@ class RAGDiaryPlugin {
         const tempPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
         const json = JSON.stringify(data, null, 2);
 
+        await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(tempPath, json, 'utf-8');
         await fs.rename(tempPath, filePath);
     }
@@ -491,11 +514,19 @@ class RAGDiaryPlugin {
     async _reloadRagTagsConfig(configPath) {
         console.log('[RAGDiaryPlugin] 🔄 正在热重载 rag_tags.json 配置与向量缓存...');
         try {
-            const cachePath = path.join(__dirname, 'vector_cache.json');
-            const nextConfig = await this._readJsonFileStable(configPath, {}, { label: 'rag_tags.json' });
-            const currentConfigHash = crypto.createHash('sha256')
-                .update(JSON.stringify(nextConfig, null, 2))
-                .digest('hex');
+            const cachePath = process.env.RAG_VECTOR_CACHE_PATH || path.join(__dirname, 'vector_cache.json');
+            const baseConfig = await this._readJsonFileStable(configPath, {}, { label: 'rag_tags.json' });
+            const gateOverride = process.env.RAG_GATE_CONFIG_PATH
+                ? await this._readJsonFileStable(process.env.RAG_GATE_CONFIG_PATH, {}, { label: 'RAG_GATE_CONFIG_PATH' })
+                : null;
+            const merged = gateProvenance.mergeThresholdOverride(baseConfig, gateOverride, 'diary');
+            const nextConfig = merged.effective;
+            const nextIdentity = gateProvenance.gateIdentity(baseConfig);
+            const currentConfigHash = gateProvenance.effectiveGateConfigHash(
+                nextIdentity,
+                nextConfig,
+                gateOverride
+            );
 
             if (!currentConfigHash) {
                 console.warn('[RAGDiaryPlugin] 热重载: rag_tags.json 文件不存在或为空，跳过。');
@@ -510,9 +541,20 @@ class RAGDiaryPlugin {
 
             this.lastConfigHash = currentConfigHash;
             this.ragConfig = nextConfig;
+            this.gateIdentity = nextIdentity;
+            this.effectiveGateConfigHash = currentConfigHash;
 
-            // 重建向量缓存
-            await this._buildAndSaveCache(currentConfigHash, cachePath);
+            let cache = null;
+            try {
+                cache = await this._readJsonFileStable(cachePath, null, { label: 'rag vector cache' });
+            } catch (error) {
+                if (error.code !== 'ENOENT') throw error;
+            }
+            if (gateProvenance.cacheMatches(cache, nextIdentity)) {
+                this.enhancedVectorCache = cache.vectors;
+            } else {
+                await this._buildAndSaveCache(currentConfigHash, cachePath);
+            }
 
             // 清空查询缓存（配置变了，旧缓存结果可能不准确）
             if (this.queryCacheEnabled) {
@@ -4383,7 +4425,8 @@ class RAGDiaryPlugin {
             auto_bl: autoBlacklist ? autoBlacklist.sort().join(',') : '',
             fresh_time_start: isFreshTimeConversationStart,
             shotgun_decay: shotgunDecayFactor,
-            shotgun_history_limit: shotgunHistorySegmentLimit
+            shotgun_history_limit: shotgunHistorySegmentLimit,
+            gate_config: this.effectiveGateConfigHash || null
         });
     }
 
