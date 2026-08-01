@@ -95,25 +95,31 @@ test('VT-004: cache schema v2 is threshold-independent and embedding-bound', () 
 });
 
 test('profile and runtime share one effective gate config hash', () => {
-    const resolved = require('../lib/profile').loadProfile('default');
-    const read = file => file && fs.existsSync(file)
-        ? JSON.parse(fs.readFileSync(file, 'utf-8'))
-        : {};
-    const runtimeState = gate.resolveGateState({
-        diary: read(resolved.gate.definitionPaths.diary),
-        cold: read(resolved.gate.definitionPaths.cold)
-    }, resolved.gateCalibration.artifact, {
-        embedding: {
-            model: resolved.embedding.model,
-            dimension: resolved.embedding.dimension,
-            endpointFingerprint: resolved.embedding.endpointFingerprint
-        },
-        artifactHash: resolved.gateCalibration.artifactHash
+    const baseConfigs = {
+        diary: { EvalDiary: { tags: ['ops'], description: 'operations', threshold: 0.6 } },
+        cold: { EvalCold: { tags: ['docs'], description: 'documentation', threshold: 0.3 } }
+    };
+    const artifact = {
+        calibrationId: 'synthetic-calibration',
+        allowedTargets: { diary: ['EvalDiary'], cold: ['EvalCold'] },
+        thresholds: { diary: { EvalDiary: 0.51 }, cold: { EvalCold: 0.27 } }
+    };
+    const profileState = gate.resolveGateState(baseConfigs, artifact, {
+        env: ENV,
+        artifactHash: 'sha256:synthetic-artifact'
     });
-    assert.equal(runtimeState.gateDefinitionHash, resolved.gate.definitionHash);
-    assert.deepEqual(runtimeState.thresholds, resolved.gate.thresholds);
-    assert.deepEqual(runtimeState.thresholdOverrides, resolved.gate.thresholdOverrides);
-    assert.equal(runtimeState.effectiveConfigHash, resolved.gate.effectiveConfigHash);
+    const runtimeState = gate.resolveGateState(baseConfigs, {
+        calibrationId: profileState.calibrationId,
+        allowedTargets: artifact.allowedTargets,
+        thresholds: profileState.thresholdOverrides
+    }, {
+        env: ENV,
+        artifactHash: profileState.artifactHash
+    });
+    assert.equal(runtimeState.gateDefinitionHash, profileState.gateDefinitionHash);
+    assert.deepEqual(runtimeState.thresholds, profileState.thresholds);
+    assert.deepEqual(runtimeState.thresholdOverrides, profileState.thresholdOverrides);
+    assert.equal(runtimeState.effectiveConfigHash, profileState.effectiveConfigHash);
 });
 
 test('plugin config installs definitions without overwriting model-specific thresholds', t => {
@@ -206,8 +212,31 @@ test('semantic vector directory follows the per-run environment path', async t =
     assert.equal(JSON.parse(fs.readFileSync(vectorPath, 'utf-8')).schemaVersion, 2);
 });
 
-test('RAGDiaryPlugin initialization waits for the actual semanticGroups manager', async () => {
+test('RAGDiaryPlugin initialization waits for the actual semanticGroups manager', async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-plugin-singleton-'));
+    const previous = {
+        vectors: process.env.SEMANTIC_VECTOR_CACHE_DIR,
+        groups: process.env.SEMANTIC_GROUPS_CONFIG_PATH,
+        edit: process.env.SEMANTIC_GROUPS_EDIT_PATH
+    };
+    process.env.SEMANTIC_VECTOR_CACHE_DIR = path.join(dir, 'vectors');
+    process.env.SEMANTIC_GROUPS_CONFIG_PATH = path.join(dir, 'groups.json');
+    process.env.SEMANTIC_GROUPS_EDIT_PATH = path.join(dir, 'groups.edit.json');
+    const emptyGroups = JSON.stringify({ config: {}, groups: {} });
+    fs.writeFileSync(process.env.SEMANTIC_GROUPS_CONFIG_PATH, emptyGroups);
+    fs.writeFileSync(process.env.SEMANTIC_GROUPS_EDIT_PATH, emptyGroups);
+    t.after(() => {
+        fs.rmSync(dir, { recursive: true, force: true });
+        for (const [key, value] of Object.entries({
+            SEMANTIC_VECTOR_CACHE_DIR: previous.vectors,
+            SEMANTIC_GROUPS_CONFIG_PATH: previous.groups,
+            SEMANTIC_GROUPS_EDIT_PATH: previous.edit
+        })) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+    });
     const pluginInstance = require('../../Plugin/RAGDiaryPlugin/RAGDiaryPlugin');
+    await pluginInstance.semanticGroups.waitUntilReady();
     let semanticReady = false;
     const fake = {
         vectorDBManager: null,
