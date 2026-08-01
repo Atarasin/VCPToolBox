@@ -13,5 +13,11 @@
     "dimension": 4096,
     "maxToken": 512
   },
+  "coldKnowledge": {
+    "mode": "aligned",
+    "storePolicy": "per-run",
+    "strictVectorMetadata": true
+  },
+  "gateCalibrationPath": "gate-calibration/qwen8b4096.json",
   "env": {}
 }

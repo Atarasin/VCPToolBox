@@ -17,6 +17,12 @@
     "dimension": null,
     "maxToken": 512
   },
+  "coldKnowledge": {
+    "mode": "aligned",
+    "storePolicy": "per-run",
+    "strictVectorMetadata": true
+  },
+  "gateCalibrationPath": "gate-calibration/default.json",
   "$maxTokenComment": [
     "maxToken 调到 512（safeMaxTokens = floor(512*0.85) = 435）是为了让 expand 族那两篇",
     "约 450 字的纪要真的被切成多个 chunk。默认 8000 之下几乎任何现实长度的日记都是单 chunk，",
