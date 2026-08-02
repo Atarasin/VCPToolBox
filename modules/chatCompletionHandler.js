@@ -485,22 +485,6 @@ async function fetchWithRetry(
         await new Promise(resolve => setTimeout(resolve, currentDelay));
         continue;
       }
-      if (response.status >= 500) {
-        if (onAttemptFailure) {
-          await onAttemptFailure(i + 1, {
-            status: response.status,
-            reason: `HTTP_${response.status}`,
-            message: response.statusText,
-          });
-        }
-        return response;
-      }
-      if (onAttemptSuccess) {
-        await onAttemptSuccess(i + 1, {
-          status: response.status,
-          statusText: response.statusText,
-        });
-      }
       return response;
     } catch (error) {
       cleanup();
@@ -544,110 +528,6 @@ async function fetchWithRetry(
   throw new Error('Fetch failed after all retries.');
 }
 
-const upstreamLinkState = new Map();
-// 熔断参数：连续失败达到阈值后，短时间内直接阻断请求，避免雪崩重试
-const DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 3;
-const DEFAULT_CIRCUIT_OPEN_MS = 15000;
-// 健康探测参数：用于在熔断期间/请求前做轻量探活
-const DEFAULT_HEALTH_PROBE_INTERVAL_MS = 15000;
-const DEFAULT_HEALTH_PROBE_TIMEOUT_MS = 3000;
-
-function resolveUpstreamOrigin(url) {
-  try {
-    return new URL(url).origin;
-  } catch (e) {
-    return null;
-  }
-}
-
-function shouldTrackUpstream(url) {
-  // 当前仅对本机 3001 链路启用健康检查与熔断，避免影响其他上游
-  try {
-    const target = new URL(url);
-    return ['localhost', '127.0.0.1', '::1'].includes(target.hostname) && target.port === '3001';
-  } catch (e) {
-    return false;
-  }
-}
-
-function getUpstreamState(origin) {
-  // 以 origin 为粒度保存链路状态，支持未来扩展多上游
-  if (!upstreamLinkState.has(origin)) {
-    upstreamLinkState.set(origin, {
-      consecutiveFailures: 0,
-      circuitOpenUntil: 0,
-      lastFailureReason: '',
-      lastFailureAt: 0,
-      lastHealthCheckAt: 0,
-      lastHealthOk: null,
-    });
-  }
-  return upstreamLinkState.get(origin);
-}
-
-function logCircuitFailure(origin, state, failure, circuitFailureThreshold, circuitOpenMs) {
-  const now = Date.now();
-  state.consecutiveFailures += 1;
-  state.lastFailureReason = failure.reason || failure.message || 'UNKNOWN';
-  state.lastFailureAt = now;
-
-  console.warn(
-    `[Upstream Circuit] ${origin} failure #${state.consecutiveFailures}/${circuitFailureThreshold} ` +
-    `(attempt=${failure.attempt || 'N/A'}, status=${failure.status || 'UNKNOWN'}, reason=${state.lastFailureReason})`
-  );
-
-  if (state.consecutiveFailures >= circuitFailureThreshold && state.circuitOpenUntil < now) {
-    // 达到阈值即打开熔断窗口，在窗口内优先拒绝新请求
-    state.circuitOpenUntil = now + circuitOpenMs;
-    console.error(
-      `[Upstream Circuit] OPEN ${origin} for ${circuitOpenMs}ms after ${state.consecutiveFailures} consecutive failures.`
-    );
-  }
-}
-
-function logCircuitSuccess(origin, state, success) {
-  // 任意一次成功都视为链路恢复，关闭熔断并清空连续失败计数
-  if (state.consecutiveFailures > 0 || state.circuitOpenUntil > 0) {
-    console.log(
-      `[Upstream Circuit] CLOSE ${origin}. recovered at attempt=${success.attempt || 'N/A'}, status=${success.status || 'UNKNOWN'}.`
-    );
-  }
-  state.consecutiveFailures = 0;
-  state.circuitOpenUntil = 0;
-  state.lastFailureReason = '';
-}
-
-async function probeUpstream(origin, apiKey, healthProbeTimeoutMs) {
-  // 使用 /v1/models 做轻量健康探测，避免额外消耗模型推理资源
-  const { default: fetch } = await import('node-fetch');
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), healthProbeTimeoutMs);
-  try {
-    const response = await fetch(`${origin}/v1/models`, {
-      method: 'GET',
-      headers: {
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      signal: controller.signal,
-    });
-    return {
-      // 401/403 也表示服务可达，仅权限不通过，依然判定链路存活
-      ok: response.ok || response.status === 401 || response.status === 403,
-      status: response.status,
-      latency: Date.now() - startedAt,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 'NETWORK_ERROR',
-      message: error.message,
-      latency: Date.now() - startedAt,
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
 // 辅助函数：根据新上下文刷新对话历史中的RAG区块
 async function _refreshRagBlocksIfNeeded(messages, newContext, pluginManager, debugMode = false) {
   const ragPlugin = pluginManager.messagePreprocessors?.get('RAGDiaryPlugin');
@@ -793,18 +673,6 @@ class ChatCompletionHandler {
       semanticModelRouter,
       multiModalForceTranslateModels: configForceTranslateModels, // 启动时快照（ENV）作为兜底
     } = this.config;
-    const circuitFailureThreshold = Number.isFinite(upstreamCircuitFailureThreshold) && upstreamCircuitFailureThreshold > 0
-      ? upstreamCircuitFailureThreshold
-      : DEFAULT_CIRCUIT_FAILURE_THRESHOLD;
-    const circuitOpenMs = Number.isFinite(upstreamCircuitOpenMs) && upstreamCircuitOpenMs > 0
-      ? upstreamCircuitOpenMs
-      : DEFAULT_CIRCUIT_OPEN_MS;
-    const healthProbeIntervalMs = Number.isFinite(upstreamHealthProbeIntervalMs) && upstreamHealthProbeIntervalMs >= 0
-      ? upstreamHealthProbeIntervalMs
-      : DEFAULT_HEALTH_PROBE_INTERVAL_MS;
-    const healthProbeTimeoutMs = Number.isFinite(upstreamHealthProbeTimeoutMs) && upstreamHealthProbeTimeoutMs > 0
-      ? upstreamHealthProbeTimeoutMs
-      : DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
 
     // 优先从 multimodal-config.json 真相源拉取最新 tag 列表，失败时回退 ENV 快照
     let multiModalForceTranslateModels = configForceTranslateModels;
