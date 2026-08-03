@@ -20,6 +20,7 @@ const {
     crossValidateMemoryPolicyDiaries
 } = require('../../../modules/agentGateway/policy/integrationCrossChecks');
 const {
+    buildGuidanceBundle,
     createAgentGuidanceResolver
 } = require('../../../modules/agentGateway/policy/agentGuidanceResolver');
 
@@ -101,6 +102,51 @@ test('guidance schema rejects non-string workflow entries and bad displayName', 
     const paths = result.errors.map((error) => error.path);
     assert.ok(paths.includes('$.shared.workflow[1]'));
     assert.ok(paths.includes('$.agents.MCPMidas.displayName'));
+});
+
+test('guidance schema accepts an optional per-agent workflow override', () => {
+    const config = validGuidanceConfig();
+    config.agents.MCPMidas.workflow = ['先查回测记录', '再下结论'];
+    const result = validateAgentGuidanceConfig(config);
+    assert.equal(result.valid, true, JSON.stringify(result.errors));
+    assert.deepEqual(result.config.agents.MCPMidas.workflow, ['先查回测记录', '再下结论']);
+});
+
+test('guidance schema rejects an empty or non-string per-agent workflow', () => {
+    const emptyConfig = validGuidanceConfig();
+    emptyConfig.agents.MCPMidas.workflow = [];
+    const emptyResult = validateAgentGuidanceConfig(emptyConfig);
+    assert.equal(emptyResult.valid, false);
+    assert.ok(emptyResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.workflow'));
+
+    const badConfig = validGuidanceConfig();
+    badConfig.agents.MCPMidas.workflow = ['ok', 7];
+    const badResult = validateAgentGuidanceConfig(badConfig);
+    assert.equal(badResult.valid, false);
+    assert.ok(badResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.workflow[1]'));
+});
+
+test('guidance bundle prefers the per-agent workflow and falls back to shared', () => {
+    const snapshot = {
+        revision: 'sha256:test',
+        publishedAt: '2026-08-02T00:00:00.000Z',
+        shared: {
+            workflow: ['shared 口径'],
+            memoryWritePolicy: { write: ['已验证结论'], skip: ['密钥'] }
+        },
+        agents: {
+            Overridden: { displayName: '覆盖', workflow: ['agent 专属口径'] },
+            Inherited: { displayName: '继承' }
+        }
+    };
+
+    const overridden = buildGuidanceBundle({ snapshot, agentId: 'Overridden' });
+    assert.deepEqual(overridden.workflow, ['agent 专属口径']);
+    // 写入红线是全局单源，不随 agent 覆盖。
+    assert.deepEqual(overridden.memoryWritePolicy.write, ['已验证结论']);
+
+    const inherited = buildGuidanceBundle({ snapshot, agentId: 'Inherited' });
+    assert.deepEqual(inherited.workflow, ['shared 口径']);
 });
 
 test('credential schema accepts the checked-in example file shape', () => {

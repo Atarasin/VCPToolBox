@@ -77,8 +77,8 @@ vcp://agent-gateway/agents/{agentId}/guidance
 
 - 继续返回现有 `renderedPrompt`、`renderMeta` 和 `summary`，不删除或改名已有字段。`summary` 两条路径均已返回；本方案要求 in-process 补齐 deferred（`accepted`/`waiting_approval`）分支的 `summary`（见 §5.1），使“现有字段”承诺在所有分支对两个 adapter 一致成立。
 - 新增 `integrationGuidance` 字段，其内容与 guidance resource 等价并包含同一 revision。
-- 已绑定 credential 时 `agentId` 可省略；显式不一致返回 `AGW_FORBIDDEN`。
-- 未绑定 credential 时必须显式提供 agent 并通过 scope 校验。
+- `agentId` 必填（含已绑定 credential——4a65ab35 后省略即 invalid request，见 §5.4 状态框）；显式值与绑定不一致返回 `AGW_FORBIDDEN`。
+- 未绑定 credential 时同样必须显式提供 agent 并通过 scope 校验。
 - description 明确它仅供无法消费 prompt/resource surface 的 tool-only host，支持常规 host 时优先使用标准 prompt/resource surface。
 
 兼容性矩阵：
@@ -92,14 +92,22 @@ vcp://agent-gateway/agents/{agentId}/guidance
 
 因此“零安装”仅表示不再需要手写 skill 才能连接并发现基础工具；不表示每个 host 都能自动消费所有 guidance 层。M2.S4 对 Claude Code / Codex / Kimi 的实测矩阵见 [smoke-records.md](smoke-records.md)：Claude Code 三层全消费；Codex 消费 instructions + resource；Kimi 为典型 tool-only host，仅消费 bootstrap 的 text 内容层。
 
-### 5.4 `agentId` 迁移
+### 5.4 `agentId` 迁移（已由 4a65ab35 推翻——现行规则：强制显式）
 
-迁移顺序不可颠倒：
+> **状态（2026-07-26，commit `4a65ab35`）**：本节原方案（绑定 credential 可省略 `agentId`）已实现后被推翻。现行规则是**所有直接 agent-scoped 的 MCP tool/prompt 调用必须显式提供 `agentId`**，理由是避免将请求误导到默认或隐式 agent、保持身份校验的明确性。绑定 credential 仍参与授权（显式值与绑定不一致 → `AGW_FORBIDDEN`），但不再替代缺失的 `agentId`，也不使用 stdio/default agent 兜底。实现见 `protocols/mcp/backendProxyExecutor.js` 的 `resolveDirectAgentTarget` 与 `inProcessExecutor.js` 的 `ensureAgentId`；`boundOmitted` 遥测埋点已随之移除。
+
+现行必填面：
+
+- `gateway_agent_bootstrap`、`gateway_recall_run`、`gateway_agent_render`（prompt argument）、memory/context 类 tool 的 `agentId` 均为必填（`mcpOperations.json` 与生成的 `mcpDescriptors.json` 一致）。
+- `gateway_job_get` / `gateway_job_cancel` 例外：保持 jobId-only，由 §3.4 的服务端 owner lookup 决议 target，不向调用方新增可伪造 owner 字段。
+- 缺失 `agentId` 一律受控 `MCP_INVALID_REQUEST`（"agentId is required"），绑定与否不改变该语义。
+
+以下为被推翻前的原迁移方案，保留作历史决策记录（**不要按此实现**）：
 
 1. 建立 credential -> `effectiveAgentId` 的端到端上下文和所有 target guard。
 2. 让 MCP in-process/proxy 都在 `ensureAgentId` 前写入 effective agent。
-3. 再将 MCP tool/prompt schema 中的 `agentId` 改 optional。直接 agent-scoped schema 的改动面为当前必填的两处——`gateway_agent_bootstrap` 与 `gateway_recall_run`（另加 render prompt 的 argument）；memory/context 类 tool 的 `agentId` 本就可选。`gateway_job_get` / `gateway_job_cancel` 继续保持 jobId-only，由 §3.4 的服务端 owner lookup 决议 target，不向调用方新增可伪造 owner 字段。
-4. 未绑定 credential 对直接 agent-scoped 操作保持 `agentId` 必填语义；job/event 等间接对象操作以服务端 owner 为 target，不要求也不信任客户端补 agentId。
+3. 再将 MCP tool/prompt schema 中的 `agentId` 改 optional。直接 agent-scoped schema 的改动面为当时必填的两处——`gateway_agent_bootstrap` 与 `gateway_recall_run`（另加 render prompt 的 argument）。
+4. 未绑定 credential 对直接 agent-scoped 操作保持 `agentId` 必填语义；job/event 等间接对象操作以服务端 owner 为 target。
 5. 记录显式 `agentId` 调用比例，完成迁移后再评估废弃时间表。
 
 `mcpOperations.json` 的改动只影响 MCP descriptors。若 Native REST 也要放宽 agent 参数，必须同步修改 `restOperations.json`、route binding 和 OpenAPI schema；不能声称修改 MCP catalog 会自动更新 OpenAPI。此外 `contracts/generated/mcpDescriptors.json` 是构建产物，修改 catalog 后必须重跑 export 脚本，契约快照测试覆盖该一致性。

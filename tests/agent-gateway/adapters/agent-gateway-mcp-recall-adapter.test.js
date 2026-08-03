@@ -530,8 +530,10 @@ test('gateway_recall_run tools/list includes RECALL_RUN descriptor with correct 
     assert.equal(recallTool.name, 'gateway_recall_run');
     assert.equal(typeof recallTool.description, 'string');
     assert.ok(recallTool.description.includes('recall'), 'Description should mention recall');
-    // M3.S1：agentId 改 optional（绑定 credential 可省略），query 保持必填
-    assert.deepStrictEqual(recallTool.inputSchema.required, ['query']);
+    // agentId 必填：4a65ab35「强制显式传入 agentId，移除自动兜底逻辑」推翻了
+    // M3.S1 的 optional 化，绑定 credential 只做一致性校验、不再补全缺失的
+    // agentId（见 backendProxyExecutor.resolveDirectAgentTarget 注释）。
+    assert.deepStrictEqual(recallTool.inputSchema.required, ['agentId', 'query']);
     assert.equal(recallTool.inputSchema.properties.agentId.type, 'string');
     assert.equal(recallTool.inputSchema.properties.query.type, 'string');
     assert.equal(recallTool.inputSchema.properties.profile.type, 'string');

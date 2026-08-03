@@ -92,6 +92,16 @@ function validateAgentEntry(entry, fieldPath, errors) {
     if (memoryDefaults !== undefined) {
         normalized.memoryDefaults = memoryDefaults;
     }
+    // §4.2：可选的 per-agent workflow 覆盖。缺省时 guidance bundle 回落到
+    // shared.workflow；显式给出空数组视为配置错误（意图不明确，应删除该字段）。
+    if (entry.workflow !== undefined) {
+        const workflow = validateStringArrayField(entry.workflow, `${fieldPath}.workflow`, errors);
+        if (Array.isArray(entry.workflow) && entry.workflow.length === 0) {
+            errors.push(invalidField(`${fieldPath}.workflow`, 'must not be empty; omit the field to inherit shared.workflow'));
+        } else if (workflow.length > 0) {
+            normalized.workflow = workflow;
+        }
+    }
     return normalized;
 }
 

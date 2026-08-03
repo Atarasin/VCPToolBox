@@ -7,8 +7,9 @@ const { normalizeString, normalizeStringArray } = require('./shared/normalize');
  * snapshot。agent 目录只提供 alias/sourceFile 与存在性；displayName 来自
  * guidance 配置（§4.2），不来自目录。
  *
- * `buildGuidanceBundle` 输出唯一的 guidance bundle：workflow/memoryWritePolicy
- * 来自 shared 段，allowed/defaultDiaries 由 memory policy 模块注入（调用方
+ * `buildGuidanceBundle` 输出唯一的 guidance bundle：memoryWritePolicy 来自
+ * shared 段；workflow 默认来自 shared，agent 显式配置 workflow 时按 agent
+ * 覆盖（§4.2）。allowed/defaultDiaries 由 memory policy 模块注入（调用方
  * 传入，guidance 配置不重新维护日记本路由），revision 与冻结 integration
  * snapshot 一致。initialize.instructions、guidance resource、bootstrap、
  * Native REST 与 skill generator 只消费该 bundle。
@@ -29,10 +30,15 @@ function buildGuidanceBundle({ snapshot, agentId, allowedDiaries = [], defaultDi
         return null;
     }
     const shared = snapshot.shared || {};
+    // §4.2：workflow 优先取 agent 覆盖，缺省回落 shared；memoryWritePolicy
+    // 仍是全局单源（写入红线不按 agent 放宽）。
+    const workflow = Array.isArray(agentEntry.workflow) && agentEntry.workflow.length > 0
+        ? agentEntry.workflow
+        : (shared.workflow || []);
     return Object.freeze({
         agentId: normalizedAgentId,
         displayName: agentEntry.displayName || normalizedAgentId,
-        workflow: Object.freeze([...(shared.workflow || [])]),
+        workflow: Object.freeze([...workflow]),
         memoryWritePolicy: Object.freeze({
             write: Object.freeze([...(shared.memoryWritePolicy?.write || [])]),
             skip: Object.freeze([...(shared.memoryWritePolicy?.skip || [])])

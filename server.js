@@ -742,16 +742,12 @@ const adminAuth = (req, res, next) => {
             });
 
             if (dedicatedGatewayAuth.provided) {
-                if (dedicatedGatewayAuth.authenticated) {
-                    req.agentGatewayAuth = dedicatedGatewayAuth;
-                    return next();
-                }
-
-                return res.status(401).json({
-                    error: 'Unauthorized',
-                    code: 'AGW_UNAUTHORIZED',
-                    authSource: dedicatedGatewayAuth.authSource
-                });
+                // legacy AGENT_GATEWAY_KEY 命中时这里就是快速路径；未命中的
+                // 已呈现 credential（文件 credential 等）不能在外层 401——
+                // 放行到 route 层 authInjection 经 buildGatewayRequestContext
+                // 统一决议（§3.3），无效 token 在该层 fail-closed 返回 401。
+                req.agentGatewayAuth = dedicatedGatewayAuth;
+                return next();
             }
         }
 

@@ -44,7 +44,7 @@ skills/midas-vcp/
 ### 目标
 
 1. **指导单源**：工作流、写入标准、日记本路由和工具提示由 Gateway guidance service 统一输出；instructions、resource、bootstrap 和 skill 仅渲染其派生结果。
-2. **绑定身份**：per-agent credential 决定有效 agent，客户端可省略 `agentId`；显式传入只能与绑定身份一致。
+2. **绑定身份**：per-agent credential 决定有效 agent。~~客户端可省略 `agentId`~~（该省略语义已由 4a65ab35 推翻——`agentId` 一律显式必填，见 §5.4 状态框）；显式传入只能与绑定身份一致。
 3. **端到端授权**：MCP tool/prompt/resource/discovery、Native REST、HTTP session、WebSocket、stdio 和 skill 下载遵循同一 target-agent 校验。
 4. **兼容性分层**：支持 resources 的 host 读取 guidance resource；仅支持 tools 的 host 调用 bootstrap；不把客户端是否自动消费 instructions/resources 当作协议保证。
 5. **可再生 skill**：skill 是可选薄产物，只包含安全 endpoint 和最小触发说明，不包含任何 secret。

@@ -1,23 +1,59 @@
 {
-  "version": 1,
-  "shared": {
-    "workflow": [
-      "任务依赖历史决策、bug、策略研究或用户偏好时，先调用 gateway_recall_run。",
-      "已知日记本、确切名称或窄范围历史问题才使用 gateway_memory_search。",
-      "召回为空或失败时继续使用本地仓库上下文，不中断任务。"
-    ],
-    "memoryWritePolicy": {
-      "write": ["用户偏好与纠正", "架构或工作流决策", "非显然 bug 根因", "已验证结论"],
-      "skip": ["密钥和敏感数据", "临时日志", "琐碎 git 可查修改", "未经确认的推测"]
-    }
-  },
-  "agents": {
-    "MCPMidas": {
-      "displayName": "Midas",
-      "memoryDefaults": {
-        "tags": ["codex", "select-stock-pro"],
-        "metadata": { "project": "quant-select-stock-pro", "source": "codex" }
-      }
-    }
+ "version": 1,
+ "shared": {
+  "workflow": [
+   "任务依赖历史决策、bug、策略研究或用户偏好时，先调用 gateway_recall_run。",
+   "已知日记本、确切名称或窄范围历史问题才使用 gateway_memory_search。",
+   "召回为空或失败时继续使用本地仓库上下文，不中断任务。"
+  ],
+  "memoryWritePolicy": {
+   "write": [
+    "用户偏好与纠正",
+    "架构或工作流决策",
+    "非显然 bug 根因",
+    "已验证结论"
+   ],
+   "skip": [
+    "密钥和敏感数据",
+    "临时日志",
+    "琐碎 git 可查修改",
+    "未经确认的推测"
+   ]
   }
+ },
+ "agents": {
+  "MCPMidas": {
+   "displayName": "Midas",
+   "memoryDefaults": {
+    "tags": [
+     "codex",
+     "select-stock-pro"
+    ],
+    "metadata": {
+     "project": "quant-select-stock-pro",
+     "source": "codex"
+    }
+   }
+  },
+  "MCPFuPeng": {
+   "displayName": "付鹏",
+   "memoryDefaults": {
+    "tags": [
+     "付鹏",
+     "宏观"
+    ],
+    "metadata": {
+     "project": "fupeng-advisor",
+     "source": "external-mcp"
+    }
+   },
+   "workflow": [
+    "回答任何宏观、资产或行业问题前，先调用 gateway_recall_run 召回历史判断与用户背景。",
+    "需要付鹏本人原话、证据链或事后验证记录时，用 prompts/get 同步 gateway_agent_render（附当前问题），不凭记忆编造引用。",
+    "给出结构性判断后，用 gateway_memory_write 把判断写入「付鹏市场判断日记本」：日期、结论、置信度、逻辑链。",
+    "事后复盘时同样写入该日记本，并分清是框架错了还是节奏错了。",
+    "召回为空不等于失败；继续基于框架回答，但主动声明该判断缺少历史存档支撑。"
+   ]
+  }
+ }
 }

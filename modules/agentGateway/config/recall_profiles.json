@@ -1,77 +1,139 @@
 {
-  "agents": {
-    "Nexus": {
-      "defaultProfile": "nexus-default",
-      "allowedProfiles": ["nexus-default"],
-      "targets": ["Nexus日记本", "Nexus避坑指南日记本", "Nexus架构设计日记本", "Nexus工程方法论日记本"]
+    "agents": {
+        "Nexus": {
+            "defaultProfile": "nexus-default",
+            "allowedProfiles": [
+                "nexus-default"
+            ],
+            "targets": [
+                "Nexus日记本",
+                "Nexus避坑指南日记本",
+                "Nexus架构设计日记本",
+                "Nexus工程方法论日记本"
+            ]
+        },
+        "MCPMidas": {
+            "defaultProfile": "Midas-default",
+            "allowedProfiles": [
+                "Midas-default"
+            ],
+            "targets": [
+                "迈达斯日记本",
+                "迈达斯因子与策略库日记本",
+                "迈达斯量化工程日记本",
+                "迈达斯量化小论坛学习笔记日记本"
+            ]
+        },
+        "Yui": {
+            "defaultProfile": "Yui-default",
+            "allowedProfiles": [
+                "Yui-default"
+            ],
+            "targets": [
+                "Yui日记本"
+            ]
+        },
+        "MCPFuPeng": {
+            "defaultProfile": "FuPeng-default",
+            "allowedProfiles": [
+                "FuPeng-default"
+            ],
+            "targets": [
+                "付鹏日记本",
+                "付鹏市场判断日记本"
+            ]
+        }
     },
-    "MCPMidas": {
-      "defaultProfile": "Midas-default",
-      "allowedProfiles": ["Midas-default"],
-      "targets": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记日记本"]
-    },
-    "Yui": {
-      "defaultProfile": "Yui-default",
-      "allowedProfiles": ["Yui-default"],
-      "targets": ["Yui日记本"]
+    "profiles": {
+        "nexus-default": {
+            "minScore": 0.4,
+            "rules": [
+                {
+                    "baseMode": "rag",
+                    "targets": {
+                        "diaries": [
+                            "Nexus日记本",
+                            "Nexus避坑指南日记本",
+                            "Nexus架构设计日记本",
+                            "Nexus工程方法论日记本"
+                        ],
+                        "aggregate": true,
+                        "kMultiplier": 1.0
+                    },
+                    "modifiers": {
+                        "time": true,
+                        "rerank": true,
+                        "tagMemo": true,
+                        "truncate": 20
+                    }
+                }
+            ]
+        },
+        "Midas-default": {
+            "minScore": 0.4,
+            "rules": [
+                {
+                    "baseMode": "rag",
+                    "targets": {
+                        "diaries": [
+                            "迈达斯日记本",
+                            "迈达斯因子与策略库日记本",
+                            "迈达斯量化工程日记本",
+                            "迈达斯量化小论坛学习笔记日记本"
+                        ],
+                        "aggregate": true,
+                        "kMultiplier": 1.0
+                    },
+                    "modifiers": {
+                        "time": true,
+                        "rerank": true,
+                        "tagMemo": true,
+                        "truncate": 20
+                    }
+                }
+            ]
+        },
+        "Yui-default": {
+            "minScore": 0.4,
+            "rules": [
+                {
+                    "baseMode": "rag",
+                    "targets": {
+                        "diaries": [
+                            "Yui日记本"
+                        ],
+                        "kMultiplier": 1.0
+                    },
+                    "modifiers": {
+                        "time": true,
+                        "rerank": true,
+                        "tagMemo": true,
+                        "truncate": 20
+                    }
+                }
+            ]
+        },
+        "FuPeng-default": {
+            "minScore": 0.4,
+            "rules": [
+                {
+                    "baseMode": "rag",
+                    "targets": {
+                        "diaries": [
+                            "付鹏日记本",
+                            "付鹏市场判断日记本"
+                        ],
+                        "aggregate": true,
+                        "kMultiplier": 1.0
+                    },
+                    "modifiers": {
+                        "time": true,
+                        "rerank": true,
+                        "tagMemo": true,
+                        "truncate": 20
+                    }
+                }
+            ]
+        }
     }
-  },
-  "profiles": {
-    "nexus-default": {
-      "minScore": 0.4,
-      "rules": [
-        {
-          "baseMode": "rag",
-          "targets": {
-            "diaries": ["Nexus日记本", "Nexus避坑指南日记本", "Nexus架构设计日记本", "Nexus工程方法论日记本"],
-            "aggregate": true,
-            "kMultiplier": 1.0
-          },
-          "modifiers": {
-            "time": true,
-            "rerank": true,
-            "tagMemo": true,
-            "truncate": 20
-          }
-        }
-      ]
-    },
-    "Midas-default": {
-      "minScore": 0.4,
-      "rules": [
-        {
-          "baseMode": "rag",
-          "targets": {
-            "diaries": ["迈达斯日记本", "迈达斯因子与策略库日记本", "迈达斯量化工程日记本", "迈达斯量化小论坛学习笔记日记本"],
-            "aggregate": true,
-            "kMultiplier": 1.0
-          },
-          "modifiers": {
-            "time": true,
-            "rerank": true,
-            "tagMemo": true,
-            "truncate": 20
-          }
-        }
-      ]
-    },
-    "Yui-default": {
-      "minScore": 0.4,
-      "rules": [
-        {
-          "baseMode": "rag",
-          "targets": {
-            "diaries": ["Yui日记本"],
-            "kMultiplier": 1.0
-          },
-          "modifiers": {
-            "time": true,
-            "rerank": true,
-            "tagMemo": true,
-            "truncate": 20
-          }
-        }
-      ]
-    }
-  }
 }
