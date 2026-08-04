@@ -5,10 +5,14 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+    RETRIEVAL_FALLBACK_WARNING,
     createAgentRegistryService
 } = require('../../../modules/agentGateway/services/agentRegistryService');
 const { createAgentDirectoryPort } = require('../../../modules/agentGateway/ports/agentDirectory');
-const { createHostPromptRenderer } = require('../../../modules/agentGateway/composition/agentPromptRenderer');
+const {
+    createHostPromptRenderer,
+    needsRagRender
+} = require('../../../modules/agentGateway/composition/agentPromptRenderer');
 
 async function createTempAgentDir() {
     return fs.mkdtemp(path.join(os.tmpdir(), 'agw-agent-registry-'));
@@ -366,6 +370,92 @@ test('host custom renderer receives the legacy renderContext shape', async () =>
         renderOptions: { messages: [{ role: 'user', content: 'hello' }] }
     });
     assert.equal(rendered, 'prompt');
+});
+
+test('the RAG render gate covers cold knowledge bases, not just diaries', () => {
+    // Gateway 侧闸门曾是 RAGDiaryPlugin 闸门的真子集，漏掉的正好是冷知识库：
+    // 只有 [[X知识库]] 的提示词一次都不会走 processMessages，静默无痕。
+    assert.equal(needsRagRender('付鹏观点库: [[付鹏观点库知识库:6::Rerank]]'), true, 'knowledge base only');
+    assert.equal(needsRagRender('记忆: [[付鹏日记本::Time::TagMemo+]]'), true, 'diary only');
+    assert.equal(needsRagRender('[[X知识库]] 与 [[Y日记本]]'), true, 'both');
+    assert.equal(needsRagRender('《《某某知识库》》'), true, '《《》》 form');
+    assert.equal(needsRagRender('[[VCP元思考::Auto::Group]]'), true, 'meta thinking');
+    assert.equal(needsRagRender('普通提示词，{{VarUserName}} 没有检索占位符'), false, 'no retrieval placeholder');
+});
+
+async function renderWithRagSpy(promptBody, renderOptions) {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(agentDir, 'Ariadne.md', promptBody);
+    const calls = [];
+    const ragPort = {
+        capabilities: () => ({ processMessages: true }),
+        async processMessages(messages) {
+            calls.push(messages);
+            const cloned = JSON.parse(JSON.stringify(messages));
+            cloned[0].content = cloned[0].content
+                .replace('[[付鹏观点库知识库:6::Rerank]]', '观点库片段：套息交易在缩圈。');
+            return cloned;
+        }
+    };
+    const pluginManager = {
+        messagePreprocessors: new Map(),
+        getAllPlaceholderValues: () => new Map(),
+        getIndividualPluginDescriptions: () => new Map(),
+        getResolvedPluginConfigValue: () => ''
+    };
+    const service = createRegistryService({
+        agentManager: createAgentManager(agentDir, { Ariadne: 'Ariadne.md' }),
+        capabilityService: createCapabilityServiceStub(),
+        renderPrompt: createHostPromptRenderer(pluginManager, ragPort)
+    });
+    const rendered = await service.renderAgent('Ariadne', renderOptions);
+    await fs.rm(agentDir, { recursive: true, force: true });
+    return { rendered, calls };
+}
+
+test('a knowledge-base-only prompt reaches the RAG retriever and reports injection', async () => {
+    const { rendered, calls } = await renderWithRagSpy(
+        '付鹏观点库: [[付鹏观点库知识库:6::Rerank]]',
+        { query: '美元走弱对港股的影响' }
+    );
+
+    assert.equal(calls.length, 1, 'processMessages must be called for a knowledge-base-only prompt');
+    assert.equal(calls[0][1].content, '美元走弱对港股的影响', 'query drives the retrieval');
+    assert.equal(rendered.renderedPrompt.includes('观点库片段'), true);
+    assert.equal(rendered.renderMeta.knowledgeInjected, true);
+    assert.equal(rendered.renderMeta.knowledgeQuerySource, 'query');
+    assert.deepEqual(rendered.warnings, []);
+});
+
+test('retrieval query precedence is query > latest user message > fallback', async () => {
+    const prompt = '付鹏观点库: [[付鹏观点库知识库:6::Rerank]]';
+
+    const explicit = await renderWithRagSpy(prompt, {
+        query: '显式检索式',
+        messages: [{ role: 'user', content: '对话里的问题' }]
+    });
+    assert.equal(explicit.calls[0][1].content, '显式检索式');
+    assert.equal(explicit.rendered.renderMeta.knowledgeQuerySource, 'query');
+
+    const fromMessages = await renderWithRagSpy(prompt, {
+        messages: [{ role: 'user', content: '对话里的问题' }]
+    });
+    assert.equal(fromMessages.calls[0][1].content, '对话里的问题');
+    assert.equal(fromMessages.rendered.renderMeta.knowledgeQuerySource, 'messages');
+    assert.deepEqual(fromMessages.rendered.warnings, []);
+
+    const degraded = await renderWithRagSpy(prompt, {});
+    assert.equal(degraded.rendered.renderMeta.knowledgeQuerySource, 'fallback');
+    assert.notEqual(degraded.calls[0][1].content, '显式检索式');
+    // 退化必须是响亮的：占位符照样被替换，只有 warning 能暴露命中的是无关片段
+    assert.equal(degraded.rendered.warnings.includes(RETRIEVAL_FALLBACK_WARNING), true);
+});
+
+test('a prompt without retrieval placeholders never reports a degraded retrieval', async () => {
+    const { rendered, calls } = await renderWithRagSpy('没有任何检索占位符的提示词', {});
+    assert.equal(calls.length, 0);
+    assert.equal(rendered.renderMeta.knowledgeInjected, false);
+    assert.deepEqual(rendered.warnings, [], 'no retrieval placeholders means nothing degraded');
 });
 
 test('AgentRegistryService throws AGENT_NOT_FOUND for unknown aliases', async () => {

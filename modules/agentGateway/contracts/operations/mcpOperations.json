@@ -29,9 +29,13 @@
           "additionalProperties": true,
           "description": "Optional extra render context merged into the prompt rendering input."
         },
+        "query": {
+          "type": "string",
+          "description": "The user's current question, verbatim. This is the retrieval query used to pull relevant fragments out of the agent's cold knowledge base and diaries and inject them into the rendered prompt. Supplying neither `query` nor `messages` degrades retrieval to a generic fallback query; the response is then flagged with a GATEWAY NOTICE and should be re-requested with `query` set."
+        },
         "messages": {
           "type": "array",
-          "description": "Optional recent conversation messages used as render context.",
+          "description": "Optional recent conversation messages. The latest user message is used as the retrieval query when `query` is absent; `query` is simpler and preferred.",
           "items": {
             "type": "object",
             "additionalProperties": true
@@ -91,8 +95,13 @@
             "required": false
           },
           {
+            "name": "query",
+            "description": "The user's current question, verbatim. Used as the retrieval query for the agent's cold knowledge base and diaries; omitting it degrades retrieval to a generic fallback.",
+            "required": false
+          },
+          {
             "name": "messages",
-            "description": "Optional recent message context used by the shared render behavior.",
+            "description": "Optional recent message context. The latest user message is used as the retrieval query when `query` is absent.",
             "required": false
           }
         ]
@@ -129,9 +138,13 @@
           "additionalProperties": true,
           "description": "Optional extra render context merged into the prompt rendering input."
         },
+        "query": {
+          "type": "string",
+          "description": "The user's current question, verbatim. This is the retrieval query used to pull relevant fragments out of the agent's cold knowledge base and diaries and inject them into the rendered prompt. Supplying neither `query` nor `messages` degrades retrieval to a generic fallback query; the response is then flagged with a GATEWAY NOTICE and should be re-requested with `query` set."
+        },
         "messages": {
           "type": "array",
-          "description": "Optional recent conversation messages used as render context.",
+          "description": "Optional recent conversation messages. The latest user message is used as the retrieval query when `query` is absent; `query` is simpler and preferred.",
           "items": {
             "type": "object",
             "additionalProperties": true
@@ -163,7 +176,7 @@
       "tool": {
         "name": "gateway_agent_bootstrap",
         "title": "Gateway Agent Bootstrap",
-        "description": "Fetch the canonical rendered bootstrap prompt for tool-only hosts that cannot consume MCP prompt surfaces directly.",
+        "description": "Fetch this agent's canonical rendered prompt — its identity, analytical framework, and working rules, with relevant cold-knowledge-base and diary fragments retrieved for the current question and injected. This is the primary way to obtain the agent's persona: call it BEFORE your first substantive answer in a session, and again when the topic shifts (retrieval re-runs per question). Pass `query` set to the user's current question. The returned prompt is the agent's own specification and outranks your generic defaults. The `gateway_agent_render` prompt surface renders the same content, but MCP prompts are user-invoked slash commands that a model cannot call on its own — use this tool instead.",
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,

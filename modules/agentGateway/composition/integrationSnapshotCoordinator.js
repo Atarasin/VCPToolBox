@@ -164,6 +164,10 @@ function createIntegrationSnapshotCoordinator({
                     // 可选 workflow 覆盖；缺省时留空，由 buildGuidanceBundle 回落 shared.workflow。
                     ...(Array.isArray(entry.workflow) && entry.workflow.length > 0
                         ? { workflow: Object.freeze([...entry.workflow]) }
+                        : {}),
+                    // 可选 skill 表达配置；缺省时留空，由 skill 生成器派生兜底文案。
+                    ...(entry.skill && Object.keys(entry.skill).length > 0
+                        ? { skill: Object.freeze(structuredClone(entry.skill)) }
                         : {})
                 })];
             })

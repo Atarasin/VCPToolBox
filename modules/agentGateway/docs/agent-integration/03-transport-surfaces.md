@@ -126,3 +126,30 @@ stdio 是**单进程单身份**：一个 stdio 实例注入一个 backend creden
 
 stdio 的静态 credential 绑定信息原本对 proxy 边缘不可见（没有 HTTP/WS 那样的逐请求受信任注入通道）。为此新增凭据自省端点 `GET /agent_gateway/credential/context`（credentialAction: `authenticated`，任何有效凭据可 introspect 自身，返回 `credentialId`、`boundAgentId`、scopes、`status`、`expiresAt`、`credentialRevision`）：stdio 在启动时解析一次，将 `boundAgentId`/`credentialScopes` 作为受信任身份覆盖注入后续每条请求（客户端 params 中的同名字段仍按伪造值剥离），从而获得与 HTTP/WS 一致的 §5.4 绑定省略语义。自省失败、未绑定或端点不可用时不阻断启动，保持"调用方需显式 `agentId`"的现状；HTTP/WS runtime（`requireRequestAuthOverride`）不做静态自省。`VCP_MCP_DEFAULT_AGENT_ID` 不参与 tools/call 兜底。
 
+
+### 5.6 人格获取入口：bootstrap 是主路径，render prompt 不是
+
+`gateway_agent_render` 与 `gateway_agent_bootstrap` 走同一条 `agents.render` 执行路径、返回同一份 `renderedPrompt`。但两者的**可达性**完全不同：
+
+- `gateway_agent_render` 是 MCP **prompt**（`publishedAsTool: false`，不在 `tools/list`）。Claude Code 等宿主把 MCP prompt 暴露成用户手打的斜杠命令——**模型没有 `prompts/get` 这个动作**，无法自主调用。
+- `gateway_agent_bootstrap` 是 tool，模型可以主动调。
+
+因此 `gateway_agent_bootstrap` 是宿主获取 agent 人格的**主入口**，不是"仅工具型宿主的降级路径"。任何面向宿主的文案（工具描述、`initialize.instructions` 里的 workflow、agent 提示词文件、skill）都必须以它为默认动作；`prompts/get` 仅在宿主明确允许模型自主调用 prompt 面时才提。
+
+> 历史坑：该工具的描述曾写作 "for tool-only hosts that cannot consume MCP prompt surfaces directly"。这句话常驻系统提示，对支持 prompt 的宿主等于明说"不是给你的"——主路径不可执行 + 备路径标注不适用，实测表现为 `gateway_recall_run` 偶尔被调用、人格层始终拿不到。
+
+### 5.7 检索 query 与降级信号
+
+渲染时日记本／冷知识库占位符按一条 query 检索后注入。query 来源优先级（canonical 实现：`policy/shared/retrievalQuery.js`）：
+
+1. `query` —— 一级参数，调用方直接给出的检索式
+2. `messages` —— 最近一条 user 消息
+3. fallback —— 两者都没有时，拿提示词自身文本去检索
+
+第 3 种是降级：命中的是与用户问题无关的片段，而占位符照样被替换，**表面完全看不出异常**。为此：
+
+- `renderMeta` 增加 `knowledgeQuerySource`（`query` / `messages` / `fallback`）与 `knowledgeInjected`（源提示词含知识库占位符且渲染后减少）。
+- fallback 且源提示词确实含检索占位符时，`warnings` 追加一条可执行文案（`RETRIEVAL_FALLBACK_WARNING`）。
+- render / bootstrap 的 MCP `content` 在**有 warning 时**前置一段 `GATEWAY NOTICE`（canonical 实现：`protocols/mcp/resultShapes.js` `createRenderedPromptContent()`），正文仍是完整 `renderedPrompt`；无 warning 时输出与直接返回 `renderedPrompt` 逐字节相同。宿主模型只读 `content`，`structuredContent` 里的 `warnings` 多半到不了它眼前——不抬到 `content` 就等于没有这个信号。两个 adapter 复用同一实现，不得漂移。
+
+另一条相关修复：Gateway 侧 RAG 渲染闸门 `needsRagRender()` 原本只匹配 `日记本`，是 RAGDiaryPlugin 自身闸门（`DirectDiaryTextProcessor.js`）的真子集，**恰好漏掉冷知识库**——提示词里只有 `[[X知识库]]` 占位符的 agent，`processMessages` 一次都不会被调用。判定已统一到 `policy/shared/promptPlaceholders.js`（日记本 ∪ 知识库），placeholder 依赖统计同源。

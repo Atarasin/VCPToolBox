@@ -46,6 +46,12 @@ function buildGuidanceBundle({ snapshot, agentId, allowedDiaries = [], defaultDi
         allowedDiaries: Object.freeze(normalizeStringArray(allowedDiaries)),
         defaultDiaries: Object.freeze(normalizeStringArray(defaultDiaries)),
         memoryDefaults: Object.freeze(structuredClone(agentEntry.memoryDefaults || {})),
+        // §6：可选 skill 表达配置。未配置时不出现在 bundle 里——消费面
+        // （instructions/resource/bootstrap）的既有形状不变，只有 skill
+        // 生成器关心它，缺省走派生兜底。
+        ...(agentEntry.skill && Object.keys(agentEntry.skill).length > 0
+            ? { skill: Object.freeze(structuredClone(agentEntry.skill)) }
+            : {}),
         revision: snapshot.revision,
         updatedAt: snapshot.publishedAt
     });

@@ -21,7 +21,7 @@
 | `FuPeng` | `Agent/quant/FuPeng.txt` | VCP 内部（VChat 等自有前端） |
 | `MCPFuPeng` | `Agent/quant/FuPeng-MCP.txt` | 外部 MCP 宿主 |
 
-原因是两者的工具语义完全不同：内部版用 `{{VCPSearchToolBox}}`、VCP 日记占位符和 `maid:「始」…「末」` 署名规范；外部版没有这些——它要告诉宿主用**自己的**联网工具做研究，用 `gateway_memory_write` 而不是日记署名写记忆，用 `prompts/get` + `gateway_agent_render` 同步规范。把内部版直接暴露出去，外部模型会照着不存在的工具语义行事。
+原因是两者的工具语义完全不同：内部版用 `{{VCPSearchToolBox}}`、VCP 日记占位符和 `maid:「始」…「末」` 署名规范；外部版没有这些——它要告诉宿主用**自己的**联网工具做研究，用 `gateway_memory_write` 而不是日记署名写记忆，用 `gateway_agent_bootstrap` 同步规范。把内部版直接暴露出去，外部模型会照着不存在的工具语义行事。
 
 先例是 `Midas` / `MCPMidas`，同样的拆分。命名沿用 `MCP` 前缀。
 
@@ -50,7 +50,7 @@ dailynote/付鹏市场判断/     判断存档与复盘
 
 `Agent/quant/FuPeng-MCP.txt` 的骨架（顺序有讲究）：
 
-1. **首要原则 + 规范获取优先级**：告诉宿主在新会话首次实质响应前、话题切换时，用 `prompts/get` → `gateway_agent_render` 同步规范，并附最近消息作为渲染上下文——Gateway 会按当前问题从冷知识库检索相关片段注入返回的提示词。绑定凭据下无需传 `arguments.agentId`（§5.4：以绑定身份为 target）；显式传 `MCPFuPeng` 也可，与绑定一致即接受。
+1. **首要原则 + 规范获取优先级**：告诉宿主在新会话首次实质响应前、话题切换时，调工具 `gateway_agent_bootstrap` 并把用户当前问题原文放进 `query` 同步规范——Gateway 会按该 query 从冷知识库检索相关片段注入返回的提示词，不传就检索不到（详见 [03](03-transport-surfaces.md) §5.6–§5.7）。**不要写 `prompts/get` + `gateway_agent_render`**：那是 prompt 面，多数宿主只把它暴露成用户手打的斜杠命令，模型无法主动调用。绑定凭据下无需传 `agentId`（§5.4：以绑定身份为 target）；显式传 `MCPFuPeng` 也可，与绑定一致即接受。
 2. **记忆与语料占位符**：`[[付鹏观点库知识库:6::Rerank]]`、`[[付鹏日记本::Time::TagMemo+]]`、`[[付鹏市场判断日记本::Time::TagMemo+]]`。渲染时由 RAGDiaryPlugin 填充。
 3. **Memory 语义**：写哪个 diary、什么该写什么不该写。与 `mcp_agent_memory_policy.json` 的 `allowedDiaries` 必须一致。
 4. **角色主体**：人设、工作流、表达规则、诚实边界。
@@ -164,7 +164,7 @@ SID=$(grep -i "mcp-session" /tmp/h.txt | awk '{print $2}' | tr -d '\r')
 | # | 检查 | 方式 | 实测 |
 |---|---|---|---|
 | 1 | 绑定身份被识别 | `initialize` 返回的 `instructions` | 含 `as agent "MCPFuPeng" (付鹏)` 与 per-agent workflow |
-| 2 | 语料检索生效 | `prompts/get` `gateway_agent_render`，`arguments.messages` 传消息对象数组 | 命中 6 条章节片段，最高相关性 70.3% |
+| 2 | 语料检索生效 | `tools/call` `gateway_agent_bootstrap`，`query` 传当前问题（当时走的是 `prompts/get` + `arguments.messages`） | 命中 6 条章节片段，最高相关性 70.3% |
 | 3 | 召回档案生效 | `tools/call` `gateway_recall_run` | `profileName: FuPeng-default` |
 | 4 | 跨 agent 被拒 | 同 token 渲染 `FuPeng` / `MCPMidas` | `AGW_FORBIDDEN` |
 | 5 | 伪造 token 被拒 | `Authorization: Bearer bad` | 401 |
@@ -193,9 +193,9 @@ Agent：   MCPFuPeng
 
 1. `initialize.instructions`（主通道，握手即得，无需额外调用）：由 guidance bundle 渲染，含 workflow、写入红线、默认 diary、guidance resource URI。只有**绑定了 agent 且持 `gateway:read`** 的凭据才拿到 agent 专属文案，否则是通用文案、不泄露任何 agent 内容（§5.2）。
 2. **工具描述**（兜底，永远在系统提示里）：`gateway_recall_run` 的 description 本身就写着 "Use this FIRST, before answering…"。
-3. `vcp://agent-gateway/agents/MCPFuPeng/guidance` resource（支持 resources 的宿主）／ `gateway_agent_bootstrap`（仅 tools 的宿主）。
+3. `vcp://agent-gateway/agents/MCPFuPeng/guidance` resource（支持 resources 的宿主）／ `gateway_agent_bootstrap`（任何宿主）。
 
-skill 是第四层可选薄产物：固化 endpoint 与触发说明，不含 secret，也不是能力来源。
+**但「能工作」不等于「是那个 agent」**：上面三层给的是记忆与规则，agent 的自我认知与思考方式在渲染后的提示词里，必须由宿主调 `gateway_agent_bootstrap`（带 `query`）取回。skill 是第四层，作用正是把这条动作写成宿主会照做的指令——它不含 secret，也不是能力来源，但它是触发面。详见 [03](03-transport-surfaces.md) §5.6。
 
 ## 六、踩坑记录（本次真实遇到并已修复）
 
@@ -217,7 +217,17 @@ skill 是第四层可选薄产物：固化 endpoint 与触发说明，不含 sec
 
 一次性写 48 个文件到新日记本目录，同秒内的 chokidar 批处理只索引到 32 个，且**不会自愈**。绕过：导入后 `touch` 目录下全部文件强制重触发，下一批次补齐（日志 `Diary date index cached … 48 file(s)`）。语料迁到 `knowledge/` 后此坑不再涉及，但给新 agent 播种日记本时仍会遇到。
 
-### 6.5 契约测试与代码的历史漂移
+### 6.5 人格拿不到：入口指向了模型调不到的 prompt 面（已修）
+
+实测形态是 `gateway_recall_run` 偶尔被调用、`gateway_agent_render` 基本不会被调用，宿主拿到记忆却拿不到人格。三个独立成因：
+
+1. `gateway_agent_render` 是 MCP **prompt**（`publishedAsTool: false`），Claude Code 这类宿主把 prompt 暴露成用户手打的斜杠命令——模型没有 `prompts/get` 这个动作。当时 agent 提示词、guidance workflow、本手册都把它写成第 1 步，等于下发了一条不可执行指令。
+2. 唯一可执行的等价入口 `gateway_agent_bootstrap` 的工具描述写着 "for tool-only hosts that cannot consume MCP prompt surfaces directly"——这句话常驻系统提示，对支持 prompt 的宿主明说"不是给你的"。主路径不可执行 + 备路径标注不适用。
+3. 即使调了也拿不到冷知识库：Gateway 侧 RAG 闸门 `needsRagRender()` 只匹配 `日记本`，是 RAGDiaryPlugin 自身闸门的真子集，恰好漏掉 `[[X知识库]]`。付鹏当时能命中纯属侥幸——它的提示词同时带日记本占位符，是日记本把闸门顶开的。另外不传检索 query 时会退化成拿提示词自身文本去检索，且**完全静默**。
+
+处置：闸门统一到 `policy/shared/promptPlaceholders.js`（日记本 ∪ 知识库）；新增一级 `query` 参数；退化抬成 warning 并在 render/bootstrap 的 MCP `content` 前置 `GATEWAY NOTICE`（`structuredContent` 里的 warning 模型看不到）；工具描述、guidance workflow、三份 `Agent/quant/*-MCP.txt` 与 skill 全部改以 bootstrap 为主入口。详见 [03](03-transport-surfaces.md) §5.6–§5.7。
+
+### 6.6 契约测试与代码的历史漂移
 
 `gateway_recall_run` 的契约测试断言 `required: ['query']`，与代码的 `['agentId','query']` 不符。考据结论：`f426ba04` 实现了 M3.S1（agentId optional），`4a65ab35`（2026-07-26）刻意推翻并改了 4 个测试文件，**漏了这一个**，且完全没动文档，造成约一周的「文档说 optional、代码是必填」漂移。本次已修正断言并同步四份文档（详见 [07-revision-history.md](07-revision-history.md) v6.1）。
 
@@ -232,7 +242,7 @@ skill 是第四层可选薄产物：固化 endpoint 与触发说明，不含 sec
 [ ] dailynote/<日记本>/                  记忆日记本，播种后 touch 一次
 [ ] config/mcp_agent_memory_policy.json  allowedDiaries / defaultDiaries
 [ ] config/recall_profiles.json          档案 + targets
-[ ] config/agent_guidance.json           displayName / memoryDefaults /（可选）workflow 覆盖
+[ ] config/agent_guidance.json           displayName / memoryDefaults /（可选）workflow 覆盖 /（可选）skill 触发面
 [ ] data/agent_gateway/                  pepper keyring（手工建）+ 绑定凭据（CLI 铸造）
 [ ] config.env                           两个 CREDENTIALS 路径变量 → 重启
 [ ] 六项验证                              见 §四表格，含跨 agent 403 与 legacy key 回归

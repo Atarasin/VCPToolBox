@@ -7,7 +7,7 @@
  * 每个 artifact 必须：
  *   - 通过 secret scan（零 findings）
  *   - manifest.contentHash 与 files 内容一致（可重现）
- *   - 固定文件清单（三 format 均为 SKILL.md + manifest.json）
+ *   - 固定文件清单（三 format 均为 SKILL.md + INSTALL.md + manifest.json）
  *   - artifactId 绑定 agentId + format + revision
  *   - 生成物包含 MCP endpoint 与工具说明，不含明文 token
  */
@@ -48,9 +48,9 @@ const AGENTS = [
 ];
 
 const EXPECTED_FILES = Object.freeze({
-    claude: ['SKILL.md', 'manifest.json'],
-    codex: ['SKILL.md', 'manifest.json'],
-    kimi: ['SKILL.md', 'manifest.json']
+    claude: ['SKILL.md', 'INSTALL.md', 'manifest.json'],
+    codex: ['SKILL.md', 'INSTALL.md', 'manifest.json'],
+    kimi: ['SKILL.md', 'INSTALL.md', 'manifest.json']
 });
 
 function sha256Hex(value) {

@@ -73,7 +73,8 @@ async function executeRender(context) {
                     model: args.model,
                     maxLength: args.maxLength,
                     context: args.context,
-                    messages: args.messages
+                    messages: args.messages,
+                    query: args.query
                 });
                 if (renderResult?.success && ['accepted', 'waiting_approval'].includes(renderResult.status)) {
                     // §5.3 / M2.S3.T1：deferred 分支同样携带 agentId，供

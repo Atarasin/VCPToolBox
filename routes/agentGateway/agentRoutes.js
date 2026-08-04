@@ -179,7 +179,8 @@ function registerAgentRenderRoute(router, context) {
                 model: req.body?.model,
                 maxLength: req.body?.maxLength,
                 context: req.body?.context,
-                messages: req.body?.messages
+                messages: req.body?.messages,
+                query: req.body?.query
             });
             if (
                 rendered &&

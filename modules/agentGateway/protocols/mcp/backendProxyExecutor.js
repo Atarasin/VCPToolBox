@@ -23,6 +23,7 @@ const {
     createMcpError,
     createMcpPromptTextMessage,
     createMcpTextContent,
+    createRenderedPromptContent,
     sanitizeMcpErrorDetails,
     serializeMcpValue
 } = require('./resultShapes');
@@ -173,11 +174,10 @@ function createDeferredResultEnvelope({
 }
 
 function createGatewayManagedContent(name, data) {
-    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER && data && typeof data.renderedPrompt === 'string') {
-        return createMcpTextContent(data.renderedPrompt);
-    }
-    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP && data && typeof data.renderedPrompt === 'string') {
-        return createMcpTextContent(data.renderedPrompt);
+    const isRenderResult = data && typeof data.renderedPrompt === 'string';
+    if (isRenderResult && (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER
+        || name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP)) {
+        return createRenderedPromptContent(data);
     }
     return createMcpTextContent(data);
 }

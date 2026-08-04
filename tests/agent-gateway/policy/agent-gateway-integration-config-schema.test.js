@@ -149,6 +149,67 @@ test('guidance bundle prefers the per-agent workflow and falls back to shared', 
     assert.deepEqual(inherited.workflow, ['shared 口径']);
 });
 
+test('guidance schema accepts an optional per-agent skill block', () => {
+    const config = validGuidanceConfig();
+    config.agents.MCPMidas.skill = {
+        name: 'midas-quant',
+        domain: '量化选股',
+        triggers: ['用户在量化仓库里做因子或回测'],
+        notFor: ['无关的通用编码任务'],
+        writeTargets: [{ diary: '迈达斯日记本', when: '得出因子结论后' }]
+    };
+    const result = validateAgentGuidanceConfig(config);
+    assert.equal(result.valid, true, JSON.stringify(result.errors));
+    assert.equal(result.config.agents.MCPMidas.skill.name, 'midas-quant');
+    assert.deepEqual(result.config.agents.MCPMidas.skill.triggers, ['用户在量化仓库里做因子或回测']);
+    assert.deepEqual(
+        result.config.agents.MCPMidas.skill.writeTargets,
+        [{ diary: '迈达斯日记本', when: '得出因子结论后' }]
+    );
+});
+
+test('guidance schema rejects malformed skill blocks', () => {
+    const emptyTriggers = validGuidanceConfig();
+    emptyTriggers.agents.MCPMidas.skill = { triggers: [] };
+    const emptyResult = validateAgentGuidanceConfig(emptyTriggers);
+    assert.equal(emptyResult.valid, false);
+    assert.ok(emptyResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.skill.triggers'));
+
+    const badName = validGuidanceConfig();
+    badName.agents.MCPMidas.skill = { name: 'Not A Slug' };
+    const badNameResult = validateAgentGuidanceConfig(badName);
+    assert.equal(badNameResult.valid, false);
+    assert.ok(badNameResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.skill.name'));
+
+    const badTarget = validGuidanceConfig();
+    badTarget.agents.MCPMidas.skill = { writeTargets: [{ diary: '迈达斯日记本' }] };
+    const badTargetResult = validateAgentGuidanceConfig(badTarget);
+    assert.equal(badTargetResult.valid, false);
+    assert.ok(badTargetResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.skill.writeTargets[0].when'));
+});
+
+test('guidance bundle carries the skill block only when configured', () => {
+    const snapshot = {
+        revision: 'sha256:test',
+        publishedAt: '2026-08-04T00:00:00.000Z',
+        shared: {
+            workflow: ['shared 口径'],
+            memoryWritePolicy: { write: ['已验证结论'], skip: ['密钥'] }
+        },
+        agents: {
+            WithSkill: { displayName: '有', skill: { domain: '宏观', triggers: ['问宏观时'] } },
+            WithoutSkill: { displayName: '无' }
+        }
+    };
+
+    assert.deepEqual(
+        buildGuidanceBundle({ snapshot, agentId: 'WithSkill' }).skill,
+        { domain: '宏观', triggers: ['问宏观时'] }
+    );
+    // 未配置时字段不出现，消费面（instructions/resource/bootstrap）形状不变
+    assert.equal('skill' in buildGuidanceBundle({ snapshot, agentId: 'WithoutSkill' }), false);
+});
+
 test('credential schema accepts the checked-in example file shape', () => {
     const raw = fs.readFileSync(path.join(CONFIG_DIR, 'agent_gateway_credentials.json.example'), 'utf8');
     const result = parseCredentialFileConfig(raw);

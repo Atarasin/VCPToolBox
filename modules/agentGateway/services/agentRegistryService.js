@@ -1,8 +1,21 @@
 const crypto = require('crypto');
 const fs = require('fs').promises;
 
+const {
+    collectKnowledgePlaceholders,
+    collectRetrievalPlaceholders
+} = require('../policy/shared/promptPlaceholders');
+const { RETRIEVAL_QUERY_SOURCES, resolveRetrievalQuery } = require('../policy/shared/retrievalQuery');
+
 const DEFAULT_SUMMARY_LENGTH = 160;
 const DEFAULT_RENDER_MAX_LENGTH = 12000;
+
+/**
+ * 检索 query 退化时的 canonical warning 文案。调用方（含 MCP 宿主模型）
+ * 读到它就应带上 `query` 重新渲染一次，而不是拿着退化结果继续。
+ */
+const RETRIEVAL_FALLBACK_WARNING = 'knowledge retrieval used a generic fallback query; '
+    + 're-call with "query" set to the user\'s current question to retrieve relevant knowledge-base and diary fragments';
 
 function normalizeRegistryString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -90,10 +103,9 @@ function buildPlaceholderSummary(text, agentDirectoryPort) {
         agents: Array.from(agentRefs).sort(),
         toolboxes: Array.from(toolboxRefs).sort(),
         variables: Array.from(variableRefs).sort(),
-        ragBlocks: collectPlaceholderMatches(text, /\[\[(.*?)日记本(.*?)\]\]/g).length +
-            collectPlaceholderMatches(text, /<<(.*?)日记本(.*?)>>/g).length +
-            collectPlaceholderMatches(text, /《《(.*?)日记本(.*?)》》/g).length +
-            collectPlaceholderMatches(text, /\{\{(.*?)日记本(.*?)\}\}/g).length,
+        // 日记本 ∪ 冷知识库：与 RAG 渲染闸门同一判定，缺一半会让知识库注入无从观测。
+        ragBlocks: collectRetrievalPlaceholders(text).length,
+        knowledgeBlocks: collectKnowledgePlaceholders(text).length,
         metaThinkingBlocks: collectPlaceholderMatches(text, /\[\[VCP元思考(.*?)\]\]/g).length,
         asyncResults: collectPlaceholderMatches(text, /\{\{VCP_ASYNC_RESULT::([a-zA-Z0-9_.-]+)::([a-zA-Z0-9_-]+)\}\}/g).length
     };
@@ -105,8 +117,8 @@ function collectPromptDependencies(text, agentDirectoryPort) {
         agents: placeholderSummary.agents,
         toolboxes: placeholderSummary.toolboxes,
         variables: placeholderSummary.variables,
-        ragBlocks: collectPlaceholderMatches(text, /(\[\[(.*?)日记本(.*?)\]\]|<<(.*?)日记本(.*?)>>|《《(.*?)日记本(.*?)》》|\{\{(.*?)日记本(.*?)\}\})/g)
-            .map((match) => match[0]),
+        ragBlocks: collectRetrievalPlaceholders(text),
+        knowledgeBlocks: collectKnowledgePlaceholders(text),
         metaThinkingBlocks: collectPlaceholderMatches(text, /\[\[VCP元思考(.*?)\]\]/g)
             .map((match) => match[0]),
         asyncResults: collectPlaceholderMatches(text, /\{\{VCP_ASYNC_RESULT::([a-zA-Z0-9_.-]+)::([a-zA-Z0-9_-]+)\}\}/g)
@@ -117,16 +129,35 @@ function collectPromptDependencies(text, agentDirectoryPort) {
     };
 }
 
-function createRenderMeta({ dependencies, renderedDependencies, unresolved, truncated, renderVariables }) {
-    const sourceRagBlockCount = Array.isArray(dependencies?.ragBlocks) ? dependencies.ragBlocks.length : 0;
-    const renderedRagBlockCount = Array.isArray(renderedDependencies?.ragBlocks) ? renderedDependencies.ragBlocks.length : 0;
+function countBlocks(dependencies, key) {
+    return Array.isArray(dependencies?.[key]) ? dependencies[key].length : 0;
+}
+
+function createRenderMeta({
+    dependencies,
+    renderedDependencies,
+    unresolved,
+    truncated,
+    renderVariables,
+    knowledgeQuerySource
+}) {
+    const sourceRagBlockCount = countBlocks(dependencies, 'ragBlocks');
+    const renderedRagBlockCount = countBlocks(renderedDependencies, 'ragBlocks');
     const memoryRecallApplied = sourceRagBlockCount > 0 && renderedRagBlockCount < sourceRagBlockCount;
+    // 冷知识库单独统计：日记本占位符被替换不代表语料进来了，
+    // 两者混在一个指标里会让「知识库整段没注入」看起来一切正常。
+    const sourceKnowledgeBlockCount = countBlocks(dependencies, 'knowledgeBlocks');
+    const renderedKnowledgeBlockCount = countBlocks(renderedDependencies, 'knowledgeBlocks');
+    const knowledgeInjected = sourceKnowledgeBlockCount > 0
+        && renderedKnowledgeBlockCount < sourceKnowledgeBlockCount;
 
     return {
         memoryRecallApplied,
         recallSources: memoryRecallApplied
             ? ['tagmemo']
             : [],
+        knowledgeInjected,
+        knowledgeQuerySource: knowledgeQuerySource || RETRIEVAL_QUERY_SOURCES.FALLBACK,
         truncated: Boolean(truncated),
         filteredByPolicy: false,
         unresolvedCount: Array.isArray(unresolved) ? unresolved.length : 0,
@@ -305,10 +336,11 @@ function createAgentRegistryApi(context, renderPrompt) {
             const renderVariables = normalizeRenderVariables(options.variables);
             const model = normalizeRegistryString(options.model);
             const maxLength = Number.isFinite(options.maxLength) ? options.maxLength : DEFAULT_RENDER_MAX_LENGTH;
+            const retrievalQuery = resolveRetrievalQuery({ query: options.query, messages: options.messages });
             const rendered = await renderPrompt({
                 agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile,
                 rawPrompt: source.rawPrompt, renderVariables, model,
-                renderOptions: { ...options.context, messages: options.messages }
+                renderOptions: { ...options.context, messages: options.messages, query: options.query }
             });
             const normalized = typeof rendered === 'string' ? rendered : String(rendered || '');
             const unresolved = collectUnresolvedConstructs(normalized);
@@ -319,10 +351,19 @@ function createAgentRegistryApi(context, renderPrompt) {
             const renderedDependencies = collectPromptDependencies(normalized, agentDirectoryPort);
             if (unresolved.length) warnings.push('render output still contains unresolved prompt constructs');
             if (truncated) warnings.push('render output was truncated to the requested maxLength');
+            // 检索 query 退化是静默失败：占位符照样被替换，只是替换成了与用户
+            // 问题无关的片段。只有把它抬成 warning，调用方才有机会带 query 重试。
+            if (retrievalQuery.source === RETRIEVAL_QUERY_SOURCES.FALLBACK
+                && Array.isArray(dependencies.ragBlocks) && dependencies.ragBlocks.length > 0) {
+                warnings.push(RETRIEVAL_FALLBACK_WARNING);
+            }
             return {
                 agentId: source.agentId, alias: source.alias, sourceFile: source.sourceFile, renderedPrompt,
                 dependencies, unresolved, warnings, truncated,
-                renderMeta: createRenderMeta({ dependencies, renderedDependencies, unresolved, truncated, renderVariables }),
+                renderMeta: createRenderMeta({
+                    dependencies, renderedDependencies, unresolved, truncated, renderVariables,
+                    knowledgeQuerySource: retrievalQuery.source
+                }),
                 meta: { model, rawSize: source.rawPrompt.length, renderedSize: normalized.length, variableKeys: Object.keys(renderVariables) }
             };
         }
@@ -352,5 +393,6 @@ function createAgentRegistryService(deps = {}) {
 }
 
 module.exports = {
+    RETRIEVAL_FALLBACK_WARNING,
     createAgentRegistryService
 };

@@ -4,6 +4,17 @@
 
 以下条目按版本保留历史决策；与当前正文冲突时，以 v6 正文和 v6 摘要为准。
 
+### v6.3（人格入口修正与 skill 重写）
+
+2026-08-04。起因是实测「`gateway_recall_run` 有概率被调用，`gateway_agent_render` 基本不会被调用」——宿主拿到了记忆层，拿不到 agent 的自我认知与思考方式。
+
+- **根因（三条独立机制，非提示词强度问题）**：① `gateway_agent_render` 是 MCP prompt（`publishedAsTool: false`），宿主把 prompt 暴露成用户手打的斜杠命令，模型没有 `prompts/get` 这个动作——而 `agent_guidance.json`、三份 `Agent/quant/*-MCP.txt`、上线手册都把它写成第 1 步；② 唯一可执行的等价入口 `gateway_agent_bootstrap` 的工具描述写着 "for tool-only hosts…"，在常驻系统提示里对支持 prompt 的宿主明说"不是给你的"；③ Gateway 侧 RAG 闸门 `needsRagRender()` 只匹配 `日记本`，是 RAGDiaryPlugin 自身闸门的真子集，恰好漏掉 `[[X知识库]]`——只有知识库占位符的 agent 一次都不会走 `processMessages`，且不传检索 query 时会静默退化成拿提示词自身文本检索。
+- **代码面**：新增 `policy/shared/promptPlaceholders.js`（日记本 ∪ 知识库的 canonical 判定，渲染闸门与依赖统计同源）与 `policy/shared/retrievalQuery.js`（query > messages > fallback 的 canonical 优先级）；`mcpOperations.json` 的 render/bootstrap 新增一级 `query` 参数并重写 bootstrap 工具描述（重跑 export）；`renderAgent` 新增 `renderMeta.knowledgeInjected` / `knowledgeQuerySource` 与退化 warning；`resultShapes.createRenderedPromptContent()` 在有 warning 时于 MCP `content` 前置 `GATEWAY NOTICE`（两个 adapter 复用，无 warning 时输出逐字节不变）。
+- **配置面**：`agent_guidance.json` 新增可选 `agents.<id>.skill`（`name`/`domain`/`triggers`/`notFor`/`writeTargets`），经校验器 → 冻结快照 → guidance bundle 透出；未配置时 bundle 形状不变。`AgentGuidanceBundle` 加可选 `skill`。
+- **skill 生成面**：固定清单 2→3（`SKILL.md` + `INSTALL.md` + `manifest.json`）。`SKILL.md` 收敛为纯模型面——触发面 `description` 由 skill 配置块合成，正文是 bootstrap → recall → write 的标准动作与可原样照抄的调用体（含 `memory.tags` 这类漏了就 400 的必填字段）、日记本路由、失败语义、红线；MCP 注册与 `ln -s` 安装说明全部下沉 `INSTALL.md`（模型读到 SKILL.md 时早已装好连上，这些内容只稀释指令）。`writeTargets` 按写入授权同一条等价规则匹配 `allowedDiaries`，匹配不上的条目丢弃。
+- **文档面**：新增 [03](03-transport-surfaces.md) §5.6（bootstrap 是人格获取主入口）与 §5.7（检索 query 优先级与降级信号）；[04](04-skill-generation.md) §6、[02](02-config-data-model.md) §4.2、walkthrough §一/§五/§六（新增 6.5 踩坑条目）、smoke-records 同步。
+- **遗留**：三客户端真实安装 smoke 未按新模板复跑（frontmatter 结构未变，装载行为预期不受影响）；端到端 A/B（不带 `query` 应见 NOTICE、带 `query` 应见观点库片段）需在跑起 Gateway 的环境验证。
+
 ### v6.2（再次反转：恢复绑定 credential 省略 `agentId`）
 
 2026-08-03 恢复 §5.4 的绑定省略语义：绑定 credential 的 MCP 调用可省略 `agentId`，以绑定身份为 target。

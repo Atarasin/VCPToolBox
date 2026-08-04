@@ -1,5 +1,8 @@
 const messageProcessor = require('../../messageProcessor');
 
+const { hasRetrievalPlaceholder } = require('../policy/shared/promptPlaceholders');
+const { findLatestMessageText, resolveRetrievalQuery } = require('../policy/shared/retrievalQuery');
+
 const DEFAULT_RENDER_VARIABLE_PASSES = 3;
 const DEFAULT_RENDER_QUERY_LENGTH = 1200;
 
@@ -23,6 +26,8 @@ function createRenderContext(pluginManager, overrides = {}) {
         superDetectors: overrides.superDetectors || [],
         DEBUG_MODE: Boolean(overrides.DEBUG_MODE),
         messages: Array.isArray(overrides.messages) ? overrides.messages : [],
+        // 一级检索式：优先于 messages，供只想给一句话的调用方使用。
+        query: typeof overrides.query === 'string' ? overrides.query : '',
         expandedAgentName: null,
         expandedToolboxes: new Set()
     };
@@ -44,23 +49,6 @@ async function renderVariablePasses(text, model, renderContext) {
     return unwrapMultilineBracePayloads(current);
 }
 
-function extractMessageText(message) {
-    if (typeof message?.content === 'string') return message.content;
-    if (!Array.isArray(message?.content)) return '';
-    return message.content.filter((part) => part?.type === 'text' && typeof part.text === 'string')
-        .map((part) => part.text).join('\n').trim();
-}
-
-function findLatestMessageText(messages, role) {
-    for (let index = (messages || []).length - 1; index >= 0; index -= 1) {
-        if (messages[index]?.role === role) {
-            const text = extractMessageText(messages[index]);
-            if (text) return text;
-        }
-    }
-    return '';
-}
-
 function buildFallbackQuery(text, agentId) {
     const normalized = String(text || '').replace(/\{\{[^{}]+\}\}|\[\[[^\]]+\]\]|<<[^>]+>>|《《[^》]+》》/g, ' ')
         .replace(/\s+/g, ' ').trim();
@@ -70,17 +58,21 @@ function buildFallbackQuery(text, agentId) {
 
 function buildRagMessages(renderedText, renderContext, agentId) {
     const messages = renderContext.messages || [];
+    const resolved = resolveRetrievalQuery({ query: renderContext.query, messages });
     const result = [{ role: 'system', content: renderedText }, {
         role: 'user',
-        content: findLatestMessageText(messages, 'user') || buildFallbackQuery(renderedText, agentId)
+        content: resolved.query || buildFallbackQuery(renderedText, agentId)
     }];
     const assistant = findLatestMessageText(messages, 'assistant');
     if (assistant) result.push({ role: 'assistant', content: assistant });
     return result;
 }
 
+// 闸门必须与 RAGDiaryPlugin 自己的闸门同宽：只认「日记本」会把冷知识库
+// （`[[X知识库]]`）整段挡在 processMessages 之外，且静默无痕。
 function needsRagRender(text) {
-    return /(\[\[.*日记本.*\]\]|<<.*日记本.*>>|《《.*日记本.*》》|\{\{.*日记本.*\}\}|\[\[VCP元思考.*\]\]|\[\[AIMemo=True\]\])/.test(text);
+    return hasRetrievalPlaceholder(text)
+        || /(\[\[VCP元思考.*\]\]|\[\[AIMemo=True\]\])/.test(text);
 }
 
 function createHostPromptRenderer(pluginManager, ragRetrieverPort, customRenderer) {
@@ -103,4 +95,4 @@ function createHostPromptRenderer(pluginManager, ragRetrieverPort, customRendere
     };
 }
 
-module.exports = { createHostPromptRenderer };
+module.exports = { createHostPromptRenderer, needsRagRender };

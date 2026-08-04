@@ -45,6 +45,7 @@ const {
     createMcpError,
     createMcpPromptTextMessage,
     createMcpTextContent,
+    createRenderedPromptContent,
     serializeMcpValue
 } = require('./resultShapes');
 const { mapGatewayFailureToMcpErrorCode } = require('./errorMapping');
@@ -196,11 +197,10 @@ function createDeferredResultEnvelope({
 }
 
 function createGatewayManagedContent(name, data) {
-    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER && data && typeof data.renderedPrompt === 'string') {
-        return createMcpTextContent(data.renderedPrompt);
-    }
-    if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP && data && typeof data.renderedPrompt === 'string') {
-        return createMcpTextContent(data.renderedPrompt);
+    const isRenderResult = data && typeof data.renderedPrompt === 'string';
+    if (isRenderResult && (name === MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER
+        || name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP)) {
+        return createRenderedPromptContent(data);
     }
     return createMcpTextContent(data);
 }
@@ -611,7 +611,8 @@ async function executeGatewayManagedPromptGet({
             model: args.model,
             maxLength: args.maxLength,
             context: args.context,
-            messages: args.messages
+            messages: args.messages,
+            query: args.query
         });
     } catch (error) {
         const mapped = mapAgentRegistryError(error, requestContext);

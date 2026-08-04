@@ -66,7 +66,11 @@ test('generateSkillArtifact enforces the format allowlist', () => {
 });
 
 test('each format produces a fixed file list with manifest content hashes', () => {
-    const expectations = { claude: ['SKILL.md'], codex: ['SKILL.md'], kimi: ['SKILL.md'] };
+    const expectations = {
+        claude: ['SKILL.md', 'INSTALL.md'],
+        codex: ['SKILL.md', 'INSTALL.md'],
+        kimi: ['SKILL.md', 'INSTALL.md']
+    };
     for (const format of SKILL_FORMATS) {
         const artifact = generateSkillArtifact({
             guidance: GUIDANCE_FIXTURE, format, baseUrl: 'https://gw.example.com'
@@ -99,6 +103,115 @@ test('generated content embeds guidance and endpoints but never secret-shaped va
         // 环境变量引用形态，不是内联 token
         assert.equal(scanForSecrets(artifact.files).length, 0, `${format} passes secret scan`);
     }
+});
+
+function fileByPath(artifact, path) {
+    return artifact.files.find((file) => file.path === path)?.content || '';
+}
+
+test('SKILL.md is model-facing only: procedure and call shapes, no install or registration', () => {
+    const artifact = generateSkillArtifact({
+        guidance: GUIDANCE_FIXTURE, format: 'claude', baseUrl: 'https://gw.example.com'
+    });
+    const skillMd = fileByPath(artifact, 'SKILL.md');
+
+    // 人格入口必须是可被模型调用的 tool，且排在召回之前
+    assert.ok(skillMd.includes('gateway_agent_bootstrap'), 'bootstrap is the persona entry point');
+    assert.ok(
+        skillMd.indexOf('gateway_agent_bootstrap') < skillMd.indexOf('gateway_recall_run'),
+        'bootstrap step must precede the recall step'
+    );
+    assert.ok(skillMd.includes('"query"'), 'the bootstrap call shape carries an explicit query');
+    // 写回三个必填字段必须以可照抄的成品出现
+    assert.ok(skillMd.includes('"diary": "Nova"'), 'write example uses the default diary');
+    assert.ok(skillMd.includes('"tags"'), 'write example carries memory.tags');
+    assert.ok(skillMd.includes('"vcp"'), 'write example seeds tags from memoryDefaults');
+
+    // 模型读到这个文件时早已装好连上，安装/注册内容只会稀释指令
+    assert.ok(!skillMd.includes('mcpServers'), 'no MCP registration snippet in SKILL.md');
+    assert.ok(!skillMd.includes('ln -s'), 'no install path instructions in SKILL.md');
+});
+
+test('INSTALL.md carries the human-facing setup that SKILL.md dropped', () => {
+    const artifact = generateSkillArtifact({
+        guidance: GUIDANCE_FIXTURE, format: 'claude', baseUrl: 'https://gw.example.com'
+    });
+    const installMd = fileByPath(artifact, 'INSTALL.md');
+
+    assert.ok(installMd.includes('https://gw.example.com/mcp'), 'endpoint for registration');
+    assert.ok(installMd.includes('AGENT_GATEWAY_TOKEN'), 'credential is referenced by env var only');
+    assert.ok(installMd.includes('mcpServers'), 'registration snippets live here');
+    assert.ok(installMd.includes('ln -s'), 'install path lives here');
+    assert.equal(scanForSecrets(artifact.files).length, 0, 'still零 secret');
+});
+
+test('the skill description is built from the configured trigger surface', () => {
+    const guidance = {
+        ...GUIDANCE_FIXTURE,
+        skill: {
+            name: 'ariadne-thread',
+            domain: '迷宫导航',
+            triggers: ['用户要在既有架构里找一条路径', '需要阿里阿德涅的历史判断'],
+            notFor: ['与该 agent 记忆无关的一次性任务'],
+            writeTargets: [
+                { diary: 'Nova', when: '得出结构性结论后' },
+                { diary: '未授权日记本', when: '永远不该出现' }
+            ]
+        }
+    };
+    const artifact = generateSkillArtifact({ guidance, format: 'claude', baseUrl: 'https://gw.example.com' });
+    const skillMd = fileByPath(artifact, 'SKILL.md');
+
+    assert.ok(skillMd.includes('name: ariadne-thread'), 'skill.name overrides the derived name');
+    assert.ok(skillMd.includes('迷宫导航'), 'domain reaches the description');
+    assert.ok(skillMd.includes('用户要在既有架构里找一条路径'), 'triggers reach the description');
+    assert.ok(skillMd.includes('不适用：与该 agent 记忆无关的一次性任务'), 'notFor reaches the description');
+    assert.ok(skillMd.includes('得出结构性结论后'), 'allowed writeTarget reaches the routing table');
+    // 配置漂移不应产出一条注定 403 的指令
+    assert.ok(!skillMd.includes('未授权日记本'), 'writeTargets outside allowedDiaries are dropped');
+});
+
+test('writeTargets match allowed diaries by the same equivalence the write path uses', () => {
+    // 配置里写「X日记本」，bundle 里是策略解析后的「X」——按字面比对会把合法
+    // 条目误丢，而写入授权本身用的是等价规则。
+    const guidance = {
+        ...GUIDANCE_FIXTURE,
+        allowedDiaries: ['付鹏', '付鹏市场判断'],
+        defaultDiaries: ['付鹏'],
+        skill: {
+            writeTargets: [{ diary: '付鹏市场判断日记本', when: '给出结构性判断后' }]
+        }
+    };
+    const skillMd = fileByPath(
+        generateSkillArtifact({ guidance, format: 'claude', baseUrl: 'https://gw.example.com' }),
+        'SKILL.md'
+    );
+    assert.ok(
+        skillMd.includes('| 付鹏市场判断 |  | 给出结构性判断后 |'),
+        'suffix-form writeTarget resolves onto the bundle diary name'
+    );
+});
+
+test('a guidance bundle without a skill block still renders a usable skill', () => {
+    const bare = {
+        agentId: 'Bare Agent',
+        displayName: 'Bare Agent',
+        workflow: [],
+        memoryWritePolicy: { write: [], skip: [] },
+        allowedDiaries: [],
+        defaultDiaries: [],
+        memoryDefaults: {},
+        revision: `sha256:${'c'.repeat(64)}`,
+        updatedAt: '2026-08-04T00:00:00.000Z'
+    };
+    const artifact = generateSkillArtifact({ guidance: bare, format: 'claude', baseUrl: 'https://gw.example.com' });
+    assert.equal(artifact.ok, true);
+    const skillMd = fileByPath(artifact, 'SKILL.md');
+
+    // agentId 允许空格，skill 目录名不允许
+    assert.ok(skillMd.includes('name: vcp-agent-gateway-bare-agent'), 'derived skill name is slugified');
+    assert.ok(skillMd.includes('gateway_agent_bootstrap'), 'fallback still leads with the persona step');
+    assert.ok(!/\n\n\n/.test(skillMd), 'empty guidance sections are omitted, not left blank');
 });
 
 test('secret scan patterns catch inline token shapes', () => {
