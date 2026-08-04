@@ -116,3 +116,53 @@ test('published Agent Gateway OpenAPI keeps formal runtime and envelope schemas 
         '#/components/responses/NotFound'
     );
 });
+
+/**
+ * 每个 MCP 操作有两份参数 schema：`argsSchema`（服务端校验）与
+ * `mcp.tool.inputSchema` / `mcp.prompt.arguments`（对外发布，进 tools/list、
+ * prompts/list，宿主看到的就是它）。两者都是 `additionalProperties: false`，
+ * 一旦漂移就出现「服务端收得下、宿主根本不会发」的静默失配——新增参数只改
+ * 了其中一份是最容易犯的形态。
+ */
+const MCP_OPERATION_SOURCE = readJson(
+    path.join(__dirname, '..', '..', '..', 'modules', 'agentGateway', 'contracts', 'operations', 'mcpOperations.json')
+);
+
+test('每个 MCP 操作的服务端 argsSchema 与对外发布的参数面逐字段一致', () => {
+    for (const operation of MCP_OPERATION_SOURCE) {
+        const expected = Object.keys(operation.argsSchema?.properties || {}).sort();
+        assert.ok(expected.length > 0, `${operation.toolName} 必须声明 argsSchema.properties`);
+
+        const publishedTool = operation.mcp?.tool;
+        if (publishedTool) {
+            assert.deepEqual(
+                Object.keys(publishedTool.inputSchema?.properties || {}).sort(),
+                expected,
+                `${operation.toolName}: mcp.tool.inputSchema 与 argsSchema 字段集漂移`
+            );
+        }
+
+        const publishedPrompt = operation.mcp?.prompt;
+        if (publishedPrompt) {
+            assert.deepEqual(
+                (publishedPrompt.arguments || []).map((argument) => argument.name).sort(),
+                expected,
+                `${operation.toolName}: mcp.prompt.arguments 与 argsSchema 字段集漂移`
+            );
+        }
+    }
+});
+
+test('render 与 bootstrap 对外声明 query —— 缺了宿主就不会传，检索静默退化', () => {
+    const renderOperations = MCP_OPERATION_SOURCE.filter(
+        (operation) => operation.execution?.operationName === 'agents.render'
+    );
+    assert.equal(renderOperations.length, 2, 'render prompt 面与 bootstrap tool 面各一');
+
+    for (const operation of renderOperations) {
+        const publishedNames = operation.mcp?.tool
+            ? Object.keys(operation.mcp.tool.inputSchema.properties)
+            : operation.mcp.prompt.arguments.map((argument) => argument.name);
+        assert.ok(publishedNames.includes('query'), `${operation.toolName} 必须对外声明 query`);
+    }
+});
