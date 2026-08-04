@@ -148,6 +148,44 @@ test('resolveRestCredentialAction matches catalog paths', () => {
     // health/metrics 是 adminAuth 排除项，不参与 credential scope 检查
     assert.equal(resolveRestCredentialAction('GET', '/health').authExclusion, 'adminAuth');
     assert.equal(resolveRestCredentialAction('GET', '/metrics').authExclusion, 'adminAuth');
+    // 凭据自省端点（§5.5 / L4）：任何有效凭据均可 introspect 自身
+    assert.equal(resolveRestCredentialAction('GET', '/credential/context').credentialAction, 'authenticated');
     // 未登记 path 不匹配（fail-open 到既有 authenticated 语义，由 catalog 校验兜底）
     assert.equal(resolveRestCredentialAction('GET', '/nonexistent').matched, false);
+});
+
+test('credential context endpoint returns the presented credential context', async (t) => {
+    await setupCredentialFiles(t);
+    const baseUrl = await createServer(t);
+
+    const response = await fetch(`${baseUrl}/agent_gateway/credential/context`, {
+        headers: { 'x-agent-gateway-key': TOKEN_READONLY }
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.success, true);
+    assert.equal(body.data.credentialId, 'cred-readonly');
+    assert.equal(body.data.credentialSubject, 'cred-readonly');
+    assert.equal(body.data.boundAgentId, 'Ariadne');
+    assert.deepEqual(body.data.scopes, ['gateway:read']);
+    assert.equal(body.data.status, 'active');
+    assert.equal(body.data.expiresAt, null);
+    assert.ok(body.data.credentialRevision);
+
+    const full = await fetch(`${baseUrl}/agent_gateway/credential/context`, {
+        headers: { 'x-agent-gateway-key': TOKEN_FULL }
+    });
+    const fullBody = await full.json();
+    assert.equal(fullBody.data.credentialId, 'cred-full');
+    assert.deepEqual(fullBody.data.scopes, ['gateway:read', 'gateway:execute']);
+});
+
+test('credential context endpoint rejects invalid tokens with 401', async (t) => {
+    await setupCredentialFiles(t);
+    const baseUrl = await createServer(t);
+
+    const response = await fetch(`${baseUrl}/agent_gateway/credential/context`, {
+        headers: { 'x-agent-gateway-key': 'token-does-not-exist' }
+    });
+    assert.equal(response.status, 401);
 });

@@ -218,6 +218,23 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /agent_gateway/credential/context:
+    get:
+      tags:
+        - Operations
+      summary: 返回当前呈现凭据的自身上下文（credentialId、绑定 agent、scopes、revision）
+      operationId: getAgentGatewayCredentialContext
+      parameters:
+        - $ref: "#/components/parameters/RequestIdQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/CredentialContextSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /agent_gateway/memory/targets:
     get:
       tags:
@@ -802,6 +819,19 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/HealthEnvelope"
+    CredentialContextSuccess:
+      description: 成功
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/XRequestId"
+        x-agent-gateway-version:
+          $ref: "#/components/headers/XGatewayVersion"
+        x-agent-gateway-trace-id:
+          $ref: "#/components/headers/XTraceId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CredentialContextEnvelope"
     MemorySearchSuccess:
       description: 成功
       headers:
@@ -1745,6 +1775,52 @@ components:
           $ref: "#/components/schemas/HealthData"
         meta:
           $ref: "#/components/schemas/GatewayMeta"
+    CredentialContextEnvelope:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/CredentialContextData"
+        meta:
+          $ref: "#/components/schemas/GatewayMeta"
+    CredentialContextData:
+      type: object
+      required:
+        - credentialId
+        - credentialSubject
+        - boundAgentId
+        - scopes
+        - status
+        - expiresAt
+        - credentialRevision
+      properties:
+        credentialId:
+          type: string
+        credentialSubject:
+          type: string
+        boundAgentId:
+          type: string
+          description: 该凭据绑定的 agent；未绑定时为 null。
+          nullable: true
+        scopes:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        expiresAt:
+          type: string
+          nullable: true
+        credentialRevision:
+          type: string
+          description: 凭据记录 revision；绑定/scope/状态变化必然改变该值。
     MemorySearchRequest:
       type: object
       required:
@@ -1995,11 +2071,13 @@ components:
     RecallRunRequest:
       type: object
       required:
-        - agentId
         - query
       properties:
         agentId:
           type: string
+          description: >-
+            Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent
+            becomes the target); required otherwise. An explicit value must match the bound agent.
         query:
           type: string
         profile:

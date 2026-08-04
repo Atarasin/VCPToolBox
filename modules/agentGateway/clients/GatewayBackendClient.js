@@ -298,6 +298,12 @@ class GatewayBackendClient {
         });
     }
 
+    // 凭据自省（§5.5 / L4）：stdio 等无逐请求注入通道的宿主在启动时解析
+    // 静态 credential 的绑定身份；HTTP/WS 逐请求注入，不需要调用。
+    getCredentialContext(requestOptions) {
+        return this.requestJson('GET', AGENT_GATEWAY_ROUTE_BINDINGS.credentialContext, requestOptions);
+    }
+
     getJob(jobId, query, requestOptions) {
         return this.requestJson('GET', AGENT_GATEWAY_ROUTE_BINDINGS.jobGet(jobId), {
             query,

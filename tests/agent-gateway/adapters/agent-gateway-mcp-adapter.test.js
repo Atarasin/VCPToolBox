@@ -414,9 +414,9 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(bootstrapTool.annotations.gatewayManaged, true);
     assert.equal(
         bootstrapTool.inputSchema.properties.agentId.description,
-        'Explicit target agent identifier for this MCP invocation. Callers must provide this field.'
+        'Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent.'
     );
-    assert.deepEqual(bootstrapTool.inputSchema.required, ['agentId']);
+    assert.equal(bootstrapTool.inputSchema.required, undefined);
     assert.ok(memorySearchTool && memorySearchTool.inputSchema);
     assert.equal(memorySearchTool.annotations.gatewayManaged, true);
     assert.equal(
@@ -431,8 +431,9 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.ok(memoryWriteTool && memoryWriteTool.inputSchema);
     assert.equal(
         memoryWriteTool.inputSchema.properties.agentId.description,
-        'Explicit target agent identifier for this MCP invocation. Callers must provide this field.'
+        'Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent.'
     );
+    assert.deepEqual(memoryWriteTool.inputSchema.required, ['target', 'memory']);
 });
 
 test('MCP adapter executes agent bootstrap through shared render behavior and returns a concise summary', async () => {

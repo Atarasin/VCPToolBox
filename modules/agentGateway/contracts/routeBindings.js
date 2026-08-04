@@ -6,6 +6,7 @@ const AGENT_GATEWAY_ROUTE_BINDINGS = Object.freeze({
     contextAssemble: '/agent_gateway/context/assemble',
     memoryWrite: '/agent_gateway/memory/write',
     recallRun: '/agent_gateway/recall/run',
+    credentialContext: '/agent_gateway/credential/context',
     jobGet: (jobId) => `/agent_gateway/jobs/${encodeURIComponent(jobId)}`,
     jobCancel: (jobId) => `/agent_gateway/jobs/${encodeURIComponent(jobId)}/cancel`,
     eventStream: '/agent_gateway/events/stream'

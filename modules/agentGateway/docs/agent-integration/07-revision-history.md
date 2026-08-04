@@ -4,6 +4,16 @@
 
 以下条目按版本保留历史决策；与当前正文冲突时，以 v6 正文和 v6 摘要为准。
 
+### v6.2（再次反转：恢复绑定 credential 省略 `agentId`）
+
+2026-08-03 恢复 §5.4 的绑定省略语义：绑定 credential 的 MCP 调用可省略 `agentId`，以绑定身份为 target。
+
+- **动机**：绑定 credential 在密码学上只能代表一个 agent（§3.2 禁止 admin scope 出现在绑定 credential 上），显式 `agentId` 对绑定调用只是冗余的一致性校验，不提供额外授权保证，却迫使外部宿主在每次工具调用重复身份。v6.1 的两条动机中，"误导到默认/隐式 agent"针对的是 default/env 兜底——本次不恢复任何兜底，只恢复与授权身份同源的绑定补全；"身份校验显式化"由审计（每请求 `credentialId` + `effectiveAgentId`）与遥测（`explicit`/`boundOmitted`）承担。
+- **代码面**：`backendProxyExecutor.resolveDirectAgentTarget()` 恢复绑定补全分支（无 defaultAgentId 参数），diary 类与 job 类操作统一经它决议（diary 策略门必须在填充后的 agentId 上执行；job 类不计入遥测）；`inProcessExecutor.buildManagedToolContextInput()` 恢复同一逻辑；`mcpOperations.json` 8 个操作 `agentId` 改 optional 并重跑 export；`RecallRunRequest` OpenAPI `required` 放宽为 `['query']`（消除与运行时的 schema 漂移）；`boundOmitted` 遥测恢复记录（统计结构此前保留）。未绑定 credential 省略仍受控 `MCP_INVALID_REQUEST`，显式不一致仍 `AGW_FORBIDDEN`。另新增凭据自省端点 `GET /agent_gateway/credential/context`（credentialAction: `authenticated`）：stdio 启动时解析静态 credential 的绑定身份并作为受信任身份注入后续请求，获得与 HTTP/WS 一致的省略语义；自省失败/未绑定不阻断启动。REST paths 冻结数 21→22。
+- **测试面**：m3-agent-target、两个 adapter 测试与 recall adapter 契约断言反转；新增 proxy 侧 bootstrap/recall/memory/job 绑定省略用例与 boundOmitted 遥测用例；新增凭据自省端点路由用例与 stdio 启动解析/注入用例（含伪造 authContext 覆盖、HTTP-WS runtime 不做静态自省）。
+- **文档面**：§5.4 状态框与规则矩阵重写，§5.3 bootstrap 条目、§5.5 stdio 段（自省端点与启动注入）、README 目标 2、walkthrough §一/§五同步。
+- **教训沿用**：本次在改代码的同时同步全部契约测试与文档，避免重蹈 v6.1 的文档漂移。
+
 ### v6.1（实现后反转记录：`agentId` 强制显式化）
 
 2026-07-26 commit `4a65ab35`「强制显式传入 agentId，移除自动兜底逻辑」在 M3 交付**之后**推翻了 §5.4 的 optional 化方案：

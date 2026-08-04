@@ -77,7 +77,7 @@ vcp://agent-gateway/agents/{agentId}/guidance
 
 - 继续返回现有 `renderedPrompt`、`renderMeta` 和 `summary`，不删除或改名已有字段。`summary` 两条路径均已返回；本方案要求 in-process 补齐 deferred（`accepted`/`waiting_approval`）分支的 `summary`（见 §5.1），使“现有字段”承诺在所有分支对两个 adapter 一致成立。
 - 新增 `integrationGuidance` 字段，其内容与 guidance resource 等价并包含同一 revision。
-- `agentId` 必填（含已绑定 credential——4a65ab35 后省略即 invalid request，见 §5.4 状态框）；显式值与绑定不一致返回 `AGW_FORBIDDEN`。
+- `agentId` 在绑定 credential 时可省略——省略即以绑定身份为 target（2026-08-03 恢复，见 §5.4 状态框）；显式值与绑定不一致返回 `AGW_FORBIDDEN`。未绑定 credential 时必填，缺失即 invalid request。
 - 未绑定 credential 时同样必须显式提供 agent 并通过 scope 校验。
 - description 明确它仅供无法消费 prompt/resource surface 的 tool-only host，支持常规 host 时优先使用标准 prompt/resource surface。
 
@@ -92,25 +92,31 @@ vcp://agent-gateway/agents/{agentId}/guidance
 
 因此“零安装”仅表示不再需要手写 skill 才能连接并发现基础工具；不表示每个 host 都能自动消费所有 guidance 层。M2.S4 对 Claude Code / Codex / Kimi 的实测矩阵见 [smoke-records.md](smoke-records.md)：Claude Code 三层全消费；Codex 消费 instructions + resource；Kimi 为典型 tool-only host，仅消费 bootstrap 的 text 内容层。
 
-### 5.4 `agentId` 迁移（已由 4a65ab35 推翻——现行规则：强制显式）
+### 5.4 `agentId` 语义（2026-08-03 恢复：绑定 credential 可省略）
 
-> **状态（2026-07-26，commit `4a65ab35`）**：本节原方案（绑定 credential 可省略 `agentId`）已实现后被推翻。现行规则是**所有直接 agent-scoped 的 MCP tool/prompt 调用必须显式提供 `agentId`**，理由是避免将请求误导到默认或隐式 agent、保持身份校验的明确性。绑定 credential 仍参与授权（显式值与绑定不一致 → `AGW_FORBIDDEN`），但不再替代缺失的 `agentId`，也不使用 stdio/default agent 兜底。实现见 `protocols/mcp/backendProxyExecutor.js` 的 `resolveDirectAgentTarget` 与 `inProcessExecutor.js` 的 `ensureAgentId`；`boundOmitted` 遥测埋点已随之移除。
+> **状态（2026-08-03）**：绑定 credential 的 MCP 调用**可以省略 `agentId`**，服务端以绑定身份为 target。4a65ab35 的"一律强制显式"规则被再次反转；本次恢复**不**带回任何 default/env agent 兜底（那才是 4a65ab35 真正要消除的误导面），只恢复"绑定身份补全"——target 与授权身份同源同值。绑定 credential 在密码学上只能代表一个 agent（§3.2：`admin` scope 不允许出现在绑定 credential 上），显式重复不构成额外授权保证；审计每请求仍记录 `credentialId` + `effectiveAgentId`，遥测区分 `explicit`/`boundOmitted`。
 
-现行必填面：
+现行规则矩阵：
 
-- `gateway_agent_bootstrap`、`gateway_recall_run`、`gateway_agent_render`（prompt argument）、memory/context 类 tool 的 `agentId` 均为必填（`mcpOperations.json` 与生成的 `mcpDescriptors.json` 一致）。
-- `gateway_job_get` / `gateway_job_cancel` 例外：保持 jobId-only，由 §3.4 的服务端 owner lookup 决议 target，不向调用方新增可伪造 owner 字段。
-- 缺失 `agentId` 一律受控 `MCP_INVALID_REQUEST`（"agentId is required"），绑定与否不改变该语义。
+| credential | `agentId` | 行为 |
+|---|---|---|
+| 绑定 agent | 省略 | target = 绑定 agent，记 `boundOmitted` |
+| 绑定 agent | 显式 == 绑定 | 放行，记 `explicit` |
+| 绑定 agent | 显式 ≠ 绑定 | `AGW_FORBIDDEN`（不变） |
+| 未绑定 | 省略 | 受控 `MCP_INVALID_REQUEST`（"agentId is required: provide an explicit agentId, or use an agent-bound credential"） |
+| 未绑定 | 显式 | 现行 scope/allowedAgents 校验（不变） |
 
-以下为被推翻前的原迁移方案，保留作历史决策记录（**不要按此实现**）：
+实现面：
 
-1. 建立 credential -> `effectiveAgentId` 的端到端上下文和所有 target guard。
-2. 让 MCP in-process/proxy 都在 `ensureAgentId` 前写入 effective agent。
-3. 再将 MCP tool/prompt schema 中的 `agentId` 改 optional。直接 agent-scoped schema 的改动面为当时必填的两处——`gateway_agent_bootstrap` 与 `gateway_recall_run`（另加 render prompt 的 argument）。
-4. 未绑定 credential 对直接 agent-scoped 操作保持 `agentId` 必填语义；job/event 等间接对象操作以服务端 owner 为 target。
-5. 记录显式 `agentId` 调用比例，完成迁移后再评估废弃时间表。
+- proxy executor `resolveDirectAgentTarget()` 恢复绑定补全分支（**无** defaultAgentId 参数）；直接 agent-scoped 操作（render prompt、bootstrap、recall_run、memory/context 类）与 job 类操作统一经它决议。diary 策略门必须在填充后的 agentId 上执行——透传空 `agentId` 会绕过 per-agent 日记授权；job 类操作不计入显式/省略遥测（间接对象，§3.4 服务端 owner lookup 授权）。
+- in-process executor `buildManagedToolContextInput()` 恢复同一补全逻辑；显式不一致在边缘即 `MCP_FORBIDDEN`（in-process 即 canonical backend）。未绑定省略仍由下游 `ensureAgentId` 受控报错。
+- `mcpOperations.json` 8 个操作的 `agentId` 全部改 optional（prompt `gateway_agent_render` 的 argument 同步），字段描述写明绑定可省略规则；`gateway_job_get`/`gateway_job_cancel` 保持 `jobId` 必填。
+- REST 面无代码改动：canonical 决议树（§3.2）本就支持"绑定 + 无 target → `effectiveAgentId` = 绑定 agent"。`RecallRunRequest` 的 OpenAPI `required` 放宽为 `['query']`——运行时本就经决议树填充，此前的 `['agentId','query']` 是 schema 文档漂移。
+- stdio：经凭据自省端点 `GET /agent_gateway/credential/context` 在启动时解析静态 credential 的绑定身份，作为受信任身份注入后续每条请求（§5.5），与 HTTP/WS 同一省略语义；自省失败或未绑定时保持"调用方需显式 `agentId`"的现状。
 
 `mcpOperations.json` 的改动只影响 MCP descriptors。若 Native REST 也要放宽 agent 参数，必须同步修改 `restOperations.json`、route binding 和 OpenAPI schema；不能声称修改 MCP catalog 会自动更新 OpenAPI。此外 `contracts/generated/mcpDescriptors.json` 是构建产物，修改 catalog 后必须重跑 export 脚本，契约快照测试覆盖该一致性。
+
+> **历史（2026-07-26，commit `4a65ab35`，已被上述规则再次反转）**：首次 optional 化（绑定 credential 可省略 `agentId`）实现后被 4a65ab35 推翻，理由是"避免将请求误导到默认或隐式 agent、保持身份校验的明确性"。本次处置：default/env 兜底保持移除（不恢复）；绑定补全与授权身份同源，不构成"隐式 agent"，故恢复。首次 optional 化的迁移步骤（credential → `effectiveAgentId` 上下文 → schema optional → 未绑定保持必填 → 记录显式比例）与本次一致，不再重复列出。
 
 ### 5.5 stdio 身份语义
 
@@ -118,5 +124,5 @@ stdio 没有 HTTP header 或 WebSocket handshake。其 `VCP_MCP_BACKEND_KEY`（�
 
 stdio 是**单进程单身份**：一个 stdio 实例注入一个 backend credential。同机多 agent 的场景需启动多个 stdio 实例，各自携带绑定不同 agent 的 credential。
 
-proxy executor 不应在本地提前以“缺少显式 agentId”为由失败：绑定 credential 场景应允许请求到达 backend，由统一 context 注入 effective agent；未绑定 credential 才由 backend 返回“agentId required”。
+stdio 的静态 credential 绑定信息原本对 proxy 边缘不可见（没有 HTTP/WS 那样的逐请求受信任注入通道）。为此新增凭据自省端点 `GET /agent_gateway/credential/context`（credentialAction: `authenticated`，任何有效凭据可 introspect 自身，返回 `credentialId`、`boundAgentId`、scopes、`status`、`expiresAt`、`credentialRevision`）：stdio 在启动时解析一次，将 `boundAgentId`/`credentialScopes` 作为受信任身份覆盖注入后续每条请求（客户端 params 中的同名字段仍按伪造值剥离），从而获得与 HTTP/WS 一致的 §5.4 绑定省略语义。自省失败、未绑定或端点不可用时不阻断启动，保持"调用方需显式 `agentId`"的现状；HTTP/WS runtime（`requireRequestAuthOverride`）不做静态自省。`VCP_MCP_DEFAULT_AGENT_ID` 不参与 tools/call 兜底。
 

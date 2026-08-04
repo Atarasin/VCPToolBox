@@ -11,10 +11,10 @@ const canonicalOperations = require('../../../modules/agentGateway/contracts/ope
 const { validateGatewayToolArguments } = require('../../../modules/agentGateway/contracts/schemas/validator');
 const { convertJsonSchemaToOpenApi } = require('../../../modules/agentGateway/contracts/generate/jsonSchemaToOpenApi');
 
-test('operation catalog freezes the 21 REST paths and 8 MCP operations', () => {
-    assert.equal(REST_OPERATIONS.length, 21);
+test('operation catalog freezes the 22 REST paths and 8 MCP operations', () => {
+    assert.equal(REST_OPERATIONS.length, 22);
     assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 8);
-    assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 21);
+    assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 22);
     for (const operation of REST_OPERATIONS) {
         assert.ok(operation.operationId);
         assert.ok(operation.method);
@@ -76,6 +76,25 @@ test('all managed operations preserve the historical AJV acceptance corpus', () 
         assert.deepEqual(validateGatewayToolArguments(operation, cases.valid), [], `${operation} valid corpus`);
         assert.deepEqual(cases.valid, before, `${operation} input remains unchanged`);
         assert.ok(validateGatewayToolArguments(operation, cases.invalid).length > 0, `${operation} invalid corpus`);
+    }
+});
+
+// §5.4（2026-08-03）：agentId 全部 optional——绑定 credential 由服务端决议树
+// 补全 target；schema 层不再拦截省略，未绑定省略由运行时受控报错。
+test('agentId-less arguments pass schema validation for bound-credential callers', () => {
+    const omissions = {
+        gateway_agent_render: {},
+        gateway_agent_bootstrap: {},
+        gateway_job_get: { jobId: 'job-1' },
+        gateway_job_cancel: { jobId: 'job-1' },
+        gateway_memory_search: { query: 'memory' },
+        gateway_context_assemble: {},
+        gateway_memory_write: { target: { diary: 'Nova' }, memory: { text: 'entry' } },
+        gateway_recall_run: { query: 'recall' }
+    };
+    assert.deepEqual(Object.keys(omissions).sort(), Object.keys(gatewayToolSchemas).sort());
+    for (const [operation, args] of Object.entries(omissions)) {
+        assert.deepEqual(validateGatewayToolArguments(operation, args), [], `${operation} accepts omitted agentId`);
     }
 });
 

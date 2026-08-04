@@ -7,13 +7,10 @@
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "agentId"
-        ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "variables": {
             "type": "object",
@@ -56,13 +53,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "jobId",
-          "agentId"
+          "jobId"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "jobId": {
             "type": "string",
@@ -82,13 +78,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "jobId",
-          "agentId"
+          "jobId"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "jobId": {
             "type": "string",
@@ -108,13 +103,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agentId",
           "query"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "query": {
             "type": "string",
@@ -183,13 +177,10 @@
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "agentId"
-        ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "query": {
             "type": "string",
@@ -271,14 +262,13 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agentId",
           "target",
           "memory"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "target": {
             "type": "object",
@@ -344,13 +334,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agentId",
           "query"
         ],
         "properties": {
           "agentId": {
             "type": "string",
-            "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field."
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
           },
           "query": {
             "type": "string",
@@ -375,8 +364,8 @@
       "arguments": [
         {
           "name": "agentId",
-          "description": "Explicit target agent identifier for this MCP invocation. Callers must provide this field.",
-          "required": true
+          "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent.",
+          "required": false
         },
         {
           "name": "variables",

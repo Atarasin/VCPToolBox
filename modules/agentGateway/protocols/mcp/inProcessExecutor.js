@@ -338,15 +338,24 @@ function buildManagedToolContextInput(input, args, { surface = 'in-process:tools
     );
     let agentId = explicitAgentId;
     if (trusted) {
-        // 绑定 credential 只负责校验显式 target 是否一致；不再用绑定身份
-        // 替代缺失的 agentId，避免把调用误导到默认/隐式 agent。
+        // §3.2/§5.4 决议树（2026-08 恢复）：绑定 credential 省略 agentId →
+        // 以绑定身份为 effective target；显式不一致 → 403（in-process 即
+        // canonical backend，绑定一致性在此强制）。未绑定省略保持既有必填
+        // 语义，由下游 ensureAgentId 受控报错；不做任何 default/env 兜底。
         const boundAgentId = normalizeMcpString(input.authContext.boundAgentId, 256);
         if (boundAgentId) {
-            if (explicitAgentId && explicitAgentId !== boundAgentId) {
+            if (!explicitAgentId) {
+                agentId = boundAgentId;
+                // 比例 telemetry 只统计直接 agent-scoped 操作（job 等间接
+                // 对象按 owner 决议，不计入显式 agentId 迁移比例）。
+                if (directAgentScoped) {
+                    defaultAgentTargetTelemetry.record({ surface, outcome: 'boundOmitted' });
+                }
+            } else if (explicitAgentId !== boundAgentId) {
                 throw createMcpError(MCP_ERROR_CODES.FORBIDDEN, 'target agent differs from bound agent', {
                     field: 'agentId'
                 });
-            } else if (explicitAgentId && directAgentScoped) {
+            } else if (directAgentScoped) {
                 defaultAgentTargetTelemetry.record({ surface, outcome: 'explicit' });
             }
         }
@@ -404,7 +413,7 @@ function ensureAgentId(requestContext, operation) {
     if (!requestContext.agentId) {
         throw createMcpError(
             MCP_ERROR_CODES.INVALID_REQUEST,
-            'agentId is required; callers must provide an explicit agentId',
+            'agentId is required: provide an explicit agentId, or use an agent-bound credential',
             { field: 'agentId', operation }
         );
     }
@@ -678,7 +687,7 @@ async function executeGatewayManagedTool(bundle, name, args, input = {}) {
     if (validationErrors.length && name === MCP_GATEWAY_TOOL_NAMES.RECALL_RUN) {
         const field = validationErrors[0].params?.missingProperty || validationErrors[0].path.slice(1) || 'arguments';
         if (field === 'agentId') {
-            throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'agentId is required; callers must provide an explicit agentId', {
+            throw createMcpError(MCP_ERROR_CODES.INVALID_REQUEST, 'agentId is required: provide an explicit agentId, or use an agent-bound credential', {
                 field, validationErrors
             });
         }

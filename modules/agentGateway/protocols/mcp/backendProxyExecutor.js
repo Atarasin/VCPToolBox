@@ -269,7 +269,7 @@ function ensureAgentId(input, operation, fallback = '') {
     if (!agentId) {
         throw createMcpError(
             MCP_ERROR_CODES.INVALID_REQUEST,
-            'agentId is required; callers must provide an explicit agentId',
+            'agentId is required: provide an explicit agentId, or use an agent-bound credential',
             { field: 'agentId', operation }
         );
     }
@@ -277,20 +277,28 @@ function ensureAgentId(input, operation, fallback = '') {
 }
 
 /**
- * 直接 agent-scoped MCP 调用只接受调用方显式提供的 target agentId。
+ * 直接 agent-scoped 操作的 target 决议（§5.4 / M3.S2，2026-08 恢复）。
  *
- * 绑定 credential 仍可用于 backend 侧做一致性校验，但不再替代缺失的
- * agentId，也不再使用 stdio/default agent 兜底，以免把请求误导到默认
- * agent。
+ * 绑定 credential（transport 注入的受信任 authContext）可省略 agentId：
+ * 省略时以绑定身份为 target 并记录 `boundOmitted`；显式提供记录
+ * `explicit`（与绑定不一致的值原样透传，由 canonical backend 决议树
+ * 返回 403，边缘不预授权）。未绑定且无显式值返回 ''——由调用方
+ * ensureAgentId 受控报错；不做任何 default/env agent 兜底。
  */
-function resolveDirectAgentTarget(input, args, surface) {
-    const explicit = normalizeMcpString(args?.agentId || input?.agentId || input?.requestContext?.agentId);
+function resolveDirectAgentTarget(input, args, surface, { telemetry = true } = {}) {
+    const explicit = normalizeMcpString(args?.agentId || input?.agentId || args?.target?.agentId || input?.requestContext?.agentId);
     const boundAgentId = normalizeMcpString(input?.authContext?.boundAgentId, 256);
     if (explicit) {
-        if (boundAgentId) {
+        if (telemetry && boundAgentId) {
             defaultAgentTargetTelemetry.record({ surface, outcome: 'explicit' });
         }
         return explicit;
+    }
+    if (boundAgentId) {
+        if (telemetry) {
+            defaultAgentTargetTelemetry.record({ surface, outcome: 'boundOmitted' });
+        }
+        return boundAgentId;
     }
     return '';
 }
@@ -570,11 +578,15 @@ const BACKEND_PROXY_METHODS = {
         }
 
         const executeDiaryOperation = async (methodName) => {
+            // §5.4：先经 resolveDirectAgentTarget 补全绑定身份，再过 diary
+            // 策略门——门必须按填充后的 agentId 执行 allowedDiaries，透传
+            // 空 agentId 会绕过 per-agent 日记授权。
+            const diaryTargetAgentId = resolveDirectAgentTarget(input, args, `tools/call:${name}`);
+            const scopedInput = diaryTargetAgentId ? { ...input, agentId: diaryTargetAgentId } : input;
             const scoped = applyDiaryPolicyGate({
                 toolName: name,
-                payload: buildBody(input, args),
-                input,
-                defaultAgentId: ''
+                payload: buildBody(scopedInput, args),
+                input: scopedInput
             });
             if (scoped.rejection) {
                 return { finalResult: createFailureResult(scoped.rejection) };
@@ -588,7 +600,13 @@ const BACKEND_PROXY_METHODS = {
             memorySearch: () => executeDiaryOperation('searchMemory'),
             contextAssemble: () => executeDiaryOperation('assembleContext'),
             memoryWrite: async () => {
-                const writeBody = buildBody(input, args);
+                // §5.4：绑定 credential 省略 agentId 时以绑定身份补全；
+                // 未绑定省略由 buildBody 内 ensureAgentId 受控报错。
+                const writeTargetAgentId = resolveDirectAgentTarget(input, args, `tools/call:${name}`);
+                const writeBody = buildBody(
+                    writeTargetAgentId ? { ...input, agentId: writeTargetAgentId } : input,
+                    args
+                );
                 const idempotencyKey = normalizeMcpString(
                     writeBody.options?.idempotencyKey || writeBody.target?.idempotencyKey ||
                     args.idempotencyKey || writeBody.idempotencyKey,
@@ -638,13 +656,21 @@ const BACKEND_PROXY_METHODS = {
                 );
             },
             jobGet: () => {
-                const targetAgentId = ensureAgentId(input, `tools/call:${name}`);
+                // job 是间接对象操作（服务端 owner lookup 决议 target），不计入
+                // 显式 agentId 迁移比例遥测。
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
                 const scopedInput = { ...input, agentId: targetAgentId };
                 ensureJobIdentity(scopedInput, `tools/call:${name}`);
                 return backendClient.getJob(args.jobId, buildJobQuery(scopedInput, args), requestOptions);
             },
             jobCancel: () => {
-                const targetAgentId = ensureAgentId(input, `tools/call:${name}`);
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
                 const scopedInput = { ...input, agentId: targetAgentId };
                 ensureJobIdentity(scopedInput, `tools/call:${name}`);
                 return backendClient.cancelJob(
@@ -682,7 +708,8 @@ const BACKEND_PROXY_METHODS = {
         const isDeferredResult = DEFERRED_RESULT_TOOL_NAMES.has(name) &&
             (result.status === 'accepted' || result.status === 'waiting_approval');
         if (name === MCP_GATEWAY_TOOL_NAMES.AGENT_BOOTSTRAP) {
-            const resolvedAgentId = result.data?.agentId || input.agentId || args.agentId;
+            const resolvedAgentId = result.data?.agentId || input.agentId || args.agentId
+                || normalizeMcpString(input.authContext?.boundAgentId, 256);
             if (isDeferredResult) {
                 // deferred 分支只需 agentId 供 canonical summary；render 尚未
                 // 完成，不做 prompt 整形也不取 guidance。

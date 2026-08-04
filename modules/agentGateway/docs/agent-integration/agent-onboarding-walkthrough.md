@@ -50,7 +50,7 @@ dailynote/付鹏市场判断/     判断存档与复盘
 
 `Agent/quant/FuPeng-MCP.txt` 的骨架（顺序有讲究）：
 
-1. **首要原则 + 规范获取优先级**：告诉宿主在新会话首次实质响应前、话题切换时，用 `prompts/get` → `gateway_agent_render`（`arguments.agentId: MCPFuPeng`）同步规范，并附最近消息作为渲染上下文——Gateway 会按当前问题从冷知识库检索相关片段注入返回的提示词。
+1. **首要原则 + 规范获取优先级**：告诉宿主在新会话首次实质响应前、话题切换时，用 `prompts/get` → `gateway_agent_render` 同步规范，并附最近消息作为渲染上下文——Gateway 会按当前问题从冷知识库检索相关片段注入返回的提示词。绑定凭据下无需传 `arguments.agentId`（§5.4：以绑定身份为 target）；显式传 `MCPFuPeng` 也可，与绑定一致即接受。
 2. **记忆与语料占位符**：`[[付鹏观点库知识库:6::Rerank]]`、`[[付鹏日记本::Time::TagMemo+]]`、`[[付鹏市场判断日记本::Time::TagMemo+]]`。渲染时由 RAGDiaryPlugin 填充。
 3. **Memory 语义**：写哪个 diary、什么该写什么不该写。与 `mcp_agent_memory_policy.json` 的 `allowedDiaries` 必须一致。
 4. **角色主体**：人设、工作流、表达规则、诚实边界。
@@ -187,7 +187,7 @@ MCP 端点：http://<host>:6005/mcp     （Streamable HTTP；WebSocket 同端点
 Agent：   MCPFuPeng
 ```
 
-`agentId` 每次调用都要显式传（§5.4：2026-07-26 起强制显式，绑定凭据只做一致性校验、不补全缺失值）。
+`agentId` 在绑定凭据下可以省略——省略即以绑定身份为 target（§5.4：2026-08-03 起恢复绑定补全）；显式传也只有与绑定身份一致才被接受，不一致是 `AGW_FORBIDDEN`。对外宿主直接省掉即可。
 
 **不拉 skill 也能工作**——告知链路有三层，前两层是协议自带、服务端按绑定 agent 逐请求渲染的：
 
