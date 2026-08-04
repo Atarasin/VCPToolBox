@@ -167,6 +167,20 @@ function isFolderMatchAllowedByOwner(requestedAlias, existingAlias, ownerAlias) 
         return requestedIsPublic && existingIsPublic;
     }
 
+    if (requestedAlias) {
+        // 请求名与目录名完全一致时不属于模糊匹配，归属守卫不应拦截：
+        // 否则 [付鹏市场判断]付鹏 这类署名会跳过同名目录，再被包含规则收敛到 owner 自己的目录。
+        if (existingAlias === requestedAlias) {
+            return true;
+        }
+
+        // 明确请求了比 owner 更具体的专题日记本时，禁止回落到 owner 自己的目录，
+        // 避免专题日记（含目录尚未创建的首次写入）被并入主日记本。
+        if (existingAlias === ownerAlias) {
+            return false;
+        }
+    }
+
     return existingAlias === ownerAlias || existingAlias.startsWith(ownerAlias + '的');
 }
 
