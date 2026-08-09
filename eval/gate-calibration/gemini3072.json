@@ -1,0 +1,400 @@
+{
+  "schemaVersion": 1,
+  "status": "validated",
+  "calibrationId": "gemini3072-gate-v1-fpr005",
+  "qualityLevel": "decision",
+  "protocol": {
+    "name": "gate-v1",
+    "targetFpr": 0.05,
+    "algorithm": "max-tpr-under-fpr",
+    "scoringFormulaVersion": "gate-score-v1",
+    "bootstrapIterations": 1000,
+    "seed": 183815366
+  },
+  "embedding": {
+    "model": "jy-gemini-embedding-001",
+    "dimension": 3072,
+    "endpointFingerprint": "sha256:2ddbc9ce94c74edbf449b26f6f1c1c81a04c51f89ac14589cd1571f19dfeba49"
+  },
+  "dataset": {
+    "id": "gate-v1",
+    "hash": "sha256:c0fef98f2dd7583996f2aaa40847bebc77c27f00c2e02d702b4ce0c596727df8",
+    "calibrationSplitHash": "sha256:e8c2cecdf56fec2f5a448377a0d92fdf53e7e102bb0dd3d16a595f1f15fe5923",
+    "holdoutSplitHash": "sha256:d0177c679f9b00cc03c8a1ef5320c9d12b357c78ef97ab908fc2cee5b1c18c47",
+    "qualityLevel": "decision",
+    "counts": {
+      "total": 1500,
+      "targets": {
+        "diary:评测运维技术库": {
+          "targetType": "diary",
+          "library": "评测运维技术库",
+          "total": 300,
+          "positive": 100,
+          "negative": 200,
+          "ambiguous": 0,
+          "verified": 300,
+          "splits": {
+            "calibration": 210,
+            "holdout": 90
+          },
+          "negativeDifficulty": {
+            "easy": 67,
+            "near-domain": 67,
+            "hard": 66
+          }
+        },
+        "diary:评测幻想设定库": {
+          "targetType": "diary",
+          "library": "评测幻想设定库",
+          "total": 300,
+          "positive": 100,
+          "negative": 200,
+          "ambiguous": 0,
+          "verified": 300,
+          "splits": {
+            "calibration": 210,
+            "holdout": 90
+          },
+          "negativeDifficulty": {
+            "easy": 67,
+            "near-domain": 67,
+            "hard": 66
+          }
+        },
+        "diary:评测容量运营库": {
+          "targetType": "diary",
+          "library": "评测容量运营库",
+          "total": 300,
+          "positive": 100,
+          "negative": 200,
+          "ambiguous": 0,
+          "verified": 300,
+          "splits": {
+            "calibration": 210,
+            "holdout": 90
+          },
+          "negativeDifficulty": {
+            "easy": 67,
+            "near-domain": 67,
+            "hard": 66
+          }
+        },
+        "diary:vcp知识库": {
+          "targetType": "diary",
+          "library": "vcp知识库",
+          "total": 300,
+          "positive": 100,
+          "negative": 200,
+          "ambiguous": 0,
+          "verified": 300,
+          "splits": {
+            "calibration": 210,
+            "holdout": 90
+          },
+          "negativeDifficulty": {
+            "easy": 67,
+            "near-domain": 67,
+            "hard": 66
+          }
+        },
+        "cold:VCP知识": {
+          "targetType": "cold",
+          "library": "VCP知识",
+          "total": 300,
+          "positive": 100,
+          "negative": 200,
+          "ambiguous": 0,
+          "verified": 300,
+          "splits": {
+            "calibration": 210,
+            "holdout": 90
+          },
+          "negativeDifficulty": {
+            "easy": 67,
+            "near-domain": 67,
+            "hard": 66
+          }
+        }
+      }
+    }
+  },
+  "gateDefinitionHash": "sha256:b23ae47edadcb7b0cc6a01bf8d5ca5c52d6414c3d8752de96049ed6f146d8f91",
+  "thresholds": {
+    "diary": {
+      "评测容量运营库": 0.6850752949653104,
+      "vcp知识库": 0.7956001246381017,
+      "评测幻想设定库": 0.6172837006477221,
+      "评测运维技术库": 0.6638945798255759
+    },
+    "cold": {
+      "VCP知识": 0.6500967722217981
+    }
+  },
+  "calibrationMetrics": {
+    "diary:评测容量运营库": {
+      "threshold": 0.6850752949653104,
+      "tp": 28,
+      "fp": 7,
+      "tn": 133,
+      "fn": 42,
+      "positives": 70,
+      "negatives": 140,
+      "tpr": 0.4,
+      "fpr": 0.05,
+      "fnr": 0.6,
+      "accuracy": 0.7666666666666667,
+      "balancedAccuracy": 0.675,
+      "discrimination": {
+        "positiveMean": 0.6705912303461586,
+        "negativeMean": 0.5848040382104583,
+        "separation": 0.0857871921357003,
+        "standardizedSeparation": 1.7375630125493602
+      },
+      "confidenceInterval95": {
+        "threshold": {
+          "lower": 0.6762812292404702,
+          "upper": 0.692453847956193
+        },
+        "tpr": {
+          "lower": 0.24285714285714285,
+          "upper": 0.5714285714285714
+        },
+        "fpr": {
+          "lower": 0.007142857142857143,
+          "upper": 0.05
+        },
+        "balancedAccuracy": {
+          "lower": 0.6035714285714285,
+          "upper": 0.7607142857142857
+        }
+      }
+    },
+    "cold:VCP知识": {
+      "threshold": 0.6500967722217981,
+      "tp": 20,
+      "fp": 0,
+      "tn": 140,
+      "fn": 50,
+      "positives": 70,
+      "negatives": 140,
+      "tpr": 0.2857142857142857,
+      "fpr": 0,
+      "fnr": 0.7142857142857143,
+      "accuracy": 0.7619047619047619,
+      "balancedAccuracy": 0.6428571428571428,
+      "discrimination": {
+        "positiveMean": 0.6326285871255831,
+        "negativeMean": 0.5466634823893303,
+        "separation": 0.08596510473625285,
+        "standardizedSeparation": 1.4413170752440108
+      },
+      "confidenceInterval95": {
+        "threshold": {
+          "lower": 0.6231585552219329,
+          "upper": 0.6598837880281595
+        },
+        "tpr": {
+          "lower": 0.18571428571428572,
+          "upper": 0.4
+        },
+        "fpr": {
+          "lower": 0,
+          "upper": 0.028749999999999838
+        },
+        "balancedAccuracy": {
+          "lower": 0.5927678571428572,
+          "upper": 0.7
+        }
+      }
+    },
+    "diary:vcp知识库": {
+      "threshold": 0.7956001246381017,
+      "tp": 0,
+      "fp": 0,
+      "tn": 140,
+      "fn": 70,
+      "positives": 70,
+      "negatives": 140,
+      "tpr": 0,
+      "fpr": 0,
+      "fnr": 1,
+      "accuracy": 0.6666666666666666,
+      "balancedAccuracy": 0.5,
+      "discrimination": {
+        "positiveMean": 0.5502640110181831,
+        "negativeMean": 0.5607088695277883,
+        "separation": -0.010444858509605193,
+        "standardizedSeparation": -0.18808497042754888
+      },
+      "confidenceInterval95": {
+        "threshold": {
+          "lower": 0.5775709931206948,
+          "upper": 0.7956001246381017
+        },
+        "tpr": {
+          "lower": 0,
+          "upper": 0.18571428571428572
+        },
+        "fpr": {
+          "lower": 0,
+          "upper": 0.05
+        },
+        "balancedAccuracy": {
+          "lower": 0.5,
+          "upper": 0.5678571428571428
+        }
+      }
+    },
+    "diary:评测幻想设定库": {
+      "threshold": 0.6172837006477221,
+      "tp": 20,
+      "fp": 0,
+      "tn": 140,
+      "fn": 50,
+      "positives": 70,
+      "negatives": 140,
+      "tpr": 0.2857142857142857,
+      "fpr": 0,
+      "fnr": 0.7142857142857143,
+      "accuracy": 0.7619047619047619,
+      "balancedAccuracy": 0.6428571428571428,
+      "discrimination": {
+        "positiveMean": 0.5803227900142269,
+        "negativeMean": 0.549630024583308,
+        "separation": 0.030692765430918922,
+        "standardizedSeparation": 0.7063538158154303
+      },
+      "confidenceInterval95": {
+        "threshold": {
+          "lower": 0.5832685153430954,
+          "upper": 0.6340246859844714
+        },
+        "tpr": {
+          "lower": 0.18571428571428572,
+          "upper": 0.38571428571428573
+        },
+        "fpr": {
+          "lower": 0,
+          "upper": 0.05
+        },
+        "balancedAccuracy": {
+          "lower": 0.5892857142857143,
+          "upper": 0.6928571428571428
+        }
+      }
+    },
+    "diary:评测运维技术库": {
+      "threshold": 0.6638945798255759,
+      "tp": 50,
+      "fp": 7,
+      "tn": 133,
+      "fn": 20,
+      "positives": 70,
+      "negatives": 140,
+      "tpr": 0.7142857142857143,
+      "fpr": 0.05,
+      "fnr": 0.2857142857142857,
+      "accuracy": 0.8714285714285714,
+      "balancedAccuracy": 0.8321428571428571,
+      "discrimination": {
+        "positiveMean": 0.6730298244117378,
+        "negativeMean": 0.5699100943331987,
+        "separation": 0.10311973007853903,
+        "standardizedSeparation": 2.652467694364873
+      },
+      "confidenceInterval95": {
+        "threshold": {
+          "lower": 0.6174325112451069,
+          "upper": 0.6744523201910018
+        },
+        "tpr": {
+          "lower": 0.5714285714285714,
+          "upper": 1
+        },
+        "fpr": {
+          "lower": 0.014285714285714285,
+          "upper": 0.05
+        },
+        "balancedAccuracy": {
+          "lower": 0.7714285714285715,
+          "upper": 0.9785714285714286
+        }
+      }
+    }
+  },
+  "holdoutMetrics": {
+    "diary:评测容量运营库": {
+      "threshold": 0.6850752949653104,
+      "tp": 12,
+      "fp": 0,
+      "tn": 60,
+      "fn": 18,
+      "positives": 30,
+      "negatives": 60,
+      "tpr": 0.4,
+      "fpr": 0,
+      "fnr": 0.6,
+      "accuracy": 0.8,
+      "balancedAccuracy": 0.7
+    },
+    "cold:VCP知识": {
+      "threshold": 0.6500967722217981,
+      "tp": 0,
+      "fp": 0,
+      "tn": 60,
+      "fn": 30,
+      "positives": 30,
+      "negatives": 60,
+      "tpr": 0,
+      "fpr": 0,
+      "fnr": 1,
+      "accuracy": 0.6666666666666666,
+      "balancedAccuracy": 0.5
+    },
+    "diary:vcp知识库": {
+      "threshold": 0.7956001246381017,
+      "tp": 0,
+      "fp": 0,
+      "tn": 60,
+      "fn": 30,
+      "positives": 30,
+      "negatives": 60,
+      "tpr": 0,
+      "fpr": 0,
+      "fnr": 1,
+      "accuracy": 0.6666666666666666,
+      "balancedAccuracy": 0.5
+    },
+    "diary:评测幻想设定库": {
+      "threshold": 0.6172837006477221,
+      "tp": 2,
+      "fp": 6,
+      "tn": 54,
+      "fn": 28,
+      "positives": 30,
+      "negatives": 60,
+      "tpr": 0.06666666666666667,
+      "fpr": 0.1,
+      "fnr": 0.9333333333333333,
+      "accuracy": 0.6222222222222222,
+      "balancedAccuracy": 0.48333333333333334
+    },
+    "diary:评测运维技术库": {
+      "threshold": 0.6638945798255759,
+      "tp": 10,
+      "fp": 0,
+      "tn": 60,
+      "fn": 20,
+      "positives": 30,
+      "negatives": 60,
+      "tpr": 0.3333333333333333,
+      "fpr": 0,
+      "fnr": 0.6666666666666667,
+      "accuracy": 0.7777777777777778,
+      "balancedAccuracy": 0.6666666666666666
+    }
+  },
+  "createdAt": "2026-08-09T15:53:05.290Z",
+  "artifactHash": "sha256:ee00a3a372ab083beaff465280e57e7cde73612049d7065d9b8f6eeeec869abd",
+  "validatedAt": "2026-08-09T15:53:05.335Z"
+}
