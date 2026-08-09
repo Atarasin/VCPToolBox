@@ -230,7 +230,7 @@ test('collectRows retries only transient query embedding failures', async () => 
     assert.equal(calls, 1);
 });
 
-test('score bundles can be written one split at a time for resumable collection', t => {
+test('score bundles can be written as isolated calibration/holdout runs', t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-split-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const datasetInfo = {
