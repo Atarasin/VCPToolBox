@@ -46,6 +46,16 @@ async function collect(flags) {
     if (!dataset.verification.ok) {
         throw gateCalibration.codedError('GATE_DATASET_INVALID', 'dataset verification failed');
     }
+    const requestedSplit = flags.split && flags.split !== true ? String(flags.split) : null;
+    if (requestedSplit && !['calibration', 'holdout'].includes(requestedSplit)) {
+        throw gateCalibration.codedError('GATE_SCORE_SPLIT_INVALID', '--split must be calibration or holdout');
+    }
+    const collectDataset = requestedSplit
+        ? { ...dataset, rows: dataset.rows.filter(row => row.split === requestedSplit) }
+        : dataset;
+    if (collectDataset.rows.length === 0) {
+        throw gateCalibration.codedError('GATE_SCORE_SPLIT_EMPTY', `dataset has no rows for split ${requestedSplit}`);
+    }
     const resolved = profileLib.loadProfile(flags.profile || 'default');
     const installed = pluginConfig.status();
     if (!installed.ok) throw gateCalibration.codedError('GATE_PLUGIN_CONFIG_MISSING', 'gate target definitions are not installed');
@@ -96,7 +106,7 @@ async function collect(flags) {
         });
         runtime = await require('./runtime').boot({ resolved, withLightMemo: false, withColdKB: false });
         const rows = await gateCalibration.collectRows(
-            dataset,
+            collectDataset,
             resolved.name,
             {
                 model: resolved.embedding.model,
@@ -119,7 +129,8 @@ async function collect(flags) {
                 endpointFingerprint: resolved.embedding.endpointFingerprint
             },
             gateDefinitionHash: resolved.gate.definitionHash,
-            outputDir
+            outputDir,
+            splits: requestedSplit ? [requestedSplit] : undefined
         });
         runstore.finalizeRun(handle, {
             status: 'completed',

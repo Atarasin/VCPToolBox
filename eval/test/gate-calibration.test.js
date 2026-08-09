@@ -230,6 +230,26 @@ test('collectRows retries only transient query embedding failures', async () => 
     assert.equal(calls, 1);
 });
 
+test('score bundles can be written one split at a time for resumable collection', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-split-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const datasetInfo = {
+        manifest: { datasetId: 'gate-v1' },
+        verification: { datasetHash: 'sha256:dataset' }
+    };
+    const files = calibration.writeScoreBundles({
+        rows: [{ caseId: 'calibration-1', split: 'calibration', score: 0.8 }],
+        dataset: datasetInfo,
+        profileName: 'synthetic',
+        embedding: { model: 'model-a', dimension: 3, endpointFingerprint: 'sha256:endpoint' },
+        gateDefinitionHash: 'sha256:gate',
+        outputDir: dir,
+        splits: ['calibration']
+    });
+    assert.deepEqual(Object.keys(files), ['calibration']);
+    assert.equal(fs.existsSync(path.join(dir, 'synthetic-gate-v1-holdout.jsonl')), false);
+});
+
 test('gate calibrate/validate --json emit one stable machine-readable document', t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-cli-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -242,10 +242,13 @@ function scoreManifest({ dataset, profileName, embedding, gateDefinitionHash, sp
     };
 }
 
-function writeScoreBundles({ rows, dataset, profileName, embedding, gateDefinitionHash, outputDir }) {
+function writeScoreBundles({ rows, dataset, profileName, embedding, gateDefinitionHash, outputDir, splits = ['calibration', 'holdout'] }) {
     fs.mkdirSync(outputDir, { recursive: true });
     const written = {};
-    for (const split of ['calibration', 'holdout']) {
+    for (const split of splits) {
+        if (!['calibration', 'holdout'].includes(split)) {
+            throw codedError('GATE_SCORE_SPLIT_INVALID', `unsupported score split: ${split}`);
+        }
         const selected = rows.filter(row => row.split === split).sort((a, b) => a.caseId.localeCompare(b.caseId));
         const base = path.join(outputDir, `${profileName}-gate-v1-${split}`);
         const manifest = scoreManifest({ dataset, profileName, embedding, gateDefinitionHash, split, rows: selected });
