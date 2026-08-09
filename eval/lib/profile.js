@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const gateProvenance = require('../../modules/gateProvenance');
+const gateCalibrationLib = require('./gateCalibration');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const EVAL_ROOT = path.resolve(__dirname, '..');
@@ -145,6 +146,9 @@ function validateGateCalibration(calibration, context) {
     const reasons = [];
     if (artifact.schemaVersion !== 1) reasons.push('schemaVersion must be 1');
     if (artifact.status !== 'validated') reasons.push('artifact status must be validated');
+    if (!artifact.artifactHash || artifact.artifactHash !== gateCalibrationLib.artifactHash(artifact)) {
+        reasons.push('artifact hash is missing or invalid');
+    }
     if (artifact.embedding?.model !== effectiveEmbedding.model) reasons.push('embedding model differs');
     if (Number(artifact.embedding?.dimension) !== effectiveEmbedding.dimension) reasons.push('embedding dimension differs');
     if (artifact.embedding?.endpointFingerprint !== effectiveEmbedding.endpointFingerprint) reasons.push('embedding endpoint differs');

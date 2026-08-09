@@ -72,6 +72,28 @@ test('429 exhaustion throws a stable rate-limit error', async () => {
     assert.equal(calls, 3);
 });
 
+test('Retry-After beyond the configured wait cap fails instead of retrying too early', async () => {
+    let calls = 0;
+    await assert.rejects(
+        _sendBatch(['query'], {
+            apiUrl: 'https://embedding.example.test',
+            apiKey: 'test-key',
+            model: 'model-a',
+            fetchImpl: async () => {
+                calls++;
+                return response(429, { error: { type: 'rate_limit' } }, { 'retry-after': '60' });
+            },
+            sleep: async () => assert.fail('must not under-wait Retry-After'),
+            rateLimitRetries: 2,
+            rateLimitBaseMs: 100,
+            rateLimitMaxMs: 5000,
+            requestTimeoutMs: 1000
+        }, 1, false, 2),
+        error => error.code === 'EMBEDDING_RATE_LIMITED' && /exceeds configured maximum/.test(error.message)
+    );
+    assert.equal(calls, 1);
+});
+
 test('a stalled embedding request fails with a stable timeout error', async () => {
     // AbortSignal.timeout 的内部 timer 会 unref；真实 socket 会保持事件循环，测试替身也需要模拟这一点。
     const socketHandle = setTimeout(() => {}, 1000);

@@ -161,12 +161,17 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
                     const retryAfterMs = _parseRetryAfterMs(response.headers?.get?.('retry-after'));
                     const exponentialMs = rateLimitBaseMs * (2 ** rateLimitAttempt);
                     const jitterMs = Math.floor(Math.min(1000, exponentialMs * 0.1) * random());
-                    const waitTime = Math.min(rateLimitMaxMs, Math.max(retryAfterMs || 0, exponentialMs + jitterMs));
+                    const computedWaitMs = Math.min(rateLimitMaxMs, exponentialMs + jitterMs);
                     const error = new Error(`Embedding API rate limited model "${model}" (429)`);
                     error.code = 'EMBEDDING_RATE_LIMITED';
                     error.retryAfterMs = retryAfterMs;
                     lastError = error;
                     if (rateLimitAttempt >= rateLimitRetries) throw error;
+                    if (retryAfterMs !== null && retryAfterMs > rateLimitMaxMs) {
+                        error.message += `; Retry-After ${retryAfterMs}ms exceeds configured maximum ${rateLimitMaxMs}ms`;
+                        throw error;
+                    }
+                    const waitTime = retryAfterMs !== null ? retryAfterMs : computedWaitMs;
                     console.warn(
                         `[Embedding] Batch ${batchNumber} model "${model}" rate limited (429). ` +
                         `Retrying same model in ${waitTime}ms (${rateLimitAttempt + 1}/${rateLimitRetries}).`
