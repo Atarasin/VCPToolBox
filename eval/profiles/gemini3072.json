@@ -18,5 +18,13 @@
     "strictVectorMetadata": true
   },
   "gateCalibrationPath": "gate-calibration/gemini3072.json",
-  "env": {}
+  "env": {
+    "TAG_VECTORIZE_CONCURRENCY": "1",
+    "EMBEDDING_GLOBAL_CONCURRENCY": "1",
+    "EMBEDDING_MIN_REQUEST_INTERVAL_MS": "300",
+    "EMBEDDING_REQUEST_TIMEOUT_MS": "60000",
+    "EMBEDDING_RATE_LIMIT_RETRIES": "6",
+    "EMBEDDING_RATE_LIMIT_BASE_MS": "10000",
+    "EMBEDDING_RATE_LIMIT_MAX_MS": "120000"
+  }
 }

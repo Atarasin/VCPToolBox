@@ -13,6 +13,70 @@ const DISABLE_BATCHING = (process.env.EMBEDDING_DISABLE_BATCHING || 'false').toL
 const RAW_EMBEDDING_DIMENSIONS = process.env.EMBEDDING_DIMENSIONS || process.env.VECTORDB_DIMENSION;
 const EMBEDDING_DIMENSIONS = RAW_EMBEDDING_DIMENSIONS ? parseInt(RAW_EMBEDDING_DIMENSIONS, 10) : NaN;
 
+function _envInteger(name, fallback, min, max = Number.MAX_SAFE_INTEGER) {
+    const parsed = Number.parseInt(process.env[name], 10);
+    return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
+}
+
+const REQUEST_TIMEOUT_MS = _envInteger('EMBEDDING_REQUEST_TIMEOUT_MS', 60000, 1000);
+const RATE_LIMIT_RETRIES = _envInteger('EMBEDDING_RATE_LIMIT_RETRIES', 4, 0, 10);
+const RATE_LIMIT_BASE_MS = _envInteger('EMBEDDING_RATE_LIMIT_BASE_MS', 5000, 100);
+const RATE_LIMIT_MAX_MS = _envInteger('EMBEDDING_RATE_LIMIT_MAX_MS', 120000, RATE_LIMIT_BASE_MS);
+const GLOBAL_CONCURRENCY = _envInteger('EMBEDDING_GLOBAL_CONCURRENCY', 0, 0);
+const MIN_REQUEST_INTERVAL_MS = _envInteger('EMBEDDING_MIN_REQUEST_INTERVAL_MS', 0, 0);
+
+function _createRequestScheduler(maxConcurrency = 0, minIntervalMs = 0) {
+    const limit = Math.max(0, Number(maxConcurrency) || 0);
+    const interval = Math.max(0, Number(minIntervalMs) || 0);
+    if (limit === 0 && interval === 0) return task => task();
+
+    const queue = [];
+    let active = 0;
+    let nextStartAt = 0;
+    let timer = null;
+
+    const drain = () => {
+        if (timer || queue.length === 0 || (limit > 0 && active >= limit)) return;
+        const waitMs = Math.max(0, nextStartAt - Date.now());
+        if (waitMs > 0) {
+            timer = setTimeout(() => {
+                timer = null;
+                drain();
+            }, waitMs);
+            return;
+        }
+
+        const { task, resolve, reject } = queue.shift();
+        active++;
+        nextStartAt = Date.now() + interval;
+        Promise.resolve()
+            .then(task)
+            .then(resolve, reject)
+            .finally(() => {
+                active--;
+                drain();
+            });
+        drain();
+    };
+
+    return task => new Promise((resolve, reject) => {
+        queue.push({ task, resolve, reject });
+        drain();
+    });
+}
+
+const scheduleRequest = _createRequestScheduler(GLOBAL_CONCURRENCY, MIN_REQUEST_INTERVAL_MS);
+
+function _parseRetryAfterMs(value, now = Date.now()) {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const normalized = String(value).trim();
+    const seconds = Number(normalized);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+    const retryAt = Date.parse(normalized);
+    if (!Number.isFinite(retryAt)) return null;
+    return Math.max(0, retryAt - now);
+}
+
 function _splitModelList(value) {
     return String(value || '')
         .split(/[,，]/)
@@ -60,13 +124,21 @@ function _getEmbeddingModelCandidates(config = {}) {
  * 内部函数：发送单个批次
  */
 async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dimensions) {
-    const { default: fetch } = await import('node-fetch');
+    const fetchImpl = config.fetchImpl || (await import('node-fetch')).default;
+    const sleep = config.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const random = config.random || Math.random;
     const modelCandidates = _getEmbeddingModelCandidates(config);
     const baseDelay = 1000;
+    const requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) ? config.requestTimeoutMs : REQUEST_TIMEOUT_MS;
+    const rateLimitRetries = Number.isFinite(config.rateLimitRetries) ? config.rateLimitRetries : RATE_LIMIT_RETRIES;
+    const rateLimitBaseMs = Number.isFinite(config.rateLimitBaseMs) ? config.rateLimitBaseMs : RATE_LIMIT_BASE_MS;
+    const rateLimitMaxMs = Number.isFinite(config.rateLimitMaxMs) ? config.rateLimitMaxMs : RATE_LIMIT_MAX_MS;
+    let lastError = null;
 
     for (let attempt = 1; attempt <= modelCandidates.length; attempt++) {
         const model = modelCandidates[attempt - 1];
-        try {
+        for (let rateLimitAttempt = 0; rateLimitAttempt <= rateLimitRetries; rateLimitAttempt++) {
+          try {
             const requestUrl = `${config.apiUrl}/v1/embeddings`;
             const requestBody = { model, input: disableBatching ? batchTexts[0] : batchTexts };
             if (Number.isFinite(dimensions)) {
@@ -74,19 +146,37 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
             }
             const requestHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` };
 
-            const response = await fetch(requestUrl, {
-                method: 'POST',
-                headers: requestHeaders,
-                body: JSON.stringify(requestBody)
-            });
+            const response = await scheduleRequest(() => fetchImpl(requestUrl, {
+                    method: 'POST',
+                    headers: requestHeaders,
+                    body: JSON.stringify(requestBody),
+                    // 排队时间不应消耗 HTTP 超时预算，signal 必须在拿到全局请求槽后创建。
+                    signal: AbortSignal.timeout(Math.max(1, requestTimeoutMs))
+                }));
 
             const responseBodyText = await response.text();
 
             if (!response.ok) {
                 if (response.status === 429) {
-                    const waitTime = Math.min(5000 * attempt, 15000);
-                    console.warn(`[Embedding] Batch ${batchNumber} model "${model}" rate limited (429). Switching fallback in ${waitTime / 1000}s...`);
-                    await new Promise(r => setTimeout(r, waitTime));
+                    const retryAfterMs = _parseRetryAfterMs(response.headers?.get?.('retry-after'));
+                    const exponentialMs = rateLimitBaseMs * (2 ** rateLimitAttempt);
+                    const jitterMs = Math.floor(Math.min(1000, exponentialMs * 0.1) * random());
+                    const computedWaitMs = Math.min(rateLimitMaxMs, exponentialMs + jitterMs);
+                    const error = new Error(`Embedding API rate limited model "${model}" (429)`);
+                    error.code = 'EMBEDDING_RATE_LIMITED';
+                    error.retryAfterMs = retryAfterMs;
+                    lastError = error;
+                    if (rateLimitAttempt >= rateLimitRetries) throw error;
+                    if (retryAfterMs !== null && retryAfterMs > rateLimitMaxMs) {
+                        error.message += `; Retry-After ${retryAfterMs}ms exceeds configured maximum ${rateLimitMaxMs}ms`;
+                        throw error;
+                    }
+                    const waitTime = retryAfterMs !== null ? retryAfterMs : computedWaitMs;
+                    console.warn(
+                        `[Embedding] Batch ${batchNumber} model "${model}" rate limited (429). ` +
+                        `Retrying same model in ${waitTime}ms (${rateLimitAttempt + 1}/${rateLimitRetries}).`
+                    );
+                    await sleep(waitTime);
                     continue;
                 }
                 throw new Error(`API Error ${response.status}: ${responseBodyText.substring(0, 500)}`);
@@ -140,12 +230,24 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
 
             return data.data.sort((a, b) => a.index - b.index).map(item => item.embedding);
 
-        } catch (e) {
+          } catch (e) {
+            if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
+                const timeoutError = new Error(`Embedding request timed out after ${requestTimeoutMs}ms`);
+                timeoutError.code = 'EMBEDDING_REQUEST_TIMEOUT';
+                lastError = timeoutError;
+                console.warn(`[Embedding] Batch ${batchNumber}, Model "${model}" timed out after ${requestTimeoutMs}ms.`);
+                if (attempt === modelCandidates.length) throw timeoutError;
+                break;
+            }
+            lastError = e;
             console.warn(`[Embedding] Batch ${batchNumber}, Model "${model}" failed (${attempt}/${modelCandidates.length}): ${e.message}`);
             if (attempt === modelCandidates.length) throw e;
-            await new Promise(r => setTimeout(r, baseDelay * attempt));
+            await sleep(baseDelay * attempt);
+            break;
+          }
         }
     }
+    throw lastError || new Error('No embedding model candidates available');
 }
 
 /**
@@ -281,4 +383,11 @@ function cosineSimilarity(a, b) {
     return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
 }
 
-module.exports = { getEmbeddingsBatch, cosineSimilarity, _getEmbeddingModelCandidates };
+module.exports = {
+    getEmbeddingsBatch,
+    cosineSimilarity,
+    _getEmbeddingModelCandidates,
+    _sendBatch,
+    _parseRetryAfterMs,
+    _createRequestScheduler
+};

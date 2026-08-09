@@ -17,6 +17,7 @@ const fs = require('fs').promises;
 const BM25QueryOptimizer = require('./BM25QueryOptimizer.js');
 const { endpointFingerprint } = require('../../modules/embeddingProvenance');
 const { mergeThresholdOverride } = require('../../modules/gateProvenance');
+const { scoreGateVectors } = require('../../modules/gateScoring');
 
 const DEFAULT_TDB_THRESHOLD = 0.30; // 《《》》门控的默认相似度阈值（冷知识库通常比日记本更宽松）
 
@@ -221,20 +222,38 @@ class TDBPlaceholderProcessor {
             totalThreshold += threshold;
             count++;
 
-            const libraryNameCosine = nameVector
-                ? this.host.cosineSimilarity(queryVector, nameVector) : null;
-            const enhancedVectorCosine = enhancedVector
-                ? this.host.cosineSimilarity(queryVector, enhancedVector) : null;
-            const score = Math.max(
-                Number.isFinite(libraryNameCosine) ? libraryNameCosine : 0,
-                Number.isFinite(enhancedVectorCosine) ? enhancedVectorCosine : 0
-            );
+            const scored = scoreGateVectors({
+                queryVector,
+                libraryNameVector: nameVector,
+                enhancedVector,
+                cosineSimilarity: this.host.cosineSimilarity.bind(this.host)
+            });
+            const { score, scoreComponents } = scored;
             maxSim = Math.max(maxSim, score);
-            perLibrary[name] = { score, threshold, libraryNameCosine, enhancedVectorCosine };
+            perLibrary[name] = { score, threshold, ...scoreComponents };
         }
 
         const avgThreshold = count > 0 ? totalThreshold / count : DEFAULT_TDB_THRESHOLD;
         return { maxSim, avgThreshold, perLibrary };
+    }
+
+    async scoreGate({ library, query, queryVector = null }) {
+        const name = String(library || '').trim();
+        const text = String(query || '').trim();
+        if (!name) throw new TypeError('library is required');
+        if (!queryVector && !text) throw new TypeError('query or queryVector is required');
+        const vector = queryVector || await this.host.getSingleEmbeddingCached(text);
+        const gate = await this._computeGate(vector, [name]);
+        const item = gate.perLibrary[name];
+        return {
+            score: item.score,
+            scoreComponents: {
+                libraryNameCosine: item.libraryNameCosine,
+                enhancedVectorCosine: item.enhancedVectorCosine,
+                aggregation: item.aggregation
+            },
+            scoringFormulaVersion: 'gate-score-v1'
+        };
     }
 
     _broadcastGateDecision(libraryNames, score, threshold, decision, scoreComponents) {

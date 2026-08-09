@@ -4120,14 +4120,20 @@ class TagMemoEngine {
         }
 
         // queued 任务尚未持有任何资源，关闭时直接取消；running 任务等待其安全释放租约。
+        // Threshold/follow-up timers call doMatrixRebuild() directly rather than through
+        // _derivedTaskQueue, so _isMatrixRebuilding must be part of the shutdown barrier too.
         this._derivedTaskQueue = this._derivedTaskQueue.filter(task => task.status === 'running');
         const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 30 * 60 * 1000);
         const startedAt = Date.now();
-        while (this._derivedTaskRunning && Date.now() - startedAt < timeoutMs) {
+        while ((this._derivedTaskRunning || this._isMatrixRebuilding) && Date.now() - startedAt < timeoutMs) {
             await new Promise(resolve => setTimeout(resolve, 50));
         }
-        if (this._derivedTaskRunning) {
-            console.warn(`[TagMemoEngine] ⚠️ Shutdown timed out after ${timeoutMs}ms while a derived task was still running.`);
+        if (this._derivedTaskRunning || this._isMatrixRebuilding) {
+            const active = [
+                this._derivedTaskRunning ? 'derived task' : null,
+                this._isMatrixRebuilding ? 'matrix rebuild' : null
+            ].filter(Boolean).join(' and ');
+            console.warn(`[TagMemoEngine] ⚠️ Shutdown timed out after ${timeoutMs}ms while ${active} was still running.`);
         } else {
             this._derivedTaskQueue = [];
         }

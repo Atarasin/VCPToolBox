@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>VCP Gate 人工审阅器</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.55 system-ui, sans-serif; }
+    body { max-width: 960px; margin: 0 auto; padding: 24px; }
+    header, main, footer { border: 1px solid #8886; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+    h1, h2, p { margin-top: 0; }
+    label { display: block; margin: 10px 0; }
+    input[type="text"], textarea { box-sizing: border-box; width: 100%; padding: 9px; font: inherit; }
+    textarea { min-height: 84px; }
+    button { padding: 9px 14px; margin: 4px; font: inherit; cursor: pointer; }
+    button.selected { outline: 3px solid #3b82f6; font-weight: 700; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .grow { flex: 1; }
+    .muted { opacity: .72; }
+    .query { font-size: 1.28rem; padding: 14px; background: #8881; border-radius: 8px; white-space: pre-wrap; }
+    .ref { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .context { max-height: 300px; overflow: auto; padding: 12px; background: #8881; border-radius: 8px; white-space: pre-wrap; }
+    .status { min-height: 1.5em; }
+    .error { color: #dc2626; white-space: pre-wrap; }
+    .success { color: #16a34a; }
+    progress { width: 100%; height: 18px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VCP Gate 人工审阅器</h1>
+    <p>完全离线运行。页面不会读取 API Key、不会联网，也不会预填最终标签或人工声明。</p>
+    <label>选择 review JSONL 分片 <input id="file" type="file" accept=".jsonl,application/json"></label>
+    <div id="loadStatus" class="status muted">尚未加载文件</div>
+  </header>
+
+  <main id="workspace" hidden>
+    <div class="row">
+      <strong id="position"></strong>
+      <span id="dataset" class="muted"></span>
+      <label><input id="onlyPending" type="checkbox"> 只看未完成</label>
+    </div>
+    <progress id="progress" value="0" max="1"></progress>
+    <h2 id="caseId"></h2>
+    <div id="query" class="query"></div>
+    <p>目标：<strong id="target"></strong></p>
+    <p>来源：<span id="sourceRefs" class="ref"></span></p>
+    <details open><summary>来源正文/摘要</summary><pre id="sourceContext" class="context"></pre></details>
+    <p>候选标签：<strong id="candidate"></strong>；难度：<strong id="difficulty"></strong></p>
+
+    <div aria-label="人工最终标签">
+      <button type="button" data-label="positive">P · Positive</button>
+      <button type="button" data-label="negative">N · Negative</button>
+      <button type="button" data-label="ambiguous">A · Ambiguous</button>
+    </div>
+    <label>审阅备注（可选）<textarea id="notes"></textarea></label>
+    <div class="row">
+      <button id="previous" type="button">← 上一条</button>
+      <button id="next" type="button">下一条 →</button>
+      <span class="muted">快捷键：P / N / A，← / →</span>
+    </div>
+  </main>
+
+  <footer id="exportArea" hidden>
+    <h2>导出审阅证据</h2>
+    <p>只有全部 case 都由审阅者选择标签后才能导出。</p>
+    <label>Reviewer ID <input id="reviewerId" type="text" autocomplete="off"></label>
+    <label>请亲自键入完全一致的声明
+      <textarea id="attestation" autocomplete="off" spellcheck="false"></textarea>
+    </label>
+    <p class="ref muted">I personally reviewed these gate labels against their source references.</p>
+    <button id="download" type="button" disabled>导出 reviewed JSONL</button>
+    <div id="exportStatus" class="status"></div>
+  </footer>
+
+  <script src="reviewer.js"></script>
+  <script src="reviewer-ui.js"></script>
+</body>
+</html>

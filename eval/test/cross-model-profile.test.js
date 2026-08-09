@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const profile = require('../lib/profile');
+const calibration = require('../lib/gateCalibration');
 const runstore = require('../lib/runstore');
 const preflight = require('../lib/preflight');
 
@@ -123,6 +124,36 @@ test('calibration validation rejects stale gate definition, scoring formula and 
     assert.ok(calibration.validationReasons.some(reason => reason.includes('scoring formula')));
     assert.ok(calibration.validationReasons.some(reason => reason.includes('dataset provenance')));
     assert.ok(calibration.validationReasons.some(reason => reason.includes('outside eval namespace')));
+    assert.ok(calibration.validationReasons.some(reason => reason.includes('artifact hash')));
+});
+
+test('calibration validation rejects a modified artifact with a stale internal hash', () => {
+    const effectiveEmbedding = {
+        model: 'model-a', dimension: 3, endpointFingerprint: 'sha256:endpoint'
+    };
+    const artifact = {
+        schemaVersion: 1,
+        status: 'validated',
+        embedding: effectiveEmbedding,
+        gateDefinitionHash: 'sha256:definition',
+        protocol: { scoringFormulaVersion: 'gate-score-v1' },
+        dataset: {
+            id: 'gate-v1', hash: 'sha256:dataset',
+            calibrationSplitHash: 'sha256:calibration', holdoutSplitHash: 'sha256:holdout'
+        },
+        thresholds: { diary: { EvalDiary: 0.5 }, cold: { VCP知识: 0.5 } }
+    };
+    artifact.artifactHash = calibration.artifactHash(artifact);
+    artifact.thresholds.diary.EvalDiary = 0.9;
+    const loaded = { artifact, status: 'validated' };
+    profile.validateGateCalibration(loaded, {
+        effectiveEmbedding,
+        gateDefinitionHash: 'sha256:definition',
+        scoringFormulaVersion: 'gate-score-v1',
+        allowedTargets: { diary: ['EvalDiary'], cold: ['VCP知识'] }
+    });
+    assert.equal(loaded.status, 'stale');
+    assert.ok(loaded.validationReasons.some(reason => reason.includes('artifact hash')));
 });
 
 test('cold corpus fingerprint is content-based and available to the real preflight chain', () => {

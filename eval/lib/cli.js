@@ -686,8 +686,54 @@ function loadRules(flags) {
 }
 
 async function cmdGate(positional, flags) {
+    const calibrationCommands = new Set(['verify', 'collect', 'calibrate', 'validate', 'review']);
+    if (calibrationCommands.has(positional[0])) {
+        const subcommand = positional[0];
+        try {
+            const result = await require('./gateCommands')[subcommand](flags, positional.slice(1));
+            if (flags.json) emitJson(result);
+            else {
+                out(c('bold', `\nGate ${subcommand}`));
+                out('');
+                if (subcommand === 'verify') {
+                    out(`  dataset      ${result.dataset}`);
+                    out(`  quality      ${result.qualityLevel}`);
+                    out(`  cases        ${result.counts.total}`);
+                    out(`  verified     ${result.annotation.verified}`);
+                    out(`  pending      ${result.annotation.pending}`);
+                    for (const finding of result.findings.slice(0, 20)) {
+                        out(`  ${finding.level === 'error' ? c('red', '✘') : c('yellow', '!')} [${finding.code}] ${finding.message}`);
+                    }
+                    if (result.findings.length > 20) out(`  … 另有 ${result.findings.length - 20} 条`);
+                } else if (subcommand === 'collect') {
+                    out(`  profile      ${result.profile}`);
+                    out(`  quality      ${result.qualityLevel}`);
+                    out(`  calibration  ${result.files.calibration.scores}`);
+                    out(`  holdout      ${result.files.holdout.scores}`);
+                } else if (subcommand === 'review') {
+                    out(`  output       ${result.output}`);
+                    if (result.qualityLevel) out(`  quality      ${result.qualityLevel}`);
+                    if (Number.isFinite(result.cases)) out(`  cases        ${result.cases}`);
+                    if (Number.isFinite(result.pending)) out(`  pending      ${result.pending}`);
+                    if (result.conflicts?.length) out(`  conflicts    ${result.conflicts.length}`);
+                } else {
+                    out(`  output       ${result.output}`);
+                    out(`  status       ${result.artifact.status}`);
+                    out(`  quality      ${result.artifact.qualityLevel}`);
+                    out(`  artifactHash ${result.artifact.artifactHash}`);
+                }
+                out('');
+            }
+            return result.ok ? 0 : 1;
+        } catch (error) {
+            const failure = { ok: false, command: subcommand, error: { code: error.code || 'GATE_COMMAND_FAILED', message: error.message } };
+            if (flags.json) emitJson(failure);
+            else out(c('red', `\n[${failure.error.code}] ${failure.error.message}\n`));
+            return 1;
+        }
+    }
     if (positional.length < 2) {
-        out('用法：vcp-eval gate <baselineRunId> <candidateRunId> [--rules <file>] [--json]');
+        out('用法：vcp-eval gate <verify|collect|calibrate|validate> ...，或 gate <baselineRunId> <candidateRunId>');
         return 1;
     }
     const baseline = loadRunForCompare(positional[0]);
@@ -844,6 +890,12 @@ ${c('bold', '命令')}
   score <runId|latest>            对已有运行重新计分并重生成报告
   compare <baseline> <candidate>  对比两次运行，输出 Markdown + 分类回退/修复
   gate <baseline> <candidate>     门禁判定（未通过时非零退出）
+  gate verify --dataset <jsonl>   校验 gate 数据、intent split 与人工复核状态
+  gate collect --profile <p>      使用生产共享公式采集 calibration/holdout 原始分数
+  gate calibrate --scores <jsonl> 仅用 calibration 分数拟合 draft 阈值
+  gate validate --calibration <p> 用 holdout 验证固定阈值并生成 finalized artifact
+  gate review export              导出人工复核表（支持 all/double-review 与分片）
+  gate review merge               合并不同审阅者证据，冲突/缺失保持 pending
   runs list                       列出所有运行
   runs show [runId|latest]        查看某次运行的报告
   runs prune --keep N             只保留最近 N 次运行（向量库很占地方）
