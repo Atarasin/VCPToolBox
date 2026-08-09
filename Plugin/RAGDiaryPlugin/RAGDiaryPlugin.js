@@ -3879,6 +3879,11 @@ class RAGDiaryPlugin {
         if (!name) throw new TypeError('library is required');
         if (!queryVector && !text) throw new TypeError('query or queryVector is required');
         const vector = queryVector || await this.getSingleEmbeddingCached(text);
+        if (!vector) {
+            const error = new Error('gate query embedding unavailable');
+            error.code = 'GATE_QUERY_EMBEDDING_UNAVAILABLE';
+            throw error;
+        }
         const scored = type === 'cold'
             ? await this.tdbProcessor.scoreGate({ library: name, query: text, queryVector: vector })
             : await (async () => {

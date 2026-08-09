@@ -192,6 +192,44 @@ test('collectRows preserves dataset provenance and uses the shared scorer contra
     assert.equal(rows[0].datasetHash, 'sha256:dataset');
 });
 
+test('collectRows retries only transient query embedding failures', async () => {
+    const loaded = {
+        manifest: { datasetId: 'gate-test' },
+        verification: { datasetHash: 'sha256:dataset' },
+        rows: [
+            { id: 'a', targetType: 'diary', library: 'A', query: 'alpha', label: 'positive', difficulty: 'easy', intentGroup: 'a', split: 'calibration', annotation: { status: 'verified', reviewCount: 1 } }
+        ]
+    };
+    let calls = 0;
+    const rows = await calibration.collectRows(
+        loaded,
+        'profile-a',
+        { model: 'model-a', dimension: 3, endpointFingerprint: 'sha256:endpoint' },
+        async () => {
+            calls++;
+            if (calls < 3) {
+                const error = new Error('temporary embedding failure');
+                error.code = 'GATE_QUERY_EMBEDDING_UNAVAILABLE';
+                throw error;
+            }
+            return { score: 0.8, scoreComponents: {}, scoringFormulaVersion: 'gate-score-v1' };
+        },
+        { concurrency: 1, retryAttempts: 2, retryBaseMs: 0 }
+    );
+    assert.equal(calls, 3);
+    assert.equal(rows[0].score, 0.8);
+
+    calls = 0;
+    await assert.rejects(
+        calibration.collectRows(loaded, 'profile-a', {}, async () => {
+            calls++;
+            throw new Error('permanent failure');
+        }, { retryAttempts: 8, retryBaseMs: 0 }),
+        /permanent failure/
+    );
+    assert.equal(calls, 1);
+});
+
 test('gate calibrate/validate --json emit one stable machine-readable document', t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vcp-gate-cli-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

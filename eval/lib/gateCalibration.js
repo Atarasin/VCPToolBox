@@ -166,34 +166,54 @@ async function collectRows(dataset, profileName, embedding, scorer, options = {}
     const output = new Array(dataset.rows.length);
     let nextIndex = 0;
     const concurrency = Math.max(1, Math.min(32, Number(options.concurrency) || 4));
+    const retryAttempts = Math.max(0, Math.min(8, Number(options.retryAttempts) || 0));
+    const requestedRetryBaseMs = Number(options.retryBaseMs);
+    const retryBaseMs = Number.isFinite(requestedRetryBaseMs)
+        ? Math.max(0, Math.min(300000, requestedRetryBaseMs))
+        : 15000;
+    const scoreWithRetry = async request => {
+        for (let attempt = 0; ; attempt++) {
+            try {
+                return await scorer(request);
+            } catch (error) {
+                if (error?.code !== 'GATE_QUERY_EMBEDDING_UNAVAILABLE' || attempt >= retryAttempts) throw error;
+                const delayMs = retryBaseMs * (2 ** attempt);
+                console.warn(
+                    `[GateCollect] query embedding unavailable; retrying in ${delayMs}ms ` +
+                    `(attempt ${attempt + 1}/${retryAttempts})`
+                );
+                if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+    };
     const worker = async () => {
         for (;;) {
             const index = nextIndex++;
             if (index >= dataset.rows.length) return;
             const row = dataset.rows[index];
-        const result = await scorer({
-            targetType: row.targetType,
-            library: row.library,
-            query: row.query
-        });
-        if (!Number.isFinite(result.score)) throw codedError('GATE_SCORE_INVALID', `non-finite score for ${row.id}`);
+            const result = await scoreWithRetry({
+                targetType: row.targetType,
+                library: row.library,
+                query: row.query
+            });
+            if (!Number.isFinite(result.score)) throw codedError('GATE_SCORE_INVALID', `non-finite score for ${row.id}`);
             output[index] = {
-            datasetId: dataset.manifest.datasetId,
-            datasetHash: dataset.verification.datasetHash,
-            caseId: row.id,
-            targetType: row.targetType,
-            library: row.library,
-            label: row.label,
-            difficulty: row.difficulty,
-            intentGroup: row.intentGroup,
-            split: row.split,
-            annotation: row.annotation,
-            score: result.score,
-            scoreComponents: result.scoreComponents,
-            profile: profileName,
-            embedding,
-            scoringFormulaVersion: result.scoringFormulaVersion || SCORING_FORMULA_VERSION
-        };
+                datasetId: dataset.manifest.datasetId,
+                datasetHash: dataset.verification.datasetHash,
+                caseId: row.id,
+                targetType: row.targetType,
+                library: row.library,
+                label: row.label,
+                difficulty: row.difficulty,
+                intentGroup: row.intentGroup,
+                split: row.split,
+                annotation: row.annotation,
+                score: result.score,
+                scoreComponents: result.scoreComponents,
+                profile: profileName,
+                embedding,
+                scoringFormulaVersion: result.scoringFormulaVersion || SCORING_FORMULA_VERSION
+            };
         }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, dataset.rows.length) }, worker));

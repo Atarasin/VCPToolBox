@@ -104,7 +104,11 @@ async function collect(flags) {
                 endpointFingerprint: resolved.embedding.endpointFingerprint
             },
             request => runtime.ragPlugin.scoreGate(request),
-            { concurrency: flags.concurrency }
+            {
+                concurrency: flags.concurrency,
+                retryAttempts: flags['retry-attempts'],
+                retryBaseMs: flags['retry-base-ms']
+            }
         );
         const outputDir = path.resolve(flags.out || path.join(EVAL_ROOT, 'gate-scores'));
         const files = gateCalibration.writeScoreBundles({
