@@ -35,6 +35,16 @@
             "defaultDiaries": [
                 "Yui"
             ]
+        },
+        "MCPFuPeng": {
+            "maid": "付鹏",
+            "allowedDiaries": [
+                "付鹏日记本",
+                "付鹏市场判断日记本"
+            ],
+            "defaultDiaries": [
+                "付鹏日记本"
+            ]
         }
     }
 }

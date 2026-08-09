@@ -74,6 +74,103 @@ function validateMemoryDefaults(value, fieldPath, errors) {
     return normalized;
 }
 
+const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * 可选的 per-agent skill 表达配置（§6）。
+ *
+ * 生成的 SKILL.md 里，frontmatter `description` 是宿主唯一常驻的触发面——
+ * 只有它足够具体，宿主才知道什么时候该加载这个 skill。这里的
+ * `domain`/`triggers`/`notFor` 就是那句话的素材来源；缺省时生成器按
+ * displayName 与日记本路由派生一句通用兜底。
+ *
+ * `writeTargets` 描述「哪个日记本在什么时机写」，供正文渲染成可照抄的
+ * gateway_memory_write 调用；越权 diary 由生成器按 allowedDiaries 过滤。
+ *
+ * 数组字段显式给空数组一律视为配置错误（意图不明确，应删除该字段），
+ * 与 workflow 覆盖同一语义。
+ */
+function validateSkillArrayField(value, fieldPath, errors, normalized, key) {
+    if (value === undefined) {
+        return;
+    }
+    const items = validateStringArrayField(value, fieldPath, errors);
+    if (Array.isArray(value) && value.length === 0) {
+        errors.push(invalidField(fieldPath, 'must not be empty; omit the field instead'));
+        return;
+    }
+    if (items.length > 0) {
+        normalized[key] = items;
+    }
+}
+
+function validateSkillWriteTargets(value, fieldPath, errors) {
+    if (!Array.isArray(value)) {
+        errors.push(invalidField(fieldPath, 'must be an array of { diary, when } objects'));
+        return [];
+    }
+    if (value.length === 0) {
+        errors.push(invalidField(fieldPath, 'must not be empty; omit the field instead'));
+        return [];
+    }
+    const normalized = [];
+    value.forEach((item, index) => {
+        const itemPath = `${fieldPath}[${index}]`;
+        if (!isPlainObject(item)) {
+            errors.push(invalidField(itemPath, 'must be an object with diary and when'));
+            return;
+        }
+        const diary = normalizeString(item.diary);
+        const when = normalizeString(item.when);
+        if (!diary) {
+            errors.push(invalidField(`${itemPath}.diary`, 'must be a non-empty string'));
+        }
+        if (!when) {
+            errors.push(invalidField(`${itemPath}.when`, 'must be a non-empty string'));
+        }
+        if (diary && when) {
+            normalized.push({ diary, when });
+        }
+    });
+    return normalized;
+}
+
+function validateSkillBlock(value, fieldPath, errors) {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (!isPlainObject(value)) {
+        errors.push(invalidField(fieldPath, 'must be an object'));
+        return undefined;
+    }
+    const normalized = {};
+    if (value.name !== undefined) {
+        const name = normalizeString(value.name);
+        if (!SKILL_NAME_PATTERN.test(name)) {
+            errors.push(invalidField(`${fieldPath}.name`, 'must match ^[a-z0-9][a-z0-9-]{0,63}$'));
+        } else {
+            normalized.name = name;
+        }
+    }
+    if (value.domain !== undefined) {
+        const domain = normalizeString(value.domain);
+        if (!domain) {
+            errors.push(invalidField(`${fieldPath}.domain`, 'must be a non-empty string'));
+        } else {
+            normalized.domain = domain;
+        }
+    }
+    validateSkillArrayField(value.triggers, `${fieldPath}.triggers`, errors, normalized, 'triggers');
+    validateSkillArrayField(value.notFor, `${fieldPath}.notFor`, errors, normalized, 'notFor');
+    if (value.writeTargets !== undefined) {
+        const writeTargets = validateSkillWriteTargets(value.writeTargets, `${fieldPath}.writeTargets`, errors);
+        if (writeTargets.length > 0) {
+            normalized.writeTargets = writeTargets;
+        }
+    }
+    return normalized;
+}
+
 function validateAgentEntry(entry, fieldPath, errors) {
     if (!isPlainObject(entry)) {
         errors.push(invalidField(fieldPath, 'must be an object'));
@@ -91,6 +188,20 @@ function validateAgentEntry(entry, fieldPath, errors) {
     const memoryDefaults = validateMemoryDefaults(entry.memoryDefaults, `${fieldPath}.memoryDefaults`, errors);
     if (memoryDefaults !== undefined) {
         normalized.memoryDefaults = memoryDefaults;
+    }
+    // §4.2：可选的 per-agent workflow 覆盖。缺省时 guidance bundle 回落到
+    // shared.workflow；显式给出空数组视为配置错误（意图不明确，应删除该字段）。
+    if (entry.workflow !== undefined) {
+        const workflow = validateStringArrayField(entry.workflow, `${fieldPath}.workflow`, errors);
+        if (Array.isArray(entry.workflow) && entry.workflow.length === 0) {
+            errors.push(invalidField(`${fieldPath}.workflow`, 'must not be empty; omit the field to inherit shared.workflow'));
+        } else if (workflow.length > 0) {
+            normalized.workflow = workflow;
+        }
+    }
+    const skill = validateSkillBlock(entry.skill, `${fieldPath}.skill`, errors);
+    if (skill !== undefined && Object.keys(skill).length > 0) {
+        normalized.skill = skill;
     }
     return normalized;
 }

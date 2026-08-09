@@ -4,6 +4,36 @@
 
 以下条目按版本保留历史决策；与当前正文冲突时，以 v6 正文和 v6 摘要为准。
 
+### v6.3（人格入口修正与 skill 重写）
+
+2026-08-04。起因是实测「`gateway_recall_run` 有概率被调用，`gateway_agent_render` 基本不会被调用」——宿主拿到了记忆层，拿不到 agent 的自我认知与思考方式。
+
+- **根因（三条独立机制，非提示词强度问题）**：① `gateway_agent_render` 是 MCP prompt（`publishedAsTool: false`），宿主把 prompt 暴露成用户手打的斜杠命令，模型没有 `prompts/get` 这个动作——而 `agent_guidance.json`、三份 `Agent/quant/*-MCP.txt`、上线手册都把它写成第 1 步；② 唯一可执行的等价入口 `gateway_agent_bootstrap` 的工具描述写着 "for tool-only hosts…"，在常驻系统提示里对支持 prompt 的宿主明说"不是给你的"；③ Gateway 侧 RAG 闸门 `needsRagRender()` 只匹配 `日记本`，是 RAGDiaryPlugin 自身闸门的真子集，恰好漏掉 `[[X知识库]]`——只有知识库占位符的 agent 一次都不会走 `processMessages`，且不传检索 query 时会静默退化成拿提示词自身文本检索。
+- **代码面**：新增 `policy/shared/promptPlaceholders.js`（日记本 ∪ 知识库的 canonical 判定，渲染闸门与依赖统计同源）与 `policy/shared/retrievalQuery.js`（query > messages > fallback 的 canonical 优先级）；`mcpOperations.json` 的 render/bootstrap 新增一级 `query` 参数并重写 bootstrap 工具描述（重跑 export）；`renderAgent` 新增 `renderMeta.knowledgeInjected` / `knowledgeQuerySource` 与退化 warning；`resultShapes.createRenderedPromptContent()` 在有 warning 时于 MCP `content` 前置 `GATEWAY NOTICE`（两个 adapter 复用，无 warning 时输出逐字节不变）。
+- **配置面**：`agent_guidance.json` 新增可选 `agents.<id>.skill`（`name`/`domain`/`triggers`/`notFor`/`writeTargets`），经校验器 → 冻结快照 → guidance bundle 透出；未配置时 bundle 形状不变。`AgentGuidanceBundle` 加可选 `skill`。
+- **skill 生成面**：固定清单 2→3（`SKILL.md` + `INSTALL.md` + `manifest.json`）。`SKILL.md` 收敛为纯模型面——触发面 `description` 由 skill 配置块合成，正文是 bootstrap → recall → write 的标准动作与可原样照抄的调用体（含 `memory.tags` 这类漏了就 400 的必填字段）、日记本路由、失败语义、红线；MCP 注册与 `ln -s` 安装说明全部下沉 `INSTALL.md`（模型读到 SKILL.md 时早已装好连上，这些内容只稀释指令）。`writeTargets` 按写入授权同一条等价规则匹配 `allowedDiaries`，匹配不上的条目丢弃。
+- **文档面**：新增 [03](03-transport-surfaces.md) §5.6（bootstrap 是人格获取主入口）与 §5.7（检索 query 优先级与降级信号）；[04](04-skill-generation.md) §6、[02](02-config-data-model.md) §4.2、walkthrough §一/§五/§六（新增 6.5 踩坑条目）、smoke-records 同步。
+- **遗留**：三客户端真实安装 smoke 未按新模板复跑（frontmatter 结构未变，装载行为预期不受影响）；端到端 A/B（不带 `query` 应见 NOTICE、带 `query` 应见观点库片段）需在跑起 Gateway 的环境验证。
+
+### v6.2（再次反转：恢复绑定 credential 省略 `agentId`）
+
+2026-08-03 恢复 §5.4 的绑定省略语义：绑定 credential 的 MCP 调用可省略 `agentId`，以绑定身份为 target。
+
+- **动机**：绑定 credential 在密码学上只能代表一个 agent（§3.2 禁止 admin scope 出现在绑定 credential 上），显式 `agentId` 对绑定调用只是冗余的一致性校验，不提供额外授权保证，却迫使外部宿主在每次工具调用重复身份。v6.1 的两条动机中，"误导到默认/隐式 agent"针对的是 default/env 兜底——本次不恢复任何兜底，只恢复与授权身份同源的绑定补全；"身份校验显式化"由审计（每请求 `credentialId` + `effectiveAgentId`）与遥测（`explicit`/`boundOmitted`）承担。
+- **代码面**：`backendProxyExecutor.resolveDirectAgentTarget()` 恢复绑定补全分支（无 defaultAgentId 参数），diary 类与 job 类操作统一经它决议（diary 策略门必须在填充后的 agentId 上执行；job 类不计入遥测）；`inProcessExecutor.buildManagedToolContextInput()` 恢复同一逻辑；`mcpOperations.json` 8 个操作 `agentId` 改 optional 并重跑 export；`RecallRunRequest` OpenAPI `required` 放宽为 `['query']`（消除与运行时的 schema 漂移）；`boundOmitted` 遥测恢复记录（统计结构此前保留）。未绑定 credential 省略仍受控 `MCP_INVALID_REQUEST`，显式不一致仍 `AGW_FORBIDDEN`。另新增凭据自省端点 `GET /agent_gateway/credential/context`（credentialAction: `authenticated`）：stdio 启动时解析静态 credential 的绑定身份并作为受信任身份注入后续请求，获得与 HTTP/WS 一致的省略语义；自省失败/未绑定不阻断启动。REST paths 冻结数 21→22。
+- **测试面**：m3-agent-target、两个 adapter 测试与 recall adapter 契约断言反转；新增 proxy 侧 bootstrap/recall/memory/job 绑定省略用例与 boundOmitted 遥测用例；新增凭据自省端点路由用例与 stdio 启动解析/注入用例（含伪造 authContext 覆盖、HTTP-WS runtime 不做静态自省）。
+- **文档面**：§5.4 状态框与规则矩阵重写，§5.3 bootstrap 条目、§5.5 stdio 段（自省端点与启动注入）、README 目标 2、walkthrough §一/§五同步。
+- **教训沿用**：本次在改代码的同时同步全部契约测试与文档，避免重蹈 v6.1 的文档漂移。
+
+### v6.1（实现后反转记录：`agentId` 强制显式化）
+
+2026-07-26 commit `4a65ab35`「强制显式传入 agentId，移除自动兜底逻辑」在 M3 交付**之后**推翻了 §5.4 的 optional 化方案：
+
+- **动机**：避免将请求误导到默认或隐式 agent；身份校验显式化优先于调用方便利。
+- **代码面**：MCP catalog 与生成 descriptors 恢复全部直接 agent-scoped tool/prompt 的 `agentId` 必填；移除绑定身份自动补全与 `VCP_MCP_DEFAULT_AGENT_ID` stdio 兜底；删除 `boundOmitted` 遥测埋点。`gateway_job_get`/`gateway_job_cancel` 的 jobId-only 语义不受影响。
+- **文档面**（2026-08-03 本次补记）：§5.4 加状态框并保留原方案为历史记录；README 目标 2、§5.3 bootstrap 条目、执行计划 M2.S2 T2 与 M3.S1/M3.S2 同步标注。4a65ab35 当时只改了代码与 4 个测试文件，漏改 recall adapter 契约测试（后于 2026-08-03 修正断言）且未动文档，造成约一周的文档漂移——期间文档一直在描述被推翻的行为。
+- **教训**：反转已交付 slice 时必须同步文档与全部契约测试，否则「文档说 optional、代码是必填」会诱导后人把安全收紧当 bug 修掉。
+
 ### v6（代码核实评审：间接对象生命周期与部署形态闭合）
 
 本轮评审逐条核实了 v5 的现状断言（全部属实），修订集中在设计缺口与实现约束：

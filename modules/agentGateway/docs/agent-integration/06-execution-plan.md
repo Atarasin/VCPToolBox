@@ -155,7 +155,7 @@
 依赖：S1。
 
 - [x] T1 guidance resource `vcp://agent-gateway/agents/{agentId}/guidance`:URI target 决议 + 绑定校验(§5.3)。
-- [x] T2 bootstrap 附加 `integrationGuidance` 字段(与 resource 同 revision);绑定 credential 可省略 agentId(§5.3;schema 层 optional 化按 §5.4 顺序留在 M3.S1)。
+- [x] T2 bootstrap 附加 `integrationGuidance` 字段(与 resource 同 revision);~~绑定 credential 可省略 agentId(§5.3;schema 层 optional 化按 §5.4 顺序留在 M3.S1)~~（省略语义已由 4a65ab35 推翻,agentId 现为必填,见 M3 状态注记）。
 - [x] T3 `resolveInstructions` per-request 选项贯通 harness/两 executor/三 transport;绑定 + read → ≤800 token 摘要(canonical 单点 `ceil(chars/4)` 计数);未绑定/execute-only → 通用文案不泄露 agent 内容(§5.2)。
 - [x] T4 guidance/integration/mint 响应缓存头:`Cache-Control: private, no-store` + `Vary` 身份通道(§6;integration/mint endpoint 属 M4,届时复用同一头部约定)。
 - [x] T5 验收:§8「guidance」行用例。
@@ -177,21 +177,23 @@
 
 ---
 
-## M3：`agentId` optional 迁移（原 P3）
+## M3：`agentId` optional 迁移（原 P3）——2026-08-03 再次生效（曾被 4a65ab35 短暂推翻）
 
 依赖：M2 全部。迁移顺序不可颠倒(§5.4)。
 
-### M3.S1 Schema 与契约
+> **状态**：M3.S1/M3.S2 曾按下述任务全部交付（`[x]` 为当时的真实完成态），2026-07-26 commit `4a65ab35` 曾将其推翻，**2026-08-03 已再次恢复**：catalog 与 descriptors 的 `agentId` 全部为 optional、绑定身份补全恢复、`boundOmitted` 遥测恢复记录。与首次交付的差异：stdio default/env 兜底**不恢复**（4a65ab35 的合理部分）；optional 化面从当时的两处扩展到全部 8 个 MCP 操作；job 类操作改为绑定可省略（保持 jobId 必填）。现行语义见 §5.4 顶部状态框，下列任务清单再次代表当前行为。
 
-- [x] T1 修改 MCP catalog:`gateway_agent_bootstrap`、`gateway_recall_run` 的 `agentId` 改 optional(+ render prompt argument);jobs 保持 jobId-only(§5.4)。
-- [x] T2 重跑 descriptor export,更新契约快照;Native REST 未放宽(recall REST body 保持 agentId 必填,§5.4 只要求 MCP 面);`restOperations.json`/OpenAPI 不变。
+### M3.S1 Schema 与契约（2026-08-03 再次生效）
+
+- [x] T1 修改 MCP catalog：`agentId` 改 optional（首次为 `gateway_agent_bootstrap`、`gateway_recall_run` + render prompt argument 两处；2026-08-03 扩展到全部 8 个操作）；jobs 保持 jobId 必填、agentId 绑定可省略(§5.4)。
+- [x] T2 重跑 descriptor export,更新契约快照；2026-08-03 起 `RecallRunRequest` 的 OpenAPI `required` 同步放宽为 `['query']`（消除与 REST 运行时的漂移），其余 `restOperations.json`/OpenAPI 不变。
 - [x] T3 验收:§8「契约」行;重生成 snapshot 零差异。
 
-### M3.S2 行为与遥测
+### M3.S2 行为与遥测（2026-08-03 再次生效）
 
-- [x] T1 未绑定 credential 对直接 agent-scoped 操作保持 agentId 必填(受控 400);间接对象继续 owner lookup(§5.4)。
-- [x] T2 显式 `agentId` 调用比例 telemetry(`/agent_gateway/metrics` 的 `agentTarget` 段)与兼容说明;完成迁移后再评估废弃时间表。
-- [x] T3 M3 门禁:绑定省略成功/显式同 agent 成功/显式他 agent 403/未绑定省略 400/job 按 owner 授权。
+- [x] T1 未绑定 credential 对直接 agent-scoped 操作保持 agentId 必填(受控 400);间接对象继续 owner lookup(§5.4)。（4a65ab35 曾扩展为绑定与否一律必填，2026-08-03 回到本表述）
+- [x] T2 显式 `agentId` 调用比例 telemetry(`/agent_gateway/metrics` 的 `agentTarget` 段)与兼容说明;完成迁移后再评估废弃时间表。（`boundOmitted` 埋点 4a65ab35 曾移除，2026-08-03 恢复记录；统计结构一直保留）
+- [x] T3 M3 门禁:绑定省略成功/显式同 agent 成功/显式他 agent 403/未绑定省略 400/job 按 owner 授权。（4a65ab35 期间曾为"省略一律 invalid request"，2026-08-03 恢复本门禁）
 
 ---
 

@@ -16,6 +16,9 @@ const {
 const {
     createPluginManager
 } = require('../helpers/agent-gateway-test-helpers');
+const {
+    RETRIEVAL_FALLBACK_WARNING
+} = require('../../../modules/agentGateway/services/agentRegistryService');
 
 let previousMemoryPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
 
@@ -414,9 +417,9 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.equal(bootstrapTool.annotations.gatewayManaged, true);
     assert.equal(
         bootstrapTool.inputSchema.properties.agentId.description,
-        'Explicit target agent identifier for this MCP invocation. Callers must provide this field.'
+        'Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent.'
     );
-    assert.deepEqual(bootstrapTool.inputSchema.required, ['agentId']);
+    assert.equal(bootstrapTool.inputSchema.required, undefined);
     assert.ok(memorySearchTool && memorySearchTool.inputSchema);
     assert.equal(memorySearchTool.annotations.gatewayManaged, true);
     assert.equal(
@@ -431,8 +434,9 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
     assert.ok(memoryWriteTool && memoryWriteTool.inputSchema);
     assert.equal(
         memoryWriteTool.inputSchema.properties.agentId.description,
-        'Explicit target agent identifier for this MCP invocation. Callers must provide this field.'
+        'Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent.'
     );
+    assert.deepEqual(memoryWriteTool.inputSchema.required, ['target', 'memory']);
 });
 
 test('MCP adapter executes agent bootstrap through shared render behavior and returns a concise summary', async () => {
@@ -450,6 +454,7 @@ test('MCP adapter executes agent bootstrap through shared render behavior and re
             name: 'gateway_agent_bootstrap',
             arguments: {
                 agentId: 'Ariadne',
+                query: '上周的 gateway render 收口做完了吗',
                 variables: {
                     VarUserName: 'Nova'
                 }
@@ -465,7 +470,50 @@ test('MCP adapter executes agent bootstrap through shared render behavior and re
         assert.equal(result.structuredContent.result.renderedPrompt.includes('Hello Nova from Ariadne'), true);
         assert.equal(result.structuredContent.result.renderedPrompt.includes('记忆片段'), true);
         assert.equal(result.structuredContent.result.summary.includes('Bootstrap prompt ready for Ariadne'), true);
+        assert.equal(result.structuredContent.result.renderMeta.knowledgeQuerySource, 'query');
+        assert.deepEqual(result.structuredContent.result.warnings, []);
+        // 无 warning 分支：content 与 renderedPrompt 逐字节相同，不加任何噪声
         assert.equal(result.content[0].text, result.structuredContent.result.renderedPrompt);
+    } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+    }
+});
+
+test('agent bootstrap without a retrieval query surfaces the degradation as a readable GATEWAY NOTICE', async () => {
+    const agentDir = await createTempAgentDir();
+    await writeAgentFile(
+        agentDir,
+        'Ariadne.md',
+        'Hello {{VarUserName}} from Ariadne\n[[阿里阿德涅日记本::Time::TagMemo]]'
+    );
+    const pluginManager = createRenderPluginManager(agentDir);
+    const adapter = createMcpAdapter(pluginManager);
+
+    try {
+        const result = await adapter.callTool({
+            name: 'gateway_agent_bootstrap',
+            arguments: {
+                agentId: 'Ariadne',
+                variables: { VarUserName: 'Nova' }
+            },
+            requestContext: { requestId: 'req-mcp-agent-bootstrap-degraded' }
+        });
+
+        assert.equal(result.isError, false);
+        assert.equal(result.structuredContent.result.renderMeta.knowledgeQuerySource, 'fallback');
+        assert.equal(
+            result.structuredContent.result.warnings.includes(RETRIEVAL_FALLBACK_WARNING),
+            true,
+            'fallback retrieval query must be reported as a warning'
+        );
+        // warnings 躺在 structuredContent 里模型多半看不到，必须出现在 content 文本里
+        assert.match(result.content[0].text, /^GATEWAY NOTICE/);
+        assert.equal(result.content[0].text.includes(RETRIEVAL_FALLBACK_WARNING), true);
+        assert.equal(
+            result.content[0].text.endsWith(result.structuredContent.result.renderedPrompt),
+            true,
+            'the full agent prompt must still follow the notice'
+        );
     } finally {
         await fs.rm(agentDir, { recursive: true, force: true });
     }

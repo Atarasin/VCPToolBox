@@ -218,6 +218,23 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /agent_gateway/credential/context:
+    get:
+      tags:
+        - Operations
+      summary: 返回当前呈现凭据的自身上下文（credentialId、绑定 agent、scopes、revision）
+      operationId: getAgentGatewayCredentialContext
+      parameters:
+        - $ref: "#/components/parameters/RequestIdQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/CredentialContextSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /agent_gateway/memory/targets:
     get:
       tags:
@@ -802,6 +819,19 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/HealthEnvelope"
+    CredentialContextSuccess:
+      description: 成功
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/XRequestId"
+        x-agent-gateway-version:
+          $ref: "#/components/headers/XGatewayVersion"
+        x-agent-gateway-trace-id:
+          $ref: "#/components/headers/XTraceId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CredentialContextEnvelope"
     MemorySearchSuccess:
       description: 成功
       headers:
@@ -1505,6 +1535,36 @@ components:
             metadata:
               type: object
               additionalProperties: true
+        skill:
+          type: object
+          description: 可选的 per-agent skill 表达配置（§6）：生成 SKILL.md 的触发面素材。未配置时该字段不出现，生成器按 displayName 与日记本路由派生兜底文案。
+          properties:
+            name:
+              type: string
+              pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+              description: skill 目录名覆盖；缺省为 vcp-agent-gateway-<agentid 小写>
+            domain:
+              type: string
+            triggers:
+              type: array
+              items:
+                type: string
+            notFor:
+              type: array
+              items:
+                type: string
+            writeTargets:
+              type: array
+              items:
+                type: object
+                required:
+                  - diary
+                  - when
+                properties:
+                  diary:
+                    type: string
+                  when:
+                    type: string
         revision:
           type: string
           description: 与冻结 integration snapshot 一致的内容 revision（sha256:...）
@@ -1544,6 +1604,9 @@ components:
         context:
           type: object
           additionalProperties: true
+        query:
+          type: string
+          description: 检索 query：决定从冷知识库与日记本注入哪些片段。缺省时回落到 messages 里最近一条 user 消息，两者都无则退化为通用兜底并在 warnings 中标记。
         messages:
           type: array
           items:
@@ -1585,6 +1648,16 @@ components:
           type: array
           items:
             type: string
+        knowledgeInjected:
+          type: boolean
+          description: 源提示词含冷知识库占位符，且渲染后数量减少（语料确实注入）
+        knowledgeQuerySource:
+          type: string
+          enum:
+            - query
+            - messages
+            - fallback
+          description: 本次检索 query 的来源；fallback 表示退化为通用兜底，warnings 同时置位
         truncated:
           type: boolean
         filteredByPolicy:
@@ -1745,6 +1818,52 @@ components:
           $ref: "#/components/schemas/HealthData"
         meta:
           $ref: "#/components/schemas/GatewayMeta"
+    CredentialContextEnvelope:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/CredentialContextData"
+        meta:
+          $ref: "#/components/schemas/GatewayMeta"
+    CredentialContextData:
+      type: object
+      required:
+        - credentialId
+        - credentialSubject
+        - boundAgentId
+        - scopes
+        - status
+        - expiresAt
+        - credentialRevision
+      properties:
+        credentialId:
+          type: string
+        credentialSubject:
+          type: string
+        boundAgentId:
+          type: string
+          description: 该凭据绑定的 agent；未绑定时为 null。
+          nullable: true
+        scopes:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        expiresAt:
+          type: string
+          nullable: true
+        credentialRevision:
+          type: string
+          description: 凭据记录 revision；绑定/scope/状态变化必然改变该值。
     MemorySearchRequest:
       type: object
       required:
@@ -1995,11 +2114,13 @@ components:
     RecallRunRequest:
       type: object
       required:
-        - agentId
         - query
       properties:
         agentId:
           type: string
+          description: >-
+            Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent
+            becomes the target); required otherwise. An explicit value must match the bound agent.
         query:
           type: string
         profile:

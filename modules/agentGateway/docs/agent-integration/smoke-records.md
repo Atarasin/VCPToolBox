@@ -12,6 +12,13 @@
 - **部署要求**：代理/CDN/APM/access log 的缓存旁路与 query 脱敏为部署侧责任，清单见 [deployment-notes.md](deployment-notes.md)。
 - **统一模板复测（2026-07-20 晚）**：三 format 收敛为同一 SKILL.md（含三客户端注册片段）后，单份物理拷贝置于 `~/.agents/skills/`、Claude 侧符号链接——真实 Claude Code 2.1.215（经符号链接）、Codex 0.144.5、Kimi 0.27.0 三端均发现该 skill；Codex 与 Kimi 经统一 VPN 地址（`http://10.126.126.2:6005/mcp`）+ `AGENT_GATEWAY_TOKEN` 实连网关并列出全部 7 个 gateway 工具（Kimi 为用户级 `~/.kimi-code/mcp.json` 注册）。
 
+## skill 模板重写（2026-08-04）
+
+- **文件清单 2 → 3**：`SKILL.md`（模型面：触发条件 + 标准动作 + 可照抄调用体）、`INSTALL.md`（人面：放置路径 + 三客户端注册片段 + 凭据）、`manifest.json`。MCP 注册与安装说明从 `SKILL.md` 移出——模型能读到该文件就说明早已装好连上，这些内容零信息量。
+- **触发面**：frontmatter `description` 改由 `agents.<id>.skill`（`domain`/`triggers`/`notFor`）合成，未配置时按 displayName 与日记本路由派生兜底。
+- **第一条可执行指令改为 `gateway_agent_bootstrap`（带 `query`）**，排在召回之前，理由见 [03-transport-surfaces.md](03-transport-surfaces.md) §5.6。
+- **验证状态**：生成侧由 `tests/agent-gateway/services/agent-gateway-skill-{generator,snapshot}.test.js` 覆盖（分文件断言、bootstrap 早于 recall、无 `mcpServers`/`ln -s`、secret scan 零命中、manifest 可重现）；真实配置渲染经 `scripts/agent-gateway-skill-export.js` 人工验收。**上面 2026-07-20 那轮三客户端真实安装 smoke 尚未按新模板复跑**，装载行为不受影响的判断依据是 frontmatter 结构未变（仍是 `name` + `description`）。
+
 ## M2.S4 三客户端 capability smoke（2026-07-20）
 
 - **脚本**：`npm run smoke:agent-gateway-m2`（`scripts/run-agent-gateway-m2-smoke.js`）。临时 native backend + Streamable HTTP MCP gateway，文件 credential 绑定 agent `Ariadne`（`gateway:read` + `gateway:execute`），另有 legacy gateway key 作未绑定对照。

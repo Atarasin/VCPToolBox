@@ -219,4 +219,70 @@ function registerMetricsRoute(router, context) {
     });
 }
 
-module.exports = { registerHealthRoute, registerCapabilitiesRoute, registerMetricsRoute };
+function registerCredentialContextRoute(router, context) {
+    const { protocolConfig, healthSnapshot, authContextResolver, capabilityService, agentRegistryService,
+        jobRuntimeService, memoryRuntimeService, contextRuntimeService, toolRuntimeService,
+        operabilityService, agentPolicyResolver, recallRuntimeService, recallProjectionService } = context;
+    router.get('/credential/context', async (req, res) => {
+        const startedAt = Date.now();
+        const requestContext = createNativeRequestContext(req, {
+            requestId: req.query.requestId,
+            source: req.query.source,
+            runtime: req.query.runtime
+        }, 'agent-gateway-credential-context');
+        const authContext = buildNativeAuthContext({
+            authContextResolver,
+            requestContext,
+            dedicatedAuth: req.agentGatewayAuth
+        });
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'credential.context.read',
+            requestContext,
+            authContext,
+            payload: req.query
+        });
+
+        if (operationControl && !operationControl.allowed) {
+            return sendNativeOperationRejection(res, {
+                startedAt,
+                requestContext,
+                authContext,
+                operationControl
+            });
+        }
+
+        // 凭据自省（§5.5 / L4）：只返回 authInjection 统一决议出的自身 credential
+        // context，供 stdio 等无逐请求注入通道的宿主在启动时解析绑定身份。
+        const credentialContext = req.agentGatewayAuth?.credentialContext;
+        if (!credentialContext?.ok) {
+            return sendNativeErrorWithOperation(res, {
+                status: 401,
+                requestId: requestContext.requestId,
+                startedAt,
+                code: AGW_ERROR_CODES.UNAUTHORIZED,
+                error: 'Agent gateway authentication required',
+                details: { field: 'credential' },
+                authContext,
+                operationControl
+            });
+        }
+
+        return sendNativeSuccessWithOperation(res, {
+            requestId: requestContext.requestId,
+            startedAt,
+            data: {
+                credentialId: normalizeNativeString(credentialContext.credentialId),
+                credentialSubject: normalizeNativeString(credentialContext.credentialSubject),
+                boundAgentId: normalizeNativeString(credentialContext.boundAgentId) || null,
+                scopes: Array.isArray(credentialContext.scopes) ? credentialContext.scopes : [],
+                status: normalizeNativeString(credentialContext.credential?.status),
+                expiresAt: credentialContext.credential?.expiresAt || null,
+                credentialRevision: normalizeNativeString(credentialContext.credentialRevision)
+            },
+            authContext,
+            operationControl
+        });
+    });
+}
+
+module.exports = { registerHealthRoute, registerCapabilitiesRoute, registerMetricsRoute, registerCredentialContextRoute };

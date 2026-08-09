@@ -530,7 +530,10 @@ test('gateway_recall_run tools/list includes RECALL_RUN descriptor with correct 
     assert.equal(recallTool.name, 'gateway_recall_run');
     assert.equal(typeof recallTool.description, 'string');
     assert.ok(recallTool.description.includes('recall'), 'Description should mention recall');
-    // M3.S1：agentId 改 optional（绑定 credential 可省略），query 保持必填
+    // agentId 可选：2026-08-03 恢复绑定 credential 省略语义（§5.4）——绑定
+    // credential 以绑定身份补全 target，未绑定仍需显式提供；schema 层一律
+    // optional，由运行时决议树强制（见 backendProxyExecutor.resolveDirectAgentTarget
+    // 与 inProcessExecutor.buildManagedToolContextInput 注释）。
     assert.deepStrictEqual(recallTool.inputSchema.required, ['query']);
     assert.equal(recallTool.inputSchema.properties.agentId.type, 'string');
     assert.equal(recallTool.inputSchema.properties.query.type, 'string');

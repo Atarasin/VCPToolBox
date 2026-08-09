@@ -160,7 +160,15 @@ function createIntegrationSnapshotCoordinator({
                     recallProfileRef: agentId,
                     // §4.2：guidance bundle 的 per-agent 表达内容随冻结快照发布，
                     // 消费面（REST/resource/bootstrap）不得回读原始配置文件。
-                    memoryDefaults: Object.freeze(entry.memoryDefaults ? structuredClone(entry.memoryDefaults) : {})
+                    memoryDefaults: Object.freeze(entry.memoryDefaults ? structuredClone(entry.memoryDefaults) : {}),
+                    // 可选 workflow 覆盖；缺省时留空，由 buildGuidanceBundle 回落 shared.workflow。
+                    ...(Array.isArray(entry.workflow) && entry.workflow.length > 0
+                        ? { workflow: Object.freeze([...entry.workflow]) }
+                        : {}),
+                    // 可选 skill 表达配置；缺省时留空，由 skill 生成器派生兜底文案。
+                    ...(entry.skill && Object.keys(entry.skill).length > 0
+                        ? { skill: Object.freeze(structuredClone(entry.skill)) }
+                        : {})
                 })];
             })
         );

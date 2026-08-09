@@ -392,10 +392,6 @@ const ROLE_DIVIDER_SCAN_SYSTEM = (process.env.RoleDividerScanSystem || "true").t
 const ROLE_DIVIDER_SCAN_ASSISTANT = (process.env.RoleDividerScanAssistant || "true").toLowerCase() === "true"; // 新增：Assistant角色扫描开关
 const ROLE_DIVIDER_SCAN_USER = (process.env.RoleDividerScanUser || "true").toLowerCase() === "true"; // 新增：User角色扫描开关
 const ROLE_DIVIDER_REMOVE_DISABLED_TAGS = (process.env.RoleDividerRemoveDisabledTags || "true").toLowerCase() === "true"; // 新增：禁用标签清除开关
-const UPSTREAM_CIRCUIT_FAILURE_THRESHOLD = parseInt(process.env.UpstreamCircuitFailureThreshold) || 3;
-const UPSTREAM_CIRCUIT_OPEN_MS = parseInt(process.env.UpstreamCircuitOpenMs) || 15000;
-const UPSTREAM_HEALTH_PROBE_INTERVAL_MS = parseInt(process.env.UpstreamHealthProbeIntervalMs) || 15000;
-const UPSTREAM_HEALTH_PROBE_TIMEOUT_MS = parseInt(process.env.UpstreamHealthProbeTimeoutMs) || 3000;
 
 let ROLE_DIVIDER_IGNORE_LIST = [];
 try {
@@ -746,16 +742,12 @@ const adminAuth = (req, res, next) => {
             });
 
             if (dedicatedGatewayAuth.provided) {
-                if (dedicatedGatewayAuth.authenticated) {
-                    req.agentGatewayAuth = dedicatedGatewayAuth;
-                    return next();
-                }
-
-                return res.status(401).json({
-                    error: 'Unauthorized',
-                    code: 'AGW_UNAUTHORIZED',
-                    authSource: dedicatedGatewayAuth.authSource
-                });
+                // legacy AGENT_GATEWAY_KEY 命中时这里就是快速路径；未命中的
+                // 已呈现 credential（文件 credential 等）不能在外层 401——
+                // 放行到 route 层 authInjection 经 buildGatewayRequestContext
+                // 统一决议（§3.3），无效 token 在该层 fail-closed 返回 401。
+                req.agentGatewayAuth = dedicatedGatewayAuth;
+                return next();
             }
         }
 
@@ -1279,10 +1271,6 @@ const chatCompletionHandler = new ChatCompletionHandler({
     maxVCPLoopNonStream: parseInt(process.env.MaxVCPLoopNonStream),
     apiRetries: parseInt(process.env.ApiRetries) || 3, // 新增：API重试次数
     apiRetryDelay: parseInt(process.env.ApiRetryDelay) || 1000, // 新增：API重试延迟
-    upstreamCircuitFailureThreshold: UPSTREAM_CIRCUIT_FAILURE_THRESHOLD,
-    upstreamCircuitOpenMs: UPSTREAM_CIRCUIT_OPEN_MS,
-    upstreamHealthProbeIntervalMs: UPSTREAM_HEALTH_PROBE_INTERVAL_MS,
-    upstreamHealthProbeTimeoutMs: UPSTREAM_HEALTH_PROBE_TIMEOUT_MS,
     apiConnectionTimeoutMs: parseInt(process.env.ApiConnectionTimeoutMs) || 900000, // 单次上游连接/首包超时，默认15分钟
     cachedEmojiLists,
     detectors,
@@ -1442,27 +1430,26 @@ async function handleDiaryFromAIResponse(responseText) {
             if (maidName && dateString && contentText) {
                 const diaryPayload = { maidName, dateString, contentText };
                 try {
-                    if (DEBUG_MODE) console.log('[handleDiaryFromAIResponse] Calling DailyNoteWrite plugin with payload:', diaryPayload);
-                    // pluginManager.executePlugin is expected to handle JSON stringification if the plugin expects a string
-                    // and to parse the JSON response from the plugin.
-                    // The third argument to executePlugin in Plugin.js is inputData, which can be a string or object.
-                    // For stdio, it's better to stringify here.
-                    const pluginResult = await pluginManager.executePlugin("DailyNoteWrite", JSON.stringify(diaryPayload));
-                    // pluginResult is the direct parsed JSON object from the DailyNoteWrite plugin's stdout.
-                    // Example success: { status: "success", message: "Diary saved to /path/to/your/file.txt" }
-                    // Example error:   { status: "error", message: "Error details" }
+                    if (DEBUG_MODE) console.log('[handleDiaryFromAIResponse] Calling DailyNote plugin with payload:', diaryPayload);
+                    // DailyNoteWrite 插件已退役（CHANGELOG：写回链路收敛为仅调用 DailyNote 工具）。
+                    // DailyNote 是 hybridservice/direct，executePlugin 只支持 stdio 插件，必须走 processToolCall。
+                    const pluginResult = await pluginManager.processToolCall("DailyNote", {
+                        command: 'create',
+                        maid: maidName,
+                        Date: dateString,
+                        Content: contentText
+                    }, null, 'handleDiaryFromAIResponse');
+                    // 成功返回: { status: "success", result: { message, folder, fileName, indexStatus } }
+                    // 失败返回: { status: "error", error: "..." }
 
-                    if (pluginResult && pluginResult.status === "success" && pluginResult.message) {
-                        const dailyNoteWriteResponse = pluginResult; // Use pluginResult directly
+                    if (pluginResult && pluginResult.status === "success") {
+                        const writeInfo = pluginResult.result || {};
 
-                        if (DEBUG_MODE) console.log(`[handleDiaryFromAIResponse] DailyNoteWrite plugin reported success: ${dailyNoteWriteResponse.message}`);
+                        if (DEBUG_MODE) console.log(`[handleDiaryFromAIResponse] DailyNote plugin reported success: ${writeInfo.message || ''}`);
 
                         let filePath = '';
-                        const successMessage = dailyNoteWriteResponse.message; // e.g., "Diary saved to /path/to/file.txt"
-                        const pathMatchMsg = /Diary saved to (.*)/;
-                        const matchedPath = successMessage.match(pathMatchMsg);
-                        if (matchedPath && matchedPath[1]) {
-                            filePath = matchedPath[1];
+                        if (writeInfo.folder && writeInfo.fileName) {
+                            filePath = `${writeInfo.folder}/${writeInfo.fileName}`;
                         }
 
                         const notification = {
@@ -1480,14 +1467,14 @@ async function handleDiaryFromAIResponse(responseText) {
 
                     } else if (pluginResult && pluginResult.status === "error") {
                         // Handle errors reported by the plugin's JSON response
-                        console.error(`[handleDiaryFromAIResponse] DailyNoteWrite plugin reported an error:`, pluginResult.message || pluginResult);
+                        console.error(`[handleDiaryFromAIResponse] DailyNote plugin reported an error:`, pluginResult.error || pluginResult.message || pluginResult);
                     } else {
-                        // Handle cases where pluginResult is null, or status is not "success"/"error", or message is missing on success.
-                        console.error(`[handleDiaryFromAIResponse] DailyNoteWrite plugin returned an unexpected response structure or failed:`, pluginResult);
+                        // Handle cases where pluginResult is null, or status is not "success"/"error".
+                        console.error(`[handleDiaryFromAIResponse] DailyNote plugin returned an unexpected response structure or failed:`, pluginResult);
                     }
                 } catch (pluginError) {
-                    // This catches errors from pluginManager.executePlugin itself (e.g., process spawn error, timeout)
-                    console.error('[handleDiaryFromAIResponse] Error executing DailyNoteWrite plugin:', pluginError.message, pluginError.stack);
+                    // This catches errors from pluginManager.processToolCall itself (e.g., plugin not loaded, timeout)
+                    console.error('[handleDiaryFromAIResponse] Error executing DailyNote plugin:', pluginError.message, pluginError.stack);
                 }
             } else {
                 console.error('[handleDiaryFromAIResponse] Could not extract Maid, Date, or Content from daily note block:', { maidName, dateString, contentText: contentText?.substring(0, 50) });

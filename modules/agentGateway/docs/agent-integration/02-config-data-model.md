@@ -50,11 +50,33 @@
       "memoryDefaults": {
         "tags": ["codex", "select-stock-pro"],
         "metadata": { "project": "quant-select-stock-pro", "source": "codex" }
+      },
+      // 可选：per-agent workflow 覆盖（缺省回落 shared.workflow）
+      "workflow": ["..."],
+      // 可选：skill 表达配置，见下
+      "skill": {
+        "name": "midas-quant",
+        "domain": "量化选股与策略工程",
+        "triggers": ["用户在量化仓库里做因子、策略、回测的开发与调试"],
+        "notFor": ["与该项目无关的通用编码任务"],
+        "writeTargets": [{ "diary": "迈达斯日记本", "when": "得出因子或策略结论后" }]
       }
     }
   }
 }
 ```
+
+`agents.<id>.skill` 全部字段可选，是 §6 skill 生成物的**触发面素材**：
+
+| 字段 | 作用 |
+|---|---|
+| `name` | skill 目录名，须匹配 `^[a-z0-9][a-z0-9-]{0,63}$`；缺省为 `vcp-agent-gateway-<agentid 小写>` |
+| `domain` | 一句话领域，进 `description` 主语 |
+| `triggers[]` | 「什么时候该用这个 skill」，进 `description`；这是宿主唯一常驻的判定依据 |
+| `notFor[]` | 「什么时候别用」 |
+| `writeTargets[]` | `{ diary, when }`，渲染成日记本路由表；`diary` 按写入授权同一条等价规则（`X日记本` ≡ `X`）匹配 `allowedDiaries`，匹配不上的条目丢弃，避免生成注定 403 的指令 |
+
+数组字段显式给空数组一律视为配置错误（意图不明确，应删除该字段），与 `workflow` 覆盖同一语义。整个 `skill` 块缺省时，生成器按 `displayName` 与日记本路由派生一句仍然可判定的兜底 `description`。
 
 新增 `policy/agentGuidanceResolver.js`，输出唯一的 guidance bundle：
 
@@ -67,6 +89,8 @@
   "allowedDiaries": ["..."],
   "defaultDiaries": ["..."],
   "memoryDefaults": { "tags": ["..."], "metadata": {} },
+  // 仅在配置了 agents.<id>.skill 时出现；未配置时该字段不存在，消费面形状不变
+  "skill": { "name": "...", "domain": "...", "triggers": ["..."], "notFor": ["..."], "writeTargets": [{ "diary": "...", "when": "..." }] },
   "revision": "sha256:...",
   "updatedAt": "2026-07-18T00:00:00.000Z"
 }

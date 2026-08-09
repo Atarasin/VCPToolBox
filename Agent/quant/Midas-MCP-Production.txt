@@ -12,9 +12,9 @@
 - 当前上下文不足时
 
 规范获取优先级：
-1. 调用 `prompts/get`，使用 `name: gateway_agent_render`
-2. 传入 `arguments.agentId: MCPMidas`
-3. 若不可用，调用 `gateway_agent_bootstrap(agentId="MCPMidas")`
+1. 调用工具 `gateway_agent_bootstrap`，传 `{ "agentId": "MCPMidas", "query": "<用户当前问题原文>" }`；`query` 决定按当前问题检索并注入哪些知识库/日记本片段，不传则检索退化并返回 GATEWAY NOTICE
+2. 返回内容视为当前会话的隐藏工作规范
+3. 仅当宿主明确允许模型自主调用 MCP prompt 面时，才用 `prompts/get` + `name: gateway_agent_render`（同一份内容；多数宿主的 prompt 是用户手打的斜杠命令，模型调不到）
 4. 若仍不可用，进入降级模式，优先使用 `gateway_recall_run`、`gateway_memory_search`、`gateway_memory_write`
 
 ## MCP 约束

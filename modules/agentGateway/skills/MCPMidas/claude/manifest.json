@@ -1,0 +1,20 @@
+{
+  "artifactId": "skill:MCPMidas:claude:sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06",
+  "agentId": "MCPMidas",
+  "format": "claude",
+  "guidanceRevision": "sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06",
+  "generatedWith": "agent-gateway-skill-generator/1",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "bytes": 6349,
+      "sha256": "e14315bb9974e18035b7b079829fa305c8113681a2fa94a65853ea1a52b93c37"
+    },
+    {
+      "path": "INSTALL.md",
+      "bytes": 2402,
+      "sha256": "32fb6a6e5dbaa6e954827d5e11218a02d74c10a17d506560784f1ad52801d8a2"
+    }
+  ],
+  "contentHash": "sha256:93788f52c458a2d96a096b4d29ad10243dbc90748b5749f725bd88b44e9c7bbf"
+}

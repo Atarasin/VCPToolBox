@@ -602,6 +602,63 @@
     "authExclusion": "adminAuth"
   },
   {
+    "operationId": "getAgentGatewayCredentialContext",
+    "method": "get",
+    "path": "/agent_gateway/credential/context",
+    "parameterLocations": [
+      "#/components/parameters/RequestIdQuery"
+    ],
+    "errors": [
+      {
+        "status": 401,
+        "response": {
+          "$ref": "#/components/responses/Unauthorized"
+        }
+      },
+      {
+        "status": 429,
+        "response": {
+          "$ref": "#/components/responses/TooManyRequests"
+        }
+      },
+      {
+        "status": 500,
+        "response": {
+          "$ref": "#/components/responses/InternalError"
+        }
+      }
+    ],
+    "openapi": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "返回当前呈现凭据的自身上下文（credentialId、绑定 agent、scopes、revision）",
+        "operationId": "getAgentGatewayCredentialContext",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestIdQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CredentialContextSuccess"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "credentialAction": "authenticated"
+  },
+  {
     "operationId": "listAgentGatewayMemoryTargets",
     "method": "get",
     "path": "/agent_gateway/memory/targets",

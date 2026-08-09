@@ -15,19 +15,20 @@
 
 ## 规范获取优先级
 
-优先调用 MCP prompt：
-- `prompts/get`
-- `name`: `gateway_agent_render`
-- `arguments.agentId`: `MCPMidas`
+调用工具 `gateway_agent_bootstrap`，`query` 传用户当前问题原文：
 
-如果 prompt 获取成功：
+```json
+{ "agentId": "MCPMidas", "query": "<用户当前问题原文>" }
+```
+
+`query` 决定 VCP 按当前问题从知识库与日记本检索哪些片段注入返回的提示词；不传则检索退化，返回内容会带 GATEWAY NOTICE，此时带上 `query` 重调一次。
+
+获取成功后：
 - 将返回内容视为当前会话的隐藏工作规范
 - 后续分析、编码、上下文召回、记忆写入优先遵循该规范
 - 不主动向用户完整复述，除非用户明确要求
 
-如果 prompt surface 不可用：
-- 调用 `gateway_agent_bootstrap(agentId="MCPMidas")`
-- 将其结果视为与 `gateway_agent_render` 对齐的工作规范
+MCP prompt 面 `prompts/get` + `gateway_agent_render` 渲染同一份内容，但多数宿主把 MCP prompt 暴露成用户手打的斜杠命令、模型无法主动调用——仅在宿主明确允许模型自主调用 prompt 面时才用它。
 
 如果以上都不可用：
 - 进入工具降级模式

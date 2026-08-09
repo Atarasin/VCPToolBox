@@ -18,9 +18,10 @@ const { getGatewayServiceBundle } = require('../../../modules/agentGateway/creat
 const { createPluginManager } = require('../helpers/agent-gateway-test-helpers');
 
 /**
- * MCP agent target 门禁：
- * 显式同 agent 成功 / 显式他 agent 403 / 缺少 agentId 一律受控失败 /
- * job 工具同样要求显式 agentId。
+ * MCP agent target 门禁（2026-08 恢复绑定补全语义）：
+ * 绑定 credential 省略 agentId → 以绑定身份为 target / 显式同 agent 成功 /
+ * 显式他 agent 403 / 未绑定缺少 agentId 一律受控失败 /
+ * job 工具保持 jobId 必填、agentId 可由绑定身份补全（不计入遥测）。
  */
 
 function createRecallCapturePluginManager() {
@@ -61,25 +62,20 @@ function boundContext(agentId, scopes = ['gateway:read', 'gateway:execute']) {
     });
 }
 
-test('MCP gate: bound credential still requires explicit agentId on gateway_recall_run (in-process)', async () => {
+test('MCP gate: bound credential may omit agentId on gateway_recall_run (in-process)', async () => {
     const { pluginManager, bundle, calls } = createRecallCapturePluginManager();
     const adapter = createMcpAdapter(pluginManager, { gatewayServiceBundle: bundle });
 
-    await assert.rejects(
-        () => adapter.callTool({
-            name: 'gateway_recall_run',
-            arguments: { query: 'omitted target' },
-            authContext: boundContext('Ariadne'),
-            sessionId: 'sess-m3-bound-omit',
-            requestContext: { requestId: 'req-m3-bound-omit' }
-        }),
-        (error) => {
-            assert.equal(error.code, 'MCP_INVALID_REQUEST');
-            assert.match(error.message, /explicit agentId/);
-            return true;
-        }
-    );
-    assert.equal(calls.length, 0);
+    const result = await adapter.callTool({
+        name: 'gateway_recall_run',
+        arguments: { query: 'omitted target' },
+        authContext: boundContext('Ariadne'),
+        sessionId: 'sess-m3-bound-omit',
+        requestContext: { requestId: 'req-m3-bound-omit' }
+    });
+    assert.equal(result.isError, false);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].requestContext.agentId, 'Ariadne');
 });
 
 test('M3 gate: bound credential with explicit same agent succeeds; other agent is 403 (in-process)', async () => {
@@ -123,13 +119,13 @@ test('MCP gate: unbound omission keeps the controlled agentId-required failure (
         }),
         (error) => {
             assert.equal(error.code, 'MCP_INVALID_REQUEST');
-            assert.match(error.message, /agentId/);
+            assert.match(error.message, /agentId is required/);
             return true;
         }
     );
 });
 
-test('MCP gate: backend-proxy bound credential also rejects omitted agentId on bootstrap/recall', async () => {
+test('MCP gate: backend-proxy bound credential may omit agentId on bootstrap/recall', async () => {
     const requests = [];
     const backendClient = {
         async renderAgent(agentId, body) {
@@ -167,33 +163,59 @@ test('MCP gate: backend-proxy bound credential also rejects omitted agentId on b
     });
     const authContext = { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read', 'gateway:execute'] };
 
-    await assert.rejects(
-        () => adapter.callTool({
-            name: 'gateway_agent_bootstrap',
-            arguments: { variables: {} },
-            authContext,
-            requestContext: { requestId: 'req-proxy-m3-bootstrap' }
-        }),
-        (error) => {
-            assert.equal(error.code, 'MCP_INVALID_REQUEST');
-            assert.match(error.message, /agentId is required|explicit agentId/);
-            return true;
+    const bootstrap = await adapter.callTool({
+        name: 'gateway_agent_bootstrap',
+        arguments: { variables: {} },
+        authContext,
+        requestContext: { requestId: 'req-proxy-m3-bootstrap' }
+    });
+    assert.equal(bootstrap.isError, false);
+
+    const recall = await adapter.callTool({
+        name: 'gateway_recall_run',
+        arguments: { query: 'proxy omitted' },
+        authContext,
+        requestContext: { requestId: 'req-proxy-m3-recall' }
+    });
+    assert.equal(recall.isError, false);
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].agentId, 'Ariadne');
+    assert.equal(requests[1].body.requestContext.agentId, 'Ariadne');
+});
+
+test('MCP gate: backend-proxy memory tools fill agentId from bound credential before the diary policy gate', async () => {
+    const requests = [];
+    const backendClient = {
+        async searchMemory(body) {
+            requests.push(body);
+            return {
+                ok: true,
+                httpStatus: 200,
+                payload: {
+                    success: true,
+                    data: { items: [] },
+                    meta: { requestId: 'req-proxy-m3-search' }
+                }
+            };
         }
-    );
-    await assert.rejects(
-        () => adapter.callTool({
-            name: 'gateway_recall_run',
-            arguments: { query: 'proxy omitted' },
-            authContext,
-            requestContext: { requestId: 'req-proxy-m3-recall' }
-        }),
-        (error) => {
-            assert.equal(error.code, 'MCP_INVALID_ARGUMENTS');
-            assert.match(error.message, /agentId is required|explicit agentId/);
-            return true;
-        }
-    );
-    assert.equal(requests.length, 0);
+    };
+    const adapter = createBackendProxyMcpAdapter({
+        backendClient,
+        defaultAgentId: '',
+        discoveryDefaultAgentEnabled: false
+    });
+
+    const result = await adapter.callTool({
+        name: 'gateway_memory_search',
+        arguments: { query: 'bound omitted search' },
+        authContext: { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read'] },
+        sessionId: 'sess-proxy-m3-search',
+        requestContext: { requestId: 'req-proxy-m3-search' }
+    });
+    assert.equal(result.isError, false);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].requestContext.agentId, 'Ariadne');
 });
 
 test('MCP gate: unbound backend-proxy omission is rejected before any fabricated agent target appears', async () => {
@@ -225,22 +247,55 @@ test('MCP gate: unbound backend-proxy omission is rejected before any fabricated
             requestContext: { requestId: 'req-proxy-m3-unbound' }
         }),
         (error) => {
-            assert.equal(error.code, 'MCP_INVALID_ARGUMENTS');
-            assert.match(error.message, /agentId is required|explicit agentId/);
+            assert.equal(error.code, 'MCP_INVALID_REQUEST');
+            assert.match(error.message, /agentId is required/);
             return true;
         }
     );
     assert.equal(requests.length, 0);
 });
 
-test('MCP gate: gateway_job_get and gateway_job_cancel now require explicit agentId', async () => {
+test('MCP gate: gateway_job_get and gateway_job_cancel keep jobId required; agentId is bound-omittable', async () => {
     const { OPERATION_CATALOG } = require('../../../modules/agentGateway/contracts/operations');
     const jobGet = OPERATION_CATALOG.mcp.find((operation) => operation.toolName === 'gateway_job_get');
     const jobCancel = OPERATION_CATALOG.mcp.find((operation) => operation.toolName === 'gateway_job_cancel');
-    assert.deepEqual(jobGet.argsSchema.required, ['jobId', 'agentId']);
+    assert.deepEqual(jobGet.argsSchema.required, ['jobId']);
     assert.equal(jobGet.argsSchema.properties.agentId.type, 'string');
-    assert.deepEqual(jobCancel.argsSchema.required, ['jobId', 'agentId']);
+    assert.deepEqual(jobCancel.argsSchema.required, ['jobId']);
     assert.equal(jobCancel.argsSchema.properties.agentId.type, 'string');
+});
+
+test('MCP gate: backend-proxy job tools fill agentId from bound credential when omitted', async () => {
+    const requests = [];
+    const backendClient = {
+        async getJob(jobId, query) {
+            requests.push({ kind: 'getJob', jobId, query });
+            return {
+                ok: true,
+                httpStatus: 200,
+                payload: {
+                    success: true,
+                    data: { jobId, status: 'succeeded' },
+                    meta: { requestId: 'req-proxy-m3-job' }
+                }
+            };
+        }
+    };
+    const adapter = createBackendProxyMcpAdapter({
+        backendClient,
+        defaultAgentId: '',
+        discoveryDefaultAgentEnabled: false
+    });
+
+    const result = await adapter.callTool({
+        name: 'gateway_job_get',
+        arguments: { jobId: 'job-1' },
+        authContext: { boundAgentId: 'Ariadne', credentialScopes: ['gateway:read'] },
+        requestContext: { requestId: 'req-proxy-m3-job' }
+    });
+    assert.equal(result.isError, false);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].query.agentId, 'Ariadne');
 });
 
 test('agent target telemetry counts explicit vs bound-omitted calls', () => {
@@ -272,5 +327,24 @@ test('in-process explicit calls feed the process-level agent target telemetry', 
     const snapshot = defaultAgentTargetTelemetry.snapshot();
     assert.equal(snapshot.totals.explicit >= 1, true);
     assert.equal(snapshot.totals.boundOmitted, 0);
+    defaultAgentTargetTelemetry.reset();
+});
+
+test('in-process bound-omitted calls feed the process-level agent target telemetry', async () => {
+    defaultAgentTargetTelemetry.reset();
+    const { pluginManager, bundle } = createRecallCapturePluginManager();
+    const adapter = createMcpAdapter(pluginManager, { gatewayServiceBundle: bundle });
+
+    await adapter.callTool({
+        name: 'gateway_recall_run',
+        arguments: { query: 'telemetry bound omitted' },
+        authContext: boundContext('Ariadne'),
+        sessionId: 'sess-m3-telemetry-bound',
+        requestContext: { requestId: 'req-m3-telemetry-bound' }
+    });
+
+    const snapshot = defaultAgentTargetTelemetry.snapshot();
+    assert.equal(snapshot.totals.boundOmitted >= 1, true);
+    assert.equal(snapshot.bySurface['in-process:tools/call:gateway_recall_run'].boundOmitted >= 1, true);
     defaultAgentTargetTelemetry.reset();
 });

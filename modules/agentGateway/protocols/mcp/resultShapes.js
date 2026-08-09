@@ -62,6 +62,34 @@ function createMcpTextContent(value) {
     return [{ type: 'text', text: serializeMcpValue(value) }];
 }
 
+/**
+ * render / bootstrap 的文本内容：宿主模型只读 `content`，`structuredContent`
+ * 里的 `warnings` 多半永远到不了它眼前。渲染降级（例如检索 query 退化成
+ * 通用兜底、提示词被截断）因此会表现为「一次看起来完全正常的失败」。
+ *
+ * 有 warning 时在提示词前置一段告示，让模型能读到并自行纠正（带上 `query`
+ * 重新调用）；无 warning 时返回值与直接 `createMcpTextContent(renderedPrompt)`
+ * 逐字节相同——不给正常路径增加任何噪声。
+ *
+ * 分隔符刻意不用 `<< >>`／`[[ ]]`：那是 VCP 占位符语法。
+ */
+function createRenderedPromptContent(data) {
+    const renderedPrompt = typeof data?.renderedPrompt === 'string' ? data.renderedPrompt : '';
+    const warnings = Array.isArray(data?.warnings)
+        ? data.warnings.filter((warning) => typeof warning === 'string' && warning.trim())
+        : [];
+    if (warnings.length === 0) {
+        return createMcpTextContent(renderedPrompt);
+    }
+    return createMcpTextContent([
+        'GATEWAY NOTICE — this render is degraded:',
+        ...warnings.map((warning) => `  - ${warning}`),
+        'END GATEWAY NOTICE — the agent prompt follows.',
+        '',
+        renderedPrompt
+    ].join('\n'));
+}
+
 function createMcpPromptTextMessage(text) {
     return {
         role: 'system',
@@ -114,6 +142,7 @@ module.exports = {
     createMcpError,
     createMcpPromptTextMessage,
     createMcpTextContent,
+    createRenderedPromptContent,
     normalizeMcpString,
     sanitizeMcpErrorDetails,
     serializeMcpValue,

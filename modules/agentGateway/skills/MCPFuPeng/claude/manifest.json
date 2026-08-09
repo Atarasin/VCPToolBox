@@ -1,0 +1,20 @@
+{
+  "artifactId": "skill:MCPFuPeng:claude:sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06",
+  "agentId": "MCPFuPeng",
+  "format": "claude",
+  "guidanceRevision": "sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06",
+  "generatedWith": "agent-gateway-skill-generator/1",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "bytes": 6619,
+      "sha256": "b4e4332b57a3fb2ede0424055ceb23c193afdfc5afff9be9615b81f9d8c8e9d1"
+    },
+    {
+      "path": "INSTALL.md",
+      "bytes": 2387,
+      "sha256": "6e2eb8410b72dea917f6584c9b4f77132694a600d90e1fffb902ad000663ac6d"
+    }
+  ],
+  "contentHash": "sha256:17ff4f2bc9a402e6ba30d85333b2a4bf166318a572a44d48e9e3e778fb86867a"
+}

@@ -24,7 +24,17 @@ const MID_EXPAND_MAX = 180;         // 中期最多放宽到180天
 class DreamWaveEngine {
     constructor(knowledgeBaseManager) {
         this.kb = knowledgeBaseManager;
-        this.db = knowledgeBaseManager ? knowledgeBaseManager.db : null;
+    }
+
+    /**
+     * 每次现取 KBM 的当前连接，不缓存。
+     * KnowledgeBaseManager 会在 System Ready 之后的 native Memo bootstrap 等阶段
+     * 关闭并重开 sqlite 连接；构造时拷贝下来的句柄会变成已关闭状态，
+     * 后续所有 prepare() 都抛 "The database connection is not open"，
+     * 表现为梦境里每一个种子都"无向量"、联想层全空。
+     */
+    get db() {
+        return this.kb ? this.kb.db : null;
     }
 
     // =========================================================================
@@ -341,13 +351,19 @@ class DreamWaveEngine {
                 "SELECT id FROM files WHERE path = ? OR path = ? OR path = ? OR path = ?"
             ).get(relPathPosix, relPathWin, '/' + relPathPosix, '\\' + relPathWin);
 
-            if (!fileRow) return null;
+            if (!fileRow) {
+                console.log(`[DreamWave] ⚠️ files 表无此路径: "${relPathPosix}" (root="${DAILY_NOTE_ROOT}")`);
+                return null;
+            }
 
             const chunkRow = this.db.prepare(
                 "SELECT vector FROM chunks WHERE file_id = ? ORDER BY chunk_index ASC LIMIT 1"
             ).get(fileRow.id);
 
-            if (!chunkRow || !chunkRow.vector) return null;
+            if (!chunkRow || !chunkRow.vector) {
+                console.log(`[DreamWave] ⚠️ 文件已索引但首块无向量: "${relPathPosix}" (file_id=${fileRow.id})`);
+                return null;
+            }
 
             const vecDim = Math.floor(chunkRow.vector.length / 4);
             return new Float32Array(chunkRow.vector.buffer, chunkRow.vector.byteOffset, vecDim);
@@ -420,7 +436,8 @@ class DreamWaveEngine {
                     allResults = allResults.concat(results);
                 }
             } catch (e) {
-                // 静默跳过搜索失败的索引
+                // 跳过搜索失败的索引，但必须留痕 —— 静默吞掉会让"联想层全空"变成无法诊断的哑故障
+                console.warn(`[DreamWave] ⚠️ 索引 "${idxName}" 检索失败: ${e.message}`);
             }
         }
 
