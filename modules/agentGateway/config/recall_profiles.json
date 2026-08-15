@@ -70,7 +70,7 @@
             ]
         },
         "Midas-default": {
-            "minScore": 0.4,
+            "minScore": 0.5,
             "rules": [
                 {
                     "baseMode": "rag",
@@ -94,7 +94,7 @@
             ]
         },
         "Yui-default": {
-            "minScore": 0.4,
+            "minScore": 0.5,
             "rules": [
                 {
                     "baseMode": "rag",
@@ -114,7 +114,7 @@
             ]
         },
         "FuPeng-default": {
-            "minScore": 0.4,
+            "minScore": 0.5,
             "rules": [
                 {
                     "baseMode": "rag",
