@@ -105,7 +105,7 @@ import UiPageActions from "@/components/ui/UiPageActions.vue";
 import UiSelect from "@/components/ui/UiSelect.vue";
 import UiToolbar from "@/components/ui/UiToolbar.vue";
 import { askConfirm, askInput } from "@/platform/feedback/feedbackBus";
-import { showMessage } from "@/utils";
+import { copyToClipboard, showMessage } from "@/utils";
 
 const status = ref<GatewayStatus | null>(null);
 const agents = ref<GatewayAgentOption[]>([]);
@@ -289,10 +289,11 @@ async function onRevoke(credential: GatewayCredentialView): Promise<void> {
 }
 
 async function copyCredentialId(credentialId: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(credentialId);
+  // 面板常经局域网 HTTP 访问（非安全上下文），须用带 execCommand 回退的共享工具
+  const success = await copyToClipboard(credentialId);
+  if (success) {
     showMessage(`已复制 ${credentialId}`, "success");
-  } catch {
+  } else {
     showMessage("复制失败，请手动选择复制", "error");
   }
 }

@@ -80,6 +80,7 @@ import type { GatewayCredentialView } from "@/api/agentGateway";
 import AppCheckbox from "@/components/ui/AppCheckbox.vue";
 import BaseModal from "@/components/ui/BaseModal.vue";
 import UiButton from "@/components/ui/UiButton.vue";
+import { copyToClipboard, showMessage } from "@/utils";
 
 const props = defineProps<{
   modelValue: boolean;
@@ -103,22 +104,15 @@ function handleVisibility(visible: boolean): void {
 }
 
 async function copyToken(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(props.token);
+  // 面板常经局域网 HTTP 访问（非安全上下文），须用带 execCommand 回退的共享工具
+  const success = await copyToClipboard(props.token);
+  if (success) {
     copied.value = true;
     setTimeout(() => {
       copied.value = false;
     }, 2000);
-  } catch {
-    // 剪贴板 API 不可用时退化：选中令牌文本便于手动复制
-    const range = document.createRange();
-    const node = document.querySelector(".token-modal__token");
-    if (node) {
-      range.selectNodeContents(node);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    }
+  } else {
+    showMessage("复制失败，请手动选中令牌文本复制", "error");
   }
 }
 
