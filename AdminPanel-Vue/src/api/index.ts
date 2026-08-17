@@ -106,6 +106,10 @@ export type * from './forum-assistant'
 export { tarotDivinationApi } from './tarotDivination'
 export type * from './tarotDivination'
 
+// Agent Gateway 凭据管理 API
+export { agentGatewayApi } from './agentGateway'
+export type * from './agentGateway'
+
 // 插件商店 API
 export { pluginStoreApi } from './pluginStore'
 export type * from './pluginStore'

@@ -114,6 +114,7 @@ module.exports = function (
   mount("/", "clawMail"); // Handles /claw-mail/*
   mount("/", "tarotDivination"); // Handles /tarot-divination/*
   mount("/", "toolCallRecords"); // Handles /tool-call-records/*
+  mount("/", "agentGateway"); // Handles /agent-gateway/*（Gateway 凭据管理，主进程单写者）
 
   return adminApiRouter;
 };

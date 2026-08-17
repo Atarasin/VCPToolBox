@@ -29,6 +29,7 @@ export const APP_ROUTE_COMPONENTS = {
   "thinking-chains-editor": () => import("@/views/ThinkingChainsEditor.vue"),
   "rag-tuning": () => import("@/views/RagTuning.vue"),
   "schedule-manager": () => import("@/views/ScheduleManager.vue"),
+  "agent-gateway-manager": () => import("@/views/AgentGatewayManager.vue"),
   "dream-manager": () => import("@/views/DreamManager.vue"),
   "server-log-viewer": () => import("@/views/ServerLogViewer.vue"),
   "semantic-model-router-editor": () =>

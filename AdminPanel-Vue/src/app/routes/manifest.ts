@@ -28,6 +28,7 @@ export type AppRouteId =
   | "agent-emotion-manager"
   | "forum-assistant-config"
   | "agent-scores"
+  | "agent-gateway-manager"
   | "toolbox-manager"
   | "tvs-files-editor"
   | "sar-prompt-editor"
@@ -253,6 +254,16 @@ export const APP_ROUTE_MANIFEST: readonly AppRouteMeta[] = [
     path: "/schedule-manager",
     title: "日程管理",
     icon: "calendar_month",
+    requiresAuth: true,
+    navGroup: "agentContent",
+    showInSidebar: true,
+  },
+  {
+    id: "agent-gateway-manager",
+    routeName: "AgentGatewayManager",
+    path: "/agent-gateway-manager",
+    title: "Agent 对外网关",
+    icon: "key",
     requiresAuth: true,
     navGroup: "agentContent",
     showInSidebar: true,

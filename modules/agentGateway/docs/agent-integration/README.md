@@ -19,6 +19,7 @@
 | [05-testing-gates.md](05-testing-gates.md) | 测试矩阵与发布门禁（单源清单） | §8 |
 | [06-execution-plan.md](06-execution-plan.md) | 执行计划：milestone → slice → task 的层次分解与依赖图（取代原 §7 的 P0–P4 平铺） | §7 重组 |
 | [07-revision-history.md](07-revision-history.md) | v2–v6 修订摘要 | 附录 |
+| [08-adminpanel-agent-credential-manager.md](08-adminpanel-agent-credential-manager.md) | AdminPanel 凭据管理模块：`/admin_api/agent-gateway/*` 管理路由与「Agent 对外网关」页面（铸造/轮换/吊销） | — |
 | [agent-onboarding-walkthrough.md](agent-onboarding-walkthrough.md) | 实操手册：把一个新 agent 从零接到 Gateway 对外服务（付鹏/MCPFuPeng 真实案例）、验证清单与踩坑记录 | — |
 
 阅读顺序建议：实现者先读 01（授权模型是全方案前提）→ 02 → 03，再按 06 领取任务；评审者按 07 了解决策演进；测试与发布以 05 为准。**只想上线一个新 agent、不改 Gateway 本身的读者，直接看 [agent-onboarding-walkthrough.md](agent-onboarding-walkthrough.md)。**
