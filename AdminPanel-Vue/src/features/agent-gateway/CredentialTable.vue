@@ -22,7 +22,7 @@
             <code>{{ credential.credentialId }}</code>
             <UiIconButton
               label="复制凭据 ID"
-              :title="`复制 ${credential.credentialId}`"
+              :title="`复制凭据 ID ${credential.credentialId}（令牌仅在铸造/轮换时显示一次，此处不可复制）`"
               size="sm"
               @click="emit('copyId', credential.credentialId)"
             >
