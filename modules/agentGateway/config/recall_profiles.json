@@ -30,7 +30,18 @@
                 "Yui-default"
             ],
             "targets": [
-                "Yui日记本"
+                "Yui日记本",
+                "Yui的知识日记本"
+            ]
+        },
+        "MCPYui": {
+            "defaultProfile": "Yui-default",
+            "allowedProfiles": [
+                "Yui-default"
+            ],
+            "targets": [
+                "Yui日记本",
+                "Yui的知识日记本"
             ]
         },
         "MCPFuPeng": {
@@ -100,7 +111,8 @@
                     "baseMode": "rag",
                     "targets": {
                         "diaries": [
-                            "Yui日记本"
+                            "Yui日记本",
+                            "Yui的知识日记本"
                         ],
                         "kMultiplier": 1.0
                     },

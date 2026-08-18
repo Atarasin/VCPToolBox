@@ -28,12 +28,23 @@
             ]
         },
         "Yui": {
-            "maid": "Yui",
+            "maid": "结衣",
             "allowedDiaries": [
-                "Yui"
+                "Yui日记本",
+                "Yui的知识日记本"
             ],
             "defaultDiaries": [
-                "Yui"
+                "Yui日记本"
+            ]
+        },
+        "MCPYui": {
+            "maid": "结衣",
+            "allowedDiaries": [
+                "Yui日记本",
+                "Yui的知识日记本"
+            ],
+            "defaultDiaries": [
+                "Yui日记本"
             ]
         },
         "MCPFuPeng": {
