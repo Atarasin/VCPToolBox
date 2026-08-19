@@ -8,6 +8,10 @@ const { normalizeString, normalizeStringArray } = require('./shared/normalize');
 
 const DEFAULT_POLICY_PATH = path.join(__dirname, '..', 'config', 'mcp_agent_memory_policy.json');
 
+// Trailing-wildcard diary patterns (e.g. "Nexus项目-*") are only honored for
+// these prefixes; a wildcard entry with any other prefix matches nothing.
+const ALLOWED_WILDCARD_PREFIXES = ['Nexus项目-'];
+
 const normalizePolicyString = normalizeString;
 const normalizePolicyStringArray = normalizeStringArray;
 const loadPolicyFile = createHotJsonConfigLoader({
@@ -46,7 +50,38 @@ function buildDiaryAliasCandidates(value) {
     return Array.from(candidates);
 }
 
+function isWildcardDiaryPattern(value) {
+    return normalizePolicyString(value).endsWith('*');
+}
+
+function resolveAllowedWildcardPrefix(value) {
+    const prefix = normalizePolicyString(value).slice(0, -1).trim();
+    return ALLOWED_WILDCARD_PREFIXES.includes(prefix) ? prefix : '';
+}
+
+function matchesDiaryWildcardPrefix(prefix, diaryName) {
+    const canonicalName = normalizeDiaryCanonicalName(diaryName);
+    return Boolean(canonicalName) && canonicalName.startsWith(prefix);
+}
+
 function areDiaryNamesEquivalent(left, right) {
+    // Callers pass (allowed, requested) or (requested, allowed), so wildcard
+    // handling must be symmetric in which side carries the pattern.
+    const leftIsWildcard = isWildcardDiaryPattern(left);
+    const rightIsWildcard = isWildcardDiaryPattern(right);
+    if (leftIsWildcard || rightIsWildcard) {
+        if ((leftIsWildcard && !resolveAllowedWildcardPrefix(left))
+            || (rightIsWildcard && !resolveAllowedWildcardPrefix(right))) {
+            return false;
+        }
+        if (leftIsWildcard && rightIsWildcard) {
+            return resolveAllowedWildcardPrefix(left) === resolveAllowedWildcardPrefix(right);
+        }
+        return leftIsWildcard
+            ? matchesDiaryWildcardPrefix(resolveAllowedWildcardPrefix(left), right)
+            : matchesDiaryWildcardPrefix(resolveAllowedWildcardPrefix(right), left);
+    }
+
     const leftCandidates = new Set(buildDiaryAliasCandidates(left));
     if (leftCandidates.size === 0) {
         return false;
