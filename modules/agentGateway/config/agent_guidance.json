@@ -148,6 +148,48 @@
      }
     ]
    }
+  },
+  "Nexus": {
+   "displayName": "Nexus",
+   "memoryDefaults": {
+    "tags": [
+     "nexus",
+     "coding"
+    ],
+    "metadata": {
+     "project": "multi-project",
+     "source": "mcp-client"
+    }
+   },
+   "workflow": [
+    "新会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query；返回带 GATEWAY NOTICE 时带 query 重调一次。",
+    "按 Nexus.txt §1 完成项目定位（读 .nexus-project）后，先翻项目日记本再翻通用日记本，分两次显式调用 gateway_memory_search / gateway_context_assemble。",
+    "会话收尾或得出确定结论时按双轨路由写入：项目事实进项目本，泛化经验进通用本。"
+   ],
+   "skill": {
+    "domain": "跨项目编码辅助",
+    "triggers": [
+     "在任意代码仓库中做开发、调试、重构或架构设计",
+     "需要 Nexus 既往的项目约定、决策记录或踩坑记录"
+    ],
+    "notFor": [
+     "与编码无关的纯聊天或一次性问答"
+    ],
+    "writeTargets": [
+     {
+      "diary": "Nexus项目-<项目名>日记本",
+      "when": "沉淀仅本项目有意义的架构事实、命令、约定、决策与坑时"
+     },
+     {
+      "diary": "Nexus工程经验日记本",
+      "when": "得出跨项目可复用的方法论、避坑经验或协作偏好时（先泛化）"
+     },
+     {
+      "diary": "Nexus架构设计日记本",
+      "when": "做出可复用的架构决策、设计模式或技术选型结论时（先泛化）"
+     }
+    ]
+   }
   }
  }
 }
