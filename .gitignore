@@ -1,5 +1,6 @@
 .sisyphus/
 .claude/
+.agents/
 .trae/
 .tmp/
 openspec/
