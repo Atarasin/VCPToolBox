@@ -27,6 +27,14 @@
       "changes": "定稿：无遗留待定决策。输出正式文档 docs/2026-08-19_Nexus跨项目记忆改造.md（目标与范围 / 总体设计 / 详细设计 / 任务分解 / 约束红线 / 验收标准 / 决策记录 / 风险与开放问题八章），定稿版页面以该 md 为事实源全新生成，交互控件与导出栏已移除",
       "affected_sections": ["全部"],
       "status": "已定稿"
+    },
+    {
+      "round": 4,
+      "date": "2026-08-19 23:23",
+      "feedback": "M1-M3 已经完成，但是我发现设计方案缺少最关键的一项，agent 如何获得 Nexus.txt 的内容",
+      "changes": "补上提示词分发链路设计：Nexus.txt 不是自动注入模型上下文的——正侧门是 MCP 工具 gateway_agent_bootstrap（渲染 Nexus.txt 并按 query 注入日记片段），触发面是 initialize.instructions 摘要 + 客户端 skill（由 agent_guidance.json 的 Nexus 条目驱动生成，当前缺失）。正式 md 新增 2.5 分发链路、3.4 接入步骤与新里程碑 M4、验收标准 AC7，版本升 v2",
+      "affected_sections": ["目标与总体设计", "详细设计", "任务分解", "验收标准", "风险与开放问题"],
+      "status": "已采纳"
     }
   ]
 }
