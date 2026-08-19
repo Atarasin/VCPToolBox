@@ -3,16 +3,13 @@
         "Nexus": {
             "maid": "Nexus",
             "allowedDiaries": [
-                "Nexus日记本",
+                "Nexus工程经验日记本",
                 "Nexus架构设计日记本",
-                "Nexus工程方法论日记本",
-                "Nexus避坑指南日记本"
+                "Nexus项目-*"
             ],
             "defaultDiaries": [
-                "Nexus日记本",
-                "Nexus架构设计日记本",
-                "Nexus工程方法论日记本",
-                "Nexus避坑指南日记本"
+                "Nexus工程经验日记本",
+                "Nexus架构设计日记本"
             ]
         },
         "MCPMidas": {
