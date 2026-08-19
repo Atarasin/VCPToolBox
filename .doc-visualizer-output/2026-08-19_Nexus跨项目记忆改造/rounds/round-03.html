@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus 跨项目记忆改造方案 · 已定稿</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak]{display:none!important}
+    pre.code{background:#0f172a;color:#e2e8f0;border-radius:.5rem;padding:.75rem;font-size:.75rem;overflow-x:auto;white-space:pre}
+    table.md{width:100%;border-collapse:collapse;font-size:.875rem}
+    table.md th,table.md td{border:1px solid #e2e8f0;padding:.5rem .75rem;text-align:left;vertical-align:top}
+    table.md th{background:#f8fafc;font-weight:600}
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+  <!-- 顶部 Hero -->
+  <header class="bg-gradient-to-r from-slate-900 to-slate-700 text-white px-6 py-8">
+    <div class="max-w-5xl mx-auto">
+      <p class="text-slate-400 text-sm mb-1">2026-08-19 · 版本 v1 · 评审轮次：2 轮</p>
+      <h1 class="text-2xl font-bold mb-2">Nexus 跨项目记忆改造方案
+        <span class="ml-2 text-xs px-1.5 py-0.5 rounded bg-emerald-500 text-white align-middle">R3 更新</span>
+      </h1>
+      <p class="text-slate-300 max-w-2xl">将编码助理 Nexus（Agent/coding/Nexus.txt，经 Agent Gateway 的 MCP 链路使用）的记忆体系从"仅按知识类型划分的通用日记"改造为"项目日记 + 通用日记"双轨分层，消除跨项目工作时的记忆互串。</p>
+      <div class="flex flex-wrap gap-2 mt-4">
+        <span class="bg-white/10 rounded-full px-3 py-1 text-sm">2 层日记 · 通用本 2 本</span>
+        <span class="bg-white/10 rounded-full px-3 py-1 text-sm">3 个里程碑（M4 已取消）</span>
+        <span class="bg-red-500/30 rounded-full px-3 py-1 text-sm">5 条红线</span>
+        <span class="bg-purple-500/30 rounded-full px-3 py-1 text-sm">1 处核心代码改动</span>
+        <span class="bg-emerald-500/30 rounded-full px-3 py-1 text-sm">已定稿 · 正式文档见 2026-08-19_Nexus跨项目记忆改造.md</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容 -->
+  <main class="max-w-5xl mx-auto px-4 py-8" x-data="{tab:'overview'}">
+    <!-- 标签导航（对齐正式 md 章节） -->
+    <div class="flex gap-1 border-b mb-6 overflow-x-auto">
+      <button @click="tab='overview'"
+        :class="tab==='overview'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">目标与总体设计</button>
+      <button @click="tab='detail'"
+        :class="tab==='detail'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">详细设计</button>
+      <button @click="tab='tasks'"
+        :class="tab==='tasks'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">任务分解</button>
+      <button @click="tab='rules'"
+        :class="tab==='rules'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">约束红线</button>
+      <button @click="tab='acceptance'"
+        :class="tab==='acceptance'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">验收标准</button>
+      <button @click="tab='decisions'"
+        :class="tab==='decisions'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">决策记录</button>
+      <button @click="tab='risks'"
+        :class="tab==='risks'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">风险与开放问题</button>
+      <button @click="tab='history'"
+        :class="tab==='history'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'"
+        class="px-4 py-2 text-sm font-medium whitespace-nowrap">迭代记录</button>
+    </div>
+
+    <!-- ========== 1 目标与范围 + 2 总体设计 ========== -->
+    <div x-show="tab==='overview'" x-cloak class="space-y-6">
+      <section>
+        <h2 class="text-lg font-bold mb-3">1. 目标与范围</h2>
+        <div class="border rounded-xl p-4 bg-white text-sm space-y-2">
+          <p><strong>目标：</strong>将 Nexus 的记忆体系改造为"项目日记 + 通用日记"双轨分层，消除跨项目工作时的记忆互串。</p>
+          <p><strong>范围内：</strong>M1 重写 Nexus.txt 2.0；M2 日记白名单尾通配支持（代码 + 测试）；M3 接入首个项目 VCPToolBox 并验证完整闭环。</p>
+          <p><strong>范围外：</strong>存量日记清理（用户自行全部处理，本方案不碰既有日记）；VCP 聊天链路（Q2 已确认仅走 MCP 链路）。</p>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-bold mb-3">2.1 分层结构（自上而下）</h2>
+        <div class="space-y-1 max-w-2xl">
+          <div class="bg-purple-100 border-2 border-purple-300 rounded-lg p-3 text-center">
+            <p class="font-medium">提示词层 · Agent/coding/Nexus.txt 2.0</p>
+            <p class="text-xs text-purple-700 mt-0.5">项目定位 → 显式召回 → 双轨写入路由</p>
+          </div>
+          <div class="bg-blue-100 border-2 border-blue-300 rounded-lg p-3 text-center mx-4">
+            <p class="font-medium">工具层 · Agent Gateway MCP 工具</p>
+            <p class="text-xs text-blue-700 mt-0.5">gateway_memory_write / gateway_memory_search / gateway_context_assemble / gateway_recall_run</p>
+          </div>
+          <div class="bg-amber-100 border-2 border-amber-300 rounded-lg p-3 text-center mx-8">
+            <p class="font-medium">门禁层 · mcp_agent_memory_policy.json</p>
+            <p class="text-xs text-amber-700 mt-0.5">每 agent 可访问日记的白名单；mtime 热加载；本次新增尾通配支持</p>
+          </div>
+          <div class="bg-gray-100 border-2 border-gray-300 rounded-lg p-3 text-center mx-12">
+            <p class="font-medium">存储层 · dailynote/&lt;日记名&gt;/</p>
+            <p class="text-xs text-gray-600 mt-0.5">每本日记一个目录；DailyNote 插件写入时 fs.mkdir(recursive) 自动建目录</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-bold mb-3">2.2 日记分层与命名</h2>
+        <div class="bg-white border border-gray-200 rounded-xl p-4 overflow-x-auto">
+          <table class="md">
+            <thead><tr><th>类别</th><th>名称</th><th>内容</th></tr></thead>
+            <tbody>
+              <tr><td>项目日记</td><td><code>Nexus项目-&lt;项目名&gt;日记本</code></td><td>项目架构事实、构建/测试命令、代码约定、历史决策及理由、环境坑、进行中的工作</td></tr>
+              <tr><td>通用日记</td><td><code>Nexus工程经验日记本</code></td><td>跨项目可复用的工程方法论、避坑经验、协作偏好（合并原：工程方法论 + 避坑指南 + 个人经历）</td></tr>
+              <tr><td>通用日记</td><td><code>Nexus架构设计日记本</code></td><td>系统架构、设计模式、模块划分、技术选型（纯架构）</td></tr>
+            </tbody>
+          </table>
+          <p class="text-xs text-gray-500 mt-2">项目名来源：项目根目录的 <code>.nexus-project</code> 标记文件（单行文本，仅含项目名）。</p>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-bold mb-3">2.3 写入路由（双轨分流）</h2>
+        <div class="bg-white border border-gray-200 rounded-xl p-4">
+          <div class="flex flex-col sm:flex-row items-stretch gap-2 text-center text-sm">
+            <div class="flex-1 bg-slate-100 rounded-lg p-3 font-medium self-center">产出一条经验</div>
+            <div class="self-center text-slate-400">→</div>
+            <div class="flex-1 bg-amber-50 border border-amber-300 rounded-lg p-3 font-medium self-center">离开本项目<br>是否还有用？</div>
+            <div class="self-center text-slate-400">→</div>
+            <div class="flex-[2] grid sm:grid-cols-2 gap-2">
+              <div class="bg-emerald-50 border border-emerald-300 rounded-lg p-3">
+                <p class="font-medium text-emerald-800">跨项目可复用 → 通用本</p>
+                <p class="text-xs text-emerald-700 mt-1">先泛化（剥离项目名、路径、端口等细节）。"怎么干活"→ 工程经验本；"怎么设计"→ 架构设计本。项目内具体上下文可双写一份到项目本。</p>
+              </div>
+              <div class="bg-blue-50 border border-blue-300 rounded-lg p-3">
+                <p class="font-medium text-blue-800">仅本项目有意义 → 项目本</p>
+                <p class="text-xs text-blue-700 mt-1">记具体事实：构建命令、目录结构、代码约定、决策理由、进行中的工作。</p>
+              </div>
+            </div>
+          </div>
+          <p class="text-xs text-red-600 mt-2">通用本禁止出现项目细节（红线 R1）。</p>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-bold mb-3">2.4 召回路由（固定顺序）</h2>
+        <div class="bg-white border border-gray-200 rounded-xl p-4 text-sm space-y-2">
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">第 1 步</span> 读 <code>&lt;项目根&gt;/.nexus-project</code> 得项目名；文件缺失时以 <code>git rev-parse --show-toplevel</code> 的 basename 推导，并建议用户补建标记文件。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">第 2 步</span> 第一次召回：显式 <code>diaries=["Nexus项目-&lt;项目名&gt;日记本"]</code>——项目事实优先。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">第 3 步</span> 第二次召回：显式 <code>diaries=["Nexus工程经验日记本","Nexus架构设计日记本"]</code>——通用经验补充。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">第 4 步</span> <code>gateway_recall_run</code> 仅用于通用泛检索（其 profile 为静态名单，不含项目日记）。</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ========== 3 详细设计 ========== -->
+    <div x-show="tab==='detail'" x-cloak class="space-y-6">
+      <section>
+        <h2 class="text-lg font-bold mb-3">3.1 代码改动（M2）：白名单尾通配</h2>
+        <div class="border rounded-xl p-4 bg-white text-sm space-y-2">
+          <p><strong>文件 / 函数：</strong><code>modules/agentGateway/policy/mcpAgentMemoryPolicy.js</code> 的 <code>areDiaryNamesEquivalent(left, right)</code>。</p>
+          <p><strong>现状：</strong>仅支持"日记本"后缀等价（<code>buildDiaryAliasCandidates</code> 生成带/不带后缀两个候选）。</p>
+          <p><strong>改法：</strong>任一参数以 <code>*</code> 结尾时，将该侧视为模式：模式侧与匹配侧分别经 <code>normalizeDiaryCanonicalName</code> 归一化（剥离"日记本"后缀）后执行前缀匹配。例：模式 <code>Nexus项目-*</code> → 前缀 <code>Nexus项目-</code>；<code>Nexus项目-VCPToolBox日记本</code> 归一化为 <code>Nexus项目-VCPToolBox</code>，<code>startsWith</code> 命中。</p>
+          <details class="mt-1">
+            <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600">实现注意与不改动的文件 ▾</summary>
+            <div class="text-xs text-gray-600 mt-2 space-y-2">
+              <p>· 两个调用点传参顺序不一致：<code>diaryScopeGuard.isDiaryAllowed</code> 以 (allowed, requested) 调用；<code>diaryPolicyGate.applyDiaryPolicyGate</code> 以 (requested, allowed) 调用。匹配逻辑必须对"哪一侧带 * 哪一侧是模式"做对称处理。</p>
+              <p>· 前缀收敛（红线 R4）：在 mcpAgentMemoryPolicy.js 内实现允许前缀常量（<code>ALLOWED_WILDCARD_PREFIXES = ['Nexus项目-']</code>），模式不在白名单内则不匹配任何名字；不扩散到其他文件。</p>
+              <p>· 模块约定遵循 modules/AGENTS.md：CommonJS 导出，错误边界显式，不引入 ESM-only 依赖。</p>
+              <p>· 不需要改动：diaryPolicyGate.js（搜索门禁）与 diaryScopeGuard.js（写入门禁）均只调用 areDiaryNamesEquivalent，自动继承；recallProfileResolver 不改——项目日记不进 profile rule。</p>
+            </div>
+          </details>
+          <details>
+            <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600">测试用例（tests/agent-gateway/policy/）▾</summary>
+            <div class="text-xs text-gray-600 mt-2 space-y-1">
+              <p>1. 精确匹配回归：原有等价与后缀行为不变；</p>
+              <p>2. <code>Nexus项目-*</code> 放行 <code>Nexus项目-VCPToolBox日记本</code>（带后缀与不带后缀两种写法）；</p>
+              <p>3. 跨前缀拒绝：<code>Nexus项目X-Foo日记本</code> 不匹配 <code>Nexus项目-*</code>；</p>
+              <p>4. 非白名单前缀通配拒绝：<code>Nexus-*</code> 不匹配任何名字；</p>
+              <p>5. 既有 policy 测试套件整体通过（403 报错仍携带允许清单，自愈提示不回归）。</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-bold mb-3">3.2 配置变更（M3，均热加载无需重启）</h2>
+        <div class="border rounded-xl p-4 bg-white space-y-4">
+          <div>
+            <p class="font-semibold text-sm">① modules/agentGateway/config/mcp_agent_memory_policy.json</p>
+            <pre class="code mt-2">"Nexus": {
+  "maid": "Nexus",
+  "allowedDiaries": [
+    "Nexus工程经验日记本",
+    "Nexus架构设计日记本",
+    "Nexus项目-*"
+  ],
+  "defaultDiaries": [
+    "Nexus工程经验日记本",
+    "Nexus架构设计日记本"
+  ]
+}</pre>
+            <p class="text-xs text-gray-500 mt-1"><code>Nexus项目-*</code> 一行覆盖所有现在和未来的项目日记；defaultDiaries 只放 2 本通用本，项目召回永远显式指定（见风险 1）。</p>
+          </div>
+          <div>
+            <p class="font-semibold text-sm">② modules/agentGateway/config/recall_profiles.json</p>
+            <pre class="code mt-2">"Nexus": {
+  "defaultProfile": "nexus-default",
+  "allowedProfiles": ["nexus-default"],
+  "targets": ["Nexus工程经验日记本", "Nexus架构设计日记本"]
+}
+// profiles."nexus-default".rules[0].targets.diaries 同步改为这两本，其余 modifiers 不动</pre>
+          </div>
+          <div>
+            <p class="font-semibold text-sm">③ 项目根标记文件</p>
+            <pre class="code mt-2"># 文件：&lt;项目根&gt;/.nexus-project —— 内容单行项目名，VCPToolBox 项目为：
+VCPToolBox</pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-bold mb-3">3.3 Nexus.txt 2.0（M1）章节结构</h2>
+        <div class="border rounded-xl p-4 bg-white text-sm space-y-2">
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">§1</span> <strong>项目定位</strong>：开工先读 <code>&lt;项目根&gt;/.nexus-project</code>（单行项目名）；文件缺失则从 git 根目录名推导，并建议用户补建该文件；对话中途工作目录变化 = 重新定位。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">§2</span> <strong>回忆纪律</strong>：先单独翻项目本、再翻 2 本通用本，分两次显式调用（gateway_memory_search / gateway_context_assemble，携带 agentId: "Nexus"）；gateway_recall_run 仅用于通用泛检索。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">§3</span> <strong>写入分流</strong>：双轨路由（2.3）；通用本 2 选 1；双写条款；通用本禁项目细节（红线 R1）。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">§4</span> <strong>命名规范</strong>：项目日记固定 <code>Nexus项目-&lt;项目名&gt;日记本</code>；被门禁拒绝（403）时按报错中 allowedDiaries 清单改名重试。</p>
+          <p><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs">§5</span> <strong>标签规范</strong>：项目日记条目带类型标签：#架构 #命令 #约定 #决策 #坑。</p>
+          <p class="text-red-700 text-xs border-t border-red-200 pt-2">删除：旧版"必须脱离具体项目局限"条款，及旧的 4 本日记路由表（Nexus日记本 / Nexus架构设计 / Nexus工程方法论 / Nexus避坑指南）。</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ========== 4 任务分解 ========== -->
+    <div x-show="tab==='tasks'" x-cloak class="space-y-4">
+      <div class="bg-white border border-gray-200 rounded-xl p-4 overflow-x-auto">
+        <table class="md">
+          <thead><tr><th>编号</th><th>任务</th><th>类型</th><th>依赖</th></tr></thead>
+          <tbody>
+            <tr><td class="font-mono font-bold">M1</td><td>重写 Agent/coding/Nexus.txt 2.0（§1~§5）</td><td>文档</td><td>无</td></tr>
+            <tr><td class="font-mono font-bold">M2</td><td>通配符改造 + 测试（见详细设计 3.1）</td><td>代码</td><td>无（可与 M1 并行）</td></tr>
+            <tr><td class="font-mono font-bold">M3</td><td>接入 VCPToolBox 验证闭环（3.2 全部配置 + .nexus-project + 实际会话验证）</td><td>配置+验证</td><td>M1、M2</td></tr>
+            <tr class="text-gray-400"><td class="font-mono font-bold line-through">M4</td><td class="line-through">存量迁移</td><td>—</td><td>已取消（D5：不做迁移，用户自行清理）</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ========== 5 约束红线 ========== -->
+    <div x-show="tab==='rules'" x-cloak class="space-y-3">
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <p class="font-semibold text-red-800">🚫 R1：通用日记本禁止出现项目细节</p>
+        <p class="mt-1 text-sm text-red-700">具体路径、端口、内部命名、项目特有命令，一律不进通用本；经验必须泛化后才能写入通用本。</p>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <p class="font-semibold text-red-800">🚫 R2：日记命名固定，禁止自造名称</p>
+        <p class="mt-1 text-sm text-red-700">项目日记名统一 <code>Nexus项目-&lt;项目名&gt;日记本</code>；名字不匹配白名单即 403，等于写入失败。</p>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <p class="font-semibold text-red-800">🚫 R3：密钥和敏感信息禁止写入任何日记</p>
+        <p class="mt-1 text-sm text-red-700">API Key、密码、私钥、个人敏感数据都不许写（Agent Gateway 全局规范）。</p>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <p class="font-semibold text-red-800">🚫 R4：通配符仅允许 <code>Nexus项目-</code> 前缀</p>
+        <p class="mt-1 text-sm text-red-700">不得对其他 agent 放开，不得使用更宽模式（如 <code>Nexus-*</code>）；白名单本质是安全边界。</p>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <p class="font-semibold text-red-800">🚫 R5：不碰存量日记</p>
+        <p class="mt-1 text-sm text-red-700">不做删除或批量改写；存量清理由用户自行执行（D5 已定）。</p>
+      </div>
+    </div>
+
+    <!-- ========== 6 验收标准 ========== -->
+    <div x-show="tab==='acceptance'" x-cloak class="space-y-3">
+      <div class="bg-white border border-gray-200 rounded-xl p-4 space-y-3 text-sm">
+        <div class="flex items-start gap-2"><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs mt-0.5">AC1</span><p><strong>代码：</strong>tests/agent-gateway/policy/ 相关测试全部通过，含 3.1 新增通配用例。</p></div>
+        <div class="flex items-start gap-2"><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs mt-0.5">AC2</span><p><strong>配置：</strong>两份配置保存后无需重启，gateway_memory_write 写入 <code>Nexus项目-VCPToolBox日记本</code> 返回成功（不 403）。</p></div>
+        <div class="flex items-start gap-2"><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs mt-0.5">AC3</span><p><strong>闭环：</strong>在 VCPToolBox 项目会话中写入项目本后，显式召回应命中刚写入的项目条目。</p></div>
+        <div class="flex items-start gap-2"><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs mt-0.5">AC4</span><p><strong>隔离：</strong>写入一条含项目细节的经验后，通用本召回结果中不出现该细节；通用本无新增项目细节条目。</p></div>
+        <div class="flex items-start gap-2"><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs mt-0.5">AC5</span><p><strong>定位：</strong>缺失 .nexus-project 时 Nexus 推导项目名并提示补建；创建后严格使用文件中的项目名。</p></div>
+        <div class="flex items-start gap-2"><span class="font-mono bg-slate-800 text-white px-1.5 py-0.5 rounded text-xs mt-0.5">AC6</span><p><strong>prompt：</strong>Nexus.txt 2.0 不再存在"必须脱离具体项目局限"条款，包含 §1~§5 全部章节。</p></div>
+      </div>
+    </div>
+
+    <!-- ========== 7 决策记录 ========== -->
+    <div x-show="tab==='decisions'" x-cloak class="space-y-4">
+      <div class="border-2 border-emerald-400 bg-emerald-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded text-sm font-bold">D1</span>
+          <span class="font-semibold text-emerald-900">直接实现白名单通配，不做"纯配置过渡"</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium ml-auto">方案 B · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-emerald-800">落选：A（白名单随项目数膨胀）、C（分两趟无必要）。</p>
+      </div>
+      <div class="border-2 border-emerald-400 bg-emerald-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded text-sm font-bold">D2</span>
+          <span class="font-semibold text-emerald-900">通用日记精简为 2 本</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium ml-auto">方案 B · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-emerald-800"><code>Nexus工程经验日记本</code>（方法论 + 避坑 + 协作偏好）、<code>Nexus架构设计日记本</code>（纯架构）。注：与草图原分组（"架构 + 个人"）有出入——协作偏好归入工程经验本；该微调在第 2 轮草图中已明示，定稿前未收到异议。</p>
+      </div>
+      <div class="border-2 border-emerald-400 bg-emerald-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded text-sm font-bold">D3</span>
+          <span class="font-semibold text-emerald-900">项目日记命名 <code>Nexus项目-&lt;项目名&gt;日记本</code></span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium ml-auto">方案 A · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-emerald-800">落选：B（<code>Nexus-*</code> 前缀会罩住通用本）、C（无前缀无法收敛白名单）。</p>
+      </div>
+      <div class="border-2 border-emerald-400 bg-emerald-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded text-sm font-bold">D4</span>
+          <span class="font-semibold text-emerald-900">项目根 <code>.nexus-project</code> 标记文件</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium ml-auto">方案 C · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-emerald-800">缺失时 git 根目录名推导 + 建议补建。落选：A（目录名不规范时推错）、B（每次显式告知易遗漏）。</p>
+      </div>
+      <div class="border-2 border-emerald-400 bg-emerald-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded text-sm font-bold">D5</span>
+          <span class="font-semibold text-emerald-900">不做存量迁移 → 原 M4 取消</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium ml-auto">方案 B · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-emerald-800">用户备注：旧日记自行全部清理。方案执行全程不碰存量日记。</p>
+      </div>
+      <div class="border-2 border-blue-300 bg-blue-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-blue-200 text-blue-900 px-2 py-0.5 rounded text-sm font-bold">Q1</span>
+          <span class="font-semibold text-blue-900">首个接入的项目 = VCPToolBox</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-800 font-medium ml-auto">已回答 · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-blue-800">项目日记为 <code>Nexus项目-VCPToolBox日记本</code>。</p>
+      </div>
+      <div class="border-2 border-blue-300 bg-blue-50 rounded-xl p-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono bg-blue-200 text-blue-900 px-2 py-0.5 rounded text-sm font-bold">Q2</span>
+          <span class="font-semibold text-blue-900">仅走 MCP 链路</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-800 font-medium ml-auto">已回答 · 第 2 轮</span>
+        </div>
+        <p class="mt-2 text-sm text-blue-800">聊天链路的召回配置（占位符自动召回）不在本次改造范围内。</p>
+      </div>
+    </div>
+
+    <!-- ========== 8 风险与开放问题 ========== -->
+    <div x-show="tab==='risks'" x-cloak class="space-y-6">
+      <section>
+        <h2 class="text-lg font-bold mb-3">已排查雷区（实现时规避）</h2>
+        <div class="space-y-3">
+          <div x-data="{open:false}">
+            <button @click="open=!open" class="flex items-center gap-2 text-amber-800 font-semibold hover:text-amber-600">
+              <span>⚠️ 1 — gateway_recall_run 的 profile 为静态名单，无法含项目日记</span>
+              <span x-text="open?'▲':'▼'" class="text-xs"></span>
+            </button>
+            <div x-show="open" class="mt-2 text-sm text-gray-700 pl-6 border-l-2 border-amber-300">
+              <p><strong>规避：</strong>prompt 铁律——项目召回必须走显式 diaries 的两个工具（memory_search / context_assemble）。</p>
+            </div>
+          </div>
+          <div x-data="{open:false}">
+            <button @click="open=!open" class="flex items-center gap-2 text-amber-800 font-semibold hover:text-amber-600">
+              <span>⚠️ 2 — 日记名精确匹配，错字即 403</span>
+              <span x-text="open?'▲':'▼'" class="text-xs"></span>
+            </button>
+            <div x-show="open" class="mt-2 text-sm text-gray-700 pl-6 border-l-2 border-amber-300">
+              <p><strong>规避：</strong>报错携带允许清单，prompt 教 Nexus 照清单改名自愈。</p>
+            </div>
+          </div>
+          <div x-data="{open:false}">
+            <button @click="open=!open" class="flex items-center gap-2 text-amber-800 font-semibold hover:text-amber-600">
+              <span>⚠️ 3 — "日记本"后缀自动等价仅限运行时</span>
+              <span x-text="open?'▲':'▼'" class="text-xs"></span>
+            </button>
+            <div x-show="open" class="mt-2 text-sm text-gray-700 pl-6 border-l-2 border-amber-300">
+              <p><strong>规避：</strong>配置文件统一带"日记本"后缀，不依赖运行时补全。</p>
+            </div>
+          </div>
+          <div x-data="{open:false}">
+            <button @click="open=!open" class="flex items-center gap-2 text-amber-800 font-semibold hover:text-amber-600">
+              <span>⚠️ 4 — 标记文件缺失或中途换目录</span>
+              <span x-text="open?'▲':'▼'" class="text-xs"></span>
+            </button>
+            <div x-show="open" class="mt-2 text-sm text-gray-700 pl-6 border-l-2 border-amber-300">
+              <p><strong>规避：</strong>推导 + 建议补建；目录变化重新定位项目。</p>
+            </div>
+          </div>
+          <div x-data="{open:false}">
+            <button @click="open=!open" class="flex items-center gap-2 text-amber-800 font-semibold hover:text-amber-600">
+              <span>⚠️ 5 — 混搜时通用本分数易盖过项目本</span>
+              <span x-text="open?'▲':'▼'" class="text-xs"></span>
+            </button>
+            <div x-show="open" class="mt-2 text-sm text-gray-700 pl-6 border-l-2 border-amber-300">
+              <p><strong>规避：</strong>固定分两次召回，项目本先行。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2 class="text-lg font-bold mb-3">开放问题</h2>
+        <div class="bg-white border border-gray-200 rounded-xl p-4 text-sm space-y-2">
+          <p>· 多项目并行会话时通用本的召回噪音（项目本隔离已解决；通用本混搜暂可接受，后续可按需调 minScore）。</p>
+          <p>· <code>.nexus-project</code> 是否提交进 git 由各项目自行决定（建议提交，团队共享同一项目名）。</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ========== 迭代记录 ========== -->
+    <div x-show="tab==='history'" x-cloak class="space-y-4">
+      <div class="bg-white border border-emerald-300 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R3</span>
+          <span class="text-xs text-gray-400">2026-08-19 22:01</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-600 text-white font-medium">已定稿</span>
+          <span class="ml-auto flex gap-1 flex-wrap">
+            <span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">全部</span>
+          </span>
+        </div>
+        <p class="mt-3 text-sm text-emerald-800 font-medium">🎉 本轮定稿，正式文档：2026-08-19_Nexus跨项目记忆改造.md</p>
+        <p class="mt-2 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>定稿：无遗留待定决策。输出正式文档 docs/2026-08-19_Nexus跨项目记忆改造.md（八章结构），定稿版页面以该 md 为事实源全新生成，交互控件与导出栏已移除。</p>
+        <a href="./round-03.html"
+          class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R2</span>
+          <span class="text-xs text-gray-400">2026-08-19 20:51</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+          <span class="ml-auto flex gap-1 flex-wrap">
+            <span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">全部</span>
+          </span>
+        </div>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700 whitespace-pre-line"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>【评审反馈】《Nexus 跨项目记忆改造方案》第 1 轮
+D1 通配符代码改动做不做：选「方案B」
+D2 通用日记本数量：选「方案B」
+D3 项目日记命名规范：选「方案A」
+D4 项目识别方式：选「方案C」
+D5 存量日记迁移时机：选「方案B」（备注：我会全部清理）
+Q1 首个接入的项目：VCPToolBox
+Q2 是否走聊天链路：只用 MCP</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>5 个决策全部拍板并落实：通配符改造升为必做（新 M2）、通用本精简为 2 本（协作偏好归入工程经验本，已在 D2 卡注明分组微调）、命名定为 <code>Nexus项目-&lt;项目名&gt;日记本</code>、项目识别定为 <code>.nexus-project</code> 标记文件、存量迁移取消（M4 关闭）；首个接入项目 VCPToolBox；确认只走 MCP 链路。路线图、配置样例、prompt 草案、概览与红线全部同步。</p>
+        <a href="./round-02.html"
+          class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R1</span>
+          <span class="text-xs text-gray-400">2026-08-19 20:22</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+          <span class="ml-auto flex gap-1 flex-wrap">
+            <span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">全部</span>
+          </span>
+        </div>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>首次产出评审草图：双轨日记分层（项目本 + 通用本）、4 个里程碑、5 个待定决策、2 个澄清问题。</p>
+        <a href="./round-01.html"
+          class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
