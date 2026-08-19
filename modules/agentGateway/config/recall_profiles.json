@@ -55,7 +55,7 @@
     },
     "profiles": {
         "nexus-default": {
-            "minScore": 0.4,
+            "minScore": 0.5,
             "rules": [
                 {
                     "baseMode": "rag",
