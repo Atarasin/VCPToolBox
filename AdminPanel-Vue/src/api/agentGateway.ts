@@ -46,6 +46,13 @@ export interface GatewayAgentOption {
   alias: string;
   summary: string;
   suggestedCredentialId: string;
+  /** 导出 skill 的目录名（vcp-<agent>）；guidance 未发布时为 null */
+  skillName: string | null;
+}
+
+export interface SkillArchiveDownload {
+  blob: Blob;
+  filename: string;
 }
 
 export interface CreateCredentialPayload {
@@ -155,5 +162,32 @@ export const agentGatewayApi = {
       },
       uiOptions
     );
+  },
+
+  /**
+   * 导出 agent 接入 skill（zip 附件）。响应是二进制而非 JSON，
+   * 走原生 fetch（cookie 鉴权与 httpClient 一致），失败时手工解析 JSON 错误体。
+   */
+  async downloadSkillArchive(agentId: string): Promise<SkillArchiveDownload> {
+    const response = await fetch(
+      `${API_BASE_URL}/agents/${encodeURIComponent(agentId)}/skill`,
+      { credentials: "same-origin" }
+    );
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`;
+      try {
+        const body = (await response.json()) as { error?: string };
+        if (body.error) {
+          message = body.error;
+        }
+      } catch {
+        // 非 JSON 错误体时保留状态码信息
+      }
+      throw new Error(message);
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const match = /filename="?([^";]+)"?/i.exec(disposition);
+    const filename = match && match[1] ? match[1] : `${agentId}.zip`;
+    return { blob: await response.blob(), filename };
   },
 };

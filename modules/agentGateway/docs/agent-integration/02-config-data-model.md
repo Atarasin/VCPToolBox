@@ -70,7 +70,7 @@
 
 | 字段 | 作用 |
 |---|---|
-| `name` | skill 目录名，须匹配 `^[a-z0-9][a-z0-9-]{0,63}$`；缺省为 `vcp-agent-gateway-<agentid 小写>` |
+| `name` | skill 目录名，须匹配 `^vcp-[a-z0-9][a-z0-9-]{0,59}$`（2026-08 起统一 `vcp-<agent>` 命名，覆盖值也必须带前缀）；缺省为 `vcp-<agentid 小写 slug>` |
 | `domain` | 一句话领域，进 `description` 主语 |
 | `triggers[]` | 「什么时候该用这个 skill」，进 `description`；这是宿主唯一常驻的判定依据 |
 | `notFor[]` | 「什么时候别用」 |

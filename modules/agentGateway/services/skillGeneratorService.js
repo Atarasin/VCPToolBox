@@ -101,14 +101,23 @@ function normalizeList(value) {
 /**
  * skill 目录名：优先 `skill.name` 覆盖，否则从 agentId 派生。agentId 允许
  * 空格等字符，目录名不允许——统一压成 `[a-z0-9-]`。
+ *
+ * 命名约定（2026-08 起统一）：`vcp-<agent>`，`<agent>` 为 agentId 的 slug。
+ * `skill.name` 覆盖同样受 `vcp-` 前缀约束（配置校验层强制），保证任何途径
+ * 导出的 skill 目录名形态一致。
  */
+const SKILL_NAME_PREFIX = 'vcp-';
+// 目录名总长上限 64（与 skill.name 校验同限），预留前缀 4 字符
+const SKILL_NAME_SLUG_MAX = 60;
+
 function resolveSkillName(guidance) {
     const configured = normalizeString(guidance.skill?.name);
     if (configured) {
         return configured;
     }
     const slug = guidance.agentId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
-    return `vcp-agent-gateway-${slug || 'agent'}`;
+    const trimmed = (slug || 'agent').slice(0, SKILL_NAME_SLUG_MAX).replace(/-+$/g, '');
+    return `${SKILL_NAME_PREFIX}${trimmed || 'agent'}`;
 }
 
 /**
@@ -551,6 +560,7 @@ module.exports = {
     SKILL_FORMATS,
     buildIntegrationSummary,
     generateSkillArtifact,
+    resolveSkillName,
     scanForSecrets,
     validatePublicBaseUrl
 };

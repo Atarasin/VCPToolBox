@@ -70,6 +70,22 @@
       @copy-id="copyCredentialId"
     />
 
+    <section class="agent-gateway-skill-export">
+      <header class="agent-gateway-subsection">
+        <h3>Skill 导出</h3>
+        <p>
+          按当前 guidance 为 agent 生成宿主接入包（SKILL.md / INSTALL.md / manifest.json），
+          命名统一为 <code>vcp-&lt;agent&gt;</code>，解压到 <code>~/.agents/skills/</code> 即可被发现。
+          导出物不含任何令牌；接入凭据仍需单独「铸造凭据」。
+        </p>
+      </header>
+      <AgentSkillTable
+        :agents="agents"
+        :exporting-agent-id="exportingAgentId"
+        @export="onExportSkill"
+      />
+    </section>
+
     <CredentialCreateModal
       :model-value="createModalOpen"
       :agents="agents"
@@ -100,6 +116,7 @@ import {
 import CredentialCreateModal from "@/features/agent-gateway/CredentialCreateModal.vue";
 import CredentialTable from "@/features/agent-gateway/CredentialTable.vue";
 import GatewayStatusBanner from "@/features/agent-gateway/GatewayStatusBanner.vue";
+import AgentSkillTable from "@/features/agent-gateway/AgentSkillTable.vue";
 import TokenRevealModal from "@/features/agent-gateway/TokenRevealModal.vue";
 import UiButton from "@/components/ui/UiButton.vue";
 import UiInput from "@/components/ui/UiInput.vue";
@@ -300,6 +317,26 @@ async function copyCredentialId(credentialId: string): Promise<void> {
   }
 }
 
+const exportingAgentId = ref<string | null>(null);
+
+async function onExportSkill(agent: GatewayAgentOption): Promise<void> {
+  exportingAgentId.value = agent.agentId;
+  try {
+    const { blob, filename } = await agentGatewayApi.downloadSkillArchive(agent.agentId);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    showMessage(`已导出 ${filename}（解压到 ~/.agents/skills/ 即可安装）`, "success");
+  } catch (error) {
+    showMessage(`导出失败：${describeError(error)}`, "error");
+  } finally {
+    exportingAgentId.value = null;
+  }
+}
+
 onMounted(() => {
   void reloadAll();
 });
@@ -336,5 +373,34 @@ onMounted(() => {
   color: var(--secondary-text);
   font-size: var(--font-size-helper);
   white-space: nowrap;
+}
+
+.agent-gateway-skill-export {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.agent-gateway-subsection {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.agent-gateway-subsection h3 {
+  margin: 0;
+  color: var(--primary-text);
+  font-size: var(--font-size-section-title);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.agent-gateway-subsection p {
+  margin: 0;
+  color: var(--secondary-text);
+  font-size: var(--font-size-helper);
+  line-height: 1.55;
+}
+
+.agent-gateway-subsection code {
+  font-family: "Consolas", "Monaco", monospace;
 }
 </style>

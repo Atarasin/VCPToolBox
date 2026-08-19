@@ -74,7 +74,9 @@ function validateMemoryDefaults(value, fieldPath, errors) {
     return normalized;
 }
 
-const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// 2026-08 起统一命名：skill 目录名一律 vcp-<agent>（agentId slug），
+// 显式覆盖也必须带 vcp- 前缀，防止导出命名再次发散
+const SKILL_NAME_PATTERN = /^vcp-[a-z0-9][a-z0-9-]{0,59}$/;
 
 /**
  * 可选的 per-agent skill 表达配置（§6）。
@@ -147,7 +149,7 @@ function validateSkillBlock(value, fieldPath, errors) {
     if (value.name !== undefined) {
         const name = normalizeString(value.name);
         if (!SKILL_NAME_PATTERN.test(name)) {
-            errors.push(invalidField(`${fieldPath}.name`, 'must match ^[a-z0-9][a-z0-9-]{0,63}$'));
+            errors.push(invalidField(`${fieldPath}.name`, 'must match ^vcp-[a-z0-9][a-z0-9-]{0,59}$ (skill directory names are uniformly vcp-<agent>)'));
         } else {
             normalized.name = name;
         }

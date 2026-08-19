@@ -307,3 +307,40 @@ AdminPanel-Vue/src/
 前端验证：`vue-tsc` 类型检查、`vite build`（产出 `AgentGatewayManager` 页面 chunk）、eslint 与排版守卫对新文件均零告警。
 
 面板侧验收（§10 中浏览器相关条目）需在真实部署上运行主进程 + adminServer 后人工确认。
+
+---
+
+## 13. 实现记录：Skill 导出（2026-08-19，§11.4 的落地）
+
+在凭据管理页新增「Skill 导出」区（对应 §11 V2 候选第 4 项，未走签名下载链路，
+直接由管理面生成——AdminPanel 操作者本身持 adminAuth，无需 bearer capability）：
+
+- **端点**：`GET /admin_api/agent-gateway/agents/:agentId/skill?format=`（缺省 claude，
+  allowlist 同 gateway 侧）。内部与 gateway 侧认证下载同源：`agentGuidanceService`
+  解析 guidance → `generateSkillArtifact`（同一 secret scan 防线）→ 零依赖 STORE zip
+  （新增 `modules/agentGateway/infra/zipArchiveWriter.js`，自实现 CRC32，不引入 zip 依赖）
+  → `attachment; filename="vcp-<agent>.zip"`，条目路径带 `vcp-<agent>/` 前缀，解压到
+  `~/.agents/skills/` 即完成安装。错误映射：未发布 guidance 404、非法 format 400、
+  `AGENT_GATEWAY_PUBLIC_BASE_URL` 未配置/非法 503。
+- **agents 端点增强**：`GET /agent-gateway/agents` 每项附带 `skillName`（配置了
+  `skill.name` 用配置值，否则按 agentId 派生；guidance 未发布为 `null`），供表格展示。
+- **命名统一（2026-08-19 起）**：skill 目录名一律 `vcp-<agentId slug>`（如
+  `vcp-nexus`）。`resolveSkillName` 缺省派生从 `vcp-agent-gateway-<slug>` 缩短为
+  `vcp-<slug>`；`agentGuidanceConfig` 的 `SKILL_NAME_PATTERN` 收紧为
+  `^vcp-[a-z0-9][a-z0-9-]{0,59}$`（覆盖值也必须带前缀，配置层 fail-fast）；
+  移除了 `MCPFuPeng` 的旧覆盖名 `fupeng-macro-advisor`（改为派生 `vcp-mcpfupeng`）。
+  OpenAPI 契约（`openapiComponents.json` 与导出产物）同步更新。
+- **前端**：`AgentGatewayManager.vue` 新增「Skill 导出」小节 +
+  `features/agent-gateway/AgentSkillTable.vue`（agent 清单 / skill 名 / 简介 / 导出按钮）；
+  `api/agentGateway.ts` 新增 `downloadSkillArchive`（原生 fetch 取 blob，cookie 鉴权，
+  从 `Content-Disposition` 取文件名）。导出中按钮 loading，其余行禁用防并发。
+- **令牌边界不变**：导出物零 secret（INSTALL.md 只出现 `${AGENT_GATEWAY_TOKEN}`
+  引用形态）；令牌仍只在铸造/轮换的一次性弹窗中出现，导出链路不接触令牌。
+
+验证：`tests/agent-gateway` 全量 542 断言通过（含两个更新后的命名断言文件）；
+冒烟脚本四组断言（真实配置校验 + 四 agent 派生名、zip 往返 CRC/内容/路径拒绝、
+HTTP 层 200/404/400/503 与零 secret、artifact 同源一致性）全部通过；`vue-tsc` +
+`vite build` + eslint + 排版守卫（改动文件）零告警。
+
+已有安装的旧名 skill（如 `~/.agents/skills/vcp-agent-gateway-nexus`）不自动迁移：
+从面板重新导出 `vcp-nexus` 并删除旧目录即可。

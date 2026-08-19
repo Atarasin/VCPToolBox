@@ -4,7 +4,7 @@
 
 自 M4 起，agent 集成 skill 由 Agent Gateway 按 guidance bundle 单源生成，不再手工维护。手写样本 `modules/agentGateway/skills/midas-vcp/` 的全部内容（recall workflow、diary routing、memory write policy、工具速查）已由生成物覆盖，且生成物随 guidance 配置自动保持一致。
 
-## 获取方式（三选一）
+## 获取方式（四选一）
 
 1. **在线 endpoint**（需 `gateway:read` credential）：
    `GET /agent_gateway/agents/MCPMidas/integration/skill?format=claude|codex|kimi`
@@ -12,13 +12,15 @@
    `GET /agent_gateway/agents/MCPMidas/integration/skill/download-url?format=…` → 打开返回的 `downloadUrl`
 3. **离线 CLI**：
    `node scripts/agent-gateway-skill-export.js --agent MCPMidas --out <dir> --format all`
+4. **管理面板**（AdminPanel「Agent 对外网关」页 → Skill 导出，adminAuth 鉴权）：
+   直接下载 `vcp-<agent>.zip`，解压即得 `vcp-<agent>/` 三件套（2026-08-19 起）
 
 ## 各客户端安装
 
 三客户端消费同一份统一 SKILL.md（2026-07-20 起三 format 产出相同内容，内含三种客户端的 MCP 注册片段）。**一份安装、三端共享**：
 
-1. 放入 `~/.agents/skills/vcp-agent-gateway-<agent>/SKILL.md`——Codex 与 Kimi 自动发现该目录；
-2. Claude Code 读 `~/.claude/skills/`，符号链接同一份：`ln -s ~/.agents/skills/vcp-agent-gateway-<agent> ~/.claude/skills/vcp-agent-gateway-<agent>`（已实测 Claude 2.1.215 跟随符号链接）；
+1. 放入 `~/.agents/skills/vcp-<agent>/SKILL.md`——Codex 与 Kimi 自动发现该目录（2026-08-19 起目录名统一为 `vcp-<agent>`，如 `vcp-mcpmidas`；旧产物 `vcp-agent-gateway-<agent>` 请删除后重新导出）；
+2. Claude Code 读 `~/.claude/skills/`，符号链接同一份：`ln -s ~/.agents/skills/vcp-<agent> ~/.claude/skills/vcp-<agent>`（已实测 Claude 2.1.215 跟随符号链接）；
 3. MCP 注册按 SKILL.md 内对应客户端片段：Claude `.mcp.json` / Codex `~/.codex/config.toml` / Kimi `~/.kimi-code/mcp.json`（用户级，已实测）或项目级 `.kimi-code/mcp.json`。三者统一从 `AGENT_GATEWAY_TOKEN` 环境变量读取凭据。
 
 项目级等价路径：`<项目>/.agents/skills/…` 与 `<项目>/.claude/skills/…`。Codex 不再生成 AGENTS.md 形式。

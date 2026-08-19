@@ -28,6 +28,9 @@ GET /agent_gateway/agents/:agentId/integration
 
 约束：
 
+- 命名约定（2026-08 起统一）：skill 目录名一律 `vcp-<agentId slug>`（如 `vcp-nexus`）；`skill.name` 覆盖值必须带 `vcp-` 前缀（配置校验强制，模式 `^vcp-[a-z0-9][a-z0-9-]{0,59}$`），缺省按 agentId 派生 `vcp-<小写 slug>`。任何导出途径产出的目录名形态一致。
+- 管理面导出：`GET /admin_api/agent-gateway/agents/:agentId/skill`（AdminPanel adminAuth 鉴权，`?format=` 同一 allowlist，缺省 claude）返回 zip 附件 `vcp-<agent>.zip`，解压即得 `vcp-<agent>/` 三件套；内部复用同一 `generateSkillArtifact` 与 secret scan 防线，与 gateway 侧认证下载同源。生成物零 secret，令牌不经过导出链路。
+
 - 对外 base URL 只能读取 `AGENT_GATEWAY_PUBLIC_BASE_URL`；不从请求 host 推导。配置必须解析为绝对 URL，不允许 userinfo、query 或 fragment；生产只允许 HTTPS。HTTP 仅限 loopback 与私网/CGNAT 字面 IP（RFC1918、100.64/10、IPv6 ULA——VPN/内网部署形态，隧道层承担加密）且必须显式 `ALLOW_INSECURE` 豁免；公网地址与无法离线判定的主机名一律拒绝 HTTP。（2026-07-20 经部署方确认放宽：原文仅允许 loopback。）
 - 授权走 §3.2 同一张决议表，无特例：绑定 credential 只能取所绑 agent 的 skill；未绑定 credential 按 `allowedAgents`/`admin` scope 决议（`admin` 只存在于未绑定 credential，见 §3.2）。
 - 生成物只包含 endpoint、工具说明和“从客户端安全 secret store 读取 credential”的指引；绝不包含 API key、gateway key、token、`.env` 内容或下载签名。

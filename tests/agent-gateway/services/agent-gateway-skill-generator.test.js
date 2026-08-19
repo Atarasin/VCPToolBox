@@ -149,7 +149,7 @@ test('the skill description is built from the configured trigger surface', () =>
     const guidance = {
         ...GUIDANCE_FIXTURE,
         skill: {
-            name: 'ariadne-thread',
+            name: 'vcp-ariadne-thread',
             domain: '迷宫导航',
             triggers: ['用户要在既有架构里找一条路径', '需要阿里阿德涅的历史判断'],
             notFor: ['与该 agent 记忆无关的一次性任务'],
@@ -162,7 +162,7 @@ test('the skill description is built from the configured trigger surface', () =>
     const artifact = generateSkillArtifact({ guidance, format: 'claude', baseUrl: 'https://gw.example.com' });
     const skillMd = fileByPath(artifact, 'SKILL.md');
 
-    assert.ok(skillMd.includes('name: ariadne-thread'), 'skill.name overrides the derived name');
+    assert.ok(skillMd.includes('name: vcp-ariadne-thread'), 'skill.name overrides the derived name');
     assert.ok(skillMd.includes('迷宫导航'), 'domain reaches the description');
     assert.ok(skillMd.includes('用户要在既有架构里找一条路径'), 'triggers reach the description');
     assert.ok(skillMd.includes('不适用：与该 agent 记忆无关的一次性任务'), 'notFor reaches the description');
@@ -208,8 +208,8 @@ test('a guidance bundle without a skill block still renders a usable skill', () 
     assert.equal(artifact.ok, true);
     const skillMd = fileByPath(artifact, 'SKILL.md');
 
-    // agentId 允许空格，skill 目录名不允许
-    assert.ok(skillMd.includes('name: vcp-agent-gateway-bare-agent'), 'derived skill name is slugified');
+    // agentId 允许空格，skill 目录名不允许；派生名统一 vcp-<slug>
+    assert.ok(skillMd.includes('name: vcp-bare-agent'), 'derived skill name is slugified');
     assert.ok(skillMd.includes('gateway_agent_bootstrap'), 'fallback still leads with the persona step');
     assert.ok(!/\n\n\n/.test(skillMd), 'empty guidance sections are omitted, not left blank');
 });

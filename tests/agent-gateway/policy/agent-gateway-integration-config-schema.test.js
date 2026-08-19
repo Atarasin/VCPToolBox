@@ -152,7 +152,7 @@ test('guidance bundle prefers the per-agent workflow and falls back to shared', 
 test('guidance schema accepts an optional per-agent skill block', () => {
     const config = validGuidanceConfig();
     config.agents.MCPMidas.skill = {
-        name: 'midas-quant',
+        name: 'vcp-midas-quant',
         domain: '量化选股',
         triggers: ['用户在量化仓库里做因子或回测'],
         notFor: ['无关的通用编码任务'],
@@ -160,7 +160,7 @@ test('guidance schema accepts an optional per-agent skill block', () => {
     };
     const result = validateAgentGuidanceConfig(config);
     assert.equal(result.valid, true, JSON.stringify(result.errors));
-    assert.equal(result.config.agents.MCPMidas.skill.name, 'midas-quant');
+    assert.equal(result.config.agents.MCPMidas.skill.name, 'vcp-midas-quant');
     assert.deepEqual(result.config.agents.MCPMidas.skill.triggers, ['用户在量化仓库里做因子或回测']);
     assert.deepEqual(
         result.config.agents.MCPMidas.skill.writeTargets,
@@ -180,6 +180,14 @@ test('guidance schema rejects malformed skill blocks', () => {
     const badNameResult = validateAgentGuidanceConfig(badName);
     assert.equal(badNameResult.valid, false);
     assert.ok(badNameResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.skill.name'));
+
+    // 2026-08 起统一 vcp-<agent> 命名：无前缀的旧式覆盖名必须被拒绝，
+    // 防止导出命名再次发散
+    const legacyName = validGuidanceConfig();
+    legacyName.agents.MCPMidas.skill = { name: 'midas-quant' };
+    const legacyNameResult = validateAgentGuidanceConfig(legacyName);
+    assert.equal(legacyNameResult.valid, false);
+    assert.ok(legacyNameResult.errors.map((error) => error.path).includes('$.agents.MCPMidas.skill.name'));
 
     const badTarget = validGuidanceConfig();
     badTarget.agents.MCPMidas.skill = { writeTargets: [{ diary: '迈达斯日记本' }] };
