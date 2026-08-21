@@ -1,4 +1,5 @@
 const {
+    areDiaryNamesEquivalent,
     normalizeDiaryCanonicalName,
     resolveDiaryAliasesToAvailable
 } = require('../../policy/mcpAgentMemoryPolicy');
@@ -13,6 +14,12 @@ function normalizeDiarySelection(diaries, availableDiaries) {
     return resolveDiaryAliasesToAvailable(diaries, availableDiaries)
         .map((diary) => normalizeDiaryCanonicalName(diary))
         .filter(Boolean);
+}
+
+// 允许名单可能含通配模式（`Nexus项目-*`）：归属判定必须用与写入门禁同一条
+// 等价规则——字面 includes 永远不会命中模式，会把合法项目日记误判为越权。
+function isDiaryWithinAllowed(allowedDiaries, diaryName) {
+    return allowedDiaries.some((allowed) => areDiaryNamesEquivalent(allowed, diaryName));
 }
 
 function createDiaryAccessRejection({ code, error, agentId, allowedDiaries, defaultDiaries, forbiddenDiaries }) {
@@ -52,7 +59,7 @@ async function resolveDiaryAccess({
         resolvedPolicy?.defaultDiaryNames?.length ? resolvedPolicy.defaultDiaryNames : allowedDiaries
     );
     let requested = normalizeDiarySelection(requestedDiaries, availableDiaries);
-    const forbiddenDiaries = requested.filter((diary) => !allowedDiaries.includes(diary));
+    const forbiddenDiaries = requested.filter((diary) => !isDiaryWithinAllowed(allowedDiaries, diary));
 
     if (forbiddenDiaries.length) {
         if (!appliedDefaultPolicy) {
@@ -63,7 +70,7 @@ async function resolveDiaryAccess({
                 allowedDiaries, defaultDiaries, forbiddenDiaries
             });
         }
-        requested = requested.filter((diary) => allowedDiaries.includes(diary));
+        requested = requested.filter((diary) => isDiaryWithinAllowed(allowedDiaries, diary));
         if (!requested.length) {
             return createDiaryAccessRejection({
                 code: forbiddenCode,

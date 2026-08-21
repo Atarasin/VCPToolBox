@@ -1,6 +1,7 @@
 .sisyphus/
 .claude/
 .agents/
+.zcode/
 .trae/
 .tmp/
 openspec/

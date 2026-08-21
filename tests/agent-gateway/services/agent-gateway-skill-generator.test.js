@@ -241,3 +241,167 @@ test('buildIntegrationSummary lists all formats with encoded skill paths', () =>
         assert.ok(entry.skillPath.endsWith(`format=${entry.format}`));
     }
 });
+
+
+/**
+ * M5（skill 生成器通配呈现）：allowedDiaries 里的尾通配条目（`Nexus项目-*`）
+ * 不是真实日记，路由表必须以 writeTargets 模板名 + 「按项目实例化」标注呈现，
+ * 尾注/红线/失败语义带实例化例外，且全 SKILL.md 不出现字面通配模式（字面名
+ * 与通配条目在授权侧精确等价，照抄会真实创建垃圾日记本）。
+ */
+const WILDCARD_GUIDANCE_FIXTURE = Object.freeze({
+    agentId: 'Nexus',
+    displayName: 'Nexus',
+    workflow: ['先调 gateway_agent_bootstrap。'],
+    memoryWritePolicy: { write: ['已验证结论'], skip: ['密钥'] },
+    allowedDiaries: ['Nexus工程经验日记本', 'Nexus架构设计日记本', 'Nexus项目-*'],
+    defaultDiaries: ['Nexus工程经验日记本', 'Nexus架构设计日记本'],
+    memoryDefaults: { tags: ['nexus', 'coding'], metadata: { project: 'multi-project', source: 'mcp-client' } },
+    skill: {
+        domain: '跨项目编码辅助',
+        triggers: ['在任意代码仓库中做开发、调试、重构或架构设计'],
+        notFor: ['与编码无关的纯聊天'],
+        writeTargets: [
+            { diary: 'Nexus项目-<项目名>日记本', when: '沉淀仅本项目有意义的架构事实、命令、约定、决策与坑时' },
+            { diary: 'Nexus工程经验日记本', when: '得出跨项目可复用的方法论、避坑经验或协作偏好时（先泛化）' },
+            { diary: 'Nexus架构设计日记本', when: '做出可复用的架构决策、设计模式或技术选型结论时（先泛化）' }
+        ]
+    },
+    revision: `sha256:${'b'.repeat(64)}`,
+    updatedAt: '2026-08-21T00:00:00.000Z'
+});
+
+test('wildcard allowedDiary renders as an instantiation template row, never the literal pattern', () => {
+    const artifact = generateSkillArtifact({
+        guidance: WILDCARD_GUIDANCE_FIXTURE, format: 'claude', baseUrl: 'https://gw.example.com'
+    });
+    assert.equal(artifact.ok, true);
+    const skillMd = fileByPath(artifact, 'SKILL.md');
+
+    // 模板行：行标签是 writeTargets 模板名，带「按项目实例化」标注，when 文案不丢
+    assert.ok(
+        skillMd.includes('| Nexus项目-<项目名>日记本（动态：按项目实例化） |  | 沉淀仅本项目有意义的架构事实、命令、约定、决策与坑时 |'),
+        'wildcard entry renders as the writeTargets template row with its when text'
+    );
+    // 尾注说明实例化合法、指向项目名来源
+    assert.ok(skillMd.includes('不视为换名重试'), 'footnote legitimizes instantiation');
+    assert.ok(skillMd.includes('.nexus-project'), 'footnote points at the project marker file');
+    // 全 SKILL.md 不得出现字面通配模式
+    assert.ok(!skillMd.includes('Nexus项目-*'), 'literal wildcard pattern never appears');
+    // 红线与失败语义带实例化例外
+    assert.ok(
+        skillMd.includes('- 例外：路由表中标注「动态」的日记按项目实例化后写入是合法的，不视为换名重试。'),
+        'hard rules carry the instantiation exception'
+    );
+    assert.ok(
+        skillMd.includes('去掉 `agentId`；日记本换回路由表内的名字（标注「动态」的行先按项目实例化再写）'),
+        'AGW_FORBIDDEN row carries the instantiation exception'
+    );
+});
+
+test('a wildcard entry without a matching writeTarget falls back to a prefix-derived label', () => {
+    const guidance = {
+        ...WILDCARD_GUIDANCE_FIXTURE,
+        skill: {
+            ...WILDCARD_GUIDANCE_FIXTURE.skill,
+            writeTargets: [{ diary: 'Nexus工程经验日记本', when: '得出跨项目可复用的方法论时' }]
+        }
+    };
+    const skillMd = fileByPath(
+        generateSkillArtifact({ guidance, format: 'claude', baseUrl: 'https://gw.example.com' }),
+        'SKILL.md'
+    );
+    assert.ok(
+        skillMd.includes('| Nexus项目-<实例名>（动态：按项目实例化） |  | — |'),
+        'no template: label is derived from the wildcard prefix'
+    );
+    assert.ok(skillMd.includes('落在该行动态前缀范围内即放行'), 'generic footnote without a template');
+    assert.ok(!skillMd.includes('Nexus项目-*'), 'literal wildcard pattern never appears');
+});
+
+test('non-wildcard agents keep byte-identical routing, failure-semantics and hard-rules output', () => {
+    const midasGuidance = {
+        ...WILDCARD_GUIDANCE_FIXTURE,
+        agentId: 'MCPMidas',
+        displayName: 'Midas',
+        allowedDiaries: ['MCPMidasDiary'],
+        defaultDiaries: ['MCPMidasDiary'],
+        skill: undefined
+    };
+    for (const guidance of [GUIDANCE_FIXTURE, midasGuidance]) {
+        const artifact = generateSkillArtifact({ guidance, format: 'claude', baseUrl: 'https://gw.example.com' });
+        assert.equal(artifact.ok, true, `${guidance.agentId} should generate`);
+        const skillMd = fileByPath(artifact, 'SKILL.md');
+
+        // 通配相关文案一律不得出现
+        assert.ok(!skillMd.includes('（动态：按项目实例化）'), `${guidance.agentId}: no dynamic annotation`);
+        assert.ok(!skillMd.includes('不视为换名重试'), `${guidance.agentId}: no instantiation footnote`);
+        assert.ok(!skillMd.includes('- 例外：'), `${guidance.agentId}: no hard-rule exception line`);
+        // 原有文案逐字保留（逐字回归）
+        assert.ok(
+            skillMd.includes('写入表外的日记本会被拒（`AGW_FORBIDDEN`）；需要新增日记本请找网关运维方改策略，不要在调用里换名字重试。'),
+            `${guidance.agentId}: original routing footnote verbatim`
+        );
+        assert.ok(
+            skillMd.includes('| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`，或写了授权外的日记本 | 去掉 `agentId`；日记本换回路由表内的名字 |'),
+            `${guidance.agentId}: original AGW_FORBIDDEN row verbatim`
+        );
+        assert.ok(
+            skillMd.includes('- 不要为了绕过 `AGW_FORBIDDEN` 而改 `agentId` 或换日记本名重试。'),
+            `${guidance.agentId}: original hard rule verbatim`
+        );
+    }
+});
+
+
+test('skill export for a wildcard-policy agent never bakes in an existing project name', async () => {
+    // 回归：bundle 解析曾把 `Nexus项目-*` 塌缩成磁盘上恰好存在的项目日记，
+    // 导出的 skill 里出现 `Nexus项目-VCPToolBox` 这种具体项目名。
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { createAgentPolicyResolver } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-skill-wildcard-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+    fs.writeFileSync(policyPath, JSON.stringify({
+        agents: {
+            Nexus: {
+                maid: 'Nexus',
+                allowedDiaries: WILDCARD_GUIDANCE_FIXTURE.allowedDiaries,
+                defaultDiaries: WILDCARD_GUIDANCE_FIXTURE.defaultDiaries
+            }
+        }
+    }), 'utf8');
+    const previousPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+    try {
+        const resolver = createAgentPolicyResolver({ ragConfig: {}, policyConfig: {} });
+        const policy = await resolver.resolvePolicy({
+            authContext: { agentId: 'Nexus' },
+            // 生产形态：日记目录里已存在一个具体项目日记
+            availableDiaries: ['Nexus工程经验', 'Nexus架构设计', 'Nexus项目-VCPToolBox']
+        });
+        const guidance = {
+            ...WILDCARD_GUIDANCE_FIXTURE,
+            allowedDiaries: policy.allowedDiaryNames,
+            defaultDiaries: policy.defaultDiaryNames
+        };
+        const artifact = generateSkillArtifact({ guidance, format: 'kimi', baseUrl: 'https://gw.example.com' });
+        assert.equal(artifact.ok, true);
+        const skillMd = fileByPath(artifact, 'SKILL.md');
+        assert.ok(
+            skillMd.includes('Nexus项目-<项目名>日记本（动态：按项目实例化）'),
+            'routing table shows the instantiation template row'
+        );
+        assert.ok(!skillMd.includes('Nexus项目-*'), 'literal wildcard pattern never appears');
+        assert.ok(!skillMd.includes('VCPToolBox'), 'no existing project name is baked into the export');
+    } finally {
+        if (previousPolicyPath === undefined) {
+            delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        } else {
+            process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPolicyPath;
+        }
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});

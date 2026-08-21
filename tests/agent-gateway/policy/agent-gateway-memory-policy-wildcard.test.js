@@ -77,14 +77,16 @@ test('ensureDiaryAllowed keeps allowed-diary list in the 403 self-healing payloa
     });
 });
 
-test('resolveDiaryAliasToAvailable expands the wildcard against available diaries', () => {
+test('resolveDiaryAliasToAvailable keeps wildcard patterns verbatim', () => {
+    // 通配条目是匹配模式而非别名：即使已有匹配的具体日记也原样保留——否则
+    // guidance bundle / skill 导出物会被写死成当前恰好存在的项目名，白名单
+    // 对新项目的覆盖能力也随之塌缩。
     assert.equal(
         resolveDiaryAliasToAvailable('Nexus项目-*', ['Nexus项目-VCPToolBox日记本']),
-        'Nexus项目-VCPToolBox日记本'
+        'Nexus项目-*'
     );
-    // No materialized project diary yet: the pattern falls back to its literal
-    // form and diaryScopeGuard still evaluates it as a pattern.
     assert.equal(resolveDiaryAliasToAvailable('Nexus项目-*', []), 'Nexus项目-*');
+    // 具体日记名的解析行为不变
     assert.equal(
         resolveDiaryAliasToAvailable('Nexus项目-VCPToolBox日记本', ['Nexus项目-VCPToolBox日记本']),
         'Nexus项目-VCPToolBox日记本'
@@ -149,4 +151,81 @@ test('applyDiaryPolicyGate honors the wildcard policy for memory search', () => 
         }
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+});
+
+
+test('resolvePolicy keeps the wildcard entry instead of collapsing it to existing project diaries', async () => {
+    const { createAgentPolicyResolver } = require('../../../modules/agentGateway/policy/agentPolicyResolver');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-memory-policy-'));
+    const policyPath = path.join(tempDir, 'mcp_agent_memory_policy.json');
+    fs.writeFileSync(policyPath, JSON.stringify({
+        agents: {
+            Nexus: {
+                maid: 'Nexus',
+                allowedDiaries: NEXUS_POLICY_DIARIES,
+                defaultDiaries: ['Nexus工程经验日记本', 'Nexus架构设计日记本']
+            }
+        }
+    }), 'utf8');
+
+    const previousPolicyPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = policyPath;
+    try {
+        const resolver = createAgentPolicyResolver({ ragConfig: {}, policyConfig: {} });
+        const policy = await resolver.resolvePolicy({
+            authContext: { agentId: 'Nexus' },
+            // 生产形态：日记目录里已存在一个具体项目日记
+            availableDiaries: ['Nexus工程经验', 'Nexus架构设计', 'Nexus项目-VCPToolBox']
+        });
+        assert.ok(policy.allowedDiaryNames.includes('Nexus项目-*'), 'wildcard pattern survives verbatim');
+        assert.ok(
+            !policy.allowedDiaryNames.includes('Nexus项目-VCPToolBox'),
+            'no concrete project name is baked into the resolved list'
+        );
+        assert.deepEqual(policy.defaultDiaryNames, ['Nexus工程经验', 'Nexus架构设计']);
+    } finally {
+        if (previousPolicyPath === undefined) {
+            delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        } else {
+            process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPolicyPath;
+        }
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('resolveDiaryAccess admits project diaries under a wildcard policy', async () => {
+    const { resolveDiaryAccess } = require('../../../modules/agentGateway/core/recall/diaryAccess');
+    const policyResolver = {
+        async resolvePolicy() {
+            return {
+                allowedDiaryNames: ['Nexus工程经验', 'Nexus架构设计', 'Nexus项目-*'],
+                defaultDiaryNames: ['Nexus工程经验', 'Nexus架构设计']
+            };
+        }
+    };
+    const availableDiaries = ['Nexus工程经验', 'Nexus架构设计', 'Nexus项目-VCPToolBox'];
+
+    const allowed = await resolveDiaryAccess({
+        requestedDiaries: ['Nexus项目-VCPToolBox日记本'],
+        availableDiaries,
+        agentId: 'Nexus',
+        authContext: { agentId: 'Nexus' },
+        policyResolver,
+        forbiddenCode: 'AGW_FORBIDDEN'
+    });
+    assert.equal(allowed.success, true);
+    assert.deepEqual(allowed.targetDiaries, ['Nexus项目-VCPToolBox']);
+
+    const forbidden = await resolveDiaryAccess({
+        requestedDiaries: ['Nexus日记本'],
+        availableDiaries,
+        agentId: 'Nexus',
+        authContext: { agentId: 'Nexus' },
+        policyResolver,
+        forbiddenCode: 'AGW_FORBIDDEN'
+    });
+    assert.equal(forbidden.success, false);
+    assert.equal(forbidden.status, 403);
+    // 403 自述清单保留通配模式原样，而不是塌缩成的具体项目名
+    assert.deepEqual(forbidden.details.allowedDiaries, ['Nexus工程经验', 'Nexus架构设计', 'Nexus项目-*']);
 });

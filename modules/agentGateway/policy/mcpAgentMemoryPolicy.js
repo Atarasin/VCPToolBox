@@ -95,6 +95,12 @@ function resolveDiaryAliasToAvailable(value, availableDiaries = []) {
     if (!exactValue) {
         return '';
     }
+    // 通配条目是匹配模式而非别名：绝不解析到任何具体日记，原样保留。否则
+    // 「当前恰好存在的项目日记」会顶替模式——guidance bundle 与 skill 导出物
+    // 被写死成具体项目名，白名单对新项目的覆盖能力也随之塌缩。
+    if (isWildcardDiaryPattern(exactValue)) {
+        return exactValue;
+    }
     if (normalizedAvailableDiaries.length === 0) {
         return normalizeDiaryCanonicalName(exactValue);
     }
@@ -183,6 +189,7 @@ function resolveConfiguredAgentMemoryPolicy({ agentId } = {}) {
 module.exports = {
     areDiaryNamesEquivalent,
     DEFAULT_POLICY_PATH,
+    isWildcardDiaryPattern,
     loadAgentMemoryPolicyConfig,
     normalizeDiaryCanonicalName,
     resolveDiaryAliasToAvailable,

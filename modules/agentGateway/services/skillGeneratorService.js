@@ -1,7 +1,14 @@
 const crypto = require('crypto');
 
-const { areDiaryNamesEquivalent } = require('../policy/mcpAgentMemoryPolicy');
+const { areDiaryNamesEquivalent, isWildcardDiaryPattern } = require('../policy/mcpAgentMemoryPolicy');
 const { normalizeString } = require('../policy/shared/normalize');
+
+// 通配条目（尾 `*`，如 `Nexus项目-*`）是匹配模式，不是一本真实日记。任何要
+// 呈现「具体日记名」的槽位都必须跳过它——模型照抄字面模式名去写会真实创建
+// 一本垃圾日记本（授权侧字面名与通配条目精确等价，门禁会放行）。
+function isConcreteDiaryName(name) {
+    return !isWildcardDiaryPattern(name);
+}
 
 /**
  * L3 skill generator（§6 / M4.S1）。
@@ -132,8 +139,8 @@ function buildSkillDescription(guidance) {
     const domain = normalizeString(skill.domain);
     const triggers = normalizeList(skill.triggers);
     const notFor = normalizeList(skill.notFor);
-    const defaultDiary = normalizeList(guidance.defaultDiaries)[0]
-        || normalizeList(guidance.allowedDiaries)[0];
+    const defaultDiary = normalizeList(guidance.defaultDiaries).find(isConcreteDiaryName)
+        || normalizeList(guidance.allowedDiaries).find(isConcreteDiaryName);
 
     const subject = domain
         ? `${displayName}（VCP Agent Gateway agent ${guidance.agentId}）的${domain}人格与记忆层`
@@ -167,7 +174,7 @@ function renderBootstrapStep(guidance) {
 }
 
 function renderRecallStep(guidance) {
-    const defaultDiaries = normalizeList(guidance.defaultDiaries);
+    const defaultDiaries = normalizeList(guidance.defaultDiaries).filter(isConcreteDiaryName);
     const lines = [
         '### 第 2 步：召回历史结论',
         '',
@@ -196,7 +203,9 @@ function renderWriteStep(guidance) {
     const defaultDiaries = normalizeList(guidance.defaultDiaries);
     const memoryDefaults = guidance.memoryDefaults || {};
     const defaultTags = normalizeList(memoryDefaults.tags);
-    const exampleDiary = defaultDiaries[0] || allowedDiaries[0] || '<日记本名>';
+    const exampleDiary = defaultDiaries.find(isConcreteDiaryName)
+        || allowedDiaries.find(isConcreteDiaryName)
+        || '<日记本名>';
     const exampleTags = defaultTags.length > 0 ? defaultTags : ['<至少一个标签>'];
     const memory = {
         text: '…一段自足的纯文本：结论 / 决策 / 根因，读者没有本次会话上下文也能看懂…',
@@ -232,6 +241,10 @@ function renderWriteStep(guidance) {
 /**
  * 日记本路由表。`skill.writeTargets` 里不在 `allowedDiaries` 内的条目直接
  * 丢弃——配置漂移不该产出一条注定 403 的指令。
+ *
+ * 通配条目（尾 `*`，如 `Nexus项目-*`）不是真实日记，绝不按字面渲染成表内
+ * 行：改用匹配到的 writeTargets 模板名作行标签并标注「动态：按项目实例化」，
+ * 尾注说明实例化属合法写入；无模板时按通配前缀派生占位标签。
  */
 function renderDiaryRouting(guidance) {
     const allowedDiaries = normalizeList(guidance.allowedDiaries);
@@ -241,6 +254,7 @@ function renderDiaryRouting(guidance) {
     const defaultDiaries = new Set(normalizeList(guidance.defaultDiaries));
     const writeTargets = Array.isArray(guidance.skill?.writeTargets) ? guidance.skill.writeTargets : [];
     const whenByDiary = new Map();
+    const templateByWildcard = new Map();
     for (const target of writeTargets) {
         const diary = normalizeString(target?.diary);
         const when = normalizeString(target?.when);
@@ -253,15 +267,49 @@ function renderDiaryRouting(guidance) {
         const allowed = allowedDiaries.find((name) => areDiaryNamesEquivalent(name, diary));
         if (allowed) {
             whenByDiary.set(allowed, when);
+            if (isWildcardDiaryPattern(allowed) && !templateByWildcard.has(allowed)) {
+                // 通配条目该呈现的名字是 writeTargets 的模板名
+                //（`Nexus项目-<项目名>日记本`），不是通配模式本身
+                templateByWildcard.set(allowed, diary);
+            }
         }
     }
     const lines = ['## 日记本路由', '', '| 日记本 | 默认 | 什么时候写 |', '| --- | --- | --- |'];
+    let hasWildcard = false;
+    let firstWildcardTemplate = '';
     for (const diary of allowedDiaries) {
+        if (isWildcardDiaryPattern(diary)) {
+            hasWildcard = true;
+            const templateName = templateByWildcard.get(diary) || '';
+            if (!firstWildcardTemplate && templateName) {
+                firstWildcardTemplate = templateName;
+            }
+            const label = templateName || `${diary.slice(0, -1).trim()}<实例名>`;
+            lines.push(`| ${label}（动态：按项目实例化） | ${defaultDiaries.has(diary) ? '✓' : ''} | ${whenByDiary.get(diary) || '—'} |`);
+            continue;
+        }
         lines.push(`| ${diary} | ${defaultDiaries.has(diary) ? '✓' : ''} | ${whenByDiary.get(diary) || '—'} |`);
     }
     lines.push('');
     lines.push('写入表外的日记本会被拒（`AGW_FORBIDDEN`）；需要新增日记本请找网关运维方改策略，不要在调用里换名字重试。');
+    if (hasWildcard) {
+        lines.push(buildWildcardInstantiationNote(firstWildcardTemplate));
+    }
     return lines.join('\n');
+}
+
+/**
+ * 通配条目的表尾注：按命名规则实例化是合法写入，不是「换名重试」。模板名
+ * 来自 writeTargets（如 `Nexus项目-<项目名>日记本`），项目名取自项目根的
+ * `.nexus-project`；无模板时只给通用口径。尾注刻意不引用字面通配模式——
+ * 防止模型把模式本身当日记名照抄。
+ */
+function buildWildcardInstantiationNote(templateName) {
+    const placeholder = templateName ? (/<[^>]+>/.exec(templateName) || [])[0] : '';
+    if (templateName && placeholder) {
+        return `标注「动态」的行不是固定日记名：写入前把 \`${templateName}\` 中的 \`${placeholder}\` 换成当前项目名（取自项目根 \`.nexus-project\` 文件）。实例化后的名字落在通配范围内即放行，不视为换名重试。`;
+    }
+    return '标注「动态」的行不是固定日记名：按项目实例化后再写。实例化后的名字落在该行动态前缀范围内即放行，不视为换名重试。';
 }
 
 function renderAgentWorkflow(guidance) {
@@ -296,14 +344,19 @@ function renderToolCheatsheet() {
     ].join('\n');
 }
 
-function renderFailureSemantics() {
+function renderFailureSemantics(guidance) {
+    // 通配条目存在时，AGW_FORBIDDEN 行的动作口径必须带上实例化例外——
+    // 否则「换回路由表内的名字」会与「动态行按项目实例化」打架
+    const forbiddenAction = normalizeList(guidance.allowedDiaries).some((name) => isWildcardDiaryPattern(name))
+        ? '去掉 `agentId`；日记本换回路由表内的名字（标注「动态」的行先按项目实例化再写）'
+        : '去掉 `agentId`；日记本换回路由表内的名字';
     return [
         '## 出错了怎么办',
         '',
         '| 现象 | 含义 | 动作 |',
         '| --- | --- | --- |',
         '| 返回文本以 `GATEWAY NOTICE` 开头 | 本次渲染降级（多半漏传 `query`） | 带上 `query` 重调一次 |',
-        '| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`，或写了授权外的日记本 | 去掉 `agentId`；日记本换回路由表内的名字 |',
+        `| \`AGW_FORBIDDEN\` | 传了不匹配的 \`agentId\`，或写了授权外的日记本 | ${forbiddenAction} |`,
         '| HTTP 401 | 凭据失效或被吊销 | 停止重试，告知用户联系网关运维方 |',
         '| `AGW_CONFIG_UNAVAILABLE`（503） | 网关配置暂不可用 | 降级用本地上下文继续，并说明缺少网关支撑 |',
         '| 召回/检索返回空 | 合法状态，不是错误 | 继续回答，声明缺少历史存档支撑 |'
@@ -311,14 +364,19 @@ function renderFailureSemantics() {
 }
 
 function renderHardRules(guidance) {
-    return [
+    const lines = [
         '## 红线',
         '',
         `- 不要跳过第 1 步就以${guidance.displayName}的身份回答——没取回人格时你只是个通用助手。`,
         '- 不要虚构召回内容，也不要虚构该 agent 的历史原话与既往判断；引用前先检索真实存档。',
         '- 不要把密钥、临时日志、git 可查的琐碎改动或未确认的推测写进记忆。',
         '- 不要为了绕过 `AGW_FORBIDDEN` 而改 `agentId` 或换日记本名重试。'
-    ].join('\n');
+    ];
+    if (normalizeList(guidance.allowedDiaries).some((name) => isWildcardDiaryPattern(name))) {
+        // 项目日记按命名规则实例化是授权侧放行的合法行为，不是换名绕过
+        lines.push('- 例外：路由表中标注「动态」的日记按项目实例化后写入是合法的，不视为换名重试。');
+    }
+    return lines.join('\n');
 }
 
 function joinSections(sections) {
@@ -366,7 +424,7 @@ function renderSkillMarkdown({ guidance, baseUrl }) {
         renderAgentWorkflow(guidance),
         renderDiaryRouting(guidance),
         renderToolCheatsheet(),
-        renderFailureSemantics(),
+        renderFailureSemantics(guidance),
         renderHardRules(guidance)
     ]);
 }
