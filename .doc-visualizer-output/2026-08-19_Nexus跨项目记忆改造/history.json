@@ -35,6 +35,14 @@
       "changes": "补上提示词分发链路设计：Nexus.txt 不是自动注入模型上下文的——正侧门是 MCP 工具 gateway_agent_bootstrap（渲染 Nexus.txt 并按 query 注入日记片段），触发面是 initialize.instructions 摘要 + 客户端 skill（由 agent_guidance.json 的 Nexus 条目驱动生成，当前缺失）。正式 md 新增 2.5 分发链路、3.4 接入步骤与新里程碑 M4、验收标准 AC7，版本升 v2",
       "affected_sections": ["目标与总体设计", "详细设计", "任务分解", "验收标准", "风险与开放问题"],
       "status": "已采纳"
+    },
+    {
+      "round": 5,
+      "date": "2026-08-21 13:32",
+      "feedback": "有个问题，导出 Nexus 的 skill 时，skill 描述中写死了固定的项目日记本",
+      "changes": "用当前真实配置在进程内复演渲染，确诊：skill 路由表按 allowedDiaries 全量渲染，通配条目以字面「Nexus项目-*」行出现，且硬编码尾注「表外被拒、不要换名字重试」与项目日记的动态实例化直接矛盾；配置层无解，新增 M5 改 skill 生成器（通配条目渲染为模板行 + 尾注/红线加实例化例外）。附带发现次生风险：字面「Nexus项目-*」与通配条目精确等价、是合法可写名，修复前导出使用会创建垃圾日记本。md 升 v3：新增 3.5 与 M5、AC8、雷区 7",
+      "affected_sections": ["目标与总体设计", "详细设计", "任务分解", "验收标准", "决策记录", "风险与开放问题"],
+      "status": "已采纳"
     }
   ]
 }

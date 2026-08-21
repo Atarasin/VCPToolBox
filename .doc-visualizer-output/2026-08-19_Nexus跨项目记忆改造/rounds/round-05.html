@@ -584,7 +584,7 @@ VCPToolBox</pre>
         </div>
         <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700 whitespace-pre-line"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>有个问题，导出 Nexus 的 skill 时，skill 描述中写死了固定的项目日记本</blockquote>
         <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>用当前真实配置在进程内复演渲染，确诊 skill 路由表把通配条目以字面「Nexus项目-*」行渲染，且硬编码尾注"表外被拒、不要换名重试"与项目日记的动态实例化直接矛盾；配置层无解，新增 M5（生成器通配呈现修复：通配条目渲染为模板行 + 尾注/红线加实例化例外）与 AC8、雷区 7，md 升 v3。</p>
-        <a href="2026-08-19_Nexus跨项目记忆改造/rounds/round-05.html"
+        <a href="./round-05.html"
           class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
       </div>
 
@@ -603,7 +603,7 @@ VCPToolBox</pre>
         </div>
         <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700 whitespace-pre-line"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>M1-M3 已经完成，但是我发现设计方案缺少最关键的一项，agent 如何获得 Nexus.txt 的内容</blockquote>
         <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>补上提示词分发链路设计：Nexus.txt 不是自动注入模型上下文的——正门是 MCP 工具 gateway_agent_bootstrap（渲染 Nexus.txt 并按 query 注入日记片段），触发面是 initialize.instructions 摘要 + 客户端 skill（由 agent_guidance.json 的 Nexus 条目驱动生成，当前缺失）。正式 md 新增 2.5 分发链路、3.4 接入步骤与新里程碑 M4、验收标准 AC7，版本升 v2。</p>
-        <a href="2026-08-19_Nexus跨项目记忆改造/rounds/round-04.html"
+        <a href="./round-04.html"
           class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
       </div>
 
@@ -618,7 +618,7 @@ VCPToolBox</pre>
         </div>
         <p class="mt-3 text-sm text-emerald-800 font-medium">🎉 本轮定稿，正式文档：2026-08-19_Nexus跨项目记忆改造.md</p>
         <p class="mt-2 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>定稿：无遗留待定决策。输出正式文档 docs/2026-08-19_Nexus跨项目记忆改造.md（八章结构），定稿版页面以该 md 为事实源全新生成，交互控件与导出栏已移除。</p>
-        <a href="2026-08-19_Nexus跨项目记忆改造/rounds/round-03.html"
+        <a href="./round-03.html"
           class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
       </div>
 
@@ -640,7 +640,7 @@ D5 存量日记迁移时机：选「方案B」（备注：我会全部清理）
 Q1 首个接入的项目：VCPToolBox
 Q2 是否走聊天链路：只用 MCP</blockquote>
         <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>5 个决策全部拍板并落实：通配符改造升为必做（新 M2）、通用本精简为 2 本（协作偏好归入工程经验本，已在 D2 卡注明分组微调）、命名定为 <code>Nexus项目-&lt;项目名&gt;日记本</code>、项目识别定为 <code>.nexus-project</code> 标记文件、存量迁移取消（M4 关闭）；首个接入项目 VCPToolBox；确认只走 MCP 链路。路线图、配置样例、prompt 草案、概览与红线全部同步。</p>
-        <a href="2026-08-19_Nexus跨项目记忆改造/rounds/round-02.html"
+        <a href="./round-02.html"
           class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
       </div>
 
@@ -654,7 +654,7 @@ Q2 是否走聊天链路：只用 MCP</blockquote>
           </span>
         </div>
         <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>首次产出评审草图：双轨日记分层（项目本 + 通用本）、4 个里程碑、5 个待定决策、2 个澄清问题。</p>
-        <a href="2026-08-19_Nexus跨项目记忆改造/rounds/round-01.html"
+        <a href="./round-01.html"
           class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
       </div>
     </div>
