@@ -21,8 +21,32 @@ const CORE_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS tags (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
-        vector BLOB
+        vector BLOB,
+        vector_version INTEGER NOT NULL DEFAULT 1
     );
+
+    -- 全局 Tag usearch 双槽基线。
+    -- tags 是唯一权威真相；本页只描述某个磁盘 usearch 槽内包含的 Tag 版本，
+    -- 启动时据此回放新增、更新和删除，而不是从 SQLite 全量重建 HNSW。
+    CREATE TABLE IF NOT EXISTS tag_index_baselines (
+        generation INTEGER PRIMARY KEY,
+        slot TEXT NOT NULL CHECK(slot IN ('a', 'b')),
+        dimension INTEGER NOT NULL,
+        model_sig TEXT NOT NULL,
+        tag_count INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('building', 'ready')),
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS tag_index_baseline_entries (
+        generation INTEGER NOT NULL,
+        tag_id INTEGER NOT NULL,
+        vector_version INTEGER NOT NULL,
+        PRIMARY KEY (generation, tag_id),
+        FOREIGN KEY(generation) REFERENCES tag_index_baselines(generation) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_tag_index_baseline_entries_generation
+        ON tag_index_baseline_entries(generation);
+
     CREATE TABLE IF NOT EXISTS file_tags (
         file_id INTEGER NOT NULL,
         tag_id INTEGER NOT NULL,
@@ -210,6 +234,10 @@ const CORE_SCHEMA_SQL = `
     );
     CREATE INDEX IF NOT EXISTS idx_pair_sim_model
         ON tag_pair_similarity(model_sig);
+    -- 主键只覆盖 tag_a 左前缀；反向端点索引保证按任一 Tag
+    -- 枚举或失效无向 Pair 时不会退化为全表扫描。
+    CREATE INDEX IF NOT EXISTS idx_pair_sim_tag_b
+        ON tag_pair_similarity(tag_b);
 
     CREATE TABLE IF NOT EXISTS tag_pair_similarity_status (
         tag_a INTEGER NOT NULL,
@@ -228,6 +256,8 @@ const CORE_SCHEMA_SQL = `
         ON tag_pair_similarity_status(artifact_sig, status);
     CREATE INDEX IF NOT EXISTS idx_pair_sim_status_model
         ON tag_pair_similarity_status(model_sig);
+    CREATE INDEX IF NOT EXISTS idx_pair_sim_status_tag_b
+        ON tag_pair_similarity_status(tag_b);
 
     CREATE TABLE IF NOT EXISTS kv_store (
         key TEXT PRIMARY KEY,
@@ -264,6 +294,73 @@ const CORE_SCHEMA_SQL = `
 `;
 
 const POST_MIGRATION_INDEX_SQL = `
+    -- Pairwise 扫描前事实代际。该值与 tags/file_tags 的权威变更处于同一
+    -- SQLite 事务，使 Rust 可以在读取全库高维 BLOB 前安全短路。
+    INSERT OR IGNORE INTO kv_store(key, value)
+    VALUES ('tagmemo_pairwise_fact_generation', '1');
+
+    CREATE TRIGGER IF NOT EXISTS trg_pairwise_tags_insert_generation
+    AFTER INSERT ON tags
+    BEGIN
+        UPDATE kv_store
+        SET value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        WHERE key = 'tagmemo_pairwise_fact_generation';
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pairwise_tags_vector_generation
+    AFTER UPDATE OF vector ON tags
+    WHEN OLD.vector IS NOT NEW.vector
+    BEGIN
+        UPDATE kv_store
+        SET value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        WHERE key = 'tagmemo_pairwise_fact_generation';
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pairwise_tags_delete_generation
+    AFTER DELETE ON tags
+    BEGIN
+        UPDATE kv_store
+        SET value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        WHERE key = 'tagmemo_pairwise_fact_generation';
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pairwise_file_tags_insert_generation
+    AFTER INSERT ON file_tags
+    BEGIN
+        UPDATE kv_store
+        SET value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        WHERE key = 'tagmemo_pairwise_fact_generation';
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pairwise_file_tags_update_generation
+    AFTER UPDATE OF file_id, tag_id ON file_tags
+    WHEN OLD.file_id IS NOT NEW.file_id OR OLD.tag_id IS NOT NEW.tag_id
+    BEGIN
+        UPDATE kv_store
+        SET value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        WHERE key = 'tagmemo_pairwise_fact_generation';
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pairwise_file_tags_delete_generation
+    AFTER DELETE ON file_tags
+    BEGIN
+        UPDATE kv_store
+        SET value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        WHERE key = 'tagmemo_pairwise_fact_generation';
+    END;
+
+    -- 必须在旧数据库完成 tags.vector_version 附加迁移后创建。
+    -- Tag 向量版本由 SQLite 在事实事务内单调推进，启动差分只比较整数版本，
+    -- 不需要读取并哈希全库高维 BLOB。WHEN 条件避免无关字段更新误增版本。
+    CREATE TRIGGER IF NOT EXISTS trg_tags_vector_version
+    AFTER UPDATE OF vector ON tags
+    WHEN OLD.vector IS NOT NEW.vector
+    BEGIN
+        UPDATE tags
+        SET vector_version = OLD.vector_version + 1
+        WHERE id = NEW.id;
+    END;
+
     CREATE INDEX IF NOT EXISTS idx_intrinsic_residual_artifact
         ON tag_intrinsic_residuals(artifact_sig);
     CREATE INDEX IF NOT EXISTS idx_intrinsic_residual_model
@@ -271,6 +368,7 @@ const POST_MIGRATION_INDEX_SQL = `
 `;
 
 const ADDITIVE_MIGRATIONS = Object.freeze([
+    ['tags', 'vector_version', 'INTEGER NOT NULL DEFAULT 1'],
     ['file_tags', 'position', 'INTEGER NOT NULL DEFAULT 0'],
     ['tag_intrinsic_residuals', 'raw_residual_ratio', 'REAL'],
     // 退休物理列仅用于兼容已有 SQLite 文件与旧原生二进制。
@@ -317,8 +415,41 @@ function addColumnIfMissing(db, table, column, definition, logPrefix) {
 function initializeKnowledgeBaseSchema(db, options = {}) {
     assertDatabase(db);
     const logPrefix = options.logPrefix || 'KnowledgeBase';
+    const reversePairIndexes = [
+        'idx_pair_sim_tag_b',
+        'idx_pair_sim_status_tag_b'
+    ];
+    const existingReversePairIndexes = new Set(
+        db.prepare(`
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND name IN (?, ?)
+        `).all(...reversePairIndexes).map(row => row.name)
+    );
+    const missingReversePairIndexes = reversePairIndexes.filter(
+        name => !existingReversePairIndexes.has(name)
+    );
+    const reverseIndexMigrationStartedAt = Date.now();
+
+    if (missingReversePairIndexes.length > 0) {
+        console.warn(
+            `[${logPrefix}] 🧱 Building missing Pairwise reverse endpoint ` +
+            `index(es): ${missingReversePairIndexes.join(', ')}. ` +
+            'Large databases may take time; startup will continue after SQLite finishes.'
+        );
+    }
 
     db.exec(CORE_SCHEMA_SQL);
+
+    if (missingReversePairIndexes.length > 0) {
+        console.log(
+            `[${logPrefix}] ✅ Pairwise reverse endpoint index migration complete: ` +
+            `${missingReversePairIndexes.join(', ')}, ` +
+            `elapsed=${Date.now() - reverseIndexMigrationStartedAt}ms.`
+        );
+    }
+
     for (const [table, column, definition] of ADDITIVE_MIGRATIONS) {
         addColumnIfMissing(db, table, column, definition, logPrefix);
     }

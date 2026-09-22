@@ -528,7 +528,32 @@ async function fetchWithRetry(
   throw new Error('Fetch failed after all retries.');
 }
 
-// 辅助函数：根据新上下文刷新对话历史中的RAG区块
+// 剥离 Markdown 代码块，避免 VCP Refresh 误扫源码示例中的伪 RAG 标签
+function stripMarkdownCodeFencesForRagRefresh(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(/```[\s\S]*?```/g, '');
+}
+
+// 安全解析 RAG metadata：必须是合法 JSON 对象，否则跳过（不抛错污染用户请求）
+function safeParseRagBlockMetadata(rawMetadata, debugMode = false) {
+  if (typeof rawMetadata !== 'string') return null;
+  const trimmed = rawMetadata.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    if (debugMode) console.warn(`[VCP Refresh] 跳过非 JSON metadata: ${trimmed.slice(0, 80)}`);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch (e) {
+    if (debugMode) console.warn(`[VCP Refresh] metadata JSON 解析失败，跳过: ${e.message}`);
+    return null;
+  }
+}
+
+// 辅助函数：根据新上下文刷新对话历史中由真实 system 消息承载的 RAG 区块
 async function _refreshRagBlocksIfNeeded(messages, newContext, pluginManager, debugMode = false) {
   const ragPlugin = pluginManager.messagePreprocessors?.get('RAGDiaryPlugin');
   // 检查插件是否存在且是否实现了refreshRagBlock方法
@@ -543,14 +568,16 @@ async function _refreshRagBlocksIfNeeded(messages, newContext, pluginManager, de
   const newMessages = JSON.parse(JSON.stringify(messages));
   let hasRefreshed = false;
 
-  // 🟢 改进点1：使用更健壮的正则 [\s\S]*? 匹配跨行内容，并允许标签周围有空格
-  const ragBlockRegex = /<!-- VCP_RAG_BLOCK_START ([\s\S]*?) -->([\s\S]*?)<!-- VCP_RAG_BLOCK_END -->/g;
+  // metadata 只接受 JSON 对象，避免误匹配源码示例、正则模板和未渲染占位符。
+  const ragBlockRegex = /<!-- VCP_RAG_BLOCK_START\s+(\{[\s\S]*?\})\s+-->([\s\S]*?)<!-- VCP_RAG_BLOCK_END -->/g;
 
   for (let i = 0; i < newMessages.length; i++) {
-    // 只处理 assistant 和 system 角色中的字符串内容
-    // 🟢 改进点2：有些场景下 RAG 可能会被注入到 user 消息中，建议也检查 user
-    if (['assistant', 'system', 'user'].includes(newMessages[i].role) && typeof newMessages[i].content === 'string') {
-      let messageContent = newMessages[i].content;
+    // 安全边界：只刷新协议层真实的 system 消息。
+    // 不接受 assistant、普通 user 或通过文本前缀模拟的“虚拟 system-user”，
+    // 否则客户端可自行构造合法 RAG metadata，在工具循环中触发任意日记本刷新。
+    if (newMessages[i]?.role === 'system' && typeof newMessages[i].content === 'string') {
+      // 先剥离 Markdown 代码围栏，避免扫描到示例中的伪 RAG 标签。
+      let messageContent = stripMarkdownCodeFencesForRagRefresh(newMessages[i].content);
 
       // 快速检查是否存在标记，避免无效正则匹配
       if (!messageContent.includes('VCP_RAG_BLOCK_START')) {
@@ -572,8 +599,10 @@ async function _refreshRagBlocksIfNeeded(messages, newContext, pluginManager, de
           const metadataJson = match[1];
 
           try {
-            // 🟢 改进点3：解析元数据时如果不严谨可能会报错，增加容错
-            const metadata = JSON.parse(metadataJson);
+            const metadata = safeParseRagBlockMetadata(metadataJson, debugMode);
+            if (!metadata) {
+              continue;
+            }
 
             if (debugMode) {
               console.log(`[VCP Refresh] 正在刷新区块 (${metadata.dbName})...`);
@@ -651,7 +680,6 @@ class ChatCompletionHandler {
       activeRequests,
       writeDebugLog,
       writeChatLog,
-      handleDiaryFromAIResponse,
       webSocketServer,
       DEBUG_MODE,
       SHOW_VCP_OUTPUT,
@@ -818,7 +846,7 @@ class ChatCompletionHandler {
       // 3. 执行上下文修剪
       if (originalBody.messages && Array.isArray(originalBody.messages)) {
         const originalCount = originalBody.messages.length;
-        originalBody.messages = contextManager.pruneMessages(
+        originalBody.messages = await contextManager.pruneMessagesSmart(
           originalBody.messages,
           contextTokenLimit,
           DEBUG_MODE
@@ -980,6 +1008,10 @@ class ChatCompletionHandler {
         superDetectors: this.config.superDetectors,
         DEBUG_MODE,
         messages: tavernProcessedMessages, // 将近期消息列表传递下去，用于支持上下文动态折叠 (Contextual Folding)
+        // 静态/混合/分布式插件上报内容由 preprocessor_order.json 中的
+        // $StaticPlaceholderInjection 虚拟阶段注入，避免动态网页文本在
+        // CapturePreprocessor 之前生成可执行截图占位符。
+        deferStaticPluginPlaceholders: true,
         // 🔒 灵魂级占位符去重：跨消息共享展开状态
         // Agent 类：整个上下文只允许展开一个 agent（第一个遇到的），后续所有 agent 占位符均不展开
         // Toolbox 类：每种 toolbox 各允许展开一次，同名重复出现时不再展开
@@ -1021,40 +1053,56 @@ class ChatCompletionHandler {
       }
       if (DEBUG_MODE) await writeDebugLog('LogAfterVariableProcessing', processedMessages);
 
-      // --- 媒体处理器 ---
-      if (shouldProcessMedia) {
-        if (shouldProcessMediaPlus) {
-          for (const msg of processedMessages) {
-            if (msg.role === 'user' && Array.isArray(msg.content)) {
-              const mediaParts = msg.content.filter(part => part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string' && /^data:(image|audio|video)\/[^;]+;base64,/.test(part.image_url.url));
-              if (mediaParts.length > 0) {
-                msg.__vcp_media_backup__ = JSON.parse(JSON.stringify(mediaParts));
-              }
+      if (shouldProcessMedia && shouldProcessMediaPlus) {
+        for (const msg of processedMessages) {
+          if (msg.role === 'user' && Array.isArray(msg.content)) {
+            const mediaParts = msg.content.filter(part => part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string' && /^data:(image|audio|video)\/[^;]+;base64,/.test(part.image_url.url));
+            if (mediaParts.length > 0) {
+              msg.__vcp_media_backup__ = JSON.parse(JSON.stringify(mediaParts));
             }
-          }
-        }
-
-        const processorName = pluginManager.messagePreprocessors.has('MultiModalProcessor')
-          ? 'MultiModalProcessor'
-          : 'ImageProcessor';
-        if (pluginManager.messagePreprocessors.has(processorName)) {
-          if (DEBUG_MODE) console.log(`[Server] Calling message preprocessor: ${processorName}`);
-          try {
-            processedMessages = await pluginManager.executeMessagePreprocessor(processorName, processedMessages, requestPreprocessorConfig);
-          } catch (pluginError) {
-            console.error(`[Server] Error in preprocessor ${processorName}:`, pluginError);
           }
         }
       }
 
-      // --- 其他通用消息预处理器 ---
-      for (const name of pluginManager.messagePreprocessors.keys()) {
-        // 跳过已经特殊处理的插件
-        if (name === 'ImageProcessor' || name === 'MultiModalProcessor' || name === 'VCPTavern') continue;
+      // --- 可排序消息处理管线 ---
+      // VCPTavern 已在变量展开前执行；其余真实预处理器与静态占位符注入
+      // 严格遵循 preprocessor_order.json，确保动态插件文本不能污染前置捕获指令。
+      const STATIC_PLACEHOLDER_INJECTION_STAGE = '$StaticPlaceholderInjection';
+      const selectedMediaProcessor = pluginManager.messagePreprocessors.has('MultiModalProcessor')
+        ? 'MultiModalProcessor'
+        : 'ImageProcessor';
+      const orderedPipeline = Array.isArray(pluginManager.preprocessorOrder)
+        ? pluginManager.preprocessorOrder
+        : Array.from(pluginManager.messagePreprocessors.keys());
+
+      for (const name of orderedPipeline) {
+        if (name === 'VCPTavern') continue;
+
+        if (name === STATIC_PLACEHOLDER_INJECTION_STAGE) {
+          if (DEBUG_MODE) console.log('[Server] Injecting static/hybrid/distributed plugin placeholders.');
+          processedMessages = await messageProcessor.injectStaticPluginPlaceholdersInMessages(
+            processedMessages,
+            {
+              ...processingContext,
+              messages: processedMessages
+            }
+          );
+          continue;
+        }
+
+        if (name === 'ImageProcessor' || name === 'MultiModalProcessor') {
+          if (!shouldProcessMedia || name !== selectedMediaProcessor) continue;
+        }
+
+        if (!pluginManager.messagePreprocessors.has(name)) continue;
 
         if (DEBUG_MODE) console.log(`[Server] Calling message preprocessor: ${name}`);
         try {
-          processedMessages = await pluginManager.executeMessagePreprocessor(name, processedMessages, requestPreprocessorConfig);
+          processedMessages = await pluginManager.executeMessagePreprocessor(
+            name,
+            processedMessages,
+            requestPreprocessorConfig
+          );
         } catch (pluginError) {
           console.error(`[Server] Error in preprocessor ${name}:`, pluginError);
         }
@@ -1406,5 +1454,13 @@ class ChatCompletionHandler {
     }
   }
 }
+
+// 暴露纯刷新入口供安全回归测试和内部复用；请求主链路仍通过 handler context 调用同一实现。
+Object.defineProperty(ChatCompletionHandler, 'refreshRagBlocksIfNeeded', {
+  value: _refreshRagBlocksIfNeeded,
+  writable: false,
+  configurable: false,
+  enumerable: false
+});
 
 module.exports = ChatCompletionHandler;

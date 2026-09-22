@@ -382,7 +382,15 @@ const DEBUG_MODE = (process.env.DebugMode || "False").toLowerCase() === "true";
 const CHAT_LOG_ENABLED = (process.env.CHAT_LOG_ENABLED || "false").toLowerCase() === "true";
 const VCPToolCode = (process.env.VCPToolCode || "false").toLowerCase() === "true"; // 新增：读取VCP工具调用验证码开关
 const SHOW_VCP_OUTPUT = (process.env.ShowVCP || "False").toLowerCase() === "true"; // 读取 ShowVCP 环境变量
-const RAG_MEMO_REFRESH = (process.env.RAGMemoRefresh || "false").toLowerCase() === "true"; // 新增：RAG日记刷新开关
+const REASONING_TO_CONTENT_ENABLED = (process.env.ReasoningToContentEnabled || "false").toLowerCase() === "true";
+const REASONING_TO_CONTENT_TAG = String(process.env.ReasoningToContentTag || "think").trim().toLowerCase() === "thinking"
+    ? "thinking"
+    : "think";
+const REASONING_TO_CONTENT_MODELS = String(process.env.ReasoningToContentModel || "")
+    .split(',')
+    .map(model => model.trim().toLowerCase())
+    .filter(Boolean);
+const RAG_MEMO_REFRESH = (process.env.RAGMemoRefresh || "false").toLowerCase() === "true"; // 新增：传递RAG日记刷新开关
 const ENABLE_ROLE_DIVIDER = (process.env.EnableRoleDivider || "false").toLowerCase() === "true"; // 新增：角色分割开关
 const ENABLE_ROLE_DIVIDER_IN_LOOP = (process.env.EnableRoleDividerInLoop || "false").toLowerCase() === "true"; // 新增：循环栈角色分割开关
 const ROLE_DIVIDER_SYSTEM = (process.env.RoleDividerSystem || "true").toLowerCase() === "true"; // 新增：System角色分割开关
@@ -532,7 +540,7 @@ for (const key in process.env) {
     if (/^Detector\d+$/.test(key)) {
         const index = key.substring(8);
         const outputKey = `Detector_Output${index}`;
-        if (process.env[outputKey]) {
+        if (process.env[outputKey] !== undefined) {
             detectors.push({ detector: process.env[key], output: process.env[outputKey] });
         }
     }
@@ -545,7 +553,7 @@ for (const key in process.env) {
     if (/^SuperDetector\d+$/.test(key)) {
         const index = key.substring(13);
         const outputKey = `SuperDetector_Output${index}`;
-        if (process.env[outputKey]) {
+        if (process.env[outputKey] !== undefined) {
             superDetectors.push({ detector: process.env[key], output: process.env[outputKey] });
         }
     }
@@ -1247,10 +1255,12 @@ const chatCompletionHandler = new ChatCompletionHandler({
     activeRequests,
     writeDebugLog,
     writeChatLog,
-    handleDiaryFromAIResponse,
     webSocketServer,
     DEBUG_MODE,
     SHOW_VCP_OUTPUT,
+    reasoningToContentEnabled: REASONING_TO_CONTENT_ENABLED,
+    reasoningToContentTag: REASONING_TO_CONTENT_TAG,
+    reasoningToContentModels: REASONING_TO_CONTENT_MODELS,
     VCPToolCode, // 新增：传递VCP工具调用验证码开关
     RAGMemoRefresh: RAG_MEMO_REFRESH, // 新增：传递RAG日记刷新开关
     enableRoleDivider: ENABLE_ROLE_DIVIDER, // 新增：传递角色分割开关
@@ -1367,121 +1377,6 @@ app.post('/v1/human/tool', async (req, res) => {
     }
 });
 
-
-async function handleDiaryFromAIResponse(responseText) {
-    let fullAiResponseTextForDiary = '';
-    let successfullyParsedForDiary = false;
-    if (!responseText || typeof responseText !== 'string' || responseText.trim() === "") {
-        return;
-    }
-    const lines = responseText.trim().split('\n');
-    const looksLikeSSEForDiary = lines.some(line => line.startsWith('data: '));
-    if (looksLikeSSEForDiary) {
-        let sseContent = '';
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                const jsonData = line.substring(5).trim();
-                if (jsonData === '[DONE]') continue;
-                try {
-                    const parsedData = JSON.parse(jsonData);
-                    const contentChunk = parsedData.choices?.[0]?.delta?.content || parsedData.choices?.[0]?.message?.content || '';
-                    if (contentChunk) sseContent += contentChunk;
-                } catch (e) { /* ignore */ }
-            }
-        }
-        if (sseContent) {
-            fullAiResponseTextForDiary = sseContent;
-            successfullyParsedForDiary = true;
-        }
-    }
-    if (!successfullyParsedForDiary) {
-        try {
-            const parsedJson = JSON.parse(responseText);
-            const jsonContent = parsedJson.choices?.[0]?.message?.content;
-            if (jsonContent && typeof jsonContent === 'string') {
-                fullAiResponseTextForDiary = jsonContent;
-                successfullyParsedForDiary = true;
-            }
-        } catch (e) { /* ignore */ }
-    }
-    if (!successfullyParsedForDiary && !looksLikeSSEForDiary) {
-        fullAiResponseTextForDiary = responseText;
-    }
-
-    if (fullAiResponseTextForDiary.trim()) {
-        const dailyNoteRegex = /<<<DailyNoteStart>>>(.*?)<<<DailyNoteEnd>>>/s;
-        const match = fullAiResponseTextForDiary.match(dailyNoteRegex);
-        if (match && match[1]) {
-            const noteBlockContent = match[1].trim();
-            if (DEBUG_MODE) console.log('[handleDiaryFromAIResponse] Found structured daily note block.');
-
-            const maidMatch = noteBlockContent.match(/^\s*Maid:\s*(.+?)$/m);
-            const dateMatch = noteBlockContent.match(/^\s*Date:\s*(.+?)$/m);
-
-            const maidName = maidMatch ? maidMatch[1].trim() : null;
-            const dateString = dateMatch ? dateMatch[1].trim() : null;
-
-            let contentText = null;
-            const contentMatch = noteBlockContent.match(/^\s*Content:\s*([\s\S]*)$/m);
-            if (contentMatch) {
-                contentText = contentMatch[1].trim();
-            }
-
-            if (maidName && dateString && contentText) {
-                const diaryPayload = { maidName, dateString, contentText };
-                try {
-                    if (DEBUG_MODE) console.log('[handleDiaryFromAIResponse] Calling DailyNote plugin with payload:', diaryPayload);
-                    // DailyNoteWrite 插件已退役（CHANGELOG：写回链路收敛为仅调用 DailyNote 工具）。
-                    // DailyNote 是 hybridservice/direct，executePlugin 只支持 stdio 插件，必须走 processToolCall。
-                    const pluginResult = await pluginManager.processToolCall("DailyNote", {
-                        command: 'create',
-                        maid: maidName,
-                        Date: dateString,
-                        Content: contentText
-                    }, null, 'handleDiaryFromAIResponse');
-                    // 成功返回: { status: "success", result: { message, folder, fileName, indexStatus } }
-                    // 失败返回: { status: "error", error: "..." }
-
-                    if (pluginResult && pluginResult.status === "success") {
-                        const writeInfo = pluginResult.result || {};
-
-                        if (DEBUG_MODE) console.log(`[handleDiaryFromAIResponse] DailyNote plugin reported success: ${writeInfo.message || ''}`);
-
-                        let filePath = '';
-                        if (writeInfo.folder && writeInfo.fileName) {
-                            filePath = `${writeInfo.folder}/${writeInfo.fileName}`;
-                        }
-
-                        const notification = {
-                            type: 'daily_note_created',
-                            data: {
-                                maidName: diaryPayload.maidName,
-                                dateString: diaryPayload.dateString,
-                                filePath: filePath,
-                                status: 'success',
-                                message: `日记 '${filePath || '未知路径'}' 已为 '${diaryPayload.maidName}' (${diaryPayload.dateString}) 创建成功。`
-                            }
-                        };
-                        webSocketServer.broadcast(notification, 'VCPLog');
-                        if (DEBUG_MODE) console.log('[handleDiaryFromAIResponse] Broadcasted daily_note_created notification:', notification);
-
-                    } else if (pluginResult && pluginResult.status === "error") {
-                        // Handle errors reported by the plugin's JSON response
-                        console.error(`[handleDiaryFromAIResponse] DailyNote plugin reported an error:`, pluginResult.error || pluginResult.message || pluginResult);
-                    } else {
-                        // Handle cases where pluginResult is null, or status is not "success"/"error".
-                        console.error(`[handleDiaryFromAIResponse] DailyNote plugin returned an unexpected response structure or failed:`, pluginResult);
-                    }
-                } catch (pluginError) {
-                    // This catches errors from pluginManager.processToolCall itself (e.g., plugin not loaded, timeout)
-                    console.error('[handleDiaryFromAIResponse] Error executing DailyNote plugin:', pluginError.message, pluginError.stack);
-                }
-            } else {
-                console.error('[handleDiaryFromAIResponse] Could not extract Maid, Date, or Content from daily note block:', { maidName, dateString, contentText: contentText?.substring(0, 50) });
-            }
-        }
-    }
-}
 
 // --- Admin API Router (Moved to routes/adminPanelRoutes.js) ---
 
@@ -1694,6 +1589,10 @@ async function initialize() {
     }
     if (DEBUG_MODE) console.log('表情包列表缓存加载完成。');
 
+    // 所有插件运行时、服务路由和静态任务就绪后再启动清单监听，
+    // 避免启动阶段的文件写入触发多余重载。
+    pluginManager.startPluginWatcher();
+
     // 初始化通用任务调度器
     taskScheduler.initialize(pluginManager, webSocketServer, DEBUG_MODE);
 }
@@ -1778,10 +1677,12 @@ async function startServer() {
         if (DEBUG_MODE) console.log('[Server] Initializing WebSocketServer...');
         const vcpKeyValue = pluginManager.getResolvedPluginConfigValue('VCPLog', 'VCP_Key') || process.env.VCP_Key;
         const distributedMusicPlaylistSyncEnabled = (process.env.DISTRIBUTED_MUSIC_PLAYLIST_SYNC_ENABLED || 'false').toLowerCase() === 'true';
+        const webSocketHeartbeatEnabled = (process.env.WEBSOCKET_HEARTBEAT_ENABLED || 'false').toLowerCase() === 'true';
         webSocketServer.initialize(server, {
             debugMode: DEBUG_MODE,
             vcpKey: vcpKeyValue,
-            distributedMusicPlaylistSyncEnabled
+            distributedMusicPlaylistSyncEnabled,
+            heartbeatEnabled: webSocketHeartbeatEnabled
         });
 
         // --- 注入依赖 ---

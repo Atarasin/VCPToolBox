@@ -438,12 +438,12 @@ class DirectDiaryTextProcessor {
     }
 
     hasDirectDiaryPlaceholder(text) {
-        return typeof text === 'string' && /\{\{.*?日记本.*?\}\}/.test(text);
+        return typeof text === 'string' && /\{\{[^}]*?日记本[^}]*?\}\}/.test(text);
     }
 
     hasVectorOrSemanticPlaceholder(text) {
         if (!text || typeof text !== 'string') return false;
-        return /\[\[.*日记本.*\]\]|<<.*日记本.*>>|《《.*日记本.*》》|\[\[.*知识库.*\]\]|《《.*知识库.*》》|\[\[VCP元思考.*\]\]|\[\[AIMemo=True\]\]/.test(text);
+        return /\[\[[^\]]*日记本[^\]]*\]\]|<<[^>]*日记本[^>]*>>|《《[^》]*日记本[^》]*》》|\[\[[^\]]*知识库[^\]]*\]\]|《《[^》]*知识库[^》]*》》|\[\[[^\]]*VCP元思考[^\]]*\]\]|\[\[AIMemo=True\]\]/.test(text);
     }
 
     isDirectOnlyText(text) {
@@ -530,8 +530,8 @@ class DirectDiaryTextProcessor {
             .replace(/\[\[.*?\]\]/gs, ' ')
             .replace(/<<.*?>>/gs, ' ')
             .replace(/《《.*?》》/gs, ' ')
-            .replace(/<<<\[TOOL_REQUEST\]>>>[\s\S]*?<<<\[END_TOOL_REQUEST\]>>>/g, ' ')
-            .replace(/「始」[\s\S]*?「末」/g, ' ')
+            .replace(/(?:<<<\[?TOOL_REQUEST_ESCAPE\]?>>>[\s\S]*?<<<\[?END_TOOL_REQUEST_ESCAPE\]?>>>|<<<\[?TOOL_REQUEST\]?>>>[\s\S]*?<<<\[?END_TOOL_REQUEST\]?>>>)/gi, ' ')
+            .replace(/(?:「始ESCAPE」[\s\S]*?「末ESCAPE」|「始」[\s\S]*?「末」)/gi, ' ')
             .replace(/\s+/g, ' ')
             .trim();
     }
@@ -942,17 +942,17 @@ class DirectDiaryTextProcessor {
 
     sanitizeNestedPlaceholders(diaryContent) {
         return String(diaryContent || '')
-            .replace(/\[\[.*日记本.*\]\]/g, '[循环占位符已移除]')
-            .replace(/<<.*日记本.*>>/g, '[循环占位符已移除]')
-            .replace(/《《.*日记本.*》》/g, '[循环占位符已移除]')
-            .replace(/\{\{.*日记本.*\}\}/g, '[循环占位符已移除]')
-            .replace(/\[\[.*知识库.*\]\]/g, '[循环占位符已移除]')
-            .replace(/《《.*知识库.*》》/g, '[循环占位符已移除]');
+            .replace(/\[\[[^\]]*日记本[^\]]*\]\]/g, '[循环占位符已移除]')
+            .replace(/<<[^>]*日记本[^>]*>>/g, '[循环占位符已移除]')
+            .replace(/《《[^》]*日记本[^》]*》》/g, '[循环占位符已移除]')
+            .replace(/\{\{[^}]*日记本[^}]*\}\}/g, '[循环占位符已移除]')
+            .replace(/\[\[[^\]]*知识库[^\]]*\]\]/g, '[循环占位符已移除]')
+            .replace(/《《[^》]*知识库[^》]*》》/g, '[循环占位符已移除]');
     }
 
     async processContent(content, options = {}) {
         let processedContent = String(content || '');
-        const declarations = [...processedContent.matchAll(/\{\{(.*?)日记本(.*?)\}\}/g)];
+        const declarations = [...processedContent.matchAll(/\{\{([^}]*?)日记本([^}]*?)\}\}/g)];
 
         if (declarations.length === 0) {
             return processedContent;
@@ -1101,7 +1101,14 @@ class DirectDiaryTextProcessor {
             return { processed: false, messages };
         }
 
-        const newMessages = JSON.parse(JSON.stringify(messages));
+        // Copy-on-write：纯文本快速路径只会修改目标承载消息。
+        // 未修改历史消息及其多模态/Base64 content 保持原引用，避免整树 JSON 深拷贝。
+        const targetIndexSet = new Set(targetIndices);
+        const newMessages = messages.map((message, index) =>
+            targetIndexSet.has(index) && message && typeof message === 'object'
+                ? { ...message }
+                : message
+        );
         const processedDiaries = new Set();
 
         await Promise.all(targetIndices.map(async (index) => {

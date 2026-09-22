@@ -3,9 +3,9 @@ const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('path');
 const multer = require('multer');
-const extract = require('extract-zip');
 const tar = require('tar');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
+const { extractZipSafely } = require('../../modules/safeZipExtractor');
 
 const IMAGE_ROOT_DIR = path.join(__dirname, '..', '..', 'image');
 const EMOJI_LISTS_DIR = path.join(
@@ -85,6 +85,22 @@ function compareText(a, b) {
         numeric: true,
         sensitivity: 'base',
     });
+}
+
+async function writeTextFileIfChanged(filePath, nextContent) {
+    try {
+        const currentContent = await fs.readFile(filePath, 'utf-8');
+        if (currentContent === nextContent) {
+            return false;
+        }
+    } catch (error) {
+        if (!error || error.code !== 'ENOENT') {
+            throw error;
+        }
+    }
+
+    await fs.writeFile(filePath, nextContent, 'utf-8');
+    return true;
 }
 
 function buildPreviewUrl(relativePath) {
@@ -505,8 +521,10 @@ async function extractArchiveSafely(archiveFormat, archiveFilePath, extractDir) 
     };
 
     if (archiveFormat === 'zip') {
-        await extract(archiveFilePath, {
-            dir: extractDir,
+        await extractZipSafely(archiveFilePath, extractDir, {
+            maxEntries: MAX_EXTRACTED_FILE_COUNT,
+            maxTotalSize: MAX_EXTRACTED_TOTAL_SIZE,
+            maxEntrySize: MAX_EXTRACTED_TOTAL_SIZE,
             onEntry(entry) {
                 checkEntryBudget(entry && entry.uncompressedSize);
             },
@@ -534,6 +552,9 @@ async function rebuildEmojiGeneratedLists() {
         .sort(compareText);
 
     const packs = [];
+    let updatedCount = 0;
+    let unchangedCount = 0;
+
     for (const packName of emojiDirs) {
         const packDirPath = path.join(IMAGE_ROOT_DIR, packName);
         const packEntries = await fs.readdir(packDirPath, { withFileTypes: true });
@@ -544,17 +565,29 @@ async function rebuildEmojiGeneratedLists() {
             .sort(compareText);
 
         const targetFilePath = path.join(EMOJI_LISTS_DIR, `${packName}.txt`);
-        await fs.writeFile(targetFilePath, imageFiles.join('|'), 'utf-8');
+        const didWrite = await writeTextFileIfChanged(
+            targetFilePath,
+            imageFiles.join('|')
+        );
+
+        if (didWrite) {
+            updatedCount += 1;
+        } else {
+            unchangedCount += 1;
+        }
 
         packs.push({
             name: packName,
             count: imageFiles.length,
             filePath: targetFilePath,
+            updated: didWrite,
         });
     }
 
     return {
         generatedCount: packs.length,
+        updatedCount,
+        unchangedCount,
         packs,
     };
 }

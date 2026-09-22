@@ -198,6 +198,9 @@ ip_blacklist.json
 /VectorStoreTDB/
 
 # 插件缓存文件
+# PlaceholderExplorer 的备份与运行时索引可能包含私密值或本机绝对路径，严禁入库。
+Plugin/PlaceholderExplorer/backups/
+Plugin/PlaceholderExplorer/generated/placeholder-index.json
 Plugin/ArtistMatcher/artist_cache.json
 Plugin/DailyHot/dailyhot_cache.md
 Plugin/EmojiListGenerator/generated_lists/
@@ -268,6 +271,20 @@ image/sensegen/
 image/webuigen/
 image/zimagegen/
 
+# MediaRenderer 与 AgnesVideoGen 渲染/生成输出
+image/media-renderer/
+file/media-renderer/
+file/agnesvideogen/
+
+# 全局临时文件与运行时历史
+*.tmp
+*.bak
+*.pyc
+__pycache__/
+**/__pycache__/
+VCPTimedResults/
+Plugin/BilibiliFetch/.cookies_cache
+
 # 网络抓取图片输出
 image/urlfetch/
 
@@ -306,6 +323,8 @@ Thumbs.db
 # ===== 编译产物 =====
 rust-vexus-lite/target/
 Plugin/DailyNoteSearcher/src/target/
+Plugin/CodeSearcher/src/target/
+Plugin/PaperReader/paperreader-rs/target/
 
 # ==== 分布式开发 ====
 VCPDistributedServer

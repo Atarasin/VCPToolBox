@@ -50,6 +50,27 @@ let residentInitialized = false;
 
 
 // --- Debug Logging (to stderr) ---
+function getArgumentValue(args, ...candidateNames) {
+    if (!args || typeof args !== 'object') {
+        return undefined;
+    }
+
+    for (const name of candidateNames) {
+        if (Object.prototype.hasOwnProperty.call(args, name) && args[name] !== undefined) {
+            return args[name];
+        }
+    }
+
+    const normalizedNames = candidateNames.map(name => String(name).toLowerCase());
+    for (const [key, value] of Object.entries(args)) {
+        if (value !== undefined && normalizedNames.includes(key.toLowerCase())) {
+            return value;
+        }
+    }
+
+    return undefined;
+}
+
 function debugLog(message, ...args) {
     if (DEBUG_MODE) {
         console.error(`[DailyNote][Debug] ${message}`, ...args); // Log debug to stderr
@@ -596,8 +617,26 @@ async function processLocalFiles(content) {
 }
 
 // --- 'create' Command Logic ---
-function contentStartsWithAiTimePrefix(content) {
-    return /^\s*\[\d{1,2}:\d{2}(?::\d{2})?\](?=\s|$)/.test(content);
+const DIARY_TIME_PREFIX_RE =
+    /^\s*\[([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?\](?=\s|$)/;
+
+function parseLeadingDiaryTimePrefix(content) {
+    if (typeof content !== 'string') {
+        return null;
+    }
+
+    const match = DIARY_TIME_PREFIX_RE.exec(content);
+    if (!match) {
+        return null;
+    }
+
+    // Keep this syntax-based rather than enforcing real-world clock ranges:
+    // diary timestamps may represent fictional or otherwise custom time systems.
+    return {
+        hours: match[1].padStart(2, '0'),
+        minutes: match[2],
+        seconds: match[3] ?? null
+    };
 }
 
 async function handleCreateCommand(args) {
@@ -629,18 +668,22 @@ async function handleCreateCommand(args) {
 
         const trimmedMaidName = maid.trim();
         const trimmedFolderName = typeof folder === 'string' ? folder.trim() : '';
-        let folderName = trimmedFolderName || trimmedMaidName;
-        let actualMaidName = trimmedMaidName;
-        const tagMatch = trimmedMaidName.match(/^\[(.*?)\](.*)$/);
+        // 解析旧式 [文件夹]作者 格式——闭括号后必须有非空作者名才视为旧格式
+        const tagMatch = trimmedMaidName.match(/^\[([^\]]*)\](.+)$/);
+        let folderName;
+        let actualMaidName;
 
-        if (trimmedFolderName) {
-            debugLog(`Explicit folder provided. Folder: ${folderName}, Actual Maid: ${actualMaidName}`);
-        } else if (tagMatch) {
-            folderName = tagMatch[1].trim();
+        if (tagMatch) {
+            // maid 确实是旧式格式，提取作者
             actualMaidName = tagMatch[2].trim();
-            debugLog(`Tagged note detected. Tag: ${folderName}, Actual Maid: ${actualMaidName}`);
+            // 目录：显式 folder 优先，否则用旧式 maid 中的目录部分
+            folderName = trimmedFolderName || tagMatch[1].trim() || actualMaidName;
+            debugLog(`Legacy maid format parsed. Folder: ${folderName}, Actual Maid: ${actualMaidName}, explicit folder: ${!!trimmedFolderName}`);
         } else {
-            debugLog(`No tag detected. Folder: ${folderName}, Actual Maid: ${actualMaidName}`);
+            // maid 是普通署名
+            actualMaidName = trimmedMaidName;
+            folderName = trimmedFolderName || trimmedMaidName;
+            debugLog(`Plain maid. Folder: ${folderName}, Actual Maid: ${actualMaidName}`);
         }
 
         const folderResolution = await resolveDiaryFolderName(folderName, {
@@ -661,10 +704,14 @@ async function handleCreateCommand(args) {
 
         const datePart = dateString.replace(/[.\\\/\s-]/g, '-').replace(/-+/g, '-');
         const now = new Date();
-        const hours = now.getHours().toString().padStart(2, '0');
-        const minutes = now.getMinutes().toString().padStart(2, '0');
-        const seconds = now.getSeconds().toString().padStart(2, '0');
-        const timeStringForFile = `${hours}_${minutes}_${seconds}`;
+        const runtimeHours = now.getHours().toString().padStart(2, '0');
+        const runtimeMinutes = now.getMinutes().toString().padStart(2, '0');
+        const runtimeSeconds = now.getSeconds().toString().padStart(2, '0');
+        const explicitTime = parseLeadingDiaryTimePrefix(processedContent);
+        const fileHours = explicitTime?.hours ?? runtimeHours;
+        const fileMinutes = explicitTime?.minutes ?? runtimeMinutes;
+        const fileSeconds = explicitTime?.seconds ?? runtimeSeconds;
+        const timeStringForFile = `${fileHours}_${fileMinutes}_${fileSeconds}`;
 
         const dirPath = path.join(dailyNoteRootPath, sanitizedFolderName);
 
@@ -693,8 +740,8 @@ async function handleCreateCommand(args) {
 
         await fs.mkdir(dirPath, { recursive: true });
 
-        const timeStringForContent = `${hours}:${minutes}`;
-        const fileContent = contentStartsWithAiTimePrefix(processedContent)
+        const timeStringForContent = `${runtimeHours}:${runtimeMinutes}`;
+        const fileContent = explicitTime
             ? `[${datePart}] - ${actualMaidName}\n${processedContent}`
             : `[${datePart}] - ${actualMaidName}\n[${timeStringForContent}]\n${processedContent}`;
 
@@ -1067,7 +1114,7 @@ function generateDiff(oldText, newText, oldLabel, newLabel) {
 
         hunks.push(
             `@@ -${aRange} +${bRange} @@\n` +
-                hunkOps.map((o) => o.type + o.line).join('\n')
+            hunkOps.map((o) => o.type + o.line).join('\n')
         );
 
         idx = hunkEnd;
@@ -1130,7 +1177,10 @@ async function atomicReplaceIfUnchanged(filePath, content, expectedStats) {
 async function handleUpdateCommand(args) {
     debugLog("Processing 'update' command with args:", args);
 
-    const { target, replace, maid } = args;
+    // 参数键名大小写不敏感：兼容 target/replace、Target/Replace、TARGET/REPLACE 等写法。
+    const target = getArgumentValue(args, 'target');
+    const replace = getArgumentValue(args, 'replace');
+    const maid = getArgumentValue(args, 'maid');
     const folder = args.folder || args.Folder || args.folderName || args.FolderName || args.fold || args.Fold;
 
     if (typeof target !== 'string' || typeof replace !== 'string') {
@@ -1149,8 +1199,7 @@ async function handleUpdateCommand(args) {
     }
 
     debugLog(
-        `Validated input for update. Target length: ${target.length}. Maid: ${
-            maid || 'Not specified'
+        `Validated input for update. Target length: ${target.length}. Maid: ${maid || 'Not specified'
         }. Folder: ${folder || 'Not specified'}`
     );
 
@@ -1572,8 +1621,8 @@ async function dispatchCommand(args) {
         typeof parameters.Content === 'string' ||
         typeof parameters.content === 'string';
     const hasUpdateTargetReplace =
-        typeof parameters.target === 'string' &&
-        typeof parameters.replace === 'string';
+        typeof getArgumentValue(parameters, 'target') === 'string' &&
+        typeof getArgumentValue(parameters, 'replace') === 'string';
 
     let normalizedCommand = rawCommand;
     if (rawCommand !== 'create' && rawCommand !== 'update') {

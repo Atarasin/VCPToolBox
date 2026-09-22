@@ -82,9 +82,28 @@ export interface TagConsistencyPreview {
   requiresConfirmation: boolean;
 }
 
+export type TagConsistencyPreviewTaskStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "expired";
+
+export interface TagConsistencyPreviewTask {
+  taskId: string | null;
+  status: TagConsistencyPreviewTaskStatus;
+  startedAt: number | null;
+  finishedAt: number | null;
+  preview: TagConsistencyPreview | null;
+  error: {
+    code?: string;
+    message: string;
+  } | null;
+}
+
 export interface TagConsistencyPreviewResponse {
   success?: boolean;
-  preview?: TagConsistencyPreview;
+  task?: TagConsistencyPreviewTask;
   code?: string;
   error?: string;
 }
@@ -92,6 +111,16 @@ export interface TagConsistencyPreviewResponse {
 export interface TagConsistencyApplyResult {
   applied: boolean;
   summary: TagConsistencySummary;
+  indexUpdate: {
+    mode:
+      | "active-rust-delta"
+      | "baseline-plus-sqlite-delta"
+      | "sqlite-full-rebuild";
+    requestedDeletes: number;
+    requestedUpserts: number;
+    totalVectors: number;
+  };
+  checkpointPublished: boolean;
   waveAssetsStale: boolean;
   recommendedAction: "active-full-training";
   message: string;
@@ -155,12 +184,25 @@ export const ragApi = {
   },
 
   async previewTagConsistency(
-    uiOptions: RequestUiOptions = {}
+    uiOptions: RequestUiOptions = DEFAULT_READ_UI_OPTIONS
   ): Promise<TagConsistencyPreviewResponse> {
     return requestWithUi(
       {
         url: "/admin_api/rag-tag-consistency/preview",
         method: "POST",
+        timeoutMs: 60_000,
+      },
+      uiOptions
+    );
+  },
+
+  async getTagConsistencyPreviewStatus(
+    uiOptions: RequestUiOptions = DEFAULT_READ_UI_OPTIONS
+  ): Promise<TagConsistencyPreviewResponse> {
+    return requestWithUi(
+      {
+        url: "/admin_api/rag-tag-consistency/preview/status",
+        timeoutMs: 60_000,
       },
       uiOptions
     );
@@ -175,6 +217,9 @@ export const ragApi = {
         url: "/admin_api/rag-tag-consistency/apply",
         method: "POST",
         body: { token },
+        // 与独立 adminServer 的维护代理窗口一致。大型 usearch 删除现已在
+        // Rust 后台线程执行，不冻结页面，但请求需要等待 checkpoint 完成。
+        timeoutMs: 30 * 60 * 1000,
       },
       uiOptions
     );
