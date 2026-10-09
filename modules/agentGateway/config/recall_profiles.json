@@ -1,4 +1,5 @@
 {
+    "recallMode": "river",
     "agents": {
         "Nexus": {
             "defaultProfile": "nexus-default",
