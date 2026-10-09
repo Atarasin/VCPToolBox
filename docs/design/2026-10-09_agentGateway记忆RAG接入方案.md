@@ -113,9 +113,9 @@ skill 包（SKILL.md + INSTALL.md + manifest.json）由 `services/skillGenerator
 
 #### M1.S1 重排修复与验证
 依赖：无
-- [ ] T1 按 §3.1 修改 `Plugin/RAGDiaryPlugin/config.env` 两个 Jev 参数并热载
-- [ ] T2 按 §3.1 验证网关 rerank 生效（日志无 400、排序变化）
-- [ ] 验收：rerank 开启后召回排序发生变化且日志无 Jev HTTP 400
+- [x] T1 按 §3.1 修改 `Plugin/RAGDiaryPlugin/config.env` 两个 Jev 参数并热载
+- [x] T2 按 §3.1 验证网关 rerank 生效（日志无 400、排序变化）
+- [x] 验收：rerank 开启后召回排序发生变化且日志无 Jev HTTP 400
 
 ### M2：RiverMemo 接入召回管线（核心）
 依赖：无（与 M1 并行可行）。目标：召回质量与 VCPChat 生产对齐，外部零改动。

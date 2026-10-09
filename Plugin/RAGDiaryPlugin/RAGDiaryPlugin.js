@@ -175,12 +175,14 @@ class RAGDiaryPlugin {
             useJev: jevAdvancedRerank,
             jevPrompt: process.env.JevRerankPrompt
                 || '请选择最值得用于回答当前查询的记忆。请从逻辑关联、记忆叙事连续性、信息解释力三个层面综合判断；优先保留能直接解释当前问题、补足关键背景或维持人物与事件连续性的内容，压低仅有表面词汇重合、重复、跑题或缺乏上下文价值的内容。',
+            // 默认 10 × 1500 字符：中文约 1.5 token/字符时 ≈ 22.5k tokens，
+            // 压进 Jev 单请求 32k 上限；更大默认会必现 HTTP 400。
             jevMaxChoices: Number.isFinite(configuredJevMaxChoices)
                 ? Math.max(2, Math.min(255, configuredJevMaxChoices))
-                : 255,
+                : 10,
             jevMaxDocumentChars: Number.isFinite(configuredJevMaxDocumentChars)
                 ? Math.max(200, Math.min(50000, configuredJevMaxDocumentChars))
-                : 6000
+                : 1500
         };
         // 移除启动时检查，改为在调用时实时检查
         if (this.rerankConfig.useJev) {
