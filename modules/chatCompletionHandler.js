@@ -38,6 +38,7 @@ const ToolCallParser = require('./vcpLoop/toolCallParser');
 const ToolExecutor = require('./vcpLoop/toolExecutor');
 const StreamHandler = require('./handlers/streamHandler');
 const NonStreamHandler = require('./handlers/nonStreamHandler');
+const { createInteractionCompletion } = require('./handlers/interactionCompletion');
 
 const VCP_TOOL_USE_FORBIDDEN_PLACEHOLDER = '[[VCPToolUse=Forbidden]]';
 
@@ -755,6 +756,8 @@ class ChatCompletionHandler {
     const requestPreprocessorConfig = vcpchatExtensions
       ? { vcpchatExtensions }
       : {};
+    // 请求独享，PluginManager 浅拷贝配置时仍保留此对象引用。
+    requestPreprocessorConfig.tavernInteraction = {};
     const isOriginalRequestStreaming = originalBody.stream === true;
     const responseCacheKey = this.responseReplayCache.buildKey(clientIp, id);
 
@@ -767,6 +770,8 @@ class ChatCompletionHandler {
     let clientDisconnectedAbortReason = null;
     let cleanupClientDisconnectListeners = () => {};
     let finalizeResponseCacheRecorder = () => {};
+    let interactionCompletion = null;
+    let interactionOutcomeAccepted = false;
 
     if (responseCacheKey) {
       finalizeResponseCacheRecorder = installResponseCacheRecorder(res, {
@@ -1015,8 +1020,12 @@ class ChatCompletionHandler {
         // 🔒 灵魂级占位符去重：跨消息共享展开状态
         // Agent 类：整个上下文只允许展开一个 agent（第一个遇到的），后续所有 agent 占位符均不展开
         // Toolbox 类：每种 toolbox 各允许展开一次，同名重复出现时不再展开
+        // VCP 工具 / 静态插件 / 全局清单类：每种在整个请求生命周期内只展开一次
         expandedAgentName: null,    // string | null - 已展开的唯一 Agent 别名
-        expandedToolboxes: new Set() // Set<string> - 已展开的 Toolbox 别名集合
+        expandedToolboxes: new Set(), // Set<string> - 已展开的 Toolbox 别名集合
+        expandedVcpTools: new Set(), // Set<string> - 已展开的 VCP 工具别名集合
+        expandedStaticPlaceholders: new Set(), // Set<string> - 已展开的静态插件占位符集合
+        expandedGlobalPlaceholders: new Set() // Set<string> - 已展开的全局清单占位符集合
       };
 
       // 🔒 顺序处理消息（非并发），确保 agent/toolbox 的"首次展开"语义正确
@@ -1185,6 +1194,15 @@ class ChatCompletionHandler {
         console.warn('[OneRing] Failed to freeze response meta before upstream fetch:', oneRingMetaError.message);
       }
 
+      interactionCompletion = createInteractionCompletion({
+        res,
+        signal: abortController.signal,
+        oneRingModule: pluginManager?.messagePreprocessors?.get?.('OneRing'),
+        oneRingMeta: oneRingResponseMeta,
+        messages: processedMessages,
+        tavernInteraction: requestPreprocessorConfig.tavernInteraction
+      });
+
       const willStreamResponse = isOriginalRequestStreaming;
       const finalUpstreamBody = { ...originalBody, stream: willStreamResponse };
 
@@ -1327,11 +1345,11 @@ class ChatCompletionHandler {
         requestPreprocessorConfig
       };
 
-      if (isUpstreamStreaming) {
-        await new StreamHandler(context).handle(req, res, firstAiAPIResponse);
-      } else {
-        await new NonStreamHandler(context).handle(req, res, firstAiAPIResponse);
-      }
+      const outcome = isUpstreamStreaming
+        ? await new StreamHandler(context).handle(req, res, firstAiAPIResponse)
+        : await new NonStreamHandler(context).handle(req, res, firstAiAPIResponse);
+      interactionOutcomeAccepted = true;
+      interactionCompletion.accept(outcome);
     } catch (error) {
       if (error.name === 'AbortError') {
         // 显式 /v1/interrupt 或客户端断联都会走到这里。
@@ -1419,6 +1437,7 @@ class ChatCompletionHandler {
         }
       }
     } finally {
+      if (!interactionOutcomeAccepted) interactionCompletion?.fail();
       cleanupClientDisconnectListeners();
 
       if (!res.writableEnded && !res.destroyed) {

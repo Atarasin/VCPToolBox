@@ -116,6 +116,7 @@ module.exports = function (
   mount("/", "tarotDivination"); // Handles /tarot-divination/*
   mount("/", "toolCallRecords"); // Handles /tool-call-records/*
   mount("/", "agentGateway"); // Handles /agent-gateway/*（Gateway 凭据管理，主进程单写者）
+  mount("/", "jevRegistry"); // Handles /jev/registry/* (JEV 第三方注册表只读调试，实验)
 
   return adminApiRouter;
 };
