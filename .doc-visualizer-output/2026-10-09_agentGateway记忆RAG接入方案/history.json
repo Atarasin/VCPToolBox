@@ -1,0 +1,48 @@
+{
+  "doc": "agentGateway记忆RAG接入方案",
+  "mode": "A",
+  "phase": "finalized",
+  "final_doc": "docs/design/2026-10-09_agentGateway记忆RAG接入方案.md",
+  "rounds": [
+    {
+      "round": 1,
+      "date": "2026-10-09 22:30",
+      "feedback": "初始草图",
+      "changes": "首次产出评审草图：记忆/RAG 接入拆为 5 个里程碑（M1 修重排 → M2 RiverMemo 新引擎接入 → M3 检索预算对齐 → M4 冷知识库接入 → M5 可选的关联发现工具化），MCP 工具面评审结论为「不移除任何工具、只做加法」；留了 6 个待定决策（D1 失败策略 / D2 启用方式 / D3 冷知识库暴露形态 / D4 M5 做不做 / D5 重排修复路线 / D6 预算幅度）和 3 个澄清问题（Q1 外部消费者画像 / Q2 冷知识库内容边界 / Q3 重排服务配置现状）",
+      "affected_sections": ["全部"],
+      "status": "已采纳"
+    },
+    {
+      "round": 2,
+      "date": "2026-10-09 23:10",
+      "feedback": "【评审反馈】《agentGateway记忆RAG接入方案》第 1 轮\nD1 新引擎失败时怎么处理：选「方案A降级并留痕」\nD2 新引擎怎么启用：选「方案B全局切换」\nD3 冷知识库怎么对外暴露：选「方案A新工具」\nD4 关联发现本期做不做：选「方案B先观望」\nD5 重排修复走哪条路：选「方案A修Jev参数」\nD6 检索预算放开幅度：选「方案A保守放开」\nQ1 外部消费者画像：Midas（量化研究员）、FuPeng（宏观金融顾问）、Yui（陪伴型智能体）\nQ2 冷知识库内容边界：（未填写）\nQ3 重排服务配置现状：Plugin/RAGDiaryPlugin/config.env 该配置文件中有可用的重排服务配置",
+      "changes": "6 个决策全部拍板，D1~D6 转为已定静态卡；路线图按决策落实：M1 定为修 Jev 参数（候选 255→10、单篇 6000→1500，传统重排作后备）、M2 定为全局默认切 river（非默认建议，按用户选择落实，补充全局一键回退开关兜底）、M3 定为保守放开（默认 5→8、上限 20→50）、M4 确认新增第 8 个工具 gateway_knowledge_search、M5 本期不做仅留档；概览新增消费者画像卡片（Midas 重关键词混合 / FuPeng 重冷知识库 / Yui 重 River 关联与多向量），M2.S4 验证用例按三类角色选取；MCP 工具面评审表新增 gateway_knowledge_search 规划行；Q2（知识库内容边界）仍开放，为唯一待补项",
+      "affected_sections": ["概览", "接入路线图", "MCP 工具面评审", "待定决策"],
+      "status": "已采纳"
+    },
+    {
+      "round": 3,
+      "date": "2026-10-09 23:40",
+      "feedback": "除了付鹏观点库只对 FuPeng 开发，其它冷知识库对所有 agent 开放",
+      "changes": "Q2（冷知识库内容边界）转为已定卡：付鹏观点库仅对 FuPeng 开放，其余冷知识库对全体 agent 开放（「开发」按上下文理解为「开放」）；M4.S3 权限设计按此定稿（复用日记本白名单思路按角色配置）；概览 FuPeng 消费者卡补充专属库标注。至此 D1~D6 与 Q1~Q3 全部已定，无遗留开放项，方案具备定稿条件",
+      "affected_sections": ["概览", "接入路线图", "待定决策"],
+      "status": "已采纳"
+    },
+    {
+      "round": 4,
+      "date": "2026-10-10 00:05",
+      "feedback": "agentGateway 模块还有 Agent 对外网关的功能，通过对外导出 skill 让外部 coding 工具知道如何使用 vcp_agent_gateway mcp 工具。接入方案更新后，这部分也应该相应更新",
+      "changes": "把 skill 导出面纳入方案（代码核验：SKILL.md 由 skillGeneratorService 按 agent_guidance.json 渲染生成、改配置后重导出，预生成包 MCPFuPeng/MCPMidas/midas-vcp 三个）——MCP 工具面评审新增「Skill 导出面」小节说明机制与三档影响（M2 零变更 / M3 审计措辞 / M4 必须同步）；路线图新增 M4.S4（guidance 增补 gateway_knowledge_search 使用说明、重导出预生成包并提升 manifest 版本、签名下载链路回归）；M3.S1 新增 T2 行为描述审计任务（guidance/skill 中「最多 N 条」类措辞与预算放开后实际行为的一致性，差异在 M4.S4 重导出时生效）；M2 里程碑门禁明确 skill 导出面零变更；概览架构图网关层补上 skill 导出通道。无新增待定决策",
+      "affected_sections": ["概览", "接入路线图", "MCP 工具面评审"],
+      "status": "已采纳"
+    },
+    {
+      "round": 5,
+      "date": "2026-10-10 00:30",
+      "feedback": "定稿",
+      "changes": "评审通过，定稿：输出正式 md 至 docs/design/2026-10-09_agentGateway记忆RAG接入方案.md（面向执行 agent，含 8 章结构、M/S/T 三级任务分解、6 条红线、8 条验收、D1~D6+Q1~Q3 决策记录、R1~R5+O1 风险表）；一致性自检通过（草图的每张决策卡、每条红线、M1~M5 全部 13 个 slice/20 个 task 在 md 中均有落实，M5 补齐 S1 留档结构）；定稿版主 HTML 由 md 全新生成（非草图修补），无交互控件与导出栏",
+      "affected_sections": ["全部"],
+      "status": "已定稿"
+    }
+  ]
+}

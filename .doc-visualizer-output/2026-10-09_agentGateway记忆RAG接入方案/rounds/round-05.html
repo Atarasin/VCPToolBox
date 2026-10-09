@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>agentGateway 记忆/RAG 能力接入方案 · 已定稿</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak]{display:none!important}
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+  <!-- ================= Hero ================= -->
+  <header class="bg-gradient-to-r from-slate-900 to-emerald-900 text-white px-6 py-8">
+    <div class="max-w-5xl mx-auto">
+      <p class="text-slate-400 text-sm mb-1">2026-10-09 · VCPToolBox / agentGateway · 版本 v1</p>
+      <h1 class="text-2xl font-bold mb-2">agentGateway 记忆/RAG 能力接入方案（含 MCP 工具面与 skill 导出面同步）</h1>
+      <p class="text-slate-300 max-w-2xl">把 RiverMemo 原生联合查询与冷知识库接进网关召回管线，让外部 MCP 客户端（Midas / FuPeng / Yui / Nexus）的召回质量与 VCPChat 对齐；既有 7 个工具不移除、只做加法（新增第 8 个 gateway_knowledge_search）。</p>
+      <div class="flex flex-wrap gap-2 mt-4">
+        <span class="bg-white/10 rounded-full px-3 py-1 text-sm">5 个里程碑 · 13 个切片 · 20 个任务</span>
+        <span class="bg-red-500/30 rounded-full px-3 py-1 text-sm">6 条红线</span>
+        <span class="bg-emerald-500/30 rounded-full px-3 py-1 text-sm">已定稿 · 正式文档见 docs/design/2026-10-09_agentGateway记忆RAG接入方案.md</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= Main ================= -->
+  <main class="max-w-5xl mx-auto px-4 py-8" x-data="{tab:'overview'}">
+
+    <div class="flex gap-1 border-b mb-6 overflow-x-auto">
+      <button @click="tab='overview'" :class="tab==='overview'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">目标与设计</button>
+      <button @click="tab='detail'" :class="tab==='detail'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">详细设计</button>
+      <button @click="tab='roadmap'" :class="tab==='roadmap'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">任务分解</button>
+      <button @click="tab='rules'" :class="tab==='rules'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">约束与红线</button>
+      <button @click="tab='accept'" :class="tab==='accept'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">验收标准</button>
+      <button @click="tab='decisions'" :class="tab==='decisions'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">决策记录</button>
+      <button @click="tab='risks'" :class="tab==='risks'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">风险与开放问题</button>
+      <button @click="tab='history'" :class="tab==='history'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">迭代记录</button>
+    </div>
+
+    <!-- ============ 目标与设计 ============ -->
+    <div x-show="tab==='overview'" x-cloak class="space-y-6">
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">1. 目标与范围</h2>
+        <p class="text-sm text-gray-700 mb-3"><b>背景差距（代码级核验）</b>：① 网关召回绑定 <code class="text-xs bg-gray-100 px-1 rounded">kbm.search</code>（RAGDiaryPlugin 的非 RiverMemo 回退路径），而生产默认已是 <code class="text-xs bg-gray-100 px-1 rounded">executeNativeRiverQuery</code>（全 Rust 一次完成），网关模块内零引用；② 检索参数保守（MAX_RAG_K=20、默认 k=5、rerank 默认关）；③ Jev 重排因参数超限必现 400 从未生效；④ 冷知识库（TDBKnowledgeManager / TriviumDB）完全未接。</p>
+        <p class="text-sm text-gray-700"><b>目标</b>：外部 MCP 客户端经网关的召回质量与 VCPChat 对齐；重排真正生效；冷知识库以新工具对外并按角色隔离权限。所有接口变化只做加法。</p>
+        <p class="text-sm text-gray-700 mt-2"><b>范围外</b>：M5 观望；不做 chatCompletionHandler 对话通道、不暴露插件工具面、不做 WorkflowKernel；不移除任何既有工具，gateway_agent_render 保持 prompt 形态。</p>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">2. 总体设计：分层与动刀位置</h2>
+        <div class="space-y-1 max-w-lg">
+          <div class="bg-purple-100 border-2 border-purple-300 rounded-lg p-3 text-center font-medium text-sm">外部 MCP 客户端 · Claude Code / Codex / Trae / DSH 等</div>
+          <div class="text-center text-gray-400 text-xs">↓ 7+1 个 MCP 工具（既有签名不变；M4 新增第 8 个）</div>
+          <div class="bg-blue-100 border-2 border-blue-300 rounded-lg p-3 text-center font-medium text-sm mx-4">网关层 agentGateway · 召回管线（规则→向量→检索→合并→预算→AIMemo）+ skill 导出</div>
+          <div class="text-center text-gray-400 text-xs">↓ 端口绑定（唯一宿主耦合层，本次动刀处）</div>
+          <div class="bg-emerald-100 border-2 border-emerald-300 rounded-lg p-3 text-center font-medium text-sm mx-8">ports 层 · kbm.search（KNN 回退，保留）→ 新增 riverQuery（executeNativeRiverQuery）+ knowledgeSearch（TDB）</div>
+          <div class="bg-gray-100 border-2 border-gray-300 rounded-lg p-3 text-center font-medium text-sm mx-12">VCP 内核 · KnowledgeBaseManager / Rust 向量引擎 / RAGDiaryPlugin / TDBKnowledgeManager</div>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">升级发生在管线内部：M2/M3 完成后三个召回工具结果质量提升，调用方（MCP 客户端与 skill 文本）零改动。</p>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">消费者画像（Q1）与能力对应</h2>
+        <div class="grid sm:grid-cols-4 gap-3">
+          <div class="border rounded-xl p-4 bg-blue-50 border-blue-200">
+            <p class="font-semibold text-blue-900 text-sm">Midas · 量化研究员</p>
+            <p class="text-xs text-blue-700 mt-1">精确术语与指标名 → M3.S3 BM25 混合检索。</p>
+          </div>
+          <div class="border rounded-xl p-4 bg-blue-50 border-blue-200">
+            <p class="font-semibold text-blue-900 text-sm">FuPeng · 宏观金融顾问</p>
+            <p class="text-xs text-blue-700 mt-1">知识广度与观点沉淀 → M4 冷知识库（付鹏观点库专属）。</p>
+          </div>
+          <div class="border rounded-xl p-4 bg-blue-50 border-blue-200">
+            <p class="font-semibold text-blue-900 text-sm">Yui · 陪伴型智能体</p>
+            <p class="text-xs text-blue-700 mt-1">长期记忆连贯关联 → M2 River 拓扑、M3.S2 多向量。</p>
+          </div>
+          <div class="border rounded-xl p-4 bg-blue-50 border-blue-200">
+            <p class="font-semibold text-blue-900 text-sm">Nexus · 编码助手</p>
+            <p class="text-xs text-blue-700 mt-1">全部召回质量提升。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">skill 导出面影响</h2>
+        <p class="text-sm text-gray-700 mb-3">skill 包（SKILL.md + INSTALL.md + manifest.json）由 skillGeneratorService 按 agent_guidance.json 渲染生成，改配置后重导出；预生成包：MCPFuPeng / MCPMidas / midas-vcp。</p>
+        <div class="grid sm:grid-cols-3 gap-3">
+          <div class="border rounded-xl p-4 bg-emerald-50 border-emerald-200"><p class="font-semibold text-emerald-800 text-sm">M2 → 零变更</p><p class="text-xs text-emerald-700 mt-1">工具签名与调用语义不变。</p></div>
+          <div class="border rounded-xl p-4 bg-amber-50 border-amber-200"><p class="font-semibold text-amber-800 text-sm">M3 → 审计措辞</p><p class="text-xs text-amber-700 mt-1">「最多 N 条」类描述失真处同步（M3.S1 审计 → M4.S4 生效）。</p></div>
+          <div class="border rounded-xl p-4 bg-purple-50 border-purple-200"><p class="font-semibold text-purple-800 text-sm">M4 → 必须同步</p><p class="text-xs text-purple-700 mt-1">guidance 增补新工具说明 + 重导出 + manifest 升版（M4.S4）。</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 详细设计 ============ -->
+    <div x-show="tab==='detail'" x-cloak class="space-y-4">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 class="font-bold mb-2">3.1 M1 重排修复（D5·方案A）</h3>
+        <p class="text-sm text-gray-700"><code class="text-xs bg-gray-100 px-1 rounded">Plugin/RAGDiaryPlugin/config.env</code>：<code class="text-xs bg-gray-100 px-1 rounded">JevRerankMaxChoices</code> 255→10、<code class="text-xs bg-gray-100 px-1 rounded">JevRerankMaxDocumentChars</code> 6000→1500（≈22.5k token，压进 28k 预算）。后备：该文件已有可用传统重排配置（Q3），可关 JevAdvancedRerank 切传统路径。验证：profile 开 rerank，日志无 400、排序变化。</p>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 class="font-bold mb-2">3.2 M2 RiverMemo 接入（核心）</h3>
+        <ul class="text-sm text-gray-700 space-y-2 list-disc list-inside">
+          <li><b>openspec</b>：recall profile 增加 mode: knn|river 字段与全局开关的契约。</li>
+          <li><b>riverQuery 端口</b>：ports/ 新增窄接口；vcpPortBindings 绑定 kbm.executeNativeRiverQuery；调用形状参照 RAGDiaryPlugin.js:3307-3342（diaryNames / preparedMemoObservation（复用 applyTagBoostAsync 返回）/ topK / candidateK / coreTags / supplementalQueryVectors / hybridPlan）。</li>
+          <li><b>失败降级（D1·方案A）</b>：river 抛错 → 回退 searchDiary(KNN) + 审计日志与指标；KNN 路径 1.33 融合系数不动（红线 5）。</li>
+          <li><b>管线接入（D2·方案B）</b>：ragRetriever 语义阶段加 mode 分支；全局默认 river + 全局一键回退开关（如 AGENT_GATEWAY_RECALL_MODE=knn）；档案级覆盖不进本期。</li>
+          <li><b>对比验证</b>：≥20 条真实 query，覆盖 Midas/FuPeng/Yui 三类场景，river 不劣于 knn。</li>
+        </ul>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 class="font-bold mb-2">3.3 M3 预算与混合检索对齐（D6·方案A）</h3>
+        <ul class="text-sm text-gray-700 space-y-2 list-disc list-inside">
+          <li>MAX_RAG_K 20→50、默认 k 5→8、tagBoost 暴露到 recall_profiles.json；同步审计 guidance/skill 行为描述。</li>
+          <li>多查询向量：precomputeVector 阶段从 recentMessages 提取 supplementalQueryVectors。</li>
+          <li>BM25 混合：全文检索文件候选融入 river 查询 hybridPlan.fileCandidates（含 timeLimits 透传）。</li>
+        </ul>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 class="font-bold mb-2">3.4 M4 冷知识库接入</h3>
+        <ul class="text-sm text-gray-700 space-y-2 list-disc list-inside">
+          <li><b>端口</b>：ports/ 绑定 TDBKnowledgeManager（server.js:114 实例化）；查询面 search / searchWithVector / searchGraphFirst / queryTql；不经 ContextBridge。</li>
+          <li><b>新工具（D3·方案A）</b>：gateway_knowledge_search，目录 7→8；openspec 更新 mcpOperations.json / mcpDescriptors / discoverySnapshot。</li>
+          <li><b>权限（Q2）</b>：付鹏观点库仅 FuPeng，其余全员；服务端按角色强制（复用 diaryScopeGuard 思路），未授权 403。</li>
+          <li><b>guidance/skill（R4）</b>：agent_guidance.json 增补使用说明与 403 解释口径；重导出 3 个预生成包 + manifest 升版 + 签名下载回归 + secret scan。</li>
+        </ul>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 class="font-bold mb-2">3.5 M5 associativeDiscovery（留档）</h3>
+        <p class="text-sm text-gray-700">modules/associativeDiscovery.js（跨日记拓扑回溯，基于 executeNativeRiverQuery，已有测试）。M2 稳定后另立变更纳入（D4·方案B）。</p>
+      </div>
+    </div>
+
+    <!-- ============ 任务分解 ============ -->
+    <div x-show="tab==='roadmap'" x-cloak class="space-y-4">
+
+      <div x-data="{open:true}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M1</span>
+          <span class="font-semibold">重排修复（独立，可立即执行）</span>
+          <span class="ml-auto text-xs opacity-70">1 切片 · 2 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M1.S1</span><span class="font-medium text-sm">重排修复与验证</span><span class="ml-auto text-xs text-gray-400">依赖：无</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 按 §3.1 修改两个 Jev 参数并热载</li>
+              <li>T2 按 §3.1 验证网关 rerank 生效（日志无 400、排序变化）</li>
+              <li class="text-emerald-700">验收：rerank 开启后排序变化且日志无 Jev HTTP 400</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div x-data="{open:true}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-amber-400 text-slate-900 px-2 py-0.5 rounded text-sm font-bold">M2</span>
+          <span class="font-semibold">RiverMemo 接入召回管线（核心）</span>
+          <span class="ml-auto text-xs opacity-70">4 切片 · 7 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M2.S1</span><span class="font-medium text-sm">openspec 立项</span><span class="ml-auto text-xs text-gray-400">依赖：无</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 建 openspec change：mode 字段与全局开关契约（§3.2.1）</li>
+              <li class="text-emerald-700">验收：spec 变更目录建立并通过评审</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M2.S2</span><span class="font-medium text-sm">riverQuery 端口绑定与失败降级</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 ports/ 新增 riverQuery 端口定义（§3.2.2）</li>
+              <li>T2 vcpPortBindings 绑定 executeNativeRiverQuery（preparedMemoObservation 复用、生产参数对齐）</li>
+              <li>T3 失败降级：river 失败→KNN+审计/指标（§3.2.2，D1）</li>
+              <li class="text-emerald-700">验收：端口单测通过；人为失败时降级路径有审计记录</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M2.S3</span><span class="font-medium text-sm">管线接入 river 模式</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 ragRetriever 语义阶段增加 mode: knn|river 分支（§3.2.3）</li>
+              <li>T2 全局默认 river + 一键回退开关（§3.2.3，D2）</li>
+              <li class="text-emerald-700">验收：两模式均可召回；日志可见 river 走 executeNativeRiverQuery</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M2.S4</span><span class="font-medium text-sm">新旧引擎召回质量对比</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S3</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 ≥20 条真实 query 人工抽查，覆盖三类角色场景（§3.2.4、§2.2）</li>
+              <li class="text-emerald-700">验收：对比报告产出，river 不劣于 knn</li>
+            </ul>
+          </div>
+          <p class="text-xs text-gray-400 px-1">里程碑门禁：外部客户端与 skill 导出面零改动即可获得新引擎收益。</p>
+        </div>
+      </div>
+
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M3</span>
+          <span class="font-semibold">检索预算与混合检索对齐</span>
+          <span class="ml-auto text-xs opacity-70">3 切片 · 4 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M3.S1</span><span class="font-medium text-sm">参数暴露到召回档案</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S3</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 MAX_RAG_K 20→50、默认 k 5→8、tagBoost 暴露到档案（§3.3.1，D6）</li>
+              <li>T2 审计 guidance/skill 行为描述并标记差异（§2.3；M4.S4 生效）</li>
+              <li class="text-emerald-700">验收：改档案配置后取数行为变化；差异清单产出</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M3.S2</span><span class="font-medium text-sm">多查询向量</span><span class="ml-auto text-xs text-gray-400">依赖：M3.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 从 recentMessages 提取 supplementalQueryVectors（§3.3.2）</li>
+              <li class="text-emerald-700">验收：多向量模式召回覆盖面有可测提升</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M3.S3</span><span class="font-medium text-sm">BM25 混合计划</span><span class="ml-auto text-xs text-gray-400">依赖：M3.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 全文检索文件候选融入 river 查询 hybridPlan（§3.3.3）</li>
+              <li class="text-emerald-700">验收：含明确关键词的 query 命中改善</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M4</span>
+          <span class="font-semibold">冷知识库（TDB）接入</span>
+          <span class="ml-auto text-xs opacity-70">4 切片 · 6 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M4.S1</span><span class="font-medium text-sm">knowledge 端口</span><span class="ml-auto text-xs text-gray-400">依赖：无（可与 M2 并行）</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 ports/ 绑定 TDBKnowledgeManager 查询面（§3.4.1）</li>
+              <li class="text-emerald-700">验收：网关进程内可查询 TDB 库（单测覆盖）</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M4.S2</span><span class="font-medium text-sm">新工具 gateway_knowledge_search</span><span class="ml-auto text-xs text-gray-400">依赖：M4.S1（D3 已定）</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 经 openspec 新增工具：mcpOperations / mcpDescriptors / discoverySnapshot（§3.4.2）</li>
+              <li>T2 契约与工具目录更新及测试</li>
+              <li class="text-emerald-700">验收：外部客户端可经 MCP 调用检索冷知识库</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M4.S3</span><span class="font-medium text-sm">权限边界</span><span class="ml-auto text-xs text-gray-400">依赖：M4.S2（Q2 已定）</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 付鹏观点库仅 FuPeng、其余全员；服务端按角色强制（§3.4.3）</li>
+              <li class="text-emerald-700">验收：未授权角色查不到未开放的知识库（403）</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M4.S4</span><span class="font-medium text-sm">guidance 增补与 skill 重导出</span><span class="ml-auto text-xs text-gray-400">依赖：M4.S2（R4 新增）</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 agent_guidance.json 增补新工具使用说明与 403 解释口径（§3.4.4）</li>
+              <li>T2 重导出 3 个预生成包 + manifest 升版 + 签名下载回归；M3.S1 差异一并生效（§2.3）</li>
+              <li class="text-emerald-700">验收：SKILL.md 含新工具说明、通过 secret scan、下载链路可领取</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden opacity-70">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M5</span>
+          <span class="font-semibold">associativeDiscovery 工具化（留档，本期不执行）</span>
+          <span class="ml-auto text-xs opacity-70">D4·方案B 观望</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M5.S1</span><span class="font-medium text-sm">associativeDiscovery 网关化（留档）</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 跨日记拓扑回溯包成网关工具或 REST（§3.5；届时另立 openspec 变更）</li>
+              <li class="text-emerald-700">验收：给定种子日记能返回跨日记关联链（现成测试可参照）</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 约束与红线 ============ -->
+    <div x-show="tab==='rules'" x-cloak class="space-y-4">
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4"><div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div><p class="font-semibold text-red-800">红线 1：宿主耦合隔离</p><p class="mt-1 text-sm text-red-700">一切新内核绑定只进 composition/vcpPortBindings.js；services/、core/ 出现直接内核引用即违规。</p></div></div></div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4"><div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div><p class="font-semibold text-red-800">红线 2：契约变更走 openspec</p><p class="mt-1 text-sm text-red-700">MCP 工具目录（discoverySnapshot 冻结）、recall profile 字段均为已发布契约，先立正式变更再动代码。</p></div></div></div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4"><div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div><p class="font-semibold text-red-800">红线 3：只做加法</p><p class="mt-1 text-sm text-red-700">不移除既有 7 个工具、不破坏既有调用方式；外部已有真实消费者（Nexus 全套在用）。</p></div></div></div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4"><div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div><p class="font-semibold text-red-800">红线 4：不静默吞错</p><p class="mt-1 text-sm text-red-700">river 失败按 D1 降级并留痕（审计+指标）；禁止静默返回空/旧结果而无痕迹。</p></div></div></div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4"><div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div><p class="font-semibold text-red-800">红线 5：KNN 路径 1.33 融合系数锁定</p><p class="mt-1 text-sm text-red-700">searchDiary 绑定的历史约定（「宿主搜索 API 要求历史 1.33 系数」），接入新引擎时不改旧路径该系数。</p></div></div></div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4"><div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div><p class="font-semibold text-red-800">红线 6：TagMemo 只用异步门面</p><p class="mt-1 text-sm text-red-700">仅可用 applyTagBoostAsync / prepareUnifiedMemoObservation；同步 applyTagBoost 已退休（抛 TAGMEMO_JS_GRAPH_RUNTIME_RETIRED）。</p></div></div></div>
+    </div>
+
+    <!-- ============ 验收标准 ============ -->
+    <div x-show="tab==='accept'" x-cloak class="space-y-3">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">总体验收（8 条，全部可判定）</h2>
+        <ol class="text-sm text-gray-700 space-y-2 list-decimal list-inside">
+          <li>profile 开 rerank 后日志无 Jev HTTP 400 且召回排序可见变化（M1）。</li>
+          <li>全局 river 模式下三个召回工具调用方式不变、正常返回，日志可见 executeNativeRiverQuery；人为失败自动降级 KNN 且审计有记录（M2）。</li>
+          <li>一键回退开关切回 knn 后行为立即回退，无需代码变更（M2）。</li>
+          <li>M2.S4 对比报告产出且 river 不劣于 knn（≥20 条、三类角色场景）（M2）。</li>
+          <li>档案配置 k=8 生效、上限 50 可达（大召回场景验证）（M3）。</li>
+          <li>外部 MCP 客户端可调用 gateway_knowledge_search 检索非受限库；非 FuPeng 身份查付鹏观点库得 403（M4）。</li>
+          <li>重导出的 3 个 skill 包含新工具说明、通过 secret scan、manifest 版本提升、签名下载可领取（M4）。</li>
+          <li>既有 7 个工具的既有调用（Nexus 全套）回归通过（全程）。</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- ============ 决策记录 ============ -->
+    <div x-show="tab==='decisions'" x-cloak class="space-y-3">
+      <div class="bg-white border border-gray-200 rounded-xl p-5 overflow-x-auto">
+        <h2 class="font-bold text-lg mb-3">已确认的决策（D1~D6 + Q1~Q3 + R4 补充）</h2>
+        <table class="w-full text-sm min-w-[760px]">
+          <thead><tr class="text-left text-xs text-gray-500 border-b"><th class="py-2 pr-2">#</th><th class="py-2 pr-2">决策</th><th class="py-2 pr-2">选择</th><th class="py-2 pr-2">理由 / 备注</th><th class="py-2">轮次</th></tr></thead>
+          <tbody class="divide-y">
+            <tr><td class="py-2 pr-2 font-mono text-xs">D1</td><td class="py-2 pr-2">river 失败策略</td><td class="py-2 pr-2">A：降级 KNN + 审计留痕</td><td class="py-2 text-gray-600">外部三角色体验优先；留痕保证可观测</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">D2</td><td class="py-2 pr-2">启用方式</td><td class="py-2 pr-2">B：全局默认切 river</td><td class="py-2 text-gray-600">用户选择（非默认建议）；兜底＝全局回退开关 + D1</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">D3</td><td class="py-2 pr-2">冷知识库暴露形态</td><td class="py-2 pr-2">A：新工具 gateway_knowledge_search</td><td class="py-2 text-gray-600">冻结面变更最小、语义边界清晰</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">D4</td><td class="py-2 pr-2">M5 关联发现</td><td class="py-2 pr-2">B：本期观望</td><td class="py-2 text-gray-600">聚焦主线；纳入成本低可后补</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">D5</td><td class="py-2 pr-2">重排修复路线</td><td class="py-2 pr-2">A：修 Jev 参数（10×1500）</td><td class="py-2 text-gray-600">两行配置即可验证；传统重排作后备（Q3）</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">D6</td><td class="py-2 pr-2">检索预算幅度</td><td class="py-2 pr-2">A：保守放开（5→8 / 20→50）</td><td class="py-2 text-gray-600">先观察三角色延迟反馈</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">Q1</td><td class="py-2 pr-2">消费者画像</td><td class="py-2 pr-2">Midas / FuPeng / Yui（+Nexus）</td><td class="py-2 text-gray-600">映射到 §2.2 与 M2.S4 用例</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">Q2</td><td class="py-2 pr-2">知识库边界</td><td class="py-2 pr-2">付鹏观点库仅 FuPeng；其余全员</td><td class="py-2 text-gray-600">落入 §3.4.3 权限设计</td><td class="py-2 text-xs">R3</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">Q3</td><td class="py-2 pr-2">重排服务配置</td><td class="py-2 pr-2">config.env 已有可用传统重排</td><td class="py-2 text-gray-600">D5 之后备保障</td><td class="py-2 text-xs">R2</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">—</td><td class="py-2 pr-2">skill 导出面纳入</td><td class="py-2 pr-2">M2 零变更 / M3 审计 / M4 必须同步</td><td class="py-2 text-gray-600">评审补充意见，非编号决策</td><td class="py-2 text-xs">R4</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ============ 风险与开放问题 ============ -->
+    <div x-show="tab==='risks'" x-cloak class="space-y-3">
+      <div class="bg-white border border-gray-200 rounded-xl p-5 overflow-x-auto">
+        <h2 class="font-bold text-lg mb-3">风险 / 坑 与 开放问题</h2>
+        <table class="w-full text-sm min-w-[680px]">
+          <thead><tr class="text-left text-xs text-gray-500 border-b"><th class="py-2 pr-2">#</th><th class="py-2 pr-2">风险/坑</th><th class="py-2 pr-2">说明</th><th class="py-2">缓解</th></tr></thead>
+          <tbody class="divide-y">
+            <tr><td class="py-2 pr-2 font-mono text-xs">R1</td><td class="py-2 pr-2">Jev 重排必现 400</td><td class="py-2 text-gray-600">255×6000×1.5 ≫ 32k 上限；400 不在重试白名单</td><td class="py-2 text-gray-600">M1 修复；验证看日志</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">R2</td><td class="py-2 pr-2">river 入口失败即抛错</td><td class="py-2 text-gray-600">上游语义不静默回退</td><td class="py-2 text-gray-600">端口层按 D1 显式包装</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">R3</td><td class="py-2 pr-2">1.33 融合系数</td><td class="py-2 text-gray-600">KNN 绑定历史约定</td><td class="py-2 text-gray-600">红线 5</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">R4</td><td class="py-2 pr-2">riverMemo.enabled 死键</td><td class="py-2 text-gray-600">rag_params.json 该键无代码读取，面板开关勿信</td><td class="py-2 text-gray-600">以代码与日志为准</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">R5</td><td class="py-2 pr-2">TagMemo 同步门面已退休</td><td class="py-2 text-gray-600">同步调用抛 TAGMEMO_JS_GRAPH_RUNTIME_RETIRED</td><td class="py-2 text-gray-600">红线 6</td></tr>
+            <tr><td class="py-2 pr-2 font-mono text-xs">O1</td><td class="py-2 pr-2">Yui 预生成 skill 包缺失</td><td class="py-2 text-gray-600">guidance 有 MCPYui 条目但预生成包无 Yui；非本期范围</td><td class="py-2 text-gray-600">M4.S4 重导出时可顺带评估</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ============ 迭代记录 ============ -->
+    <div x-show="tab==='history'" x-cloak class="space-y-4">
+      <div class="bg-white border-2 border-emerald-300 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-emerald-700 text-white px-2 py-0.5 rounded text-sm">R5</span>
+          <span class="text-xs text-gray-400">2026-10-10 00:30</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-200 text-emerald-900 font-medium">已定稿</span>
+        </div>
+        <p class="mt-2 text-sm font-medium text-emerald-800">🎉 本轮定稿，正式文档：docs/design/2026-10-09_agentGateway记忆RAG接入方案.md</p>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>定稿</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>无遗留待定决策；按最终草图输出正式 md（含 M5.S1 留档结构补齐），一致性自检通过（D1~D6/Q1~Q3、6 条红线、M1~M5 全部 slice/task 均已落实）；本定稿页面由 md 全新生成。</p>
+        <a href="./round-05.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R4</span>
+          <span class="text-xs text-gray-400">2026-10-10 00:05</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+        </div>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>agentGateway 模块还有 Agent 对外网关的功能，通过对外导出 skill 让外部 coding 工具知道如何使用 vcp_agent_gateway mcp 工具。接入方案更新后，这部分也应该相应更新</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>skill 导出面纳入方案：新增 M4.S4（guidance 增补 + 重导出预生成包 + manifest 升版）；M3.S1 增行为描述审计；M2 门禁明确 skill 零变更；工具面评审增「Skill 导出面」小节。</p>
+        <a href="./round-04.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R3</span>
+          <span class="text-xs text-gray-400">2026-10-09 23:40</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+        </div>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>除了付鹏观点库只对 FuPeng 开发，其它冷知识库对所有 agent 开放</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>Q2 转为已定：付鹏观点库仅 FuPeng、其余全员；M4.S3 权限设计定稿；概览 FuPeng 卡补专属库标注。全部开放项清零。</p>
+        <a href="./round-03.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R2</span>
+          <span class="text-xs text-gray-400">2026-10-09 23:10</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+        </div>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>D1 选「方案A降级并留痕」；D2 选「方案B全局切换」；D3 选「方案A新工具」；D4 选「方案B先观望」；D5 选「方案A修Jev参数」；D6 选「方案A保守放开」；Q1：Midas（量化研究员）、FuPeng（宏观金融顾问）、Yui（陪伴型智能体）；Q3：Plugin/RAGDiaryPlugin/config.env 中有可用的重排服务配置</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>6 个决策全部拍板并落实路线图；概览新增消费者画像；MCP 工具面评审表加 gateway_knowledge_search 规划行；Q2 保持开放。</p>
+        <a href="./round-02.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R1</span>
+          <span class="text-xs text-gray-400">2026-10-09 22:30</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+        </div>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>首次产出评审草图：5 个里程碑、MCP 工具面结论「不移除只做加法」、6 决策卡 + 3 澄清卡。</p>
+        <a href="./round-01.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+    </div>
+
+  </main>
+</body>
+</html>
