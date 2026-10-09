@@ -201,7 +201,17 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
         applyTagBoost: typeof knowledgeBaseManager?.applyTagBoostAsync === 'function'
             // 原生 Memo 资产发布后同步 applyTagBoost 已退休（JS graph runtime），
             // 必须走异步统一门面；旧宿主缺少异步接口时才回退。
-            ? (vector, weight) => knowledgeBaseManager.applyTagBoostAsync(new Float32Array(vector), weight)
+            // queryText 必须透传：applyTagBoostAsync 内部构造 preparedMemoObservation 时
+            // 以其做标签激活 sensing，缺文本会让复用该观测的 river 查询路由失真。
+            ? (vector, weight, options = {}) => knowledgeBaseManager.applyTagBoostAsync(
+                new Float32Array(vector),
+                weight,
+                Array.isArray(options.coreTags) ? options.coreTags : [],
+                typeof options.coreBoostFactor === 'number' && Number.isFinite(options.coreBoostFactor)
+                    ? options.coreBoostFactor
+                    : 1.33,
+                { queryText: options.queryText || '' }
+            )
             : typeof knowledgeBaseManager?.applyTagBoost === 'function'
                 ? (vector, weight) => knowledgeBaseManager.applyTagBoost(new Float32Array(vector), weight)
                 : null,

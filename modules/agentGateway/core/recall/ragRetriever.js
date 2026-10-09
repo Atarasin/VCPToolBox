@@ -376,7 +376,9 @@ async function prepareRagVectors({ query, ragOptions, ragRetrieverPort }) {
     let preparedMemoObservation = null;
     const effectiveTagBoost = ragOptions.tagMemoWeight || TAG_BOOST;
     if (ragOptions.tagMemo && ragRetrieverPort.applyTagBoost) {
-        const boost = await ragRetrieverPort.applyTagBoost(finalQueryVector, effectiveTagBoost);
+        // queryText 必须传入：applyTagBoostAsync 以其构建 preparedMemoObservation 的
+        // 标签激活 sensing，缺文本会让复用该观测的 river 查询路由失真。
+        const boost = await ragRetrieverPort.applyTagBoost(finalQueryVector, effectiveTagBoost, { queryText: query });
         if (boost?.vector) scoringVector = Array.from(boost.vector);
         coreTags = extractCoreTags(boost?.info);
         // 复用 applyTagBoostAsync 已完成的 Rust sensing，river 查询免一次重复构造

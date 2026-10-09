@@ -48,7 +48,7 @@ test('global recall mode defaults to river and honors env/config precedence', ()
 });
 
 function createRiverTestPort({ riverQuery } = {}) {
-    const calls = { river: [], searchDiary: [] };
+    const calls = { river: [], searchDiary: [], tagBoostOptions: [] };
     const port = {
         available: true,
         embedQuery: async () => [0.1, 0.2],
@@ -57,11 +57,14 @@ function createRiverTestPort({ riverQuery } = {}) {
             calls.searchDiary.push({ diary, options });
             return [{ text: `knn:${diary}`, sourceFile: `${diary}.md`, score: 0.42, sourceDiary: diary }];
         },
-        applyTagBoost: async () => ({
-            vector: [0.1, 0.2],
-            info: { matchedTags: ['t'] },
-            preparedMemoObservation: { marker: 'prepared' }
-        }),
+        applyTagBoost: async (vector, weight, options = {}) => {
+            calls.tagBoostOptions.push(options);
+            return {
+                vector: [0.1, 0.2],
+                info: { matchedTags: ['t'] },
+                preparedMemoObservation: { marker: 'prepared', queryText: options.queryText }
+            };
+        },
         parseTimeRanges: () => [],
         cosineSimilarity: () => 0.5
     };
@@ -106,8 +109,10 @@ test('river mode routes the semantic stage through one riverQuery call for the w
         assert.deepEqual(calls.river[0].options.diaryNames, ['D1', 'D2']);
         assert.equal(calls.river[0].options.topK, 5);
         assert.deepEqual(calls.river[0].options.coreTags, ['t']);
-        // preparedMemoObservation 复用：tagMemo 已做过 applyTagBoostAsync 的 sensing
-        assert.deepEqual(calls.river[0].options.preparedMemoObservation, { marker: 'prepared' });
+        // preparedMemoObservation 复用：tagMemo 已用同一 query 文本做过 applyTagBoostAsync sensing
+        assert.equal(calls.tagBoostOptions.length, 1);
+        assert.equal(calls.tagBoostOptions[0].queryText, 'quant query');
+        assert.deepEqual(calls.river[0].options.preparedMemoObservation, { marker: 'prepared', queryText: 'quant query' });
         assert.equal(calls.river[0].options.sourceObservationConfig.coreBoostFactor, 1.33);
         // KNN 路径不应被触发
         assert.equal(calls.searchDiary.length, 0);
