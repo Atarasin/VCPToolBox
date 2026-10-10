@@ -17,7 +17,7 @@ function writeTempConfig(payload) {
     return configPath;
 }
 
-test('global recall mode defaults to river and honors env/config precedence', () => {
+test('global recall mode defaults to knn and honors env/config precedence', () => {
     const previousEnv = process.env.AGENT_GATEWAY_RECALL_MODE;
     try {
         delete process.env.AGENT_GATEWAY_RECALL_MODE;
@@ -25,19 +25,20 @@ test('global recall mode defaults to river and honors env/config precedence', ()
         const riverConfig = writeTempConfig({ recallMode: 'river', agents: {}, profiles: {} });
         const invalidConfig = writeTempConfig({ recallMode: 'bogus', agents: {}, profiles: {} });
 
-        assert.equal(DEFAULT_RECALL_MODE, 'river');
-        // config 提供 knn → knn
+        // 2026-10-09 用户决策：默认 knn（M2.S4 实测后，M3 完成后重评）
+        assert.equal(DEFAULT_RECALL_MODE, 'knn');
         assert.equal(resolveGlobalRecallMode(knnConfig), 'knn');
-        // config 提供 river → river；非法值 → 默认 river
         assert.equal(resolveGlobalRecallMode(riverConfig), 'river');
-        assert.equal(resolveGlobalRecallMode(invalidConfig), 'river');
+        assert.equal(resolveGlobalRecallMode(invalidConfig), 'knn');
 
-        // env 覆盖 config（knn 一键回退开关）
+        // env 覆盖 config（一键切换开关）
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
+        assert.equal(resolveGlobalRecallMode(knnConfig), 'river');
         process.env.AGENT_GATEWAY_RECALL_MODE = 'knn';
         assert.equal(resolveGlobalRecallMode(riverConfig), 'knn');
         // env 非法值被忽略，回落到 config
         process.env.AGENT_GATEWAY_RECALL_MODE = 'nope';
-        assert.equal(resolveGlobalRecallMode(knnConfig), 'knn');
+        assert.equal(resolveGlobalRecallMode(riverConfig), 'river');
     } finally {
         if (previousEnv === undefined) {
             delete process.env.AGENT_GATEWAY_RECALL_MODE;
@@ -99,7 +100,7 @@ test('river mode routes the semantic stage through one riverQuery call for the w
     const warnings = [];
     console.warn = (...args) => { warnings.push(args.join(' ')); };
     try {
-        delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
         const { port, calls } = createRiverTestPort();
         const result = await collectRagItems(BASE_PARAMS(port));
 
@@ -159,7 +160,7 @@ test('river mode on a legacy port without riverQuery silently uses KNN and stays
     const warnings = [];
     console.warn = (...args) => { warnings.push(args.join(' ')); };
     try {
-        delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
         const { port, calls } = createRiverTestPort({ riverQuery: null });
         const result = await collectRagItems(BASE_PARAMS(port));
 
@@ -180,7 +181,7 @@ test('river mode on a legacy port without riverQuery silently uses KNN and stays
 test('river degradation from the binding layer surfaces engine metadata without failing the request', async () => {
     const previousEnv = process.env.AGENT_GATEWAY_RECALL_MODE;
     try {
-        delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
         const { port, calls } = createRiverTestPort({
             riverQuery: async () => ({
                 results: [{ text: 'fallback-hit', sourceDiary: 'D1', sourceFile: 'f.md', score: 0.4 }],

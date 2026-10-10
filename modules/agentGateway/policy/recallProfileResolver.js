@@ -29,10 +29,12 @@ const ALLOWED_RULE_TYPES = Object.freeze(new Set([
     'gated_full_text'
 ]));
 
-// 网关全局语义检索模式（D2·方案B）：默认 river（对齐 VCPChat 生产），
-// 可一键回退 knn。档案级 mode 覆盖不进本期。
+// 网关全局语义检索模式：river = 原生 RiverMemo 联合查询（对齐 VCPChat 生产），
+// knn = 旧 KNN 路径。2026-10-09 用户决策：默认 knn（M2.S4 三轮实测 river 落后 knn，
+// 差距集中在术语精确场景），M3.S3 BM25 混合检索完成后重跑对比，达标再切 river 默认。
+// 档案级 mode 覆盖不进本期。
 const ALLOWED_RECALL_MODES = Object.freeze(new Set(['knn', 'river']));
-const DEFAULT_RECALL_MODE = 'river';
+const DEFAULT_RECALL_MODE = 'knn';
 
 const _deprecationFlags = {
     type: false,
