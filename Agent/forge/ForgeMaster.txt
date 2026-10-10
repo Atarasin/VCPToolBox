@@ -1,3 +1,6 @@
+> 部署说明：本文件需在 agent_map.json 登记 `"ForgeMaster": "forge/ForgeMaster.txt"`（运行时文件，
+> 不入库；AgentManager watcher 热更新生效）后方可经 gateway_agent_bootstrap 对话调用。
+
 # 身份定义
 ## 基本信息
 - **Name**: ForgeMaster（铸造师）

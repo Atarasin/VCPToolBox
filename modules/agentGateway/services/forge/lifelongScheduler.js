@@ -65,6 +65,11 @@ function createLifelongScheduler({ forgeRuntimeService, gapRegistry, listExpertN
         if (running) {
             return running;
         }
+        // node --test 的子进程带 NODE_TEST_CONTEXT——测试环境一律不自启，
+        // 避免调度句柄挂起测试进程（生产常驻进程不受影响）。
+        if (env.NODE_TEST_CONTEXT || process.env.NODE_TEST_CONTEXT) {
+            return null;
+        }
         const rule = resolveLifelongRule(env);
         if (rule.mode === 'disabled') {
             auditLogger?.logGatewayOperation?.('forge.lifelong.disabled', null);

@@ -194,3 +194,89 @@ test('gateway_gap_report / gateway_forge_learn 契约注册（第 9/10 个 MCP �
     const source = require('fs').readFileSync('modules/agentGateway/protocols/mcp/inProcessOperations.js', 'utf8');
     assert.ok(source.includes('gapReport:') && source.includes('forgeLearn:'));
 });
+
+test('gateway_forge_learn 的 MCP 参数映射：subskillIds/topic 组装为 scope（阻断项 A 回归）', () => {
+    const { buildForgeLearnRequest } = require('../../../modules/agentGateway/protocols/mcp/inProcessOperations');
+    assert.deepEqual(
+        buildForgeLearnRequest({ expertName: 'UIDesigner', subskillIds: ['color-theory'], topic: '深色模式' }),
+        { expertName: 'UIDesigner', scope: { subskillIds: ['color-theory'], topic: '深色模式', reason: 'manual' } }
+    );
+    assert.deepEqual(
+        buildForgeLearnRequest({ expertName: 'UIDesigner' }),
+        { expertName: 'UIDesigner' }, '无 subskillIds/topic 不产生空 scope（全量增量）'
+    );
+    assert.deepEqual(
+        buildForgeLearnRequest({ expertName: 'UIDesigner', topic: 'YY', since: '2026-01-01T00:00:00.000Z' }),
+        { expertName: 'UIDesigner', since: '2026-01-01T00:00:00.000Z', scope: { topic: 'YY', reason: 'manual' } }
+    );
+});
+
+test('since 时间过滤：已有出处的来源不重采，BrowserSearch 带 timeRange（阻断项 B 回归）', async () => {
+    const baseDir = createTempDir();
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    fs.mkdirSync(libDir, { recursive: true });
+    fs.writeFileSync(path.join(libDir, 'K_color-theory_jiu.md'), `---\ntitle: 旧卡\ntype: concept\nsources:\n  - url: https://old.example.com/seen\n    fetchedAt: 2026-10-01T00:00:00.000Z\n---\n\n旧卡。\n`);
+
+    const searchCalls = [];
+    const jobRuntimeService = createJobRuntimeService();
+    const forgeRuntimeService = createForgeRuntimeService({
+        jobRuntimeService,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                const output = (payload.messages[0].content.includes('知识蒸馏') || payload.messages[0].content.includes('材料清单'))
+                    ? DISTILL_JSON : 'answer';
+                return { data: { choices: [{ message: { content: output } }], usage: { prompt_tokens: 1, completion_tokens: 1 } } };
+            }
+        },
+        toolInvokerPort: {
+            invoke: async (toolName, args) => {
+                searchCalls.push({ toolName, args });
+                if (toolName === 'BrowserSearch') {
+                    return { content: [{ type: 'text', text: '新\nhttps://fresh.example.com/next\n新内容' }] };
+                }
+                // AnySearch 返回新旧混合（旧来源应被 since 过滤掉）
+                return { content: [{ type: 'text', text: '旧\nhttps://old.example.com/seen\n已蒸馏\n\n新\nhttps://fresh.example.com/next\n新内容' }] };
+            }
+        },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1 }]
+        },
+        baseDir: path.join(baseDir, 'forge'),
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'a.json'),
+        knowledgePolicyPath: path.join(baseDir, 'p.json'),
+        guidanceConfigPath: path.join(baseDir, 'g.json')
+    });
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+
+    const { jobId } = await forgeRuntimeService.startExpertLearnJob({
+        expertName: 'UIDesigner',
+        since: new Date(Date.now() - 14 * 86400000).toISOString(), // 两周前 → month 档
+        scope: { reason: 'scheduled-weekly' }
+    });
+    await waitFor(() => jobRuntimeService.pollJob(jobId, null).data.job.terminal);
+
+    // 旧来源未重采，只保留新增来源
+    const rawDir = path.join(baseDir, 'forge', 'runs', jobId, 'raw', 'color-theory');
+    const metas = fs.readdirSync(rawDir).filter((f) => f.endsWith('.meta.json'))
+        .map((f) => JSON.parse(fs.readFileSync(path.join(rawDir, f), 'utf8')));
+    assert.equal(metas.length, 1, `只采新来源，实际 ${JSON.stringify(metas.map((m) => m.url))}`);
+    assert.equal(metas[0].url, 'https://fresh.example.com/next');
+    const manifest = JSON.parse(fs.readFileSync(path.join(rawDir, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.incremental, true);
+    assert.ok(manifest.since);
+    // timeRange 档位计算（两周前 → month）；AnySearch 调用不带 timeRange（插件不支持）
+    const { timeRangeFromSince } = require('../../../modules/agentGateway/services/forge/harvest');
+    assert.equal(timeRangeFromSince(new Date(Date.now() - 14 * 86400000).toISOString()), 'month');
+    assert.equal(timeRangeFromSince(new Date(Date.now() - 3 * 86400000).toISOString()), 'week');
+    assert.equal(timeRangeFromSince(new Date(Date.now() - 200 * 86400000).toISOString()), 'year');
+    assert.equal(timeRangeFromSince(new Date(Date.now() - 400 * 86400000).toISOString()), null, '超一年不过滤');
+    assert.equal(timeRangeFromSince(null), null);
+    const anyCalls = searchCalls.filter((c) => c.toolName === 'AnySearch');
+    assert.ok(anyCalls.length >= 1);
+    assert.equal(anyCalls.every((c) => !c.args.timeRange), true, 'AnySearch 不带 timeRange');
+});

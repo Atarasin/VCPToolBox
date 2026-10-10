@@ -244,6 +244,23 @@ async function executeKnowledgeSearch(context) {
     });
 }
 
+// gateway_forge_learn 的 MCP args → startExpertLearnJob 参数映射（导出以供测试）：
+// subskillIds/topic 组装为 scope（reason=manual），缺省字段不产生空 scope。
+function buildForgeLearnRequest(body = {}) {
+    const scope = (Array.isArray(body.subskillIds) && body.subskillIds.length > 0) || body.topic
+        ? {
+            ...(Array.isArray(body.subskillIds) && body.subskillIds.length > 0 ? { subskillIds: body.subskillIds } : {}),
+            ...(body.topic ? { topic: body.topic } : {}),
+            reason: 'manual'
+        }
+        : undefined;
+    return {
+        expertName: body.expertName,
+        ...(body.since ? { since: body.since } : {}),
+        ...(scope ? { scope } : {})
+    };
+}
+
 async function executeForgeService(context, action) {
     const { bundle, name, args, input, operation, executeManaged } = context;
     return executeManaged({
@@ -256,7 +273,10 @@ async function executeForgeService(context, action) {
                 const agentId = String(body.agentId || requestContext.agentId || '').trim();
                 const payload = action === 'reportGap'
                     ? await bundle.forgeRuntimeService.reportGap({ ...body, agentId })
-                    : await bundle.forgeRuntimeService.startExpertLearnJob({ ...body, authContext: null });
+                    : await bundle.forgeRuntimeService.startExpertLearnJob({
+                        ...buildForgeLearnRequest(body),
+                        authContext: null
+                    });
                 result = {
                     success: true,
                     requestId: requestContext.requestId,
@@ -352,6 +372,7 @@ async function callMcpTool({
 }
 
 module.exports = {
+    buildForgeLearnRequest,
     IN_PROCESS_OPERATION_HANDLERS,
     attachRequestId,
     buildBootstrapResult,
