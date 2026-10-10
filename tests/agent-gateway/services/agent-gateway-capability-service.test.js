@@ -46,7 +46,7 @@ test('CapabilityService builds compatible capabilities and scope-filtered target
     assert.equal(capabilities.context.features.truncation, true);
     assert.deepEqual(capabilities.jobs, {
         supported: true,
-        states: ['accepted', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'],
+        states: ['accepted', 'running', 'waiting_approval', 'pending_confirm', 'paused_budget', 'completed', 'failed', 'cancelled'],
         actions: ['poll', 'cancel']
     });
     assert.deepEqual(capabilities.events, {

@@ -299,7 +299,7 @@ function createCapabilityService(deps = {}) {
                 context: createContextDescriptor(ragRetrieverPort),
                 jobs: {
                     supported: true,
-                    states: ['accepted', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'],
+                    states: ['accepted', 'running', 'waiting_approval', 'pending_confirm', 'paused_budget', 'completed', 'failed', 'cancelled'],
                     actions: ['poll', 'cancel']
                 },
                 events: {

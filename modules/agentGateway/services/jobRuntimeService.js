@@ -21,6 +21,9 @@ const JOB_STATUS = Object.freeze({
     ACCEPTED: 'accepted',
     RUNNING: 'running',
     WAITING_APPROVAL: 'waiting_approval',
+    // forge 长任务引入的门禁态：等待用户确认画像 / 预算耗尽暂停（均非终态、可取消）。
+    PENDING_CONFIRM: 'pending_confirm',
+    PAUSED_BUDGET: 'paused_budget',
     COMPLETED: 'completed',
     FAILED: 'failed',
     CANCELLED: 'cancelled'
@@ -29,7 +32,9 @@ const JOB_STATUS = Object.freeze({
 const CANCELLABLE_JOB_STATUSES = new Set([
     JOB_STATUS.ACCEPTED,
     JOB_STATUS.RUNNING,
-    JOB_STATUS.WAITING_APPROVAL
+    JOB_STATUS.WAITING_APPROVAL,
+    JOB_STATUS.PENDING_CONFIRM,
+    JOB_STATUS.PAUSED_BUDGET
 ]);
 
 const TERMINAL_JOB_STATUSES = new Set([
@@ -109,6 +114,10 @@ function mapStatusToEventType(status) {
         return JOB_EVENT_TYPES.RUNNING;
     case JOB_STATUS.WAITING_APPROVAL:
         return JOB_EVENT_TYPES.WAITING_APPROVAL;
+    case JOB_STATUS.PENDING_CONFIRM:
+        return JOB_EVENT_TYPES.PENDING_CONFIRM;
+    case JOB_STATUS.PAUSED_BUDGET:
+        return JOB_EVENT_TYPES.PAUSED_BUDGET;
     case JOB_STATUS.COMPLETED:
         return JOB_EVENT_TYPES.COMPLETED;
     case JOB_STATUS.FAILED:
@@ -297,6 +306,23 @@ function createJobStoreApi(store, eventStore) {
         }
 
         const nextStatus = normalizeJobRuntimeString(updates.status) || existingJob.status;
+        // 终态保护：completed/failed/cancelled 不可被常规 update 迁出，
+        // 防止 worker 的迟到回写覆盖外部取消（红线 5）。
+        // 显式续跑（resumeFromTerminal）是唯一例外，如 forge 的单步重试。
+        if (TERMINAL_JOB_STATUSES.has(existingJob.status) &&
+            nextStatus !== existingJob.status &&
+            !updates.resumeFromTerminal) {
+            return {
+                success: false,
+                status: 409,
+                code: AGW_ERROR_CODES.VALIDATION_ERROR,
+                error: 'Job is in terminal state; explicit resume required to change status',
+                details: {
+                    jobId: normalizedJobId,
+                    status: existingJob.status
+                }
+            };
+        }
         const updatedAt = new Date().toISOString();
         const nextMetadata = updates.metadata && typeof updates.metadata === 'object'
             ? {
@@ -412,6 +438,22 @@ function createJobRuntimeApi(store, eventStore, jobStore, { auditLogger = null }
             return updateJob(normalizedJobId, {
                 status: JOB_STATUS.CANCELLED
             });
+        },
+        listJobs({ authContext, filters } = {}) {
+            const normalizedFilters = filters && typeof filters === 'object' ? filters : {};
+            const operationPrefix = normalizeJobRuntimeString(normalizedFilters.operationPrefix);
+            const jobs = Array.from(store.values())
+                .filter((job) => !operationPrefix || job.operation.startsWith(operationPrefix))
+                .filter((job) => canAccessJob(job, authContext, { allowAdoption: false }))
+                .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+                .map(cloneJob);
+
+            return {
+                success: true,
+                data: {
+                    jobs
+                }
+            };
         },
         listEvents({ authContext, filters } = {}) {
             // §3.4 / M1.S6.T1：事件可见性从关联 job 的服务端 owner snapshot 决议

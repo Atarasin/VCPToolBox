@@ -12,7 +12,7 @@ import { computed } from "vue";
 
 const props = withDefaults(
   defineProps<{
-    variant?: "default" | "secondary" | "success" | "warning" | "danger" | "info" | "outline";
+    variant?: "default" | "secondary" | "success" | "warning" | "danger" | "info" | "purple" | "outline";
   }>(),
   {
     variant: "default",
@@ -70,6 +70,11 @@ const badgeClass = computed(() => ["ui-badge", `ui-badge--${props.variant}`]);
 .ui-badge--info {
   background: color-mix(in srgb, var(--highlight-text) 16%, transparent);
   color: var(--highlight-text);
+}
+
+.ui-badge--purple {
+  background: color-mix(in srgb, #8b5cf6 16%, transparent);
+  color: #8b5cf6;
 }
 
 .ui-badge--outline {

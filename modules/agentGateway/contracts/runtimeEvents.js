@@ -4,6 +4,8 @@ const JOB_EVENT_TYPES = Object.freeze({
     ACCEPTED: 'job.accepted',
     RUNNING: 'job.running',
     WAITING_APPROVAL: 'job.waiting_approval',
+    PENDING_CONFIRM: 'job.pending_confirm',
+    PAUSED_BUDGET: 'job.paused_budget',
     COMPLETED: 'job.completed',
     FAILED: 'job.failed',
     CANCELLED: 'job.cancelled'

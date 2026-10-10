@@ -36,6 +36,9 @@ const {
     JOB_STATUS
 } = require('../services/jobRuntimeService');
 const {
+    createForgeRuntimeService
+} = require('../services/forge/service');
+const {
     createMemoryRuntimeService
 } = require('../services/memoryRuntimeService');
 const {
@@ -190,6 +193,16 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         toolInvokerPort: ports.toolInvoker
     });
     const jobRuntimeService = createJobRuntimeService({ auditLogger });
+    // forge 铸造编排（专家铸造炉 M1）：五步状态机跑在 job 运行时之上，
+    // 端口面只含 llmCompletion / toolInvoker / agentDirectory（只读），不接触记忆端口（红线 1）。
+    const forgeRuntimeService = createForgeRuntimeService({
+        jobRuntimeService,
+        auditLogger,
+        llmCompletionPort: ports.llmCompletion,
+        toolInvokerPort: ports.toolInvoker,
+        agentDirectoryPort: ports.agentDirectory,
+        baseDir: process.env.FORGE_BASE_DIR || undefined
+    });
     const capabilityService = createCapabilityService({
         ports,
         ragRetrieverPort: ports.ragRetriever,
@@ -324,6 +337,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         capabilityService,
         agentRegistryService,
         jobRuntimeService,
+        forgeRuntimeService,
         memoryRuntimeService,
         contextRuntimeService,
         knowledgeRuntimeService,
