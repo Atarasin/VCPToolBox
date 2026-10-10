@@ -41,6 +41,7 @@ function createKnowledgeRuntimeService(deps = {}) {
                 details: { field: 'query' } };
         }
         if (!knowledgeStorePort?.available) {
+            auditLogger.log('knowledge.search.unavailable', { requestId, agentId });
             return { success: false, requestId, status: 503,
                 code: AGW_ERROR_CODES.CONFIG_UNAVAILABLE, error: 'Knowledge store is not available' };
         }
