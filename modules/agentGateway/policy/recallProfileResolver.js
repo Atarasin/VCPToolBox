@@ -29,6 +29,13 @@ const ALLOWED_RULE_TYPES = Object.freeze(new Set([
     'gated_full_text'
 ]));
 
+// 网关全局语义检索模式：river = 原生 RiverMemo 联合查询（对齐 VCPChat 生产），
+// knn = 旧 KNN 路径。2026-10-09 用户决策：默认 knn（M2.S4 三轮实测 river 落后 knn，
+// 差距集中在术语精确场景），M3.S3 BM25 混合检索完成后重跑对比，达标再切 river 默认。
+// 档案级 mode 覆盖不进本期。
+const ALLOWED_RECALL_MODES = Object.freeze(new Set(['knn', 'river']));
+const DEFAULT_RECALL_MODE = 'knn';
+
 const _deprecationFlags = {
     type: false,
     diaries: false,
@@ -42,9 +49,31 @@ const loadRecallProfiles = createHotJsonConfigLoader({
             ? parsed.agents : {};
         const profiles = parsed?.profiles && typeof parsed.profiles === 'object' && !Array.isArray(parsed.profiles)
             ? parsed.profiles : {};
-        return { agents, profiles };
+        const recallMode = normalizeString(parsed?.recallMode).toLowerCase();
+        return {
+            agents,
+            profiles,
+            ...(ALLOWED_RECALL_MODES.has(recallMode) ? { recallMode } : {})
+        };
     }
 });
+
+/**
+ * 解析网关全局检索模式。优先级：环境变量 AGENT_GATEWAY_RECALL_MODE（river|knn）
+ * > recall_profiles.json 顶层 recallMode（热加载，改文件立即生效，无需重启）
+ * > 默认 knn（2026-10-09 用户决策，M3.S3 后重评）。
+ */
+function resolveGlobalRecallMode(configPath = DEFAULT_CONFIG_PATH) {
+    const envMode = normalizeString(process.env.AGENT_GATEWAY_RECALL_MODE).toLowerCase();
+    if (ALLOWED_RECALL_MODES.has(envMode)) {
+        return envMode;
+    }
+    const config = loadRecallProfiles(configPath);
+    if (ALLOWED_RECALL_MODES.has(config.recallMode)) {
+        return config.recallMode;
+    }
+    return DEFAULT_RECALL_MODE;
+}
 
 function normalizeBoolean(value) {
     if (typeof value === 'boolean') {
@@ -453,6 +482,9 @@ module.exports = {
     ALLOWED_MODIFIERS_S01,
     ALLOWED_MODIFIERS,
     ALLOWED_RULE_TYPES,
+    ALLOWED_RECALL_MODES,
+    DEFAULT_RECALL_MODE,
     DEFAULT_CONFIG_PATH,
+    resolveGlobalRecallMode,
     RecallProfileResolver
 };

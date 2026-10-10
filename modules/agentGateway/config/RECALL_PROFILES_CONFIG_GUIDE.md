@@ -22,6 +22,7 @@
 
 ```json
 {
+  "recallMode": "river",
   "agents": {
     "AgentName": {
       "defaultProfile": "profile-name",
@@ -41,6 +42,7 @@
 
 | 字段 | 必填 | 说明 | 默认值 / 缺省行为 |
 |------|------|------|------------------|
+| `recallMode` | 否 | 网关全局语义检索引擎：`river`＝原生 RiverMemo 联合查询，`knn`＝KNN+TagMemo 路径。热加载，改后立即生效，无需重启。环境变量 `AGENT_GATEWAY_RECALL_MODE` 优先级更高（需重启进程生效）。当前默认 `knn`（2026-10-09 实测对比后的用户决策，M3 混合检索完成后重评）。 | `knn` |
 | `agents` | 是 | 顶层 Agent 绑定映射，键为 Agent 名称或别名。 | 无默认值。缺失时视为没有任何 Agent 绑定。 |
 | `defaultProfile` | 否 | 默认使用的 profile 名称。 | 未设置时，优先取 `allowedProfiles` 的第一项；若也未设置，则回退到顶层 `profiles` 中的第一个可用项。 |
 | `allowedProfiles` | 否 | Agent 允许使用的 profile 名称列表。 | 未设置时，表示允许使用该 Agent 可见的全部 profile。 |

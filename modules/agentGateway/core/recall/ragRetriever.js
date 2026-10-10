@@ -6,6 +6,7 @@ const {
     OPENCLAW_ERROR_CODES
 } = require('../../contracts/errorCodes');
 const { resolveDiaryAccess } = require('./diaryAccess');
+const { resolveGlobalRecallMode } = require('../../policy/recallProfileResolver');
 const {
     projectSearchItems,
     projectContextBlocks,
@@ -372,13 +373,20 @@ async function prepareRagVectors({ query, ragOptions, ragRetrieverPort }) {
     }
     let scoringVector = finalQueryVector;
     let coreTags = [];
+    let preparedMemoObservation = null;
     const effectiveTagBoost = ragOptions.tagMemoWeight || TAG_BOOST;
     if (ragOptions.tagMemo && ragRetrieverPort.applyTagBoost) {
-        const boost = await ragRetrieverPort.applyTagBoost(finalQueryVector, effectiveTagBoost);
+        // queryText 必须传入：applyTagBoostAsync 以其构建 preparedMemoObservation 的
+        // 标签激活 sensing，缺文本会让复用该观测的 river 查询路由失真。
+        const boost = await ragRetrieverPort.applyTagBoost(finalQueryVector, effectiveTagBoost, { queryText: query });
         if (boost?.vector) scoringVector = Array.from(boost.vector);
         coreTags = extractCoreTags(boost?.info);
+        // 复用 applyTagBoostAsync 已完成的 Rust sensing，river 查询免一次重复构造
+        if (boost?.preparedMemoObservation && typeof boost.preparedMemoObservation === 'object') {
+            preparedMemoObservation = boost.preparedMemoObservation;
+        }
     }
-    return { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector };
+    return { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector, preparedMemoObservation };
 }
 
 /**
@@ -397,30 +405,74 @@ async function collectRagItems(params) {
     if (!access.success) return access;
     const targetDiaries = access.targetDiaries;
     const vectors = await prepareRagVectors({ query, ragOptions, ragRetrieverPort });
-    const { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector } = vectors;
+    const { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector, preparedMemoObservation } = vectors;
 
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
         : Math.max(ragOptions.k, DEFAULT_RAG_K);
-    const semanticResults = await Promise.all(
-        targetDiaries.map(async (targetDiary) => {
-            const results = await Promise.resolve(
-                ragRetrieverPort.searchDiary(targetDiary, finalQueryVector, {
-                    k: semanticSearchK,
-                    tagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
-                    coreTags,
-                    geodesicRerank: ragOptions.tagMemoGeodesic === true
-                })
-            );
-            return Array.isArray(results)
-                ? results.map((result) => ({
-                    ...result,
-                    sourceDiary: normalizeContextString(result.sourceDiary || targetDiary),
-                    source: 'rag'
+    // 语义检索引擎分支：全局开关（AGENT_GATEWAY_RECALL_MODE / recall_profiles.json 顶层
+    // recallMode，热加载）。2026-10-09 用户决策默认 knn（M2.S4 实测 river 落后，M3 混合
+    // 检索完成后重评）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的
+    // riverQuery 不会抛上游异常。
+    const recallMode = resolveGlobalRecallMode();
+    const riverEligible = recallMode === 'river' && typeof ragRetrieverPort.riverQuery === 'function';
+    let riverEngine = null;
+    let semanticResults;
+    if (riverEligible) {
+        const riverResult = await Promise.resolve(ragRetrieverPort.riverQuery(
+            { text: query, vector: finalQueryVector },
+            {
+                diaryNames: targetDiaries,
+                preparedMemoObservation: preparedMemoObservation || undefined,
+                topK: semanticSearchK,
+                coreTags,
+                sourceObservationConfig: {
+                    baseTagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
+                    coreBoostFactor: 1.33
+                },
+                enabled: true
+            }
+        ));
+        semanticResults = [(Array.isArray(riverResult?.results) ? riverResult.results : []).map((result) => ({
+            ...result,
+            sourceDiary: normalizeContextString(result.sourceDiary || result.diaryName),
+            source: 'rag'
+        }))];
+        riverEngine = {
+            mode: 'river',
+            degraded: riverResult?.degraded || null,
+            artifactSig: riverResult?.artifactSig || null,
+            queryId: riverResult?.queryId || null
+        };
+        console.log(
+            `[AgentGatewayRecall] 🌊 River retrieval: diaries=${targetDiaries.join('|')}, ` +
+            `returned=${semanticResults[0].length}` +
+            `${riverResult?.degraded ? `, degraded=${riverResult.degraded.engine}` : ''}.`
+        );
+    } else {
+        if (recallMode === 'river') {
+            console.warn('[AgentGatewayRecall] River mode is configured but the port lacks riverQuery; using KNN search.');
+        }
+        semanticResults = await Promise.all(
+            targetDiaries.map(async (targetDiary) => {
+                const results = await Promise.resolve(
+                    ragRetrieverPort.searchDiary(targetDiary, finalQueryVector, {
+                        k: semanticSearchK,
+                        tagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
+                        coreTags,
+                        geodesicRerank: ragOptions.tagMemoGeodesic === true
+                    })
+                );
+                return Array.isArray(results)
+                    ? results.map((result) => ({
+                        ...result,
+                        sourceDiary: normalizeContextString(result.sourceDiary || targetDiary),
+                        source: 'rag'
                 }))
                 : [];
         })
     );
+    }
 
     let timeRanges = [];
     if (ragOptions.timeAware && ragRetrieverPort.parseTimeRanges) {
@@ -500,7 +552,8 @@ async function collectRagItems(params) {
         coreTags,
         rerankApplied,
         scoredCandidates,
-        timeRanges
+        timeRanges,
+        riverEngine
     };
 }
 

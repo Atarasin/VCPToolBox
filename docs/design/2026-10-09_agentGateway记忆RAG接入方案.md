@@ -122,26 +122,26 @@ skill 包（SKILL.md + INSTALL.md + manifest.json）由 `services/skillGenerator
 
 #### M2.S1 openspec 立项
 依赖：无
-- [ ] T1 建立 openspec change：recall profile `mode` 字段与全局开关的契约定义（§3.2.1）
-- [ ] 验收：spec 变更目录建立并通过评审
+- [x] T1 建立 openspec change：recall profile `mode` 字段与全局开关的契约定义（§3.2.1）
+- [x] 验收：spec 变更目录建立并通过评审
 
 #### M2.S2 riverQuery 端口绑定与失败降级
 依赖：M2.S1
-- [ ] T1 `ports/` 新增 riverQuery 端口定义（§3.2.2）
-- [ ] T2 `vcpPortBindings.js` 绑定 `kbm.executeNativeRiverQuery`（含 preparedMemoObservation 复用与生产参数对齐）
-- [ ] T3 失败降级包装：river 失败→KNN 回退+审计/指标（§3.2.2，D1）
-- [ ] 验收：端口单测通过；人为制造 river 失败时降级路径有审计记录
+- [x] T1 `ports/` 新增 riverQuery 端口定义（§3.2.2）
+- [x] T2 `vcpPortBindings.js` 绑定 `kbm.executeNativeRiverQuery`（含 preparedMemoObservation 复用与生产参数对齐）
+- [x] T3 失败降级包装：river 失败→KNN 回退+审计/指标（§3.2.2，D1）
+- [x] 验收：端口单测通过；人为制造 river 失败时降级路径有审计记录
 
 #### M2.S3 管线接入 river 模式
 依赖：M2.S2
-- [ ] T1 `ragRetriever.js` 语义检索阶段增加 `mode: knn|river` 分支（§3.2.3）
-- [ ] T2 全局默认切 river + 全局一键回退开关（§3.2.3，D2；档案级覆盖不做）
-- [ ] 验收：同一 query 两模式均可召回；日志可见 river 模式走了 executeNativeRiverQuery
+- [x] T1 `ragRetriever.js` 语义检索阶段增加 `mode: knn|river` 分支（§3.2.3）
+- [x] T2 全局默认切 river + 全局一键回退开关（§3.2.3，D2；档案级覆盖不做）
+- [x] 验收：同一 query 两模式均可召回；日志可见 river 模式走了 executeNativeRiverQuery
 
 #### M2.S4 新旧引擎召回质量对比
 依赖：M2.S3
-- [ ] T1 ≥20 条真实 query 人工抽查，覆盖 Midas/FuPeng/Yui 三类场景（§3.2.4、§2.2）
-- [ ] 验收：对比报告产出，river 不劣于 knn
+- [x] T1 ≥20 条真实 query 人工抽查，覆盖 Midas/FuPeng/Yui 三类场景（§3.2.4、§2.2）
+- [ ] 验收：对比报告产出，river 不劣于 knn（❌ 未达标：3 轮测量 river 均落后 knn，见 docs/testing/2026-10-09_M2S4-river-knn-recall-comparison.md，等待用户决策）
 
 里程碑门禁：外部客户端与 skill 导出面零改动即可获得新引擎收益。
 

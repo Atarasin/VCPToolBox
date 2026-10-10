@@ -10,7 +10,10 @@ const {
 } = require('../ports');
 const { normalizeStringArray, parseBoolean, parseJsonObject } = require('../policy/shared/normalize');
 const { getProtocolGovernanceConfig } = require('../contracts/protocolGovernance');
+const { createAuditLogger } = require('../infra/auditLogger');
 const { createHostPromptRenderer } = require('./agentPromptRenderer');
+
+const recallAuditLogger = createAuditLogger({ prefix: '[AgentGatewayRecall]' });
 
 function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -119,6 +122,55 @@ function createEmbeddingBinding(knowledgeBaseManager, ragPlugin, embeddingUtils)
     };
 }
 
+/**
+ * D1·方案A：river 原生查询失败时显式降级到 KNN 搜索并留痕（审计 + 告警日志），
+ * 不向外部客户端透传上游异常。降级路径与 searchDiary 绑定保持同一调用形状，
+ * 含历史约定的 1.33 融合系数（红线：KNN 路径系数锁定）。
+ */
+async function executeRiverQueryWithKnnFallback(manager, query, options = {}) {
+    try {
+        return await manager.executeNativeRiverQuery(query, options);
+    } catch (error) {
+        const diaryNames = (Array.isArray(options.diaryNames) ? options.diaryNames : [options.diaryNames])
+            .map((name) => normalizeString(typeof name === 'string' ? name : ''))
+            .filter(Boolean);
+        const errorMessage = String(error?.message || error);
+        const errorCode = error?.code || null;
+        console.warn(
+            `[AgentGatewayRecall] Native river query failed (${errorCode || 'UNKNOWN'}): ` +
+            `${errorMessage}; degrading to KNN search.`
+        );
+        recallAuditLogger.logSearch('river.degraded', {
+            diaryNames,
+            engine: 'river',
+            fallback: 'knn',
+            errorCode,
+            errorMessage
+        });
+        if (diaryNames.length === 0) {
+            return { results: [], degraded: { engine: 'knn', reason: 'river_query_failed', errorCode, errorMessage } };
+        }
+        const fallbackK = Math.max(1, Math.floor(Number(options.topK) || 8));
+        const tagBoost = Math.max(0, Number(options.sourceObservationConfig?.baseTagBoost) || 0);
+        const coreTags = Array.isArray(options.coreTags)
+            ? options.coreTags.map((tag) => normalizeString(tag)).filter(Boolean)
+            : [];
+        const perDiaryResults = await Promise.all(diaryNames.map(async (diary) => {
+            const items = await manager.search(
+                diary, query?.vector, fallbackK, tagBoost, coreTags, 1.33, null
+            );
+            return (Array.isArray(items) ? items : []).map((item) => ({
+                ...item,
+                sourceDiary: normalizeString(item?.sourceDiary || item?.diaryName) || diary
+            }));
+        }));
+        return {
+            results: perDiaryResults.flat(),
+            degraded: { engine: 'knn', reason: 'river_query_failed', errorCode, errorMessage }
+        };
+    }
+}
+
 function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
     if (!knowledgeBaseManager && !ragPlugin) return { enabled: false, reason: 'rag_unavailable' };
     return {
@@ -131,6 +183,13 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
                 options.geodesicRerank ? { geodesicRerank: true } : null
             )
             : null,
+        // 生产调用形状对齐 RAGDiaryPlugin 原生路径：query = { text, vector }；
+        // options 含 diaryNames / preparedMemoObservation / topK / candidateK / coreTags /
+        // supplementalQueryVectors / hybridPlan / sourceObservationConfig。
+        // 失败降级（D1）在绑定层包装：river 抛错 → KNN 回退 + 审计留痕。
+        riverQuery: typeof knowledgeBaseManager?.executeNativeRiverQuery === 'function'
+            ? (query, options = {}) => executeRiverQueryWithKnnFallback(knowledgeBaseManager, query, options)
+            : null,
         enhanceSemanticGroups: ragPlugin?.semanticGroups?.detectAndActivateGroups &&
             ragPlugin?.semanticGroups?.getEnhancedVector
             ? async (query, vector) => {
@@ -142,7 +201,17 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
         applyTagBoost: typeof knowledgeBaseManager?.applyTagBoostAsync === 'function'
             // 原生 Memo 资产发布后同步 applyTagBoost 已退休（JS graph runtime），
             // 必须走异步统一门面；旧宿主缺少异步接口时才回退。
-            ? (vector, weight) => knowledgeBaseManager.applyTagBoostAsync(new Float32Array(vector), weight)
+            // queryText 必须透传：applyTagBoostAsync 内部构造 preparedMemoObservation 时
+            // 以其做标签激活 sensing，缺文本会让复用该观测的 river 查询路由失真。
+            ? (vector, weight, options = {}) => knowledgeBaseManager.applyTagBoostAsync(
+                new Float32Array(vector),
+                weight,
+                Array.isArray(options.coreTags) ? options.coreTags : [],
+                typeof options.coreBoostFactor === 'number' && Number.isFinite(options.coreBoostFactor)
+                    ? options.coreBoostFactor
+                    : 1.33,
+                { queryText: options.queryText || '' }
+            )
             : typeof knowledgeBaseManager?.applyTagBoost === 'function'
                 ? (vector, weight) => knowledgeBaseManager.applyTagBoost(new Float32Array(vector), weight)
                 : null,

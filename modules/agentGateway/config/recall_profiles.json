@@ -1,4 +1,5 @@
 {
+    "recallMode": "knn",
     "agents": {
         "Nexus": {
             "defaultProfile": "nexus-default",
