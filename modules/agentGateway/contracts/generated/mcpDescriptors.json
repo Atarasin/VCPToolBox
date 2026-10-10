@@ -358,6 +358,53 @@
       "annotations": {
         "gatewayManaged": true
       }
+    },
+    {
+      "name": "gateway_knowledge_search",
+      "title": "Gateway Knowledge Search",
+      "description": "Search cold knowledge libraries (TDB/TriviumDB, e.g. reference encyclopedias and curated opinion archives) by keyword or semantic query. Use this for stable, curated reference material rather than personal memory diaries (use gateway_recall_run / gateway_memory_search for those). Some libraries are role-restricted; requesting one without permission returns 403 — server-side policy is authoritative.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "description": "Target agent identifier. Optional when the presented credential is bound to an agent; an explicit value must match the bound agent."
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query used to retrieve cold-knowledge (TDB) entries."
+          },
+          "library": {
+            "type": "string",
+            "description": "Optional single knowledge library target. Automatically merged into `libraries`."
+          },
+          "libraries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional explicit list of knowledge libraries to search. Omit to search all accessible libraries."
+          },
+          "topK": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "Maximum number of hits to return (default 8)."
+          },
+          "expand": {
+            "type": "boolean",
+            "description": "Expand chunk hits to parent document text (default true)."
+          },
+          "minScore": {
+            "type": "number",
+            "description": "Optional minimum similarity score filter."
+          }
+        }
+      }
     }
   ],
   "prompts": [

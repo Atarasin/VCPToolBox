@@ -11,9 +11,9 @@ const canonicalOperations = require('../../../modules/agentGateway/contracts/ope
 const { validateGatewayToolArguments } = require('../../../modules/agentGateway/contracts/schemas/validator');
 const { convertJsonSchemaToOpenApi } = require('../../../modules/agentGateway/contracts/generate/jsonSchemaToOpenApi');
 
-test('operation catalog freezes the 22 REST paths and 8 MCP operations', () => {
+test('operation catalog freezes the 22 REST paths and 9 MCP operations', () => {
     assert.equal(REST_OPERATIONS.length, 22);
-    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 8);
+    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 9);
     assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 22);
     for (const operation of REST_OPERATIONS) {
         assert.ok(operation.operationId);
@@ -67,7 +67,9 @@ test('all managed operations preserve the historical AJV acceptance corpus', () 
         gateway_memory_write: { valid: { agentId: 'Ariadne', target: { diary: 'Nova' }, memory: { text: 'entry' },
             timestamp: 123, unknown: true }, invalid: { target: null, memory: { text: 'entry' } } },
         gateway_recall_run: { valid: { agentId: 'Ariadne', query: 'recall', unknown: true },
-            invalid: { agentId: 'Ariadne', query: null } }
+            invalid: { agentId: 'Ariadne', query: null } },
+        gateway_knowledge_search: { valid: { agentId: 'Ariadne', query: 'knowledge', library: 'VCP百科全书', topK: '8', unknown: true },
+            invalid: { query: 'knowledge', topK: 999 } }
     };
 
     assert.deepEqual(Object.keys(corpus).sort(), Object.keys(gatewayToolSchemas).sort());
@@ -90,7 +92,8 @@ test('agentId-less arguments pass schema validation for bound-credential callers
         gateway_memory_search: { query: 'memory' },
         gateway_context_assemble: {},
         gateway_memory_write: { target: { diary: 'Nova' }, memory: { text: 'entry' } },
-        gateway_recall_run: { query: 'recall' }
+        gateway_recall_run: { query: 'recall' },
+        gateway_knowledge_search: { query: 'knowledge' }
     };
     assert.deepEqual(Object.keys(omissions).sort(), Object.keys(gatewayToolSchemas).sort());
     for (const [operation, args] of Object.entries(omissions)) {

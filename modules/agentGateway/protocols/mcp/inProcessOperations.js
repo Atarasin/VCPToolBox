@@ -213,6 +213,37 @@ async function executeRecallRun(context) {
     });
 }
 
+async function executeKnowledgeSearch(context) {
+    const { bundle, name, args, input, operation, executeManaged } = context;
+    return executeManaged({
+        bundle, name, args, input,
+        operationName: operation.operationName,
+        source: operation.source,
+        async execute({ body, requestContext }) {
+            // agentId 由 executeManaged 的 managed-context 决议（bound credential 注入）
+            let result;
+            try {
+                result = await bundle.knowledgeRuntimeService.search({
+                    body,
+                    requestContext,
+                    defaultSource: operation.source
+                });
+            } catch (error) {
+                // 权限守卫抛出的 Forbidden 转结果式失败，走标准 MCP 错误码映射
+                result = {
+                    success: false,
+                    requestId: requestContext.requestId,
+                    status: error.status || 500,
+                    code: error.code || AGW_ERROR_CODES.INTERNAL_ERROR,
+                    error: error.message,
+                    ...(error.details ? { details: error.details } : {})
+                };
+            }
+            return attachRequestId(result, requestContext.requestId);
+        }
+    });
+}
+
 const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     render: executeRender,
     jobGet: (context) => executeJob(context, 'pollJob'),
@@ -220,7 +251,8 @@ const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     memorySearch: (context) => executeDiary(context, 'search'),
     contextAssemble: (context) => executeDiary(context, 'buildRecallContext'),
     memoryWrite: executeMemoryWrite,
-    recallRun: executeRecallRun
+    recallRun: executeRecallRun,
+    knowledgeSearch: executeKnowledgeSearch
 });
 
 async function callMcpTool({

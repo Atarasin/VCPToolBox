@@ -4,6 +4,7 @@ const defaultAgentManager = require('../../agentManager');
 const {
     createAgentDirectoryPort,
     createDiaryStorePort,
+    createKnowledgeStorePort,
     createLlmCompletionPort,
     createRagRetrieverPort,
     createToolInvokerPort
@@ -304,6 +305,12 @@ function bindVcpPorts(pluginManager, options = {}) {
         try { embeddingUtils = require('../../../EmbeddingUtils'); } catch (_error) { embeddingUtils = null; }
     }
     const ragRetriever = createRagRetrieverPort(createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils));
+    // M4.S1：冷知识库管理器（TDBKnowledgeManager，宿主经 Plugin.js 注入）。
+    // 缺失时端口整体不可用（optional），既有能力不受影响。
+    const tdbKnowledgeManager = options.tdbKnowledgeManager === undefined
+        ? (pluginManager.tdbKnowledgeManager ||
+            pluginManager.openClawBridge?.tdbKnowledgeManager || null)
+        : options.tdbKnowledgeManager;
     const agentManager = options.agentManager || pluginManager.agentManager || defaultAgentManager;
     const ports = {
         ragRetriever,
@@ -335,6 +342,14 @@ function bindVcpPorts(pluginManager, options = {}) {
                 });
             }
         }),
+        knowledgeStore: tdbKnowledgeManager &&
+            typeof tdbKnowledgeManager.search === 'function' &&
+            typeof tdbKnowledgeManager.listLibraries === 'function'
+            ? createKnowledgeStorePort({
+                search: (queryText, searchOptions = {}) => tdbKnowledgeManager.search(queryText, searchOptions),
+                listLibraries: () => tdbKnowledgeManager.listLibraries()
+            })
+            : createKnowledgeStorePort({ enabled: false, reason: 'tdb_knowledge_unavailable', optional: true }),
         configuration: Object.freeze({
             rag: createRagConfigSnapshot(pluginManager),
             policy: createPolicyConfigSnapshot(pluginManager),

@@ -41,6 +41,7 @@ const {
 const {
     createContextRuntimeService
 } = require('../services/contextRuntimeService');
+const { createKnowledgeRuntimeService } = require('../services/knowledgeRuntimeService');
 const {
     createToolRuntimeService
 } = require('../services/toolRuntimeService');
@@ -217,6 +218,11 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         diaryScopeGuard: ensureDiaryAllowed
     });
     let recallRuntimeService;
+    // M4：冷知识库（TDB）检索运行时；端口不可用时服务仍可构造（search 返回 503）
+    const knowledgeRuntimeService = createKnowledgeRuntimeService({
+        knowledgeStorePort: ports.knowledgeStore,
+        auditLogger
+    });
     const contextRuntimeService = createContextRuntimeService({
         ports,
         ragRetrieverPort: ports.ragRetriever,
@@ -320,6 +326,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         jobRuntimeService,
         memoryRuntimeService,
         contextRuntimeService,
+        knowledgeRuntimeService,
         toolRuntimeService,
         operabilityService,
         recallProfileResolver,
