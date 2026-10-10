@@ -61,7 +61,7 @@ const loadRecallProfiles = createHotJsonConfigLoader({
 /**
  * 解析网关全局检索模式。优先级：环境变量 AGENT_GATEWAY_RECALL_MODE（river|knn）
  * > recall_profiles.json 顶层 recallMode（热加载，改文件立即生效，无需重启）
- * > 默认 river。
+ * > 默认 knn（2026-10-09 用户决策，M3.S3 后重评）。
  */
 function resolveGlobalRecallMode(configPath = DEFAULT_CONFIG_PATH) {
     const envMode = normalizeString(process.env.AGENT_GATEWAY_RECALL_MODE).toLowerCase();
