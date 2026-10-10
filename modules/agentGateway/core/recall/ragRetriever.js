@@ -391,6 +391,34 @@ async function prepareRagVectors({ query, ragOptions, ragRetrieverPort }) {
     return { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector, preparedMemoObservation };
 }
 
+// M3.S2：辅助向量条数与时间衰减（对齐 RAGDiaryPlugin 生产端 shotgun 历史段参数）
+const SUPPLEMENTAL_MESSAGE_LIMIT = 3;
+const SUPPLEMENTAL_DECAY_FACTOR = 0.85;
+
+async function buildSupplementalQueryVectors({ recentMessages, ragRetrieverPort }) {
+    const messages = (Array.isArray(recentMessages) ? recentMessages : [])
+        .map((message) => normalizeContextContentText(message?.content ?? message?.text))
+        .filter(Boolean)
+        .slice(-SUPPLEMENTAL_MESSAGE_LIMIT);
+    if (messages.length === 0 || typeof ragRetrieverPort?.embedQuery !== 'function') {
+        return [];
+    }
+    const supplemental = [];
+    for (let index = 0; index < messages.length; index += 1) {
+        try {
+            const vector = await Promise.resolve(ragRetrieverPort.embedQuery(messages[index]));
+            if (!Array.isArray(vector) || vector.length === 0) continue;
+            supplemental.push({
+                vector,
+                weight: Math.pow(SUPPLEMENTAL_DECAY_FACTOR, messages.length - index)
+            });
+        } catch (_error) {
+            // 单条辅助向量失败不影响主查询
+        }
+    }
+    return supplemental;
+}
+
 /**
  * 共享 search/context 的检索主流程，避免在 adapter 内复制实现。
  */
@@ -423,6 +451,13 @@ async function collectRagItems(params) {
     let riverEngine = null;
     let semanticResults;
     if (riverEligible) {
+        // M3.S2：多查询向量——从 recentMessages 提取辅助向量（越新权重越高，衰减 0.85，
+        // 对齐 RAGDiaryPlugin 生产端 shotgun 打法），作为 supplementalQueryVectors 参与
+        // river 联合查询，扩大召回覆盖面。仅 river 路径消费（KNN 绑定无该参数面）。
+        const supplementalQueryVectors = await buildSupplementalQueryVectors({
+            recentMessages: params.recentMessages,
+            ragRetrieverPort
+        });
         const riverResult = await Promise.resolve(ragRetrieverPort.riverQuery(
             { text: query, vector: finalQueryVector },
             {
@@ -430,6 +465,7 @@ async function collectRagItems(params) {
                 preparedMemoObservation: preparedMemoObservation || undefined,
                 topK: semanticSearchK,
                 coreTags,
+                supplementalQueryVectors,
                 sourceObservationConfig: {
                     baseTagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
                     coreBoostFactor: 1.33

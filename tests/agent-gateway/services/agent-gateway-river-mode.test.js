@@ -204,3 +204,115 @@ test('river degradation from the binding layer surfaces engine metadata without 
         }
     }
 });
+
+test('river mode derives supplemental query vectors from recentMessages with recency decay', async () => {
+    const previousEnv = process.env.AGENT_GATEWAY_RECALL_MODE;
+    try {
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
+        const riverCalls = [];
+        const vectorsByText = new Map([
+            ['quant query', [0.1, 0.2]],
+            ['msg-old', [0.11, 0.21]],
+            ['msg-mid', [0.12, 0.22]],
+            ['msg-new', [0.13, 0.23]]
+        ]);
+        const port = {
+            available: true,
+            embedQuery: async (text) => vectorsByText.get(String(text)) || [0.5, 0.5],
+            listDiaries: () => ['D1', 'D2'],
+            searchDiary: async () => [],
+            applyTagBoost: async () => ({ vector: [0.1, 0.2], info: { matchedTags: [] }, preparedMemoObservation: { m: 1 } }),
+            parseTimeRanges: () => [],
+            cosineSimilarity: () => 0.5,
+            riverQuery: async (query, options = {}) => {
+                riverCalls.push({ query, options });
+                return { results: [{ text: 'hit', diaryName: 'D1', sourceFile: 'f.md', score: 0.9 }], artifactSig: 's' };
+            }
+        };
+        const result = await collectRagItems({
+            ...BASE_PARAMS(port),
+            recentMessages: [
+                { role: 'user', content: 'msg-old' },
+                { role: 'assistant', content: 'msg-mid' },
+                { role: 'user', content: 'msg-new' },
+                { role: 'user', content: '' }
+            ]
+        });
+
+        assert.equal(result.success, true);
+        const supplemental = riverCalls[0].options.supplementalQueryVectors;
+        // 空消息被过滤；3 条有效消息 → 3 条辅助向量
+        assert.equal(supplemental.length, 3);
+        // 顺序与权重：越新权重越高（0.85^1），最旧 0.85^3
+        assert.deepEqual(supplemental.map((entry) => entry.vector), [
+            [0.11, 0.21], [0.12, 0.22], [0.13, 0.23]
+        ]);
+        assert.deepEqual(supplemental.map((entry) => Number(entry.weight.toFixed(4))), [
+            0.6141, 0.7225, 0.85
+        ]);
+    } finally {
+        if (previousEnv === undefined) delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        else process.env.AGENT_GATEWAY_RECALL_MODE = previousEnv;
+    }
+});
+
+test('supplemental vectors stay empty without recentMessages and never affect knn mode', async () => {
+    const previousEnv = process.env.AGENT_GATEWAY_RECALL_MODE;
+    try {
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
+        const { port, calls } = createRiverTestPort();
+        await collectRagItems(BASE_PARAMS(port));
+        assert.deepEqual(calls.river[0].options.supplementalQueryVectors, []);
+
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'knn';
+        const knnCalls = [];
+        const port2 = createRiverTestPort().port;
+        port2.searchDiary = async (diary) => {
+            knnCalls.push(diary);
+            return [];
+        };
+        await collectRagItems({
+            ...BASE_PARAMS(port2),
+            recentMessages: [{ role: 'user', content: 'ignored' }]
+        });
+        assert.equal(knnCalls.length, 2);
+        assert.equal(port2.riverQuery ? 1 : 0, 1); // 端口仍带 riverQuery，但 knn 模式不调用
+    } finally {
+        if (previousEnv === undefined) delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        else process.env.AGENT_GATEWAY_RECALL_MODE = previousEnv;
+    }
+});
+
+test('a failing supplemental embedding is skipped without breaking the main query', async () => {
+    const previousEnv = process.env.AGENT_GATEWAY_RECALL_MODE;
+    try {
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
+        const riverCalls = [];
+        const port = {
+            available: true,
+            embedQuery: async (text) => {
+                if (String(text) === 'msg-bad') throw new Error('embed down');
+                return [0.1, 0.2];
+            },
+            listDiaries: () => ['D1'],
+            searchDiary: async () => [],
+            applyTagBoost: async () => ({ vector: [0.1, 0.2], info: { matchedTags: [] }, preparedMemoObservation: { m: 1 } }),
+            parseTimeRanges: () => [],
+            cosineSimilarity: () => 0.5,
+            riverQuery: async (query, options = {}) => {
+                riverCalls.push({ query, options });
+                return { results: [{ text: 'hit', diaryName: 'D1', sourceFile: 'f.md', score: 0.9 }], artifactSig: 's' };
+            }
+        };
+        const result = await collectRagItems({
+            ...BASE_PARAMS(port),
+            requestedDiaries: ['D1'],
+            recentMessages: [{ role: 'user', content: 'msg-bad' }, { role: 'user', content: 'msg-good' }]
+        });
+        assert.equal(result.success, true);
+        assert.equal(riverCalls[0].options.supplementalQueryVectors.length, 1);
+    } finally {
+        if (previousEnv === undefined) delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        else process.env.AGENT_GATEWAY_RECALL_MODE = previousEnv;
+    }
+});
