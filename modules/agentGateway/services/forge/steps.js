@@ -9,13 +9,16 @@ const {
 } = require('./blueprint');
 const { createHarvestStepRunner } = require('./harvest');
 const { createDistillStepRunner } = require('./distill');
+const { createSynthesizeStepRunner } = require('./synthesize');
+const { ForgeNameConflictError, detectNameConflicts, listExistingAgentNames } = require('./nameConflict');
 const { extractJsonObject } = require('./jsonUtils');
 
 /**
  * 铸造五步状态机的步骤定义（§3.2）。
- * M1 交付编排骨架；M2 起接入真实能力：blueprint（M1，LLM 起草画像）、
- * harvest（M2.S1，检索采集）与 distill（M2.S2，蒸馏入库）已实现；
- * synthesize / trial 分别由 M3.S1 / M4.S1 交付（经 options.stepRunners 可再覆盖）。
+ * M1 交付编排骨架；逐步接入真实能力：blueprint（M1，LLM 起草画像）、
+ * harvest（M2.S1，检索采集）、distill（M2.S2，蒸馏入库）与 synthesize
+ * （M3.S1，人设合成与注册绑定）已实现；trial 由 M4.S1 交付
+ * （经 options.stepRunners 可再覆盖）。
  */
 
 const BLUEPRINT_DRAFT_PROMPT = `你是一名「专家铸造师」。请根据用户的一句话需求，起草一份专家画像（blueprint）JSON。
@@ -51,53 +54,10 @@ class ForgeCapabilityPendingError extends Error {
     }
 }
 
-// 红线 3：重名冲突不直接失败，而是交回编排层转 pending_confirm 暂停待人工确认。
-class ForgeNameConflictError extends Error {
-    constructor(draft, conflicts) {
-        super(`专家名与既有 agent/文件冲突：${conflicts.map((c) => c.kind === 'agent' ? c.name : c.file).join('、')}`);
-        this.name = 'ForgeNameConflictError';
-        this.code = 'FORGE_NAME_CONFLICT';
-        this.status = 409;
-        this.details = { conflicts, draft };
-    }
-}
-
 function createPendingStepRunner(stepId, milestone) {
     return async function pendingStep() {
         throw new ForgeCapabilityPendingError(stepId, milestone);
     };
-}
-
-async function listExistingAgentNames(agentDirectoryPort) {
-    if (!agentDirectoryPort || typeof agentDirectoryPort.listAgents !== 'function') {
-        return [];
-    }
-    try {
-        if (typeof agentDirectoryPort.ensureLoaded === 'function') {
-            await agentDirectoryPort.ensureLoaded();
-        }
-        return agentDirectoryPort.listAgents().map((agent) => agent?.alias).filter(Boolean);
-    } catch {
-        return [];
-    }
-}
-
-// §3.1 / 红线 3：与 agent_map 现有条目或现有 Agent/ 文件的重名冲突。
-// baseDir = Agent/forge，其父目录即 Agent/ 根；同名 .txt 视为冲突
-// （未登记文件虽不参与加载，但占用 synthesize 步骤的目标路径）。
-function detectNameConflicts(name, { baseDir, existingAgentNames }) {
-    const conflicts = [];
-    if (existingAgentNames.includes(name)) {
-        conflicts.push({ kind: 'agent', name });
-    }
-    const agentRoot = path.join(baseDir, '..');
-    const candidates = [path.join(agentRoot, `${name}.txt`), path.join(baseDir, `${name}.txt`)];
-    for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-            conflicts.push({ kind: 'file', file: path.relative(agentRoot, candidate) });
-        }
-    }
-    return conflicts;
 }
 
 function createBlueprintStepRunner({ baseDir }) {
@@ -167,7 +127,16 @@ function createBlueprintStepRunner({ baseDir }) {
 /**
  * 步骤注册表。stepRunners 允许后续里程碑替换默认（capability-pending）实现。
  */
-function createStepRegistry({ baseDir, knowledgeRoot, smokeRetries = null, smokeIntervalMs = null, stepRunners = {} }) {
+function createStepRegistry({
+    baseDir,
+    knowledgeRoot,
+    smokeRetries = null,
+    smokeIntervalMs = null,
+    agentMapPath = null,
+    knowledgePolicyPath = null,
+    guidanceConfigPath = null,
+    stepRunners = {}
+}) {
     const defaults = {
         blueprint: createBlueprintStepRunner({ baseDir }),
         harvest: createHarvestStepRunner(),
@@ -176,7 +145,11 @@ function createStepRegistry({ baseDir, knowledgeRoot, smokeRetries = null, smoke
             ...(smokeRetries != null ? { smokeRetries } : {}),
             ...(smokeIntervalMs != null ? { smokeIntervalMs } : {})
         }),
-        synthesize: createPendingStepRunner('synthesize', 'M3.S1'),
+        synthesize: createSynthesizeStepRunner({
+            agentMapPath: agentMapPath || path.join(path.resolve(baseDir, '..', '..'), 'agent_map.json'),
+            knowledgePolicyPath: knowledgePolicyPath || path.join(__dirname, '..', '..', 'config', 'mcp_agent_knowledge_policy.json'),
+            guidanceConfigPath: guidanceConfigPath || path.join(__dirname, '..', '..', 'config', 'agent_guidance.json')
+        }),
         trial: createPendingStepRunner('trial', 'M4.S1')
     };
     const runners = { ...defaults, ...stepRunners };
