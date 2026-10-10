@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>专家铸造炉 · 设计文档（已定稿）</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak]{display:none!important}
+    .doc-table{border-collapse:collapse;width:100%;font-size:0.875rem}
+    .doc-table th,.doc-table td{border:1px solid #e5e7eb;padding:0.5rem 0.75rem;text-align:left;vertical-align:top}
+    .doc-table th{background:#f8fafc}
+    .doc-pre{background:#f8fafc;border:1px solid #e2e8f0;border-radius:0.5rem;padding:0.75rem 1rem;font-size:0.75rem;overflow-x:auto;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.5}
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+  <!-- 顶部 Hero -->
+  <header class="bg-gradient-to-r from-emerald-900 to-slate-800 text-white px-6 py-8">
+    <div class="max-w-5xl mx-auto">
+      <p class="text-emerald-200/70 text-sm mb-1">2026-10-10 · VCPToolBox / agentGateway · 设计文档 v1</p>
+      <h1 class="text-2xl font-bold mb-2">专家铸造炉（Agent 自学习专家生成流水线）</h1>
+      <p class="text-emerald-50/80 max-w-3xl">
+        一句话需求 → 专家画像 → 网络采集 → 知识蒸馏入 TDB 冷知识库 → 人设合成注册 → 试岗验收（LLM 判卷 + Jev 对照）→ 持续学习闭环。
+        专业技能只进知识库，绝不写进记忆。
+      </p>
+      <div class="flex flex-wrap gap-2 mt-4">
+        <span class="bg-white/10 rounded-full px-3 py-1 text-sm">5 个里程碑</span>
+        <span class="bg-white/10 rounded-full px-3 py-1 text-sm">10 个切片 · 23 个任务</span>
+        <span class="bg-red-500/30 rounded-full px-3 py-1 text-sm">6 条红线</span>
+        <span class="bg-purple-500/30 rounded-full px-3 py-1 text-sm">7 个决策已确认</span>
+        <span class="bg-blue-500/30 rounded-full px-3 py-1 text-sm">9 条验收标准</span>
+        <span class="bg-emerald-500/30 rounded-full px-3 py-1 text-sm">已定稿 · 正式文档见 2026-10-10_专家铸造炉.md</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容 -->
+  <main class="max-w-5xl mx-auto px-4 py-8" x-data="{tab:'scope'}">
+    <!-- 标签导航（对齐 md 章节） -->
+    <div class="flex gap-1 border-b mb-6 overflow-x-auto">
+      <button @click="tab='scope'" :class="tab==='scope'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">目标与范围</button>
+      <button @click="tab='arch'" :class="tab==='arch'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">总体设计</button>
+      <button @click="tab='detail'" :class="tab==='detail'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">详细设计</button>
+      <button @click="tab='tasks'" :class="tab==='tasks'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">任务分解</button>
+      <button @click="tab='rules'" :class="tab==='rules'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">约束红线</button>
+      <button @click="tab='accept'" :class="tab==='accept'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">验收标准</button>
+      <button @click="tab='decisions'" :class="tab==='decisions'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">决策记录</button>
+      <button @click="tab='risks'" :class="tab==='risks'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">风险与开放问题</button>
+      <button @click="tab='history'" :class="tab==='history'?'border-b-2 border-blue-600 text-blue-600':'text-gray-600'" class="px-4 py-2 text-sm font-medium whitespace-nowrap">迭代记录</button>
+    </div>
+
+    <!-- ==================== 1 目标与范围 ==================== -->
+    <div x-show="tab==='scope'" x-cloak class="space-y-5">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">§1.1 目标</h2>
+        <p class="text-sm text-gray-700 leading-relaxed">为 VCPToolBox 增加「专家生成」能力：用户以一句话需求描述目标专家（首个试点：<strong>UI 设计专家</strong>），系统自动完成六步流水线：</p>
+        <ol class="mt-3 text-sm text-gray-700 space-y-1.5 list-decimal list-inside">
+          <li><strong>专家画像制定（构思）</strong>：铸造师 agent 与用户确认职责边界、子技能清单、考纲</li>
+          <li><strong>网络资料采集（采集）</strong>：按子技能逐项检索抓取，原始材料永久存档</li>
+          <li><strong>知识蒸馏入库（提炼）</strong>：蒸馏为结构化知识文件写入 <code>knowledge/&lt;库名&gt;/</code>，TDB 冷知识库自动索引</li>
+          <li><strong>人设合成与注册（合成）</strong>：生成 <code>Agent/&lt;名字&gt;.txt</code>、登记 <code>agent_map.json</code>、绑定知识库权限与引导配置</li>
+          <li><strong>试岗验收（试岗）</strong>：出题官按考纲出题，新专家盲测（只准查自己的库），LLM 判卷，及格后请用户抽查，不及格定向补课</li>
+          <li><strong>持续学习（进修）</strong>：缺口标记、手动进修指令、定时进修三种触发，增量入库并留学习档案</li>
+        </ol>
+        <div class="mt-4 border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+          <p class="font-semibold text-red-800">核心原则（红线 1）</p>
+          <p class="mt-1 text-sm text-red-700">专业技能只进 TDB 冷知识库，绝不写入任何记忆日记本。记忆本存「经历」，知识库存「本事」，两者永不交叉。铸造流程全程禁止调用任何写日记工具，审计日志可证明。</p>
+        </div>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">§1.2 范围</h2>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="border border-emerald-200 bg-emerald-50 rounded-xl p-4">
+            <p class="font-semibold text-emerald-800 mb-2">In scope</p>
+            <ul class="text-sm text-emerald-900 space-y-1 list-disc list-inside">
+              <li>铸造流水线编排（agentGateway job 运行时之上）</li>
+              <li>专家画像 JSON schema 与读写校验</li>
+              <li>检索抓取（复用搜索插件，多插件 fallback）、蒸馏（llmCompletion）、知识文件写入 knowledge/</li>
+              <li>人设合成、agent_map 自动登记、知识库权限绑定、引导配置</li>
+              <li>试岗出题 / 盲测 / LLM 判卷 / Jev 对照试点 / 缺口回填</li>
+              <li>缺口登记（新 MCP 工具 gateway_gap_report）、手动进修、定时进修（taskScheduler）、学习档案</li>
+              <li>预算护栏：每次铸造模型调用费用上限 10 元（画像内可配，默认 10）</li>
+            </ul>
+          </div>
+          <div class="border border-gray-300 bg-gray-50 rounded-xl p-4">
+            <p class="font-semibold text-gray-700 mb-2">Out of scope（已确认决策）</p>
+            <ul class="text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>AdminPanel 进度展示页（D1：本期不做，将来需要再补）</li>
+              <li>VCP 内部对话渠道的人设适配（Q3：主要渠道为外部 MCP 客户端）</li>
+              <li>多专家并行铸造调度（单 job 串行即可）</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white border-2 border-emerald-300 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§1.3 试点验收对象</h2>
+        <p class="text-sm text-gray-700">「UI 设计专家」：及格线样例（Q5 已确认）——<strong>能给出一份眼前一亮、去 AI 味的 UI 设计图</strong>。</p>
+      </div>
+    </div>
+
+    <!-- ==================== 2 总体设计 ==================== -->
+    <div x-show="tab==='arch'" x-cloak class="space-y-5">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">§2.1 流水线总览</h2>
+        <pre class="doc-pre">[用户一句话需求]
+      │
+      ▼
+① 构思 blueprint ──(用户确认画像)──► ② 采集 harvest ──► ③ 提炼 distill
+      ▲                                                        │
+      │                                                        ▼
+      │              ⑥ 持续学习 lifelong ◄──缺口── ⑤ 试岗 trial ◄── ④ 合成 synthesize
+      └──────────── 增量学习（小型采集→提炼） ◄──────────────┘</pre>
+        <p class="mt-2 text-sm text-gray-600">六步中 ②③ 复用同一套「采集→提炼」能力：初次铸造全量跑，缺口回填与持续学习以缺口/主题为 scope 增量跑。</p>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">§2.2 组件分层（上层只读下层，禁止反向依赖）</h2>
+        <div class="space-y-1 max-w-3xl">
+          <div class="bg-purple-100 border-2 border-purple-300 rounded-lg p-3 text-center font-medium text-sm">入口层 · 铸造师 agent（Agent/forge/ForgeMaster.txt）——对话式下订单（D1）；解析需求、生成画像初稿、推进确认、汇报结果</div>
+          <div class="bg-blue-100 border-2 border-blue-300 rounded-lg p-3 text-center font-medium text-sm mx-4">编排层 · forge job 状态机（forge.expert.create / forge.expert.learn）——五步状态机 + 断点续跑 + 预算护栏，跑在 job 运行时（红线 5）</div>
+          <div class="bg-green-100 border-2 border-green-300 rounded-lg p-3 text-center font-medium text-sm mx-8">能力层 · 检索端口 / 蒸馏端口 / 合成端口 / 判卷端口——toolInvoker 调搜索插件；llmCompletion + 模板；Jev 对照走 typesafe-ai</div>
+          <div class="bg-gray-100 border-2 border-gray-300 rounded-lg p-3 text-center font-medium text-sm mx-12">存储层 · 画像 JSON / 原始材料存档 / knowledge/ TDB / Agent/*.txt + agent_map.json / 权限与引导配置 / 学习档案</div>
+          <div class="text-center text-xs text-gray-400 mt-1">↑ 每层只读下一层，禁止反向依赖</div>
+        </div>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">§2.3 复用清单（零/极少改动）</h2>
+        <table class="doc-table">
+          <tr><th>现有能力</th><th>用途</th></tr>
+          <tr><td>TDBKnowledge 文件监听（upsertFile）</td><td>知识文件写入 knowledge/ 后自动索引，<strong>不需要新写入通道</strong></td></tr>
+          <tr><td>AgentManager 热更新（agent_map.json watcher）</td><td>注册新 agent 不重启、不写新代码</td></tr>
+          <tr><td>mcp_agent_knowledge_policy.json 受限库白名单</td><td>新知识库默认只对新专家开放（D5），沿用付鹏观点库模式</td></tr>
+          <tr><td>agentGateway job 运行时（gateway_job_get/cancel）</td><td>长任务进度查询/取消/重试</td></tr>
+          <tr><td>ports/llmCompletion.js</td><td>蒸馏、合成、出题、判卷的 LLM 调用</td></tr>
+          <tr><td>ports/toolInvoker.js</td><td>调用搜索插件</td></tr>
+          <tr><td>AnySearch / FlashDeepSearch / BrowserSearch 等插件</td><td>检索与网页抓取，多插件 fallback</td></tr>
+          <tr><td>taskScheduler（routes/taskScheduler.js）</td><td>定期进修的定时触发</td></tr>
+          <tr><td>infra/auditLogger</td><td>全流程审计事件</td></tr>
+        </table>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">§2.4 新建清单</h2>
+        <ol class="text-sm text-gray-700 space-y-1 list-decimal list-inside">
+          <li>专家画像 schema + 读写校验（§3.1）</li>
+          <li>forge job 编排：五步状态机 + 断点续跑 + 预算护栏（§3.2）</li>
+          <li>五个提示词模板：蒸馏 / 出题 / 判卷 / 人设合成 / Jev 维度定义（§3.4–§3.7）</li>
+          <li>铸造师 agent 人设（对话入口角色）</li>
+          <li>缺口登记：新 MCP 工具 gateway_gap_report + 缺口数据文件（§3.8）</li>
+          <li>学习档案与定时进修任务（§3.8）</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- ==================== 3 详细设计 ==================== -->
+    <div x-show="tab==='detail'" x-cloak class="space-y-5">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.1 专家画像（blueprint）</h2>
+        <p class="text-sm text-gray-700 mb-3">文件位置：<code>Agent/forge/blueprints/&lt;name&gt;.json</code></p>
+        <details>
+          <summary class="text-sm text-blue-600 cursor-pointer hover:underline">Schema 完整定义 ▾</summary>
+          <pre class="doc-pre mt-2">{
+  "name": "UIDesigner",                  // 专家名 = agent 名 = agent_map 键；知识库名派生自 name
+  "displayName": "UI 设计专家",
+  "scope": {
+    "responsibilities": ["落地页/UI 界面设计评审", "组件规范建议", "配色与排版方案"],
+    "boundaries": ["不做前端代码实现", "不做人机交互研究"]
+  },
+  "subskills": [
+    { "id": "color-theory", "title": "配色理论",
+      "searchQueries": ["color theory UI design", "配色理论 界面设计"],
+      "sourceHints": ["官方文档优先", "经典书籍优先"] }
+  ],
+  "sourcePolicy": {
+    "preferOfficialDocs": true,
+    "minDomainsPerSubskill": 3,
+    "qualityFilter": "丢弃营销软文/无实质内容/严重过时内容，丢弃理由留档"
+  },
+  "examOutline": [
+    { "subskillId": "color-theory", "conceptQuestions": 1, "appliedQuestions": 1 }
+  ],
+  "practicalExam": {
+    "prompt": "为一个 SaaS 落地页产出设计方案",
+    "gradingDimensions": ["眼前一亮", "去 AI 味", "可落地"]
+  },
+  "acceptanceSample": "能给出一份眼前一亮、去AI味的 UI 设计图",
+  "budget": { "maxModelCostCny": 10 }
+}</pre>
+        </details>
+        <p class="mt-3 text-sm font-medium text-gray-700">校验规则：</p>
+        <ul class="mt-1 text-sm text-gray-600 space-y-1 list-disc list-inside">
+          <li><code>name</code> 非空、合法文件名字符，且不得与 agent_map.json 现有条目或现有 Agent/ 文件冲突（冲突即暂停待人工确认，红线 3）</li>
+          <li><code>subskills</code> 非空，每项 searchQueries 非空</li>
+          <li><code>budget.maxModelCostCny</code> 缺省取默认值 10（Q2 已确认）</li>
+          <li><code>examOutline</code> 必须覆盖全部 subskills</li>
+        </ul>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.2 铸造 job 编排</h2>
+        <p class="text-sm text-gray-700">job 类型：<code>forge.expert.create</code>（全量五步）/ <code>forge.expert.learn</code>（增量，仅采集→提炼，可带时间过滤）。</p>
+        <table class="doc-table mt-3">
+          <tr><th>步骤</th><th>名称</th><th>产物</th><th>用户门禁</th></tr>
+          <tr><td>1</td><td>blueprint</td><td>画像 JSON</td><td><strong>是</strong>：初稿生成后转 pending_confirm，确认后继续</td></tr>
+          <tr><td>2</td><td>harvest</td><td>raw/ 原始材料 + meta</td><td>否</td></tr>
+          <tr><td>3</td><td>distill</td><td>knowledge/&lt;库名&gt;/ 知识文件</td><td>否</td></tr>
+          <tr><td>4</td><td>synthesize</td><td>Agent/&lt;name&gt;.txt + agent_map 行 + 权限/引导配置</td><td>重名冲突时暂停待确认</td></tr>
+          <tr><td>5</td><td>trial</td><td>考卷 + 答卷 + 判分报告 + 缺口清单</td><td>及格后提示用户抽查（D3）</td></tr>
+        </table>
+        <p class="mt-3 text-sm text-gray-700"><strong>断点续跑</strong>：每步产物落盘即视为完成；job 重试时检测已完成步骤并跳过，只重跑失败步骤（不从头烧钱重来）。</p>
+        <p class="mt-2 text-sm text-gray-700"><strong>进度上报</strong>：复用 job 运行时 progress 事件，事件体携带 <code>{step, detail, costSoFarCny}</code>。</p>
+        <p class="mt-2 text-sm text-gray-700"><strong>预算护栏</strong>（Q2）：每次 llmCompletion / toolInvoker 调用后按模型单价表累计估算费用；累计 ≥90% 上限发 budget.warning 审计事件继续执行；累计 ≥100% job 自动转 <code>paused_budget</code>，携带已花费明细，等待用户确认续跑或终止。</p>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.3 检索与抓取（harvest）</h2>
+        <ul class="text-sm text-gray-700 space-y-1.5 list-disc list-inside">
+          <li><strong>插件调用</strong>：toolInvoker 端口，优先顺序 AnySearch → FlashDeepSearch → BrowserSearch，前一个失败/空结果时 fallback</li>
+          <li><strong>来源多样性</strong>：同一 subskill 至少 minDomainsPerSubskill（默认 3）个不同域名来源，官方文档域名优先加权</li>
+          <li><strong>原始材料存档</strong>（D6：永久保留）：Agent/forge/runs/&lt;jobId&gt;/raw/&lt;subskillId&gt;/ 下每份材料一个文件 + 元数据 <code>{url, fetchedAt, contentHash, plugin}</code></li>
+          <li><strong>抓取礼貌</strong>（红线 6）：同域名请求间隔 ≥ 2 秒；优先使用搜索插件返回的摘要/正文，不做整站爬取</li>
+        </ul>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.4 蒸馏（distill）</h2>
+        <ul class="text-sm text-gray-700 space-y-1.5 list-disc list-inside">
+          <li><strong>模板</strong>：Agent/forge/templates/distill.md；输出知识单元 JSON 数组（type ∈ {concept, methodology, checklist, case, pitfall}）</li>
+          <li><strong>分流规则</strong>（D2 混合）：methodology/体系性内容 → 系列长文档 <code>NN_&lt;主题&gt;.md</code>；concept/checklist/case/pitfall → 知识卡 <code>K_&lt;subskillId&gt;_&lt;slug&gt;.md</code></li>
+          <li><strong>去重合并</strong>：标题相似 + LLM 同义判断 → 合并为一卡，sources 取并集（多来源同义 → 一卡多出处）</li>
+          <li><strong>质量过滤</strong>：每来源 LLM 评估质量分，低于阈值丢弃，丢弃记录 {url, reason} 留档</li>
+          <li><strong>入库验证</strong>：TDB watcher 自动索引（upsertFile 路径）；写后用 gateway_knowledge_search 冒烟查询新库</li>
+        </ul>
+        <details class="mt-2">
+          <summary class="text-sm text-blue-600 cursor-pointer hover:underline">知识卡文件头（红线 4：可溯源）▾</summary>
+          <pre class="doc-pre mt-2">---
+title: 一句话标题
+oneLiner: 一句话摘要
+type: checklist
+subskill: color-theory
+sources:
+  - url: https://...
+    fetchedAt: 2026-10-10T21:00:00+08:00
+tags: [配色, 对比度]
+---
+（正文）</pre>
+        </details>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.5 人设合成（synthesize）</h2>
+        <p class="text-sm text-gray-700">模板 <code>Agent/forge/templates/synthesize.txt</code>，生成结构对齐 <code>Agent/coding/Nexus.txt</code> 的成熟范式：</p>
+        <ol class="mt-2 text-sm text-gray-700 space-y-1 list-decimal list-inside">
+          <li>身份定义（name/role/version，作者标注 ForgeMaster 铸造）</li>
+          <li>核心设定（职责边界，来自画像 scope）</li>
+          <li><strong>MCP 工具调用强制规范</strong>（Q3：外部 MCP 客户端）：所有 gateway 工具调用显式传 <code>agentId: "&lt;name&gt;"</code></li>
+          <li><strong>知识库调用纪律</strong>：接手问题先 gateway_knowledge_search（显式 libraries: ["&lt;库名&gt;"]），答完标注知识出处；知识不足时调用 gateway_gap_report 登记缺口（§3.8）</li>
+          <li>子技能清单与考试标准（来自画像）</li>
+        </ol>
+        <p class="mt-2 text-sm text-gray-700"><strong>重名门禁</strong>（红线 3）：agent_map 已存在同名键或 Agent/ 下已有同名文件 → job 暂停 pending_confirm，提示改名或人工明确覆盖；<strong>默认绝不覆盖</strong>。</p>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.6 注册与配置绑定</h2>
+        <table class="doc-table">
+          <tr><th>目标</th><th>操作</th><th>验证</th></tr>
+          <tr><td>agent_map.json</td><td>追加 "&lt;name&gt;": "forge/&lt;name&gt;.txt"</td><td>不重启 server，AgentManager watcher 生效</td></tr>
+          <tr><td>知识库权限（D5 默认受限）</td><td>mcp_agent_knowledge_policy.json 增 restrictedLibraries["&lt;库名&gt;"] = { allowedAgents: ["&lt;name&gt;"] }</td><td>其他 agentId 检索该库返回 403</td></tr>
+          <tr><td>引导配置</td><td>agent_guidance.json 增新专家条目，绑定专属知识库</td><td>bootstrap 渲染包含知识库指引</td></tr>
+        </table>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.7 试岗与判卷（trial）</h2>
+        <ul class="text-sm text-gray-700 space-y-1.5 list-disc list-inside">
+          <li><strong>出题</strong>（templates/examine.md）：每 subskill ≥2 题（1 概念 + 1 应用），另加 1 道<strong>实操题</strong>（Q5）——「为 SaaS 落地页产出设计方案/设计图」，评分维度含<strong>眼前一亮、去 AI 味、可落地</strong></li>
+          <li><strong>盲测</strong>：被考 agent 工具白名单只含 gateway_knowledge_search（禁一切记忆读写工具，呼应红线 1）</li>
+          <li><strong>判卷</strong>（D3+D7）：主判 LLM（templates/grade.md），维度 = 正确性/完整性/专业性/去 AI 味/可落地，各 0–5 分 + 评语 + 引用知识卡；及格线总分 80%；<strong>到线才请用户抽查</strong>，不及格直接进回填</li>
+          <li><strong>Jev 对照试点</strong>（D7 方案 C）：同一批考卷用 typesafe-ai Jev 做类型化复判——isProfessional / isAiFlavored / isActionable（各带置信概率）；LLM 分数与 Jev 判决双双落档 <code>exams/comparison.json</code>；对比稳定且确有收益后再切主判（本期不切换）</li>
+          <li><strong>缺口回填</strong>：不及格维度映射为缺口清单 → forge.expert.learn 定向任务（scope=缺口 subskills）→ 回填后同套考题重测</li>
+        </ul>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.8 持续学习（lifelong）</h2>
+        <p class="text-sm text-gray-700 mb-2">缺口登记：<strong>新增 MCP 工具 <code>gateway_gap_report</code></strong>（第 9 个 gateway 工具），参数 <code>{agentId, subskillId, question, whyInsufficient}</code>，向 forge/&lt;name&gt;/gaps.json 追加缺口并触发审计事件 gap.reported。</p>
+        <table class="doc-table">
+          <tr><th>触发（D4：三种都要）</th><th>实现</th><th>里程碑</th></tr>
+          <tr><td>a. 缺口驱动</td><td>gaps.json 中 status=open 的条目 → forge.expert.learn（scope=gap）</td><td>M5.S1</td></tr>
+          <tr><td>b. 手动指令</td><td>用户对铸造师说「去学一下 XX」→ 解析为增量学习任务</td><td>M5.S1</td></tr>
+          <tr><td>c. 定期进修</td><td>taskScheduler 周任务（默认 weekly 可配），带时间过滤（只检索上次学习后新增内容）</td><td>M5.S2</td></tr>
+        </table>
+        <p class="mt-3 text-sm text-gray-700"><strong>增量入库纪律</strong>（红线 3）：只新增/合并知识卡，不删除、不修改既有旧卡（除非来源明确撤回）。</p>
+        <p class="mt-2 text-sm text-gray-700"><strong>学习档案</strong>：forge/&lt;name&gt;/learning-history.jsonl 追加 <code>{ts, trigger, scope, sources, distilledFiles}</code>——读过什么、学过什么、为什么学，全部可查。</p>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-2">§3.9 审计与安全</h2>
+        <ul class="text-sm text-gray-700 space-y-1.5 list-disc list-inside">
+          <li><strong>审计事件</strong>（沿用 auditLogger）：forge.job.started / forge.step.completed / forge.budget.warning / forge.budget.paused / forge.agent.registered / forge.library.restricted / forge.exam.graded / forge.gap.reported / forge.learn.completed</li>
+          <li><strong>红线 1 技术保障</strong>：铸造 job 与盲测的工具白名单均不含 gateway_memory_write 等记忆写工具；审计日志可证明全程零记忆写入</li>
+          <li><strong>零 secret 校验</strong>（红线 2）：人设 txt、知识卡、报告落盘前过模式检查（sk-[A-Za-z0-9]{20,}、Bearer、token=、.env 内容形态），命中即阻断落盘并告警</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ==================== 4 任务分解 ==================== -->
+    <div x-show="tab==='tasks'" x-cloak class="space-y-4">
+      <p class="text-sm text-gray-600">M1 → M5 线性依赖，每步可独立验收。task 中 §x.x 引用「详细设计」章节，执行者必须回读原文。本分解可直接作为 execute-plan 的执行计划。</p>
+
+      <!-- M1 -->
+      <div x-data="{open:true}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M1</span>
+          <span class="font-semibold">铸造流水线骨架——先有图纸和车间</span>
+          <span class="ml-auto text-xs opacity-70">2 切片 · 5 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <p class="text-xs text-gray-500">依赖：无。目标：画像格式定稿，铸造任务可在 job 运行时上运行（查进度/取消/重试/预算护栏）。</p>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M1.S1</span><span class="font-medium text-sm">专家画像（蓝图）定义与落盘</span><span class="ml-auto text-xs text-gray-400">依赖：无</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 定义画像 JSON schema 与校验规则（§3.1）</li>
+              <li>T2 画像文件读写与校验工具函数（§3.1）</li>
+              <li class="text-emerald-700">验收：给定「UI 设计专家」一句话需求，能产出一份通过全部校验规则的画像文件（含默认预算 10 元）</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M1.S2</span><span class="font-medium text-sm">铸造任务编排（复用 job 运行时）</span><span class="ml-auto text-xs text-gray-400">依赖：M1.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 forge.expert.create 五步状态机：blueprint → harvest → distill → synthesize → trial（§3.2）</li>
+              <li>T2 进度上报 + 步骤产物落盘判定 + 失败步骤单独重试（断点续跑，§3.2）</li>
+              <li>T3 预算护栏：逐环节累计模型调用费用，≥90% 告警、≥100% 自动暂停并附已花费明细（§3.2，Q2）</li>
+              <li class="text-emerald-700">验收：测试 job 能查进度/取消/单步重试；预算触发时自动转 paused_budget 且事件携带费用明细</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- M2 -->
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M2</span>
+          <span class="font-semibold">知识采集与提炼——专家的「课本」从无到有</span>
+          <span class="ml-auto text-xs opacity-70">2 切片 · 5 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <p class="text-xs text-gray-500">依赖：M1 全部。目标：单 subskill 关键词端到端完成 搜索→抓取→蒸馏→入库，入库后语义可查。</p>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M2.S1</span><span class="font-medium text-sm">检索与抓取端口</span><span class="ml-auto text-xs text-gray-400">依赖：M1.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 搜索插件调用封装：AnySearch → FlashDeepSearch → BrowserSearch 顺序 fallback + 来源多样性约束（每 subskill ≥3 域名）（§3.3）</li>
+              <li>T2 原始材料永久存档：URL + 时间戳 + 内容哈希 + 插件名（D6，§3.3）</li>
+              <li class="text-emerald-700">验收：对一个 subskill 关键词取回 ≥3 个不同域名的原始材料并落盘，每份带完整元数据</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M2.S2</span><span class="font-medium text-sm">蒸馏器：原始材料 → 知识文件 → 自动上架</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 蒸馏模板，按内容性质分流（D2 混合）：methodology/体系 → 长文档；concept/checklist/case/pitfall → 知识卡（§3.4）</li>
+              <li>T2 去重合并（多来源同义 → 一卡多出处）+ 质量过滤（差源丢弃、理由留档）（§3.4）</li>
+              <li>T3 知识文件写入 knowledge/&lt;库名&gt;/，验证 TDB watcher 自动索引生效（§3.4）</li>
+              <li class="text-emerald-700">验收：gateway_knowledge_search 在新库查到知识点，每个知识卡带 ≥1 条出处（URL + 抓取时间）</li>
+            </ul>
+          </div>
+          <div class="border border-gray-200 rounded-lg p-3 bg-white">
+            <p class="text-sm font-medium text-gray-700">里程碑门禁</p>
+            <ul class="mt-1 text-sm text-gray-600 space-y-1 list-disc list-inside"><li class="text-emerald-700">用真实小领域（如「配色理论」）完整跑一遍 采集→提炼→入库→可检索</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- M3 -->
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M3</span>
+          <span class="font-semibold">专家合成与注册——专家「入职」</span>
+          <span class="ml-auto text-xs opacity-70">2 切片 · 4 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <p class="text-xs text-gray-500">依赖：M2 全部。目标：第一个「UI 设计专家」端到端可对话、可查库、权限边界正确。</p>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M3.S1</span><span class="font-medium text-sm">人设合成</span><span class="ml-auto text-xs text-gray-400">依赖：M2.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 人设合成模板：身份 + 职责边界 + MCP 强制规范（显式 agentId）+ 知识库调用纪律章节（外部 MCP 客户端规范，同 Nexus.txt 模式）（§3.5，Q3）</li>
+              <li>T2 重名冲突检测与人工确认门禁（默认绝不覆盖，§3.5、红线 3）</li>
+              <li class="text-emerald-700">验收：生成的 txt 含「知识库调用纪律」章节且 agentId 规范正确；gateway_agent_bootstrap 后自我介绍与画像 scope 一致</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M3.S2</span><span class="font-medium text-sm">注册与配置绑定</span><span class="ml-auto text-xs text-gray-400">依赖：M3.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 agent_map.json 自动登记，验证热更新生效（不重启，§3.6）</li>
+              <li>T2 知识库权限绑定（默认只对新专家开放，D5）+ 引导配置写入（§3.6）</li>
+              <li class="text-emerald-700">验收：新专家经 MCP 完成一次 gateway_knowledge_search 成功；换任一其他 agentId 检索该受限库返回 403</li>
+            </ul>
+          </div>
+          <div class="border border-gray-200 rounded-lg p-3 bg-white">
+            <p class="text-sm font-medium text-gray-700">里程碑门禁</p>
+            <ul class="mt-1 text-sm text-gray-600 space-y-1 list-disc list-inside"><li class="text-emerald-700">「UI 设计专家」端到端：对话可用 + 查到自己的知识库 + 权限边界正确</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- M4 -->
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M4</span>
+          <span class="font-semibold">试岗验收——上岗考试与定向补课</span>
+          <span class="ml-auto text-xs opacity-70">2 切片 · 5 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <p class="text-xs text-gray-500">依赖：M3 全部。目标：专家的专业度可被考试证明，判卷链路含 Jev 对照试点。</p>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M4.S1</span><span class="font-medium text-sm">出题与盲测</span><span class="ml-auto text-xs text-gray-400">依赖：M3.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 出题官模板：按考纲生成考题（每 subskill ≥1 概念 + 1 应用），含实操题「产出 SaaS 落地页设计方案」，评分维度含「眼前一亮、去 AI 味」（§3.7，Q5）</li>
+              <li>T2 盲测执行：被考 agent 工具白名单仅 gateway_knowledge_search（§3.7）</li>
+              <li>T3 打分报告：LLM 判卷（D7 第一步），维度 0–5 分 + 评语 + 知识卡引用；到及格线（80%）才请用户抽查（D3）（§3.7）</li>
+              <li class="text-emerald-700">验收：一份含每题得分、依据、缺口清单的验收报告落盘且用户可读</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M4.S2</span><span class="font-medium text-sm">缺口回填与 Jev 对照试点</span><span class="ml-auto text-xs text-gray-400">依赖：M4.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 缺口清单 → forge.expert.learn 定向学习任务（只补缺口，不推倒重来）（§3.7）</li>
+              <li>T2 Jev 对照试点：同一批考卷 Jev 类型化复判（isProfessional / isAiFlavored / isActionable + 置信概率），LLM 与 Jev 分数双双留档 exams/comparison.json（D7 方案 C，§3.7）</li>
+              <li class="text-emerald-700">验收：回填后同套考题重测弱项分数提升；Jev 对照判分对比档案落盘可查</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- M5 -->
+      <div x-data="{open:false}" class="border rounded-xl overflow-hidden">
+        <button @click="open=!open" class="w-full flex items-center gap-3 p-4 bg-slate-800 text-white hover:bg-slate-700">
+          <span class="font-mono bg-white/20 px-2 py-0.5 rounded text-sm">M5</span>
+          <span class="font-semibold">持续学习——上岗后越用越强</span>
+          <span class="ml-auto text-xs opacity-70">2 切片 · 4 任务</span>
+          <svg class="w-4 h-4 transition-transform" :class="open&&'rotate-180'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" class="p-4 space-y-2 bg-slate-50">
+          <p class="text-xs text-gray-500">依赖：M4 全部。目标：学习闭环成立——发现不足 → 定向进修 → 增量入库 → 留档可查。</p>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M5.S1</span><span class="font-medium text-sm">缺口标记与手动进修</span><span class="ml-auto text-xs text-gray-400">依赖：M4.S2</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 新增 MCP 工具 gateway_gap_report + gaps.json 登记格式（§3.8）</li>
+              <li>T2 手动学习指令：「去学一下 XX」→ 铸造师解析为 forge.expert.learn 增量任务（§3.8，D4）</li>
+              <li class="text-emerald-700">验收：对话中标记的一个缺口生成并完成一次增量学习；新增知识卡入库且既有旧卡未被删除/修改</li>
+            </ul>
+          </div>
+          <div class="bg-white border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">M5.S2</span><span class="font-medium text-sm">定期进修与学习档案</span><span class="ml-auto text-xs text-gray-400">依赖：M5.S1</span></div>
+            <ul class="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+              <li>T1 定时进修任务（taskScheduler，默认 weekly 可配），带「上次学习后新增内容」时间过滤（§3.8，D4）</li>
+              <li>T2 学习历史档案 learning-history.jsonl：时间/触发/范围/来源/产出文件（§3.8）</li>
+              <li class="text-emerald-700">验收：手动触发一次「周更」，知识库出现新增知识卡且学习历史有对应记录</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 5 约束红线 ==================== -->
+    <div x-show="tab==='rules'" x-cloak class="space-y-4">
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div>
+          <p class="font-semibold text-red-800">红线 1：专业技能只进冷知识库，绝不写进记忆日记本</p>
+          <p class="mt-1 text-sm text-red-700">铸造流程与盲测的工具白名单均不含记忆写工具；记忆本记「经历」，知识库存「本事」，两条线永不交叉（技术保障见 §3.9）。</p>
+        </div></div>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div>
+          <p class="font-semibold text-red-800">红线 2：生成物零密钥</p>
+          <p class="mt-1 text-sm text-red-700">人设 txt、知识卡、验收报告中不得出现任何 API key / token / 密码 / .env 内容；落盘前过模式检查并阻断（§3.9）。</p>
+        </div></div>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div>
+          <p class="font-semibold text-red-800">红线 3：绝不自动覆盖已有 agent / 已有知识库</p>
+          <p class="mt-1 text-sm text-red-700">重名冲突暂停待人工确认；增量学习只新增/合并知识卡，不删旧卡（除非来源明确撤回）。</p>
+        </div></div>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div>
+          <p class="font-semibold text-red-800">红线 4：来源可追溯，无法溯源不入库</p>
+          <p class="mt-1 text-sm text-red-700">每张知识卡必须带出处链接与抓取时间；LLM 自生成无来源的「知识」不允许入库——宁可缺，不可编。</p>
+        </div></div>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div>
+          <p class="font-semibold text-red-800">红线 5：长任务必须可停、可查、可重试</p>
+          <p class="mt-1 text-sm text-red-700">铸造/进修一律跑 job 运行时；随时查进度、取消；失败步骤单独重试，不从头烧钱重来。</p>
+        </div></div>
+      </div>
+      <div class="border-l-4 border-red-500 bg-red-50 rounded-r-lg p-4">
+        <div class="flex items-start gap-3"><span class="text-red-500 text-xl mt-0.5">🚫</span><div>
+          <p class="font-semibold text-red-800">红线 6：抓取讲礼貌</p>
+          <p class="mt-1 text-sm text-red-700">遵守目标站点 robots 与频率限制（同域 ≥2s 间隔），不做压力爬虫；优先复用搜索插件的摘要/正文。</p>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- ==================== 6 验收标准 ==================== -->
+    <div x-show="tab==='accept'" x-cloak class="space-y-3">
+      <p class="text-sm text-gray-600">系统级可判定条件（全部满足即项目验收通过）：</p>
+      <div class="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC1</span><p class="text-sm text-gray-700">一句话「造一个 UI 设计专家」→ forge.expert.create 全流程完成，产物齐全：画像 JSON、原始材料存档、knowledge/ 知识文件、Agent/&lt;name&gt;.txt、agent_map 登记行、权限与引导配置</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC2</span><p class="text-sm text-gray-700">gateway_knowledge_search(agentId=新专家, libraries=[新库]) 返回带出处（URL + 时间）的知识条目</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC3</span><p class="text-sm text-gray-700">任选其他 agentId 检索该受限库，返回 403</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC4</span><p class="text-sm text-gray-700">试岗验收报告落盘：每题得分 + 依据 + 缺口清单；实操题评分维度含「眼前一亮、去 AI 味」</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC5</span><p class="text-sm text-gray-700">审计日志证明全程零 gateway_memory_write 调用（红线 1 可证）</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC6</span><p class="text-sm text-gray-700">模拟费用超限场景：job 在预算上限处自动转 paused_budget 且事件携带费用明细</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC7</span><p class="text-sm text-gray-700">对全部生成物执行 secret 模式扫描，零命中</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC8</span><p class="text-sm text-gray-700">手动进修指令触发一次增量学习：新增知识卡入库、既有旧卡 diff 为空</p></div>
+        <div class="flex gap-3"><span class="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded h-fit">AC9</span><p class="text-sm text-gray-700">Jev 对照判分档案存在且与 LLM 分数并排可查</p></div>
+      </div>
+    </div>
+
+    <!-- ==================== 7 决策记录 ==================== -->
+    <div x-show="tab==='decisions'" x-cloak class="space-y-4">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">已确认的决策（D1–D7）</h2>
+        <table class="doc-table">
+          <tr><th>#</th><th>决策</th><th>结论</th><th>理由</th><th>轮次</th></tr>
+          <tr><td>D1</td><td>操作入口形态</td><td>方案 A：对话式（铸造师 agent）</td><td>与现有 MCP 工具形态最搭，见效最快；面板后补</td><td>R2</td></tr>
+          <tr><td>D2</td><td>知识格式与粒度</td><td>方案 C：混合——方法论/体系用长文档，事实/清单/案例/常见错误用知识卡</td><td>两种内容性质不同，按性质选容器</td><td>R2</td></tr>
+          <tr><td>D3</td><td>试岗验收判卷</td><td>方案 C：先自动判卷、到及格线才请用户抽查</td><td>自动过滤不合格候选，用户时间只花在值得看的候选上</td><td>R2</td></tr>
+          <tr><td>D4</td><td>持续学习触发</td><td>方案 A：缺口驱动 + 定期刷新 + 手动指令三种都要</td><td>覆盖即时缺口与领域动态；分两步实现（M5.S1 → M5.S2）</td><td>R2</td></tr>
+          <tr><td>D5</td><td>新知识库默认权限</td><td>方案 A：默认只对生成的新专家开放</td><td>沿用受限库白名单模式；避免未验收知识污染其他 agent</td><td>R2</td></tr>
+          <tr><td>D6</td><td>原始材料保留</td><td>方案 A：全部永久保留</td><td>可追溯、可复检；蒸馏配方升级可「重熬」不用重新爬</td><td>R2</td></tr>
+          <tr><td>D7</td><td>打分引擎</td><td>方案 C：先 LLM 判卷跑通，Jev 做类型化对照试点，分数留档对比后再决定切换</td><td>不赌技术路线，数据说话（来自用户 D3 备注）</td><td>R3</td></tr>
+        </table>
+        <div class="mt-4 border border-blue-200 bg-blue-50 rounded-xl p-4">
+          <p class="font-semibold text-blue-900 text-sm mb-1">需求画像补充确认（R2）</p>
+          <p class="text-sm text-blue-900">首个试点 = UI 设计专家（Q1）；费用护栏 = ≤10 元/次（Q2）；主要渠道 = 外部 MCP 客户端（Q3）；来源策略 = 系统自动找 + 质量过滤兜底（Q4 未填写，按默认落实）；及格线样例 = 眼前一亮、去 AI 味的设计图（Q5）。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 8 风险与开放问题 ==================== -->
+    <div x-show="tab==='risks'" x-cloak class="space-y-4">
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">风险</h2>
+        <table class="doc-table">
+          <tr><th>#</th><th>风险</th><th>缓解</th></tr>
+          <tr><td>R1</td><td>LLM 蒸馏失真/幻觉知识混入库</td><td>红线 4 强制出处；质量过滤丢弃留档；判卷引用知识卡可回查；用户抽查兜底</td></tr>
+          <tr><td>R2</td><td>搜索/蒸馏费用超预算</td><td>预算护栏逐环节累计，≥100% 自动暂停（§3.2）</td></tr>
+          <tr><td>R3</td><td>单一搜索插件失效</td><td>检索端口多插件 fallback（§3.3）</td></tr>
+          <tr><td>R4</td><td>Jev 试点效果不确定</td><td>D7 方案 C 本身即对照实验设计，对比档案落盘，数据说话</td></tr>
+          <tr><td>R5</td><td>TDB watcher 索引延迟或失败</td><td>M2.S2 T3 与门禁（可检索冒烟）覆盖；失败时重试 upsertFile</td></tr>
+          <tr><td>R6</td><td>判卷维度中「去 AI 味」主观性强</td><td>LLM 维度定义 + Jev 类型化复判双轨留档，长期校准</td></tr>
+        </table>
+      </div>
+      <div class="bg-white border border-amber-200 rounded-xl p-5">
+        <h2 class="font-bold text-lg mb-3">开放问题</h2>
+        <ol class="text-sm text-gray-700 space-y-1.5 list-decimal list-inside">
+          <li>定期进修默认周期（weekly）为配置项默认值，上线后按实际效果调整</li>
+          <li>Jev 对照试点若证明稳定，主判引擎切换的判定标准（一致性阈值）在 M4.S2 试点时用对比数据现场确定</li>
+          <li>铸造师 agent 人设（ForgeMaster）的具体措辞在 M1 实现时以 Nexus.txt 为范式起草，首版上线前人工审阅一次</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- ==================== 迭代记录 ==================== -->
+    <div x-show="tab==='history'" x-cloak class="space-y-4">
+      <div class="bg-white border-2 border-emerald-300 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-emerald-700 text-white px-2 py-0.5 rounded text-sm">R4</span>
+          <span class="text-xs text-gray-400">2026-10-11 00:02</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-800 text-white font-medium">已定稿</span>
+          <span class="ml-auto flex gap-1 flex-wrap"><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">全部</span></span>
+        </div>
+        <p class="mt-2 text-sm font-medium text-emerald-800">🎉 本轮定稿，正式文档：2026-10-10_专家铸造炉.md</p>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>评审通过，定稿</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮产出：</span>正式设计文档 docs/design/2026-10-10_专家铸造炉.md（含 §3.1–§3.9 详细设计、M1–M5 三级任务分解、6 红线、9 条验收标准、D1–D7 决策记录）；一致性自检通过；本页面由 md 全新生成。</p>
+        <a href="./round-04.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R3</span>
+          <span class="text-xs text-gray-400">2026-10-10 23:56</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+          <span class="ml-auto flex gap-1 flex-wrap"><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">概览</span><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">路线图</span><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">待定决策</span></span>
+        </div>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700 whitespace-pre-line"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>【评审反馈】《专家铸造炉（Agent 自学习生成方案）》第 2 轮
+D7 打分引擎：LLM 判卷还是引入 Jev：选「方案C·先LLM后试点Jev」</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>D7 转为「已定」；M4.S1 判卷任务落为 LLM 判卷，M4.S2 新增「Jev 对照试点」任务（任务总数 23）。至此 7 个决策全部拍板。</p>
+        <a href="./round-03.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R2</span>
+          <span class="text-xs text-gray-400">2026-10-10 23:49</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+          <span class="ml-auto flex gap-1 flex-wrap"><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">概览</span><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">路线图</span><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">待定决策</span></span>
+        </div>
+        <blockquote class="mt-3 border-l-4 border-slate-300 bg-slate-50 rounded-r-lg px-4 py-2 text-sm text-slate-700 whitespace-pre-line"><span class="text-xs text-slate-400 block mb-1">评审意见（原文）</span>【评审反馈】《专家铸造炉（Agent 自学习生成方案）》第 1 轮
+D1 操作入口用什么形态：选「方案A·对话式」
+D2 知识卡的格式与粒度：选「方案C·混合」
+D3 试岗验收谁说了算：选「方案C·先自动后抽查」（备注：可以考虑是否引入 jev）
+D4 持续学习的触发方式：选「方案A·三种都要」
+D5 新知识库的默认权限：选「方案A·默认受限」
+D6 原始材料的保留策略：选「方案A·全部保留」
+Q1 第一个试点的专家领域：UI 设计专家
+Q2 铸造时长与成本预期：不在乎时长+模型费用控制在10元以内
+Q3 新专家的主要使用渠道：主要在外部 mcp 客户端
+Q4 知识来源偏好：（未填写）
+Q5 及格线的样例标准：能给出一份眼前一亮、去AI味的 UI 设计图</blockquote>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮修改：</span>6 张决策卡转为「已定」、5 个澄清全部落实（Q4 未填写按默认）；概览新增「需求画像」卡；M1.S2 加预算护栏；M2 混合格式与永久保留；M3 按 MCP 客户端规范；M4 加实操题；jev 备注拆成 D7。</p>
+        <a href="./round-02.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+      <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-sm">R1</span>
+          <span class="text-xs text-gray-400">2026-10-10 21:42</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">已采纳</span>
+          <span class="ml-auto flex gap-1 flex-wrap"><span class="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">全部</span></span>
+        </div>
+        <p class="mt-3 text-sm text-gray-700"><span class="font-medium">本轮内容：</span>首次产出评审草图：六步铸造流水线、5 里程碑 / 10 切片 / 21 任务、6 条红线、6 个待定决策与 5 个澄清问题。</p>
+        <a href="./round-01.html" class="mt-2 inline-block text-xs text-blue-600 hover:underline">查看此轮版本 →</a>
+      </div>
+    </div>
+  </main>
+
+  <footer class="max-w-5xl mx-auto px-4 pb-10 text-center text-xs text-gray-400">
+    正式文档：docs/design/2026-10-10_专家铸造炉.md · 本页面由 md 同源生成 · 可作为执行计划交给 execute-plan
+  </footer>
+</body>
+</html>
