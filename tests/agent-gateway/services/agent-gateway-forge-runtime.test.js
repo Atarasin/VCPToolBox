@@ -250,16 +250,17 @@ test('预算护栏：≥90% 告警继续执行，≥100% 自动转 paused_budget
     assert.equal(run.budgetRaises.length, 1);
 });
 
-// ── 五步状态机：未交付能力的步骤以明确错误失败（M2-M4 替换）────────────────
+// ── 五步状态机：未交付能力的步骤以明确错误失败（M2.S1 后 harvest 已接入）──
 
-test('harvest/distill/synthesize/trial 未接入能力时 job 以 FORGE_STEP_CAPABILITY_PENDING 失败', async () => {
+test('toolInvoker 缺失时 harvest 报 FORGE_TOOL_INVOKER_UNAVAILABLE；distill/synthesize/trial 仍为待接入桩', async () => {
     const baseDir = createTempDir();
     const { jobRuntimeService, forgeRuntimeService } = buildService({ baseDir });
     const { jobId } = await forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
     await waitFor(() => statusOf(jobRuntimeService, jobId) === JOB_STATUS.PENDING_CONFIRM);
     await forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
     assert.equal(await waitFor(() => statusOf(jobRuntimeService, jobId) === JOB_STATUS.FAILED), true);
-    assert.equal(forgeMeta(jobRuntimeService, jobId).error.code, 'FORGE_STEP_CAPABILITY_PENDING');
+    assert.equal(forgeMeta(jobRuntimeService, jobId).error.code, 'FORGE_TOOL_INVOKER_UNAVAILABLE');
+    assert.equal(forgeMeta(jobRuntimeService, jobId).error.step, 'harvest');
 });
 
 test('forge.expert.learn 增量学习 job 走 harvest→distill 两步', async () => {

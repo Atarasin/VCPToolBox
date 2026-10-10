@@ -7,12 +7,15 @@ const {
     validateBlueprint,
     writeBlueprint
 } = require('./blueprint');
+const { createHarvestStepRunner } = require('./harvest');
+const { createDistillStepRunner } = require('./distill');
+const { extractJsonObject } = require('./jsonUtils');
 
 /**
  * 铸造五步状态机的步骤定义（§3.2）。
- * M1 交付编排骨架：blueprint 步骤完整实现（LLM 起草画像 → 校验 → 落盘）；
- * harvest / distill / synthesize / trial 分别由 M2.S1 / M2.S2 / M3.S1 / M4.S1
- * 以真实能力实现替换（经 options.stepRunners 注入，编排器不改）。
+ * M1 交付编排骨架；M2 起接入真实能力：blueprint（M1，LLM 起草画像）、
+ * harvest（M2.S1，检索采集）与 distill（M2.S2，蒸馏入库）已实现；
+ * synthesize / trial 分别由 M3.S1 / M4.S1 交付（经 options.stepRunners 可再覆盖）。
  */
 
 const BLUEPRINT_DRAFT_PROMPT = `你是一名「专家铸造师」。请根据用户的一句话需求，起草一份专家画像（blueprint）JSON。
@@ -37,23 +40,6 @@ const BLUEPRINT_DRAFT_PROMPT = `你是一名「专家铸造师」。请根据用
 - 不要编造预算字段（系统会注入默认预算）。
 
 用户需求：{{requirement}}`;
-
-function extractJsonObject(text) {
-    if (typeof text !== 'string') {
-        return null;
-    }
-    const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start === -1 || end === -1 || end <= start) {
-        return null;
-    }
-    try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-    } catch {
-        return null;
-    }
-}
 
 class ForgeCapabilityPendingError extends Error {
     constructor(stepId, milestone) {
@@ -181,11 +167,15 @@ function createBlueprintStepRunner({ baseDir }) {
 /**
  * 步骤注册表。stepRunners 允许后续里程碑替换默认（capability-pending）实现。
  */
-function createStepRegistry({ baseDir, stepRunners = {} }) {
+function createStepRegistry({ baseDir, knowledgeRoot, smokeRetries = null, smokeIntervalMs = null, stepRunners = {} }) {
     const defaults = {
         blueprint: createBlueprintStepRunner({ baseDir }),
-        harvest: createPendingStepRunner('harvest', 'M2.S1'),
-        distill: createPendingStepRunner('distill', 'M2.S2'),
+        harvest: createHarvestStepRunner(),
+        distill: createDistillStepRunner({
+            knowledgeRoot,
+            ...(smokeRetries != null ? { smokeRetries } : {}),
+            ...(smokeIntervalMs != null ? { smokeIntervalMs } : {})
+        }),
         synthesize: createPendingStepRunner('synthesize', 'M3.S1'),
         trial: createPendingStepRunner('trial', 'M4.S1')
     };

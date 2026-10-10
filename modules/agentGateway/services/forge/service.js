@@ -57,6 +57,16 @@ class JobCancelledError extends Error {
     }
 }
 
+// 知识库根：与 TDB 同源（TDB_KNOWLEDGE_ROOT_PATH，相对 CWD 解析），
+// 缺省 <repo>/knowledge（baseDir = <repo>/Agent/forge）。
+function resolveKnowledgeRoot(baseDir) {
+    const envRoot = (process.env.TDB_KNOWLEDGE_ROOT_PATH || '').trim();
+    if (envRoot) {
+        return path.resolve(process.cwd(), envRoot);
+    }
+    return path.resolve(baseDir, '..', '..', 'knowledge');
+}
+
 function resolveForgeLlmConfig(env = process.env) {
     const url = (env.FORGE_LLM_URL || env.AIMemoUrl || '').trim();
     const apiKey = (env.FORGE_LLM_API || env.AIMemoApi || '').trim();
@@ -113,7 +123,11 @@ function createForgeRuntimeService(options = {}) {
         llmCompletionPort = null,
         toolInvokerPort = null,
         agentDirectoryPort = null,
+        knowledgeStorePort = null,
         baseDir = DEFAULT_BASE_DIR,
+        knowledgeRoot = null,
+        smokeRetries = null,
+        smokeIntervalMs = null,
         prices = null,
         defaultBudgetCny = DEFAULT_BUDGET_CNY,
         llmConfig = null,
@@ -130,7 +144,14 @@ function createForgeRuntimeService(options = {}) {
     }
 
     const runStore = createRunStore({ baseDir });
-    const stepRegistry = createStepRegistry({ baseDir, stepRunners });
+    const effectiveKnowledgeRoot = knowledgeRoot || resolveKnowledgeRoot(baseDir);
+    const stepRegistry = createStepRegistry({
+        baseDir,
+        knowledgeRoot: effectiveKnowledgeRoot,
+        smokeRetries,
+        smokeIntervalMs,
+        stepRunners
+    });
     const effectiveLlmConfig = llmConfig !== null ? llmConfig : resolveForgeLlmConfig();
 
     function log(event, payload) {
@@ -282,6 +303,8 @@ function createForgeRuntimeService(options = {}) {
                     expertName: runRecord.expertName || null,
                     baseDir,
                     runDir: runStore.runDir(jobId),
+                    knowledgeRoot: effectiveKnowledgeRoot,
+                    knowledgeStorePort,
                     llm: wrapLlm(meter, jobId, authContext, step.id),
                     toolInvoker: wrapToolInvoker(meter, jobId, authContext, step.id),
                     agentDirectoryPort,
@@ -292,7 +315,8 @@ function createForgeRuntimeService(options = {}) {
                 ensureActive(jobId, authContext); // 执行期间被取消则不覆盖 cancelled 状态。
                 const marker = await runStore.markStepComplete(jobId, step.id, {
                     summary: result.summary || null,
-                    artifacts: result.artifacts || []
+                    artifacts: result.artifacts || [],
+                    state: result.state && typeof result.state === 'object' ? result.state : null
                 });
                 markers.set(step.id, marker);
                 log('forge.step.completed', {
@@ -445,6 +469,7 @@ function createForgeRuntimeService(options = {}) {
         FORGE_JOB_OPERATIONS,
         FORGE_ALLOWED_TOOLS,
         baseDir,
+        knowledgeRoot: effectiveKnowledgeRoot,
         async startExpertCreateJob({ requirement, authContext = null, blueprintOverride = null, budgetCny = null } = {}) {
             const normalizedRequirement = normalizeString(requirement);
             if (!normalizedRequirement) {

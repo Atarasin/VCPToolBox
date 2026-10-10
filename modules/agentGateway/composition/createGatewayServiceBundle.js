@@ -201,7 +201,9 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         llmCompletionPort: ports.llmCompletion,
         toolInvokerPort: ports.toolInvoker,
         agentDirectoryPort: ports.agentDirectory,
-        baseDir: process.env.FORGE_BASE_DIR || undefined
+        knowledgeStorePort: ports.knowledgeStore,
+        baseDir: process.env.FORGE_BASE_DIR || undefined,
+        knowledgeRoot: process.env.FORGE_KNOWLEDGE_ROOT || undefined
     });
     const capabilityService = createCapabilityService({
         ports,
