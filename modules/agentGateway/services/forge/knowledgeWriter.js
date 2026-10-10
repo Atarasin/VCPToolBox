@@ -44,12 +44,14 @@ function serializeFrontmatter(fields) {
                 continue;
             }
             if (typeof value[0] === 'object') {
+                // 多行 YAML（设计 §3.4 文件头示例格式），避免内联 flow map 的值解析歧义。
                 lines.push(`${key}:`);
                 for (const item of value) {
-                    const inner = Object.entries(item)
-                        .map(([k, v]) => `${k}: ${yamlEscape(v)}`)
-                        .join(', ');
-                    lines.push(`  - { ${inner} }`);
+                    const entries = Object.entries(item);
+                    entries.forEach(([k, v], index) => {
+                        const prefix = index === 0 ? '  - ' : '    ';
+                        lines.push(`${prefix}${k}: ${yamlEscape(v)}`);
+                    });
                 }
             } else {
                 lines.push(`${key}: [${value.map((item) => yamlEscape(item)).join(', ')}]`);
@@ -162,14 +164,14 @@ function createKnowledgeWriter({ libraryDir }) {
                 return { fileName, kind: 'card' };
             })();
         },
-        writeLongDoc(unit, { fetchedAtByUrl = null } = {}) {
+        writeLongDoc(unit, { fetchedAtByUrl = null, defaultFetchedAt = null } = {}) {
             return (async () => {
                 const { longDocs, allNames } = listLibraryFiles(libDir);
                 const seq = nextLongDocSequence(longDocs);
                 const fileName = `${String(seq).padStart(2, '0')}_${slugify(unit.title, 24)}.md`;
                 const unique = uniqueFileName(libDir, fileName.replace(/\.md$/, ''), '.md', allNames);
                 const filePath = path.join(libDir, unique);
-                const fetchedTimes = (unit.sourceUrls || []).map((url) => fetchedAtByUrl?.get(url) || new Date().toISOString());
+                const fetchedTimes = (unit.sourceUrls || []).map((url) => fetchedAtByUrl?.get(url) || defaultFetchedAt || new Date().toISOString());
                 const header = `# ${unit.title}\n\n> ${unit.oneLiner}\n> 来源：${(unit.sourceUrls || []).join(' ; ')}\n> 抓取时间：${[...new Set(fetchedTimes)].join(' ; ')}\n\n`;
                 const body = `${header}${String(unit.content || '').trim()}\n`;
                 await assertNoSecrets(body, filePath);
@@ -189,19 +191,27 @@ function createKnowledgeWriter({ libraryDir }) {
                     error.status = 500;
                     throw error;
                 }
-                const sourcesBlock = match[1].match(/^sources:\n((?:  - .*\n?)+)/m);
+                const sourcesBlock = match[1].match(/^sources:\n((?:(?:  - |    ).*\n?)+)/m);
                 // 保留既有来源的原始 fetchedAt（红线 3：合并不改写旧卡的溯源时间）。
+                // 兼容两类历史格式：多行 YAML（现行）与内联 flow map（早期产物）。
                 const existing = new Map();
                 if (sourcesBlock) {
+                    let pendingUrl = null;
                     for (const line of sourcesBlock[1].split('\n')) {
-                        const pair = line.match(/url:\s*"?(.+?)"?\s*,\s*fetchedAt:\s*"?(.+?)"?\s*(?:,|$)/);
-                        if (pair) {
-                            existing.set(pair[1].trim(), pair[2].trim());
-                        } else {
-                            const url = line.match(/url:\s*"?(.+?)"?\s*(?:,|$)/);
-                            if (url) {
-                                existing.set(url[1].trim(), defaultFetchedAt || new Date().toISOString());
+                        const urlMatch = line.match(/url:\s*"?([^"\n]+?)"?\s*$/);
+                        const inlineMatch = line.match(/url:\s*"?([^",}]+?)"?\s*,\s*fetchedAt:\s*"?([^",}]+?)"?\s*\}/);
+                        const tsMatch = line.match(/fetchedAt:\s*"?([^",}\n]+?)"?\s*$/);
+                        if (inlineMatch) {
+                            existing.set(inlineMatch[1].trim(), inlineMatch[2].trim());
+                            pendingUrl = null;
+                        } else if (urlMatch) {
+                            pendingUrl = urlMatch[1].trim();
+                            if (!existing.has(pendingUrl)) {
+                                existing.set(pendingUrl, defaultFetchedAt || new Date().toISOString());
                             }
+                        } else if (tsMatch && pendingUrl) {
+                            existing.set(pendingUrl, tsMatch[1].trim());
+                            pendingUrl = null;
                         }
                     }
                 }
@@ -217,7 +227,7 @@ function createKnowledgeWriter({ libraryDir }) {
                     return { cardFile, addedCount: 0 };
                 }
                 const sourcesLines = Array.from(existing.entries())
-                    .map(([url, fetchedAt]) => `  - { url: ${yamlEscape(url)}, fetchedAt: ${yamlEscape(fetchedAt)} }`)
+                    .flatMap(([url, fetchedAt]) => [`  - url: ${yamlEscape(url)}`, `    fetchedAt: ${yamlEscape(fetchedAt)}`])
                     .join('\n');
                 let nextFrontmatter = match[1];
                 if (sourcesBlock) {

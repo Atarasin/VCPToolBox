@@ -27,7 +27,8 @@ const FALLBACK_DISTILL_TEMPLATE = `你是知识蒸馏引擎。从原始检索材
 只输出 JSON：{"knowledgeUnits":[{"type":"","title":"","oneLiner":"","content":"","tags":[],"sourceUrls":[],"mergeInto":null}],"droppedSources":[{"url":"","reason":""}]}`;
 
 const UNIT_TYPES = new Set(['concept', 'methodology', 'checklist', 'case', 'pitfall']);
-const SMOKE_RETRY_COUNT = 10;
+// 真实环境 embedding + batch 窗口可能 >30s（M2 门禁实测），窗口放宽到 60s。
+const SMOKE_RETRY_COUNT = 20;
 const SMOKE_RETRY_INTERVAL_MS = 3000;
 
 function loadTemplate(baseDir) {
@@ -103,9 +104,9 @@ async function smokeSearchLibrary(knowledgeStorePort, { libraryName, query, logg
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
         try {
-            const hits = await knowledgeStorePort.search(query, { library: libraryName, topK: 3 });
+            const hits = await knowledgeStorePort.search(query, { libraries: [libraryName], topK: 3 });
             if (Array.isArray(hits) && hits.length > 0) {
-                return { skipped: false, hits: hits.length, query };
+                return { skipped: false, verified: true, hits: hits.length, query };
             }
         } catch (error) {
             logger?.(`smoke: 查询失败（第 ${attempt} 次）：${error.message}`);
@@ -114,10 +115,12 @@ async function smokeSearchLibrary(knowledgeStorePort, { libraryName, query, logg
             await new Promise((resolve) => setTimeout(resolve, intervalMs));
         }
     }
-    const error = new Error(`入库冒烟验证未通过：新库 ${libraryName} 查询「${query}」无结果（watcher 索引可能失败，可重跑 distill 步骤）`);
-    error.code = 'FORGE_INDEX_SMOKE_FAILED';
-    error.status = 502;
-    throw error;
+    // 索引完成是 TDB watcher 的异步职责（真实环境 embedding 延迟可达分钟级，
+    // 且写入期的 TriviumDB 读打开可能与写句柄锁竞争——均非 distill 可控），
+    // 冒烟尽力而为：未命中记告警留痕，不阻断 distill——产物已落盘，
+    // 最终可检索性由门禁/人工在索引稳定后验证（TDB 队列自动重试 upsertFile）。
+    logger?.(`smoke: 新库 ${libraryName} 在 ${retries * intervalMs / 1000}s 窗口内未命中（索引延迟或失败，TDB 队列将自动重试 upsertFile）`);
+    return { skipped: false, verified: false, hits: 0, query, reason: 'index_lag_or_failed' };
 }
 
 function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COUNT, smokeIntervalMs = SMOKE_RETRY_INTERVAL_MS }) {
@@ -166,15 +169,20 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                 materials,
                 existingCardTitles: existingCards.map((card) => card.title)
             });
-            const response = await llm.complete(llmConfig, {
+            const completeOnce = async () => llm.complete(llmConfig, {
                 model: llmConfig.model,
                 messages: [{ role: 'user', content: prompt }],
                 temperature: 0.2,
                 max_tokens: 8000
             });
-            const payload = extractJsonObject(response?.data?.choices?.[0]?.message?.content || '');
+            let payload = extractJsonObject((await completeOnce())?.data?.choices?.[0]?.message?.content || '');
             if (!payload || !Array.isArray(payload.knowledgeUnits)) {
-                const error = new Error(`subskill ${subskill.id} 蒸馏输出不可解析`);
+                // LLM 输出抖动（截断/夹带杂文）时同 prompt 重试一次，费用照常入预算护栏。
+                logger?.(`distill: subskill ${subskill.id} 输出不可解析，重试一次`);
+                payload = extractJsonObject((await completeOnce())?.data?.choices?.[0]?.message?.content || '');
+            }
+            if (!payload || !Array.isArray(payload.knowledgeUnits)) {
+                const error = new Error(`subskill ${subskill.id} 蒸馏输出不可解析（已重试一次）`);
                 error.code = 'FORGE_DISTILL_OUTPUT_INVALID';
                 error.status = 502;
                 throw error;
@@ -254,8 +262,11 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
             intervalMs: smokeIntervalMs
         });
 
+        const smokeNote = smoke.skipped
+            ? '（冒烟跳过：TDB 未启用）'
+            : (smoke.verified ? `（冒烟命中 ${smoke.hits} 条）` : '（冒烟未命中：索引延迟，TDB 队列自动重试）');
         return {
-            summary: `蒸馏完成：${written.length} 个新文件 / ${merged.length} 次合并 / 丢弃 ${dropped.length} 源${smoke.skipped ? '（冒烟跳过：TDB 未启用）' : `（冒烟命中 ${smoke.hits} 条）`}`,
+            summary: `蒸馏完成：${written.length} 个新文件 / ${merged.length} 次合并 / 丢弃 ${dropped.length} 源${smokeNote}`,
             artifacts: written.map((item) => `knowledge/${libraryName}/${item.fileName}`),
             state: {
                 libraryName,

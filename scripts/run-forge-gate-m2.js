@@ -99,6 +99,31 @@ async function main() {
     const tdb = require(path.join(ROOT, 'TDBKnowledge'));
     await tdb.initialize();
 
+    // 门禁是单进程冷启动：TDB 初始扫描会排队全部既有库文件（去重检查耗时），
+    // 若不排空就发起 job，新知识文件的索引会排在 255 个初始扫描文件之后，
+    // 挤占 distill 冒烟验证的窗口（生产 watcher 常驻无此竞态）。
+    // 此处轮询持久化 ingest_queue 直到排空。
+    const Database = require(path.join(ROOT, 'node_modules', 'better-sqlite3'));
+    await (async () => {
+        const queuePath = path.join(ROOT, 'VectorStoreTDB', 'tdb_knowledge_meta.sqlite');
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+            let pending = 0;
+            try {
+                const db = new Database(queuePath, { readonly: true });
+                pending = db.prepare("SELECT COUNT(*) AS n FROM ingest_queue WHERE status IN ('pending','retrying','running')").get().n;
+                db.close();
+            } catch {
+                pending = -1; // 库尚未创建
+            }
+            if (pending === 0) {
+                console.log('[gate] TDB 初始扫描队列已排空');
+                return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        throw new Error('等待 TDB 初始扫描排空超时（120s）');
+    })();
+
     const { createJobRuntimeService } = require(path.join(ROOT, 'modules', 'agentGateway', 'services', 'jobRuntimeService'));
     const { createForgeRuntimeService } = require(path.join(ROOT, 'modules', 'agentGateway', 'services', 'forge', 'service'));
     const { scanTextForSecrets } = require(path.join(ROOT, 'modules', 'agentGateway', 'services', 'forge', 'secretScan'));
@@ -211,11 +236,31 @@ async function main() {
         }
     }
 
-    // ── 检查点 4：TDB 可检索（真实 watcher 已索引）──
+    // ── 检查点 4：TDB 可检索（真实 watcher 已索引；embedding 延迟可达分钟级，脚本侧等待）──
     const detail = await forgeRuntimeService.getJobDetail(jobId);
     console.log('[gate] distill 冒烟结果：', JSON.stringify(steps.distill));
     if (detail.cost) {
         console.log(`[gate] 费用：${detail.cost.costSoFarCny} / ${detail.cost.budgetCny} 元`);
+    }
+
+    let searchHits = 0;
+    for (let attempt = 1; attempt <= 25; attempt += 1) {
+        try {
+            const hits = await tdb.search('color theory UI design', { libraries: ['ColorTheoryExpert知识库'], topK: 3 });
+            if (hits.length > 0) {
+                searchHits = hits.length;
+                console.log(`[gate] 检索验证命中 ${hits.length} 条（第 ${attempt} 次尝试，${attempt * 12}s）`);
+                break;
+            }
+        } catch (error) {
+            console.log(`[gate] 检索尝试 ${attempt} 异常：${error.message}`);
+        }
+        if (attempt < 25) {
+            await new Promise((resolve) => setTimeout(resolve, 12000));
+        }
+    }
+    if (searchHits === 0) {
+        throw new Error('门禁失败：索引稳定后（5 分钟）新库仍不可检索');
     }
 
     const report = {
@@ -232,6 +277,7 @@ async function main() {
     };
     fs.writeFileSync(path.join(ROOT, 'Agent', 'forge', 'gate-m2-report.json'), `${JSON.stringify(report, null, 2)}\n`);
     console.log('[gate] ✅ M2 门禁通过：采集→提炼→入库→可检索 全链路真实环境验证完成');
+    process.exit(0); // TDB watcher/定时器会挂起事件循环，成功路径必须显式退出
 }
 
 main().catch((error) => {

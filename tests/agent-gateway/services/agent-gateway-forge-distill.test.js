@@ -272,10 +272,11 @@ tags: [旧]
     assert.match(mergedRaw, /旧卡正文不可被修改。/, '正文不动');
     assert.match(mergedRaw, /old-source\.example\.com/);
     assert.match(mergedRaw, /interaction-design\.org/);
-    const sources = mergedRaw.match(/sources:\n((?:  - .*\n)+)/)[1];
-    assert.equal((sources.match(/url:/g) || []).length, 2, '来源并集');
+    // 多行 YAML 格式（设计 §3.4）：- url 行计数来源数
+    const sourceCount = (mergedRaw.match(/  - url: /g) || []).length;
+    assert.equal(sourceCount, 2, '来源并集');
     // S2：既有来源的原始 fetchedAt 不被合并时刻改写
-    assert.match(sources, /2026-10-01T00:00:00\.000Z/, '旧来源时间戳保留');
+    assert.match(mergedRaw, /fetchedAt: 2026-10-01T00:00:00\.000Z/, '旧来源时间戳保留');
 
     const runDir = path.join(baseDir, 'runs', jobId);
     const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'distill.json'), 'utf8'));
@@ -323,7 +324,7 @@ test('distill：TDB 未启用时冒烟跳过（warning 不阻断）', async () =
     assert.ok(fs.existsSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')));
 });
 
-test('distill：冒烟持续无结果报 FORGE_INDEX_SMOKE_FAILED', async () => {
+test('distill：冒烟持续无结果降级为告警留痕，不阻断步骤（索引是 watcher 异步职责）', async () => {
     const baseDir = createTempDir();
     let searches = 0;
     const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
@@ -342,7 +343,10 @@ test('distill：冒烟持续无结果报 FORGE_INDEX_SMOKE_FAILED', async () => 
     });
     const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
     const job = jobRuntimeService.pollJob(jobId, null).data.job;
-    assert.equal(job.status, 'failed');
-    assert.equal(job.metadata.forge.error.code, 'FORGE_INDEX_SMOKE_FAILED');
+    // distill 完成-marker 落盘；job 失败点应是 synthesize 桩而非 distill
+    assert.equal(job.metadata.forge.error.step, 'synthesize');
+    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
+    assert.match(marker.summary, /冒烟未命中：索引延迟/);
     assert.equal(searches, 2, '短重试配置生效');
+    assert.ok(fs.existsSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')), '知识文件已落盘');
 });
