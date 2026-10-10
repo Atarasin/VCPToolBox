@@ -330,7 +330,8 @@ function createForgeRuntimeService(options = {}) {
                     toolInvoker: wrapToolInvoker(meter, jobId, authContext, step.id),
                     agentDirectoryPort,
                     llmConfig: effectiveLlmConfig,
-                    logger: (message) => log('forge.step.running', { jobId, step: step.id, message })
+                    logger: (message) => log('forge.step.running', { jobId, step: step.id, message }),
+                    audit: (event, payload) => log(event, { jobId, step: step.id, ...payload })
                 };
                 const result = await stepRegistry.getRunner(step.id)(ctx) || {};
                 ensureActive(jobId, authContext); // 执行期间被取消则不覆盖 cancelled 状态。

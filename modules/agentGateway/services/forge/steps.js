@@ -151,7 +151,8 @@ function createStepRegistry({
             knowledgePolicyPath: knowledgePolicyPath || path.join(__dirname, '..', '..', 'config', 'mcp_agent_knowledge_policy.json'),
             guidanceConfigPath: guidanceConfigPath || path.join(__dirname, '..', '..', 'config', 'agent_guidance.json')
         }),
-        trial: createTrialStepRunner()
+        trial: createTrialStepRunner(),
+        retest: createRetestStepRunner()
     };
     const runners = { ...defaults, ...stepRunners };
 
@@ -171,8 +172,6 @@ function createStepRegistry({
         ...LEARN_STEPS,
         { id: 'retest', name: '回填重测' }
     ]);
-
-    runners.retest = createRetestStepRunner();
 
     function getRunner(stepId) {
         const runner = runners[stepId];

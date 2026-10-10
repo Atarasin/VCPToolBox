@@ -319,3 +319,109 @@ test('trial：回填后同一套考题重测弱项分数提升（M4.S2 验收）
         path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'answers.json'), 'utf8'));
     assert.ok(Object.keys(learnExam.answers).length >= 3, '重测作答全部题目');
 });
+
+test('trial：判卷输出不可解析时重试一次（logger 回归用例）', async () => {
+    const baseDir = createTempDir();
+    const jrs = createJobRuntimeService();
+    let gradeCalls = 0;
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                const content = payload.messages[0].content;
+                let output;
+                if (content.includes('出题官') || content.includes('考纲')) {
+                    output = EXAM_JSON;
+                } else if (content.includes('判卷官')) {
+                    gradeCalls += 1;
+                    output = gradeCalls === 1 ? '判卷官无法输出 JSON 的抖动输出' : gradeJson(0.9);
+                } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
+                    output = DISTILL_JSON;
+                } else {
+                    output = 'answer';
+                }
+                return { data: { choices: [{ message: { content: output } }], usage: { prompt_tokens: 1, completion_tokens: 1 } } };
+            }
+        },
+        toolInvokerPort: {
+            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+        },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1 }]
+        },
+        baseDir: path.join(baseDir, 'forge'),
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'agent_map.json'),
+        knowledgePolicyPath: path.join(baseDir, 'policy.json'),
+        guidanceConfigPath: path.join(baseDir, 'guidance.json')
+    });
+    for (const [file, content] of [
+        ['agent_map.json', '{}'],
+        ['policy.json', JSON.stringify({ restrictedLibraries: {} })],
+        ['guidance.json', JSON.stringify({ version: 1, shared: { workflow: [], memoryWritePolicy: { write: [], skip: [] } }, agents: {} })]
+    ]) {
+        fs.writeFileSync(path.join(baseDir, file), content);
+    }
+    const { jobId } = await svc.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        blueprintOverride: blueprint()
+    });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
+    const job = jrs.pollJob(jobId, null).data.job;
+    // 判卷第一次垃圾 → 重试一次成功 → 应及格停在用户抽查（若 logger 未解构会以 INTERNAL 失败）
+    assert.equal(job.status, 'pending_confirm', `判卷重试后应正常完成，实际 ${job.status}：${job.metadata.forge.error?.message}`);
+    assert.equal(gradeCalls, 2, '判卷恰好两次');
+});
+
+test('learn：scope 未命中任何子技能报 FORGE_SCOPE_EMPTY', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    const { writeBlueprint } = require('../../../modules/agentGateway/services/forge/blueprint');
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+    // scope 未命中在 harvest 步骤报错（job 异步失败，不抛到调用方）
+    await env.forgeRuntimeService.startExpertLearnJob({ expertName: 'UIDesigner', scope: { subskillIds: ['not-exist'] } });
+    await waitFor(() => {
+        const listed = env.jobRuntimeService.listJobs({ filters: { operationPrefix: 'forge.expert.learn' } }).data.jobs;
+        const learn = listed[0];
+        return learn && learn.terminal;
+    }, 8000);
+    const learn = env.jobRuntimeService.listJobs({ filters: { operationPrefix: 'forge.expert.learn' } }).data.jobs[0];
+    const detail = env.jobRuntimeService.pollJob(learn.jobId, null).data.job;
+    assert.equal(detail.status, 'failed');
+    assert.equal(detail.metadata.forge.error.code, 'FORGE_SCOPE_EMPTY');
+});
+
+test('retest：回填重测不重新出题（出题官调用次数为 0）', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.5, gradeRatios: [0.5, 0.9] });
+    const jobId = await driveToTrial(env);
+    const examinerCallsBefore = env.llmCalls.filter((p) => p.messages[0].content.includes('出题官') || p.messages[0].content.includes('考纲')).length;
+    assert.ok(examinerCallsBefore >= 1, '首考出题至少一次');
+
+    const learnJobId = await waitForLearnJob(env);
+    assert.ok(learnJobId);
+    await waitFor(() => {
+        const polled = env.jobRuntimeService.pollJob(learnJobId, null);
+        return polled?.success && polled.data.job.status === 'pending_confirm';
+    }, 15000);
+    await env.forgeRuntimeService.confirmBlueprint(learnJobId, { approved: true });
+    await waitFor(() => {
+        const polled = env.jobRuntimeService.pollJob(learnJobId, null);
+        return polled?.success && polled.data.job.terminal;
+    }, 15000);
+
+    const examinerCallsAfter = env.llmCalls.filter((p) => p.messages[0].content.includes('出题官') || p.messages[0].content.includes('考纲')).length;
+    assert.equal(examinerCallsAfter, examinerCallsBefore, '回填重测全程零出题调用（同一套考题）');
+    // 同一套考题：重测作答题目数与首考一致（retest 复用原卷，不重新出题）
+    const learnAnswers = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'answers.json'), 'utf8'));
+    assert.equal(Object.keys(learnAnswers.answers).length, 3, '重测作答全部 3 题');
+    const retestSummary2 = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'retest-summary.json'), 'utf8'));
+    assert.ok(retestSummary2.retestOf, '重测关联原 job');
+    void jobId;
+});

@@ -252,7 +252,7 @@ test('预算护栏：≥90% 告警继续执行，≥100% 自动转 paused_budget
 
 // ── 五步状态机：未交付能力的步骤以明确错误失败（M2.S1 后 harvest 已接入）──
 
-test('toolInvoker 缺失时 harvest 报 FORGE_TOOL_INVOKER_UNAVAILABLE；distill/synthesize/trial 仍为待接入桩', async () => {
+test('toolInvoker 缺失时 harvest 报 FORGE_TOOL_INVOKER_UNAVAILABLE（端口前置检查）', async () => {
     const baseDir = createTempDir();
     const { jobRuntimeService, forgeRuntimeService } = buildService({ baseDir });
     const { jobId } = await forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });

@@ -209,7 +209,15 @@ function createTrialStepRunner() {
         const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
         const { answers, grading, ratio, passed, gaps, jev } = outcome;
 
-        logger?.(`forge.exam.graded: ${blueprint.name} 总分 ${(ratio * 100).toFixed(1)}%，${passed ? '及格待抽查' : `缺口 ${gaps.length} 项`}`);
+        // §3.9 独立审计事件（区别于 forge.step.running 的步骤消息流）。
+        ctx.audit?.('forge.exam.graded', {
+            expertName: blueprint.name,
+            step: 'trial',
+            ratio,
+            passed,
+            gapCount: gaps.length,
+            jevSkipped: Boolean(jev.skipped)
+        });
 
         return {
             summary: `试岗完成：总分 ${(ratio * 100).toFixed(1)}%（${passed ? '及格，待用户抽查' : '未及格，缺口 ' + gaps.length + ' 项'}）；Jev 对照${jev.skipped ? '跳过（' + jev.reason + '）' : '已留档'}`,
@@ -233,7 +241,7 @@ function createTrialStepRunner() {
  * exam 由调用方给定（retest 传原考卷，实现「同一套考题重测」§3.7）。
  */
 async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
-    const { llm, llmConfig, knowledgeStorePort, baseDir } = ctx;
+    const { llm, llmConfig, knowledgeStorePort, baseDir, logger } = ctx;
     const libraryName = blueprintLibraryName(blueprint.name);
     // 盲测（红线 1）：代查专属库 + 人设作答
     let persona = '';
@@ -371,15 +379,22 @@ function createRetestStepRunner() {
             error.status = 502;
             throw error;
         }
-        const { readBlueprint, blueprintLibraryName: libName } = require('./blueprint');
+        const { readBlueprint } = require('./blueprint');
         const blueprint = await readBlueprint(ctx.blueprintPath);
-        void libName;
         const examsDir = path.join(runDir, 'exams');
 
         const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
-        const { ratio, passed, gaps, grading } = outcome;
+        const { ratio, passed, gaps } = outcome;
 
         const previousRatio = Number(retestOf.previousRatio) || 0;
+        ctx.audit?.('forge.exam.graded', {
+            expertName: blueprint.name,
+            step: 'retest',
+            previousRatio,
+            ratio,
+            passed,
+            gapCount: gaps.length
+        });
         const improvement = ratio - previousRatio;
         const summary = `重测完成（同一套考题）：${(previousRatio * 100).toFixed(1)}% → ${(ratio * 100).toFixed(1)}%（${improvement >= 0 ? '+' : ''}${(improvement * 100).toFixed(1)} 分点，${passed ? '✅ 达到及格线' : '仍未及格，缺口 ' + gaps.length + ' 项'}）`;
         await writeExamFile(examsDir, 'retest-summary.json', {
