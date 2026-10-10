@@ -1,0 +1,1 @@
+import{t as a}from"./requestWithUi-1uMrUejM.js";var s="/admin_api/forge",o={showLoader:!1},u={async listJobs(t=o){return(await a({url:`${s}/jobs`},t)).jobs||[]},async getJobDetail(t,r=o){const{status:i,...e}=await a({url:`${s}/jobs/${encodeURIComponent(t)}`},r);return e}};export{u as t};

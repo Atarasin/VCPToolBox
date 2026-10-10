@@ -117,6 +117,7 @@ module.exports = function (
   mount("/", "toolCallRecords"); // Handles /tool-call-records/*
   mount("/", "agentGateway"); // Handles /agent-gateway/*（Gateway 凭据管理，主进程单写者）
   mount("/", "jevRegistry"); // Handles /jev/registry/* (JEV 第三方注册表只读调试，实验)
+  mount("/", "forge"); // Handles /forge/jobs/*（专家铸造只读进度，R5 增补 §3.10）
 
   return adminApiRouter;
 };

@@ -117,6 +117,10 @@ export type * from "./tarotDivination";
 export { agentGatewayApi } from './agentGateway'
 export type * from './agentGateway'
 
+// 专家铸造炉只读进度 API
+export { forgeApi } from './forge'
+export type * from './forge'
+
 // 插件商店 API
 export { pluginStoreApi } from "./pluginStore";
 export type * from "./pluginStore";

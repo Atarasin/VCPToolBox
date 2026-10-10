@@ -32,6 +32,8 @@ export type AppRouteId =
   | "forum-assistant-config"
   | "agent-scores"
   | "agent-gateway-manager"
+  | "forge-jobs"
+  | "forge-job-detail"
   | "toolbox-manager"
   | "tvs-files-editor"
   | "sar-prompt-editor"
@@ -271,6 +273,25 @@ export const APP_ROUTE_MANIFEST: readonly AppRouteMeta[] = [
     requiresAuth: true,
     navGroup: "agentContent",
     showInSidebar: true,
+  },
+  {
+    id: "forge-jobs",
+    routeName: "ForgeJobs",
+    path: "/forge-jobs",
+    title: "专家铸造",
+    icon: "factory",
+    requiresAuth: true,
+    navGroup: "agentContent",
+    showInSidebar: true,
+  },
+  {
+    id: "forge-job-detail",
+    routeName: "ForgeJobDetail",
+    path: "/forge-jobs/:jobId",
+    title: "铸造任务详情",
+    icon: "factory",
+    requiresAuth: true,
+    showInSidebar: false,
   },
   {
     id: "vcptavern-editor",
