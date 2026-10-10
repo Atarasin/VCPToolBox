@@ -9,6 +9,7 @@ const { createStepRegistry } = require('./steps');
 const { ForgeNameConflictError } = require('./nameConflict');
 const { blueprintLibraryName } = require('./blueprint');
 const { renameAtSynthesize } = require('./synthesize');
+const { PASS_RATIO } = require('./trial');
 
 /**
  * forge job 编排服务（§3.2）：
@@ -134,6 +135,7 @@ function createForgeRuntimeService(options = {}) {
         agentMapPath = null,
         knowledgePolicyPath = null,
         guidanceConfigPath = null,
+        jevPort = null,
         prices = null,
         defaultBudgetCny = DEFAULT_BUDGET_CNY,
         llmConfig = null,
@@ -162,6 +164,8 @@ function createForgeRuntimeService(options = {}) {
         stepRunners
     });
     const effectiveLlmConfig = llmConfig !== null ? llmConfig : resolveForgeLlmConfig();
+
+    let serviceApi = null; // driveJob 内经此发起不及格回填的 learn job
 
     function log(event, payload) {
         auditLogger?.logGatewayOperation?.(event, payload);
@@ -314,6 +318,7 @@ function createForgeRuntimeService(options = {}) {
                     runDir: runStore.runDir(jobId),
                     knowledgeRoot: effectiveKnowledgeRoot,
                     knowledgeStorePort,
+                    jevPort,
                     overwriteApproved: Boolean(runRecord.overwriteApproved),
                     llm: wrapLlm(meter, jobId, authContext, step.id),
                     toolInvoker: wrapToolInvoker(meter, jobId, authContext, step.id),
@@ -329,11 +334,7 @@ function createForgeRuntimeService(options = {}) {
                     state: result.state && typeof result.state === 'object' ? result.state : null
                 });
                 markers.set(step.id, marker);
-                log('forge.step.completed', {
-                    jobId,
-                    step: step.id,
-                    costSoFarCny: meter.getBreakdown().costSoFarCny
-                });
+
                 if (result.state?.expertName) {
                     runRecord.expertName = result.state.expertName;
                     runRecord.displayName = result.state.displayName || runRecord.expertName;
@@ -344,6 +345,51 @@ function createForgeRuntimeService(options = {}) {
                         blueprintPath: runRecord.blueprintPath
                     });
                 }
+                // 动态用户门禁（trial 及格 → 待抽查 D3；blueprint 静态门禁沿用）。
+                const dynamicGate = result.state?.userGate || null;
+                if (step.requiresUserConfirm || dynamicGate) {
+                    const gate = dynamicGate || {
+                        kind: 'blueprint',
+                        blueprintPath: runRecord.blueprintPath || null,
+                        hint: '画像初稿已生成，等待用户确认后继续采集'
+                    };
+                    jobRuntimeService.updateJob(jobId, {
+                        status: JOB_STATUS.PENDING_CONFIRM,
+                        metadata: { forge: buildForgeMetadata({
+                            runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
+                            extra: { pendingConfirm: gate }
+                        }) }
+                    });
+                    return; // 用户确认后经 confirmBlueprint 续跑（markers 决定续点）。
+                }
+
+                // 试岗不及格 → 自动发起定向回填 learn job（§3.7：只补缺口不推倒重来）。
+                if (step.id === 'trial' && result.state && result.state.passed === false &&
+                    Array.isArray(result.state.gaps) && result.state.gaps.length > 0 && serviceApi) {
+                    try {
+                        await serviceApi.startExpertLearnJob({
+                            expertName: runRecord.expertName,
+                            scope: {
+                                subskillIds: result.state.gaps.map((gap) => gap.subskillId),
+                                reason: 'trial-failed-gap-backfill',
+                                gaps: result.state.gaps
+                            },
+                            budgetCny: runRecord.budgetCny
+                        });
+                        log('forge.learn.scheduled', {
+                            jobId,
+                            expertName: runRecord.expertName,
+                            subskillIds: result.state.gaps.map((gap) => gap.subskillId)
+                        });
+                    } catch (error) {
+                        log('forge.learn.schedule_failed', { jobId, message: error.message });
+                    }
+                }
+                log('forge.step.completed', {
+                    jobId,
+                    step: step.id,
+                    costSoFarCny: meter.getBreakdown().costSoFarCny
+                });
             } catch (error) {
                 if (error instanceof ForgeNameConflictError) {
                     // 红线 3：默认绝不覆盖——暂停待人工确认（改名或人工明确覆盖）。
@@ -394,22 +440,6 @@ function createForgeRuntimeService(options = {}) {
                 return;
             }
 
-            if (step.requiresUserConfirm) {
-                jobRuntimeService.updateJob(jobId, {
-                    status: JOB_STATUS.PENDING_CONFIRM,
-                    metadata: { forge: buildForgeMetadata({
-                        runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
-                        extra: {
-                            pendingConfirm: {
-                                kind: 'blueprint',
-                                blueprintPath: runRecord.blueprintPath || null,
-                                hint: '画像初稿已生成，等待用户确认后继续采集'
-                            }
-                        }
-                    }) }
-                });
-                return; // 用户确认后经 confirmBlueprint 续跑。
-            }
         }
 
         await updateForgeMetadata(jobId, buildForgeMetadata({
@@ -475,7 +505,7 @@ function createForgeRuntimeService(options = {}) {
         };
     }
 
-    return {
+    serviceApi = {
         FORGE_JOB_OPERATIONS,
         FORGE_ALLOWED_TOOLS,
         baseDir,
@@ -624,9 +654,16 @@ function createForgeRuntimeService(options = {}) {
                 return { jobId, outcome: 'renamed' };
             }
 
-            await runStore.updateRun(jobId, { blueprintApproved: true });
-            log('forge.blueprint.confirmed', { jobId, expertName: runRecord.expertName });
-            scheduleDrive(jobId, authContext, { startAfterStep: 'blueprint' });
+            const pendingKind = job.metadata?.forge?.pendingConfirm?.kind || 'blueprint';
+            if (pendingKind === 'trial-report') {
+                // D3：及格报告的用户抽查确认 → job 走向完成。
+                await runStore.updateRun(jobId, { trialApproved: true });
+                log('forge.trial.report_confirmed', { jobId, expertName: runRecord.expertName });
+            } else {
+                await runStore.updateRun(jobId, { blueprintApproved: true });
+                log('forge.blueprint.confirmed', { jobId, expertName: runRecord.expertName });
+            }
+            scheduleDrive(jobId, authContext); // markers 决定续点（blueprint 后从 harvest，trial 后直接完成）
             return { jobId, outcome: 'confirmed' };
         },
         async resumeJob(jobId, { raiseBudgetToCny = null, authContext = null } = {}) {
@@ -702,6 +739,7 @@ function createForgeRuntimeService(options = {}) {
             };
         }
     };
+    return serviceApi;
 }
 
 module.exports = {

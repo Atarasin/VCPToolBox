@@ -203,7 +203,12 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         agentDirectoryPort: ports.agentDirectory,
         knowledgeStorePort: ports.knowledgeStore,
         baseDir: process.env.FORGE_BASE_DIR || undefined,
-        knowledgeRoot: process.env.FORGE_KNOWLEDGE_ROOT || undefined
+        knowledgeRoot: process.env.FORGE_KNOWLEDGE_ROOT || undefined,
+        // D7 方案 C：Jev 对照试点——绑定仓库 jevClient 单例（typesafe-ai Jev，
+        // 未配置 JEV_API_KEY 时 decide 抛 JEV_NOT_CONFIGURED，由 trial 捕获记 skipped）。
+        jevPort: {
+            decide: (state, questions) => require('../../jevClient').decide(state, questions)
+        }
     });
     const capabilityService = createCapabilityService({
         ports,

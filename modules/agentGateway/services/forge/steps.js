@@ -10,6 +10,7 @@ const {
 const { createHarvestStepRunner } = require('./harvest');
 const { createDistillStepRunner } = require('./distill');
 const { createSynthesizeStepRunner } = require('./synthesize');
+const { createTrialStepRunner } = require('./trial');
 const { ForgeNameConflictError, detectNameConflicts, listExistingAgentNames } = require('./nameConflict');
 const { extractJsonObject } = require('./jsonUtils');
 
@@ -17,7 +18,7 @@ const { extractJsonObject } = require('./jsonUtils');
  * 铸造五步状态机的步骤定义（§3.2）。
  * M1 交付编排骨架；逐步接入真实能力：blueprint（M1，LLM 起草画像）、
  * harvest（M2.S1，检索采集）、distill（M2.S2，蒸馏入库）与 synthesize
- * （M3.S1，人设合成与注册绑定）已实现；trial 由 M4.S1 交付
+ * （M3.S1，人设合成与注册绑定）与 trial（M4.S1，试岗验收）已实现
  * （经 options.stepRunners 可再覆盖）。
  */
 
@@ -150,7 +151,7 @@ function createStepRegistry({
             knowledgePolicyPath: knowledgePolicyPath || path.join(__dirname, '..', '..', 'config', 'mcp_agent_knowledge_policy.json'),
             guidanceConfigPath: guidanceConfigPath || path.join(__dirname, '..', '..', 'config', 'agent_guidance.json')
         }),
-        trial: createPendingStepRunner('trial', 'M4.S1')
+        trial: createTrialStepRunner()
     };
     const runners = { ...defaults, ...stepRunners };
 
