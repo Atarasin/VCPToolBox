@@ -139,25 +139,49 @@ function createDomainThrottle(intervalMs = SAME_DOMAIN_INTERVAL_MS) {
     };
 }
 
-function buildSearchArgs(toolName, query) {
+// since（ISO）→ BrowserSearch timeRange（周/月/年内取最近档；超出一年不过滤）。
+function timeRangeFromSince(since) {
+    if (!since) {
+        return null;
+    }
+    const ageDays = (Date.now() - Date.parse(since)) / 86400000;
+    if (!Number.isFinite(ageDays) || ageDays <= 0 || ageDays > 365) {
+        return null;
+    }
+    if (ageDays <= 7) {
+        return 'week';
+    }
+    if (ageDays <= 31) {
+        return 'month';
+    }
+    return 'year';
+}
+
+function buildSearchArgs(toolName, query, since = null) {
     switch (toolName) {
     case 'AnySearch':
         return { query, max_results: 10 };
     case 'FlashDeepSearch':
         return { SearchContent: query, SearchBroadness: 8 };
-    case 'BrowserSearch':
-        return { query, maxResults: 10 };
+    case 'BrowserSearch': {
+        const args = { query, maxResults: 10 };
+        const timeRange = timeRangeFromSince(since);
+        if (timeRange) {
+            args.timeRange = timeRange; // §3.8：增量进修只检索上次学习后的新增内容
+        }
+        return args;
+    }
     default:
         return { query };
     }
 }
 
-async function searchWithFallback(toolInvoker, queries, { logger } = {}) {
+async function searchWithFallback(toolInvoker, queries, { logger, since = null } = {}) {
     const attempts = [];
     for (const query of queries) {
         for (const toolName of SEARCH_TOOL_CHAIN) {
             try {
-                const result = await toolInvoker.invoke(toolName, buildSearchArgs(toolName, query));
+                const result = await toolInvoker.invoke(toolName, buildSearchArgs(toolName, query, since));
                 const text = result?.content?.[0]?.text ||
                     (typeof result?.original_plugin_output === 'string' ? result.original_plugin_output : '') ||
                     (typeof result === 'string' ? result : '');
@@ -207,6 +231,14 @@ function createHarvestStepRunner() {
         const minDomains = Number(blueprint.sourcePolicy?.minDomainsPerSubskill) || 3;
         const throttle = createDomainThrottle();
 
+        // §3.8 时间过滤（since）：增量进修跳过库内已有出处的来源——只学新增内容，
+        // 已蒸馏过的 URL 不重采重蒸（费用与卡片数量双约束；红线 3 旧卡不动）。
+        const { blueprintLibraryName } = require('./blueprint');
+        const { listKnownSourceUrls } = require('./knowledgeWriter');
+        const knownSourceUrls = ctx.since
+            ? listKnownSourceUrls(path.join(ctx.knowledgeRoot || path.join(ctx.baseDir, '..', '..', 'knowledge'), blueprintLibraryName(blueprint.name)))
+            : null;
+
         const manifests = [];
         const warnings = [];
         for (const subskill of subskills) {
@@ -221,14 +253,18 @@ function createHarvestStepRunner() {
                 if (new Set(Array.from(collected.values()).map((e) => domainOf(e.url))).size >= minDomains) {
                     break;
                 }
-                const hit = await searchWithFallback(toolInvoker, [query], { logger });
+                const hit = await searchWithFallback(toolInvoker, [query], { logger, since: ctx.since || null });
                 if (hit.toolName) {
                     usedBy.push({ query, plugin: hit.toolName, hits: hit.entries.length });
                 }
                 for (const entry of hit.entries) {
-                    if (!collected.has(entry.url)) {
-                        collected.set(entry.url, { ...entry, plugin: hit.toolName, query });
+                    if (collected.has(entry.url)) {
+                        continue;
                     }
+                    if (knownSourceUrls && knownSourceUrls.has(entry.url.replace(/[.,;]+$/, ''))) {
+                        continue; // 上次学习已蒸馏过该来源
+                    }
+                    collected.set(entry.url, { ...entry, plugin: hit.toolName, query });
                 }
             }
 
@@ -272,7 +308,8 @@ function createHarvestStepRunner() {
                 searchRuns: usedBy,
                 materials: savedFiles.length,
                 domains,
-                warnings: domains.length < minDomains ? [`${domains.length}/${minDomains}`] : []
+                warnings: domains.length < minDomains ? [`${domains.length}/${minDomains}`] : [],
+                ...(ctx.since ? { since: ctx.since, incremental: true } : {})
             };
             await fsp.writeFile(
                 path.join(rawDir, 'manifest.json'),
@@ -303,6 +340,7 @@ function createHarvestStepRunner() {
 
 module.exports = {
     SEARCH_TOOL_CHAIN,
+    timeRangeFromSince,
     SAME_DOMAIN_INTERVAL_MS,
     createHarvestStepRunner,
     extractEntriesFromText,

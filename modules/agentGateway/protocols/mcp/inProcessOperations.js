@@ -244,6 +244,60 @@ async function executeKnowledgeSearch(context) {
     });
 }
 
+// gateway_forge_learn 的 MCP args → startExpertLearnJob 参数映射（导出以供测试）：
+// subskillIds/topic 组装为 scope（reason=manual），缺省字段不产生空 scope。
+function buildForgeLearnRequest(body = {}) {
+    const scope = (Array.isArray(body.subskillIds) && body.subskillIds.length > 0) || body.topic
+        ? {
+            ...(Array.isArray(body.subskillIds) && body.subskillIds.length > 0 ? { subskillIds: body.subskillIds } : {}),
+            ...(body.topic ? { topic: body.topic } : {}),
+            reason: 'manual'
+        }
+        : undefined;
+    return {
+        expertName: body.expertName,
+        ...(body.since ? { since: body.since } : {}),
+        ...(scope ? { scope } : {})
+    };
+}
+
+async function executeForgeService(context, action) {
+    const { bundle, name, args, input, operation, executeManaged } = context;
+    return executeManaged({
+        bundle, name, args, input,
+        operationName: operation.operationName,
+        source: operation.source,
+        async execute({ body, requestContext }) {
+            let result;
+            try {
+                const agentId = String(body.agentId || requestContext.agentId || '').trim();
+                const payload = action === 'reportGap'
+                    ? await bundle.forgeRuntimeService.reportGap({ ...body, agentId })
+                    : await bundle.forgeRuntimeService.startExpertLearnJob({
+                        ...buildForgeLearnRequest(body),
+                        authContext: null
+                    });
+                result = {
+                    success: true,
+                    requestId: requestContext.requestId,
+                    status: action === 'reportGap' ? 'completed' : 'accepted',
+                    data: payload
+                };
+            } catch (error) {
+                result = {
+                    success: false,
+                    requestId: requestContext.requestId,
+                    status: error.status || 500,
+                    code: error.code || AGW_ERROR_CODES.INTERNAL_ERROR,
+                    error: error.message,
+                    ...(error.details ? { details: error.details } : {})
+                };
+            }
+            return attachRequestId(result, requestContext.requestId);
+        }
+    });
+}
+
 const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     render: executeRender,
     jobGet: (context) => executeJob(context, 'pollJob'),
@@ -252,7 +306,9 @@ const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     contextAssemble: (context) => executeDiary(context, 'buildRecallContext'),
     memoryWrite: executeMemoryWrite,
     recallRun: executeRecallRun,
-    knowledgeSearch: executeKnowledgeSearch
+    knowledgeSearch: executeKnowledgeSearch,
+    gapReport: (context) => executeForgeService(context, 'reportGap'),
+    forgeLearn: (context) => executeForgeService(context, 'startExpertLearnJob')
 });
 
 async function callMcpTool({
@@ -316,6 +372,7 @@ async function callMcpTool({
 }
 
 module.exports = {
+    buildForgeLearnRequest,
     IN_PROCESS_OPERATION_HANDLERS,
     attachRequestId,
     buildBootstrapResult,

@@ -206,6 +206,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         knowledgeRoot: process.env.FORGE_KNOWLEDGE_ROOT || undefined,
         // D7 方案 C：Jev 对照试点——绑定仓库 jevClient 单例（typesafe-ai Jev，
         // 未配置 JEV_API_KEY 时 decide 抛 JEV_NOT_CONFIGURED，由 trial 捕获记 skipped）。
+        // §3.8 触发 c：定期进修（默认每周一 04:00，FORGE_LIFELONG_SCHEDULE/CRON 可配）。
         jevPort: {
             decide: (state, questions) => require('../../jevClient').decide(state, questions)
         }
@@ -333,6 +334,19 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         ragRetrieverPort: ports.ragRetriever
     });
 
+    const { createLifelongScheduler } = require('../services/forge/lifelongScheduler');
+    const { listExpertNames } = require('../services/forge/gapRegistry');
+    // 定期进修：服务端常驻进程内启动（M5.S2）；AdminPanel/测试环境惰性不启动。
+    const forgeLifelongScheduler = createLifelongScheduler({
+        forgeRuntimeService,
+        gapRegistry: forgeRuntimeService.gapRegistry,
+        listExpertNames: () => listExpertNames({ baseDir: process.env.FORGE_BASE_DIR || undefined }),
+        auditLogger
+    });
+    if ((process.env.FORGE_LIFELONG_AUTOSTART || '1') !== '0') {
+        forgeLifelongScheduler.start();
+    }
+
     pluginManager.__agentGatewayServiceBundle = {
         ports,
         schemaRegistry,
@@ -345,6 +359,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         agentRegistryService,
         jobRuntimeService,
         forgeRuntimeService,
+        forgeLifelongScheduler,
         memoryRuntimeService,
         contextRuntimeService,
         knowledgeRuntimeService,

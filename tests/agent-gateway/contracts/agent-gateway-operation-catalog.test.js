@@ -11,9 +11,9 @@ const canonicalOperations = require('../../../modules/agentGateway/contracts/ope
 const { validateGatewayToolArguments } = require('../../../modules/agentGateway/contracts/schemas/validator');
 const { convertJsonSchemaToOpenApi } = require('../../../modules/agentGateway/contracts/generate/jsonSchemaToOpenApi');
 
-test('operation catalog freezes the 22 REST paths and 9 MCP operations', () => {
+test('operation catalog freezes the 22 REST paths and 11 MCP operations', () => {
     assert.equal(REST_OPERATIONS.length, 22);
-    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 9);
+    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 11);
     assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 22);
     for (const operation of REST_OPERATIONS) {
         assert.ok(operation.operationId);
@@ -69,7 +69,11 @@ test('all managed operations preserve the historical AJV acceptance corpus', () 
         gateway_recall_run: { valid: { agentId: 'Ariadne', query: 'recall', unknown: true },
             invalid: { agentId: 'Ariadne', query: null } },
         gateway_knowledge_search: { valid: { agentId: 'Ariadne', query: 'knowledge', library: 'VCP百科全书', topK: '8', unknown: true },
-            invalid: { query: 'knowledge', topK: 999 } }
+            invalid: { query: 'knowledge', topK: 999 } },
+        gateway_gap_report: { valid: { agentId: 'UIDesigner', subskillId: 'color-theory', question: '深色模式配色', whyInsufficient: '查不到', unknown: true },
+            invalid: { question: null } },
+        gateway_forge_learn: { valid: { expertName: 'UIDesigner', subskillIds: ['color-theory'], topic: '深色模式', since: '2026-01-01T00:00:00.000Z', unknown: true },
+            invalid: { expertName: null } }
     };
 
     assert.deepEqual(Object.keys(corpus).sort(), Object.keys(gatewayToolSchemas).sort());
@@ -93,7 +97,9 @@ test('agentId-less arguments pass schema validation for bound-credential callers
         gateway_context_assemble: {},
         gateway_memory_write: { target: { diary: 'Nova' }, memory: { text: 'entry' } },
         gateway_recall_run: { query: 'recall' },
-        gateway_knowledge_search: { query: 'knowledge' }
+        gateway_knowledge_search: { query: 'knowledge' },
+        gateway_gap_report: { question: '深色模式配色' },
+        gateway_forge_learn: { expertName: 'UIDesigner' }
     };
     assert.deepEqual(Object.keys(omissions).sort(), Object.keys(gatewayToolSchemas).sort());
     for (const [operation, args] of Object.entries(omissions)) {

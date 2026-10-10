@@ -244,7 +244,33 @@ function createKnowledgeWriter({ libraryDir }) {
     };
 }
 
+// 增量进修的来源去重（§3.8 时间过滤）：扫描库内全部文件的出处 URL，
+// 已有来源的材料不再重采重蒸——只检索/保留上次学习后的新增内容。
+function listKnownSourceUrls(libraryDir) {
+    const urls = new Set();
+    if (!fs.existsSync(libraryDir)) {
+        return urls;
+    }
+    const urlPattern = /https?:\/\/[^\s)\]}>"',]+/g;
+    for (const name of fs.readdirSync(libraryDir)) {
+        if (!name.endsWith('.md')) {
+            continue;
+        }
+        try {
+            const raw = fs.readFileSync(path.join(libraryDir, name), 'utf8');
+            let match;
+            while ((match = urlPattern.exec(raw)) !== null) {
+                urls.add(match[0].replace(/[.,;]+$/, ''));
+            }
+        } catch {
+            // 单文件读取失败跳过
+        }
+    }
+    return urls;
+}
+
 module.exports = {
+    listKnownSourceUrls,
     CARD_PATTERN,
     LONGDOC_PATTERN,
     slugify,

@@ -20,7 +20,9 @@ const MCP_GATEWAY_TOOL_NAMES = deepFreeze({
     CONTEXT_ASSEMBLE: toolName('context_assemble'),
     MEMORY_WRITE: toolName('memory_write'),
     RECALL_RUN: toolName('recall_run'),
-    KNOWLEDGE_SEARCH: toolName('knowledge_search')
+    KNOWLEDGE_SEARCH: toolName('knowledge_search'),
+    GAP_REPORT: toolName('gap_report'),
+    FORGE_LEARN: toolName('forge_learn')
 });
 
 const REST_OPERATIONS = deepFreeze(restOperations);
