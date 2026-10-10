@@ -944,5 +944,120 @@
         }
       }
     }
+  },
+  {
+    "toolName": "gateway_knowledge_search",
+    "operationId": "knowledge.search",
+    "argsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "Target agent identifier. Optional when the presented credential is bound to an agent (the bound agent becomes the target); required otherwise. An explicit value must match the bound agent."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query used to retrieve cold-knowledge (TDB) entries. Keyword or natural-language."
+        },
+        "library": {
+          "type": "string",
+          "description": "Optional single knowledge library target (e.g. 'VCP百科全书'). Automatically merged into `libraries` when provided. Requesting a restricted library without permission returns 403."
+        },
+        "libraries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional explicit list of knowledge libraries to search. Omit to search all libraries accessible to the agent."
+        },
+        "topK": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of hits to return per query (default 8, hard cap 50)."
+        },
+        "expand": {
+          "type": "boolean",
+          "description": "Whether to expand chunk hits back to their parent document text (default true)."
+        },
+        "minScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional minimum similarity score filter for hits."
+        }
+      }
+    },
+    "resultSchema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "errors": [
+      "MCP_INVALID_REQUEST",
+      "MCP_INVALID_ARGUMENTS",
+      "MCP_FORBIDDEN",
+      "MCP_NOT_FOUND",
+      "MCP_RUNTIME_ERROR"
+    ],
+    "execution": {
+      "operationName": "knowledge.search",
+      "source": "mcp-knowledge-search",
+      "executor": "knowledgeSearch",
+      "backendExecutor": "knowledgeSearch",
+      "credentialAction": "read"
+    },
+    "mcp": {
+      "tool": {
+        "name": "gateway_knowledge_search",
+        "title": "Gateway Knowledge Search",
+        "description": "Search cold knowledge libraries (TDB/TriviumDB, e.g. reference encyclopedias and curated opinion archives) by keyword or semantic query. Use this for stable, curated reference material rather than personal memory diaries (use gateway_recall_run / gateway_memory_search for those). Some libraries are role-restricted; requesting one without permission returns 403 — server-side policy is authoritative.",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "query"
+          ],
+          "properties": {
+            "agentId": {
+              "type": "string",
+              "description": "Target agent identifier. Optional when the presented credential is bound to an agent; an explicit value must match the bound agent."
+            },
+            "query": {
+              "type": "string",
+              "description": "Search query used to retrieve cold-knowledge (TDB) entries."
+            },
+            "library": {
+              "type": "string",
+              "description": "Optional single knowledge library target. Automatically merged into `libraries`."
+            },
+            "libraries": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional explicit list of knowledge libraries to search. Omit to search all accessible libraries."
+            },
+            "topK": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Maximum number of hits to return (default 8)."
+            },
+            "expand": {
+              "type": "boolean",
+              "description": "Expand chunk hits to parent document text (default true)."
+            },
+            "minScore": {
+              "type": "number",
+              "description": "Optional minimum similarity score filter."
+            }
+          }
+        }
+      }
+    }
   }
 ]

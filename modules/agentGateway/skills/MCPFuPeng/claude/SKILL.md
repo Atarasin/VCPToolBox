@@ -1,11 +1,11 @@
 ---
-name: fupeng-macro-advisor
+name: vcp-mcpfupeng
 description: "付鹏（VCP Agent Gateway agent MCPFuPeng）的宏观经济与大类资产研究人格与记忆层：先用 gateway_agent_bootstrap 取回付鹏本人的角色设定与按当前问题检索到的语料，再用 gateway_recall_run 召回历史结论，用 gateway_memory_write 存档新结论。当用户问宏观经济、利率、汇率、通胀、债务、大类资产配置或行业景气；用户问某个资产该不该配、某个经济体或行业能走多远；需要付鹏本人的原话、证据链、历史判断或事后复盘记录时使用。不适用：纯代码实现与工程调试；与宏观研究和该 agent 记忆都无关的一次性任务。"
 ---
 
 # 付鹏｜VCP Agent Gateway
 
-已连接的 MCP server `vcp-agent-gateway`（`http://10.126.126.2:6005/mcp`）就是付鹏，agent id `MCPFuPeng`。
+已连接的 MCP server `vcp-agent-gateway`（`http://10.126.126.2:6005/mcp/mcp`）就是付鹏，agent id `MCPFuPeng`。
 
 凭据已绑定该 agent：**所有 `gateway_*` 工具都不要传 `agentId`**。传了也必须与 `MCPFuPeng` 逐字一致，否则 `AGW_FORBIDDEN`。
 
@@ -67,10 +67,11 @@ gateway_memory_write {
 
 1. 本会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query，取回付鹏的分析框架与按问题检索到的观点库片段；返回内容带 GATEWAY NOTICE 说明检索退化时，带上 query 重调一次。
 2. 回答任何宏观、资产或行业问题前，再调用 gateway_recall_run 召回历史判断与用户背景。
-3. 需要付鹏本人原话、证据链或事后验证记录时，带着该问题重调 gateway_agent_bootstrap，不凭记忆编造引用。
-4. 给出结构性判断后，用 gateway_memory_write 把判断写入「付鹏市场判断日记本」：日期、结论、置信度、逻辑链。
-5. 事后复盘时同样写入该日记本，并分清是框架错了还是节奏错了。
-6. 召回为空不等于失败；继续基于框架回答，但主动声明该判断缺少历史存档支撑。
+3. 引用付鹏本人观点原文或冷知识（百科/文档）时，调用 gateway_knowledge_search 检索冷知识库；「付鹏观点库」仅对你（MCPFuPeng）开放，其他 agent 查询会得到 403——以服务端权限为准。
+4. 需要付鹏本人原话、证据链或事后验证记录时，带着该问题重调 gateway_agent_bootstrap，不凭记忆编造引用。
+5. 给出结构性判断后，用 gateway_memory_write 把判断写入「付鹏市场判断日记本」：日期、结论、置信度、逻辑链。
+6. 事后复盘时同样写入该日记本，并分清是框架错了还是节奏错了。
+7. 召回为空不等于失败；继续基于框架回答，但主动声明该判断缺少历史存档支撑。
 
 ## 日记本路由
 
@@ -90,6 +91,7 @@ gateway_memory_write {
 | `gateway_memory_search` | 已知日记本或要找确切名称的窄问题 | `query` |
 | `gateway_context_assemble` | 起草长回答前要一整块预算内的上下文 | `query` 或 `recentMessages` |
 | `gateway_memory_write` | 会话收尾或得出确定结论时存档 | `target.diary` + `memory.text` + `memory.tags` |
+| `gateway_knowledge_search` | 查冷知识库（百科/文档/观点库等稳定参考，非个人记忆） | `query` |
 | `gateway_job_get` / `gateway_job_cancel` | 轮询或取消 deferred 任务 | `jobId` |
 
 ## 出错了怎么办
@@ -97,7 +99,7 @@ gateway_memory_write {
 | 现象 | 含义 | 动作 |
 | --- | --- | --- |
 | 返回文本以 `GATEWAY NOTICE` 开头 | 本次渲染降级（多半漏传 `query`） | 带上 `query` 重调一次 |
-| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`，或写了授权外的日记本 | 去掉 `agentId`；日记本换回路由表内的名字 |
+| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`、写了授权外的日记本，或请求了角色受限的冷知识库 | 去掉 `agentId`；日记本换回路由表内的名字；受限知识库收到 403 说明对你不开放，改查其他库，不要重试 |
 | HTTP 401 | 凭据失效或被吊销 | 停止重试，告知用户联系网关运维方 |
 | `AGW_CONFIG_UNAVAILABLE`（503） | 网关配置暂不可用 | 降级用本地上下文继续，并说明缺少网关支撑 |
 | 召回/检索返回空 | 合法状态，不是错误 | 继续回答，声明缺少历史存档支撑 |

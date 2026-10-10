@@ -1,0 +1,10 @@
+{
+    "_comment": "冷知识库（TDB）权限边界：restrictedLibraries 中列出的库仅对 allowedAgents 白名单开放；未列出的库对全体 agent 开放。未指定 library/libraries 时默认检索该 agent 可访问的全部库。热加载。",
+    "restrictedLibraries": {
+        "付鹏观点库": {
+            "allowedAgents": [
+                "MCPFuPeng"
+            ]
+        }
+    }
+}

@@ -169,25 +169,25 @@ skill 包（SKILL.md + INSTALL.md + manifest.json）由 `services/skillGenerator
 
 #### M4.S1 knowledge 端口
 依赖：无（可与 M2 并行）
-- [ ] T1 `ports/` 绑定 TDBKnowledgeManager 查询面（§3.4.1）
-- [ ] 验收：网关进程内可查询 TDB 库（单测覆盖）
+- [x] T1 `ports/` 绑定 TDBKnowledgeManager 查询面（§3.4.1）
+- [x] 验收：网关进程内可查询 TDB 库（单测覆盖）
 
 #### M4.S2 新工具 gateway_knowledge_search
 依赖：M4.S1（D3 已定）
-- [ ] T1 经 openspec 新增 `gateway_knowledge_search`：mcpOperations.json、mcpDescriptors、discoverySnapshot（§3.4.2）
-- [ ] T2 契约与 MCP 工具目录更新及测试
-- [ ] 验收：外部客户端可经 MCP 调用检索冷知识库
+- [x] T1 经 openspec 新增 `gateway_knowledge_search`：mcpOperations.json、mcpDescriptors、discoverySnapshot（§3.4.2）
+- [x] T2 契约与 MCP 工具目录更新及测试
+- [x] 验收：外部客户端可经 MCP 调用检索冷知识库（tools/call 端到端测试）
 
 #### M4.S3 权限边界
 依赖：M4.S2（Q2 已回答）
-- [ ] T1 付鹏观点库仅 FuPeng、其余全员；服务端按角色强制（§3.4.3）
-- [ ] 验收：未授权角色查不到未开放的知识库（403）
+- [x] T1 付鹏观点库仅 FuPeng、其余全员；服务端按角色强制（§3.4.3）
+- [x] 验收：未授权角色查不到未开放的知识库（403）
 
 #### M4.S4 guidance 增补与 skill 重导出
 依赖：M4.S2（R4 新增）
-- [ ] T1 `agent_guidance.json` 增补新工具使用说明与 403 解释口径（§3.4.4）
-- [ ] T2 重导出 3 个预生成 skill 包 + manifest 版本提升 + 签名下载回归；M3.S1 差异一并生效（§3.4.4、§2.3）
-- [ ] 验收：导出 SKILL.md 含新工具说明、通过 secret scan、下载链路可领取
+- [x] T1 `agent_guidance.json` 增补新工具使用说明与 403 解释口径（§3.4.4）
+- [x] T2 重导出 3 个预生成 skill 包 + manifest 版本提升 + 签名下载回归；M3.S1 差异一并生效（§3.4.4、§2.3）
+- [x] 验收：导出 SKILL.md 含新工具说明、通过 secret scan、下载链路可领取（1002 项测试含签名下载回归全过）
 
 ### M5：associativeDiscovery 工具化（留档，本期不执行）
 依赖：M2.S2。目标：M2 稳定运行后再评估纳入（D4·方案B）。

@@ -46,7 +46,7 @@ test('descriptor set is unchanged when callers pass the removed diaryRagLoopOnly
 
 test('every gateway operation has explicit in-process and backend executor bindings', () => {
     const operations = Object.values(GATEWAY_OPERATIONS);
-    assert.equal(operations.length, 8);
+    assert.equal(operations.length, 9);
     for (const operation of operations) {
         assert.equal(typeof IN_PROCESS_OPERATION_HANDLERS[operation.executor], 'function');
         assert.equal(typeof operation.backendExecutor, 'string');

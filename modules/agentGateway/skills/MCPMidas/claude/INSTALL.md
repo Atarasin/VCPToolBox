@@ -4,11 +4,11 @@
 
 ## 1. 放置
 
-把 `SKILL.md` 放到 `~/.agents/skills/vcp-agent-gateway-mcpmidas/SKILL.md` —— Codex 与 Kimi 自动发现该目录。
+把 `SKILL.md` 放到 `~/.agents/skills/vcp-mcpmidas/SKILL.md` —— Codex 与 Kimi 自动发现该目录。
 Claude Code 读 `~/.claude/skills/`，链同一份即可：
 
 ```bash
-ln -s ~/.agents/skills/vcp-agent-gateway-mcpmidas ~/.claude/skills/vcp-agent-gateway-mcpmidas
+ln -s ~/.agents/skills/vcp-mcpmidas ~/.claude/skills/vcp-mcpmidas
 ```
 
 项目级等价路径：`<project>/.agents/skills/…` 与 `<project>/.claude/skills/…`。
@@ -30,7 +30,7 @@ ln -s ~/.agents/skills/vcp-agent-gateway-mcpmidas ~/.claude/skills/vcp-agent-gat
   "mcpServers": {
     "vcp-agent-gateway": {
       "type": "http",
-      "url": "http://10.126.126.2:6005/mcp",
+      "url": "http://10.126.126.2:6005/mcp/mcp",
       "headers": {
         "Authorization": "Bearer ${AGENT_GATEWAY_TOKEN}"
       }
@@ -43,7 +43,7 @@ ln -s ~/.agents/skills/vcp-agent-gateway-mcpmidas ~/.claude/skills/vcp-agent-gat
 
 ```toml
 [mcp_servers.vcp-agent-gateway]
-url = "http://10.126.126.2:6005/mcp"
+url = "http://10.126.126.2:6005/mcp/mcp"
 http_headers = { "Authorization" = "Bearer ${AGENT_GATEWAY_TOKEN}" }
 ```
 
@@ -53,7 +53,7 @@ http_headers = { "Authorization" = "Bearer ${AGENT_GATEWAY_TOKEN}" }
 {
   "mcpServers": {
     "vcp-agent-gateway": {
-      "url": "http://10.126.126.2:6005/mcp",
+      "url": "http://10.126.126.2:6005/mcp/mcp",
       "bearerTokenEnvVar": "AGENT_GATEWAY_TOKEN"
     }
   }
@@ -65,7 +65,7 @@ http_headers = { "Authorization" = "Bearer ${AGENT_GATEWAY_TOKEN}" }
 ```bash
 curl -s --noproxy '*' -H "Authorization: Bearer $AGENT_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-  -X POST "http://10.126.126.2:6005/mcp" \
+  -X POST "http://10.126.126.2:6005/mcp/mcp" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
 ```
 
@@ -73,7 +73,7 @@ curl -s --noproxy '*' -H "Authorization: Bearer $AGENT_GATEWAY_TOKEN" \
 
 ## 出处
 
-- guidance revision：`sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06`
-- 生成时间：`2026-08-04T15:48:45.958Z`
+- guidance revision：`sha256:bb3dadd2e180e2c8d539a9972c56e3315fbfd7cc0d0868ba272abb2ecbf631dd`
+- 生成时间：`2026-10-10T01:52:04.533Z`
 
 本文件与 `SKILL.md` 由网关按 guidance 渲染生成，不要手改——改配置后重新导出。

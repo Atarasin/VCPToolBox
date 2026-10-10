@@ -1,20 +1,20 @@
 {
-  "artifactId": "skill:MCPMidas:claude:sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06",
+  "artifactId": "skill:MCPMidas:claude:sha256:bb3dadd2e180e2c8d539a9972c56e3315fbfd7cc0d0868ba272abb2ecbf631dd",
   "agentId": "MCPMidas",
   "format": "claude",
-  "guidanceRevision": "sha256:c91681e1e0040da438bd9c2ddd306fc6a9bae51542fdbe8bbe89b9b5e99cfb06",
+  "guidanceRevision": "sha256:bb3dadd2e180e2c8d539a9972c56e3315fbfd7cc0d0868ba272abb2ecbf631dd",
   "generatedWith": "agent-gateway-skill-generator/1",
   "files": [
     {
       "path": "SKILL.md",
-      "bytes": 6349,
-      "sha256": "e14315bb9974e18035b7b079829fa305c8113681a2fa94a65853ea1a52b93c37"
+      "bytes": 7044,
+      "sha256": "f470fc4fa77322f78c6218e69d32f355697930d6662b4fd6369b3a10ffe041de"
     },
     {
       "path": "INSTALL.md",
-      "bytes": 2402,
-      "sha256": "32fb6a6e5dbaa6e954827d5e11218a02d74c10a17d506560784f1ad52801d8a2"
+      "bytes": 2376,
+      "sha256": "515a3c327641e6116b4f348a0ab1e46fbd6d2b1787de1ae6881b9cfe1f9bc651"
     }
   ],
-  "contentHash": "sha256:93788f52c458a2d96a096b4d29ad10243dbc90748b5749f725bd88b44e9c7bbf"
+  "contentHash": "sha256:89f65bb2dc3a08ff4e11e90d7bf758816355c89dd1582b44e271fe49379cec1a"
 }

@@ -343,8 +343,8 @@ test('non-wildcard agents keep byte-identical routing, failure-semantics and har
             `${guidance.agentId}: original routing footnote verbatim`
         );
         assert.ok(
-            skillMd.includes('| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`，或写了授权外的日记本 | 去掉 `agentId`；日记本换回路由表内的名字 |'),
-            `${guidance.agentId}: original AGW_FORBIDDEN row verbatim`
+            skillMd.includes('| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`、写了授权外的日记本，或请求了角色受限的冷知识库 | 去掉 `agentId`；日记本换回路由表内的名字；受限知识库收到 403 说明对你不开放，改查其他库，不要重试 |'),
+            `${guidance.agentId}: AGW_FORBIDDEN row verbatim (M4 含冷知识库口径)`
         );
         assert.ok(
             skillMd.includes('- 不要为了绕过 `AGW_FORBIDDEN` 而改 `agentId` 或换日记本名重试。'),
