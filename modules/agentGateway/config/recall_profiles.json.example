@@ -39,6 +39,10 @@
               "enabled": true,
               "weight": 1.0
             },
+            "bm25": {
+              "mode": "body",
+              "weight": 0.6
+            },
             "truncate": 20
           }
         }

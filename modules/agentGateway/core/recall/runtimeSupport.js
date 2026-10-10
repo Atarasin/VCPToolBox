@@ -26,13 +26,15 @@ const MODIFIER_TO_RAG_OPTION = Object.freeze({
     time: 'timeAware',
     group: 'groupAware',
     rerank: 'rerank',
-    tagMemo: 'tagMemo'
+    tagMemo: 'tagMemo',
+    bm25: 'bm25'
 });
 
 const MODIFIER_PIPELINE_ORDER = Object.freeze([
     'time',
     'group',
     'tagMemo',
+    'bm25',
     'rerank',
     'timeDecay',
     'roleValve',
@@ -348,6 +350,15 @@ function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
                 options.rerank = true;
                 if (typeof modifierValue.weight === 'number' && Number.isFinite(modifierValue.weight)) {
                     options.rerankWeight = modifierValue.weight;
+                }
+            } else if (modifierKey === 'bm25' && modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
+                // M3.S3：BM25 混合检索——{mode: 'tag'|'body', weight}（mode 对齐生产 ::BM25 / ::BM25+）
+                options.bm25 = modifierValue.enabled !== false;
+                if (modifierValue.mode === 'body' || modifierValue.mode === 'tag') {
+                    options.bm25Mode = modifierValue.mode;
+                }
+                if (typeof modifierValue.weight === 'number' && Number.isFinite(modifierValue.weight)) {
+                    options.bm25Weight = Math.max(0, Math.min(1, modifierValue.weight));
                 }
             } else {
                 options[ragOptionKey] = parseModifierValue(modifierKey, modifierValue);

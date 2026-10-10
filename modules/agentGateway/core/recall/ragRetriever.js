@@ -420,6 +420,75 @@ async function buildSupplementalQueryVectors({ recentMessages, ragRetrieverPort 
 }
 
 /**
+ * M3.S3：river 混合计划的稀疏文件候选——BM25 候选与 time 命中文件按 path 合并，
+ * 打法对齐 RAGDiaryPlugin 生产端（mergeNativeFileCandidate：分数取 max、time 来源优先）。
+ */
+async function buildRiverFileCandidates({ targetDiaries, query, ragOptions, ragRetrieverPort, semanticSearchK, timeRanges }) {
+    const byPath = new Map();
+    const merge = (candidate) => {
+        const candidatePath = normalizeContextString(candidate?.path);
+        if (!candidatePath) return;
+        const existing = byPath.get(candidatePath) || {
+            path: candidatePath,
+            bm25Score: 0,
+            normalizedBM25Score: 0,
+            timeScore: 0,
+            source: ''
+        };
+        existing.bm25Score = Math.max(existing.bm25Score, Number(candidate?.bm25Score) || 0);
+        existing.normalizedBM25Score = Math.max(existing.normalizedBM25Score, Number(candidate?.normalizedBM25Score) || 0);
+        existing.timeScore = Math.max(existing.timeScore, Number(candidate?.timeScore) || 0);
+        const nextSource = normalizeContextString(candidate?.source);
+        if (nextSource === 'time' || !existing.source || existing.source === 'rag') {
+            existing.source = nextSource;
+        }
+        byPath.set(candidatePath, existing);
+    };
+
+    if (ragOptions.bm25 && typeof ragRetrieverPort.getBM25FileCandidates === 'function') {
+        const bm25Limit = Math.max(
+            semanticSearchK,
+            ragOptions.k * (ragOptions.rerank ? 5 : 3)
+        );
+        try {
+            const bm25 = await Promise.resolve(ragRetrieverPort.getBM25FileCandidates(
+                targetDiaries,
+                query,
+                bm25Limit,
+                ragOptions.bm25Mode === 'body' ? 'body' : 'tag',
+                ragOptions.bm25Weight !== undefined ? ragOptions.bm25Weight : 0.6
+            ));
+            for (const file of Array.isArray(bm25?.files) ? bm25.files : []) {
+                merge(file);
+            }
+        } catch (error) {
+            // BM25 失败不阻断主查询，仅损失稀疏路
+            console.warn(`[AgentGatewayRecall] BM25 file candidates unavailable: ${error.message}`);
+        }
+    }
+
+    // timeLimits 透传：timeAware 命中的时间范围文件以 timeScore=1 并入候选
+    if (timeRanges.length > 0 && typeof ragRetrieverPort.getTimeRangeFilePaths === 'function') {
+        try {
+            const filePaths = (await Promise.all(
+                targetDiaries.map(async (targetDiary) => Promise.all(
+                    timeRanges.map((timeRange) => Promise.resolve(
+                        ragRetrieverPort.getTimeRangeFilePaths(targetDiary, timeRange)
+                    ))
+                ))
+            )).flat(2);
+            for (const filePath of new Set(filePaths.map((p) => normalizeContextString(p)).filter(Boolean))) {
+                merge({ path: filePath, timeScore: 1, source: 'time' });
+            }
+        } catch (error) {
+            console.warn(`[AgentGatewayRecall] Time file candidates unavailable: ${error.message}`);
+        }
+    }
+
+    return Array.from(byPath.values());
+}
+
+/**
  * 共享 search/context 的检索主流程，避免在 adapter 内复制实现。
  */
 async function collectRagItems(params) {
@@ -442,6 +511,11 @@ async function collectRagItems(params) {
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
         : ragOptions.k;
+    // 时间范围解析前置：river 混合计划需要把 time 命中文件并入 fileCandidates
+    let timeRanges = [];
+    if (ragOptions.timeAware && ragRetrieverPort.parseTimeRanges) {
+        timeRanges = await Promise.resolve(ragRetrieverPort.parseTimeRanges(query));
+    }
     // 语义检索引擎分支：全局开关（AGENT_GATEWAY_RECALL_MODE / recall_profiles.json 顶层
     // recallMode，热加载）。2026-10-09 用户决策默认 knn（M2.S4 实测 river 落后，M3 混合
     // 检索完成后重评）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的
@@ -458,6 +532,27 @@ async function collectRagItems(params) {
             recentMessages: params.recentMessages,
             ragRetrieverPort
         });
+        // M3.S3：BM25 混合计划——稀疏文件候选（生产端 _getBM25FileCandidates 打法）
+        // 与 timeLimits 命中文件融合为 hybridPlan.fileCandidates，Rust 联合层完成
+        // Chunk 展开与向量融合。bm25Limit 对齐生产：max(k, finalK × (rerank?5:3))。
+        const nativeFileCandidates = await buildRiverFileCandidates({
+            targetDiaries,
+            query,
+            ragOptions,
+            ragRetrieverPort,
+            semanticSearchK,
+            timeRanges
+        });
+        const hybridPlan = (nativeFileCandidates.length > 0 || supplementalQueryVectors.length > 0)
+            ? {
+                supplemental: {
+                    perIndexK: Math.max(2, Math.round(semanticSearchK / 2))
+                },
+                fileCandidates: nativeFileCandidates,
+                bm25Weight: ragOptions.bm25Weight !== undefined ? ragOptions.bm25Weight : 0.6,
+                bm25Mode: ragOptions.bm25Mode === 'body' ? 'body' : 'tag'
+            }
+            : null;
         const riverResult = await Promise.resolve(ragRetrieverPort.riverQuery(
             { text: query, vector: finalQueryVector },
             {
@@ -466,6 +561,7 @@ async function collectRagItems(params) {
                 topK: semanticSearchK,
                 coreTags,
                 supplementalQueryVectors,
+                hybridPlan,
                 sourceObservationConfig: {
                     baseTagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
                     coreBoostFactor: 1.33
@@ -512,11 +608,6 @@ async function collectRagItems(params) {
                 : [];
         })
     );
-    }
-
-    let timeRanges = [];
-    if (ragOptions.timeAware && ragRetrieverPort.parseTimeRanges) {
-        timeRanges = await Promise.resolve(ragRetrieverPort.parseTimeRanges(query));
     }
 
     let timeResults = [];

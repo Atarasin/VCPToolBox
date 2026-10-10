@@ -154,11 +154,12 @@ describe('S02 — RecallRuntimeService extensions', () => {
     });
 
     describe('MODIFIER_PIPELINE_ORDER — S02 extended', () => {
-        it('includes all 9 modifiers in correct order', () => {
+        it('includes all 10 modifiers in correct order', () => {
             assert.deepStrictEqual(MODIFIER_PIPELINE_ORDER, [
                 'time',
                 'group',
                 'tagMemo',
+                'bm25',
                 'rerank',
                 'timeDecay',
                 'roleValve',

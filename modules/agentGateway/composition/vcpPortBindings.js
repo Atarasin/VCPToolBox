@@ -190,6 +190,13 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
         riverQuery: typeof knowledgeBaseManager?.executeNativeRiverQuery === 'function'
             ? (query, options = {}) => executeRiverQueryWithKnnFallback(knowledgeBaseManager, query, options)
             : null,
+        // M3.S3：BM25 文件候选（生产端打法，Plugin/RAGDiaryPlugin 的稀疏召回控制面），
+        // 融入 river 查询 hybridPlan.fileCandidates；旧宿主无该能力时保持 null。
+        getBM25FileCandidates: typeof ragPlugin?._getBM25FileCandidates === 'function'
+            ? (diaries, queryText, limit, mode, bm25Weight) => ragPlugin._getBM25FileCandidates(
+                diaries, queryText, '', limit, mode, bm25Weight
+            )
+            : null,
         enhanceSemanticGroups: ragPlugin?.semanticGroups?.detectAndActivateGroups &&
             ragPlugin?.semanticGroups?.getEnhancedVector
             ? async (query, vector) => {

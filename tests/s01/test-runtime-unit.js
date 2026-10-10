@@ -632,6 +632,7 @@ describe('RecallRuntimeService', () => {
                 'time',
                 'group',
                 'tagMemo',
+                'bm25',
                 'rerank',
                 'timeDecay',
                 'roleValve',

@@ -547,6 +547,7 @@ Legacy 示例（仍可用但不推荐）：
 | `group` | `boolean` | 启用**语义组增强**，利用语义分组提升相关度。 | 默认 `false`，即关闭。 |
 | `rerank` | `boolean` | 启用**重排序**，对初筛结果做二次精排。 | 默认 `false`，即关闭。 |
 | `tagMemo` | `boolean` | 启用 **TagMemo** 标签增强，融入标签关联信息。 | 默认 `false`，即关闭。 |
+| `bm25` | `boolean \| object` | 启用 **BM25 稀疏混合检索**（M3 新增，仅 river 检索模式消费）：关键词命中的文件作为稀疏候选并入 river 联合查询的 `hybridPlan.fileCandidates`，含明确关键词的 query 命中显著改善。对象写法 `{ "mode": "body", "weight": 0.6 }`：`mode` 为 `tag`（标签域，等价生产 `::BM25`）或 `body`（正文域，等价 `::BM25+`），`weight` 为稀疏路权重（0~1）。旧宿主无 BM25 能力时静默跳过。 | 默认 `false`，即关闭；`mode` 默认 `tag`，`weight` 默认 `0.6`。 |
 
 ### 4.2 S02 修饰符（后处理）
 

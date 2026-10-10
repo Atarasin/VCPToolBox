@@ -3,6 +3,7 @@ const { createUnavailablePort, freezeAvailablePort } = require('./portUtils');
 const REQUIRED_METHODS = Object.freeze(['embedQuery', 'listDiaries', 'searchDiary']);
 const OPTIONAL_METHODS = Object.freeze([
     'riverQuery',
+    'getBM25FileCandidates',
     'enhanceSemanticGroups',
     'applyTagBoost',
     'parseTimeRanges',
