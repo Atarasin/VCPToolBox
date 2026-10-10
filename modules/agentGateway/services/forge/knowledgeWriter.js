@@ -141,18 +141,19 @@ function createKnowledgeWriter({ libraryDir }) {
                 file: cards[index].file
             }));
         },
-        writeCard(unit, { subskillId, fetchedAt }) {
+        writeCard(unit, { subskillId, fetchedAtByUrl = null, defaultFetchedAt = null }) {
             return (async () => {
                 const { allNames } = listLibraryFiles(libDir);
                 const baseName = `K_${subskillId}_${slugify(unit.title)}`;
                 const fileName = uniqueFileName(libDir, baseName, '.md', allNames);
                 const filePath = path.join(libDir, fileName);
+                const resolveFetchedAt = (url) => fetchedAtByUrl?.get(url) || defaultFetchedAt || new Date().toISOString();
                 const frontmatter = serializeFrontmatter({
                     title: unit.title,
                     oneLiner: unit.oneLiner,
                     type: unit.type,
                     subskill: subskillId,
-                    sources: (unit.sourceUrls || []).map((url) => ({ url, fetchedAt })),
+                    sources: (unit.sourceUrls || []).map((url) => ({ url, fetchedAt: resolveFetchedAt(url) })),
                     tags: unit.tags || []
                 });
                 const body = `${frontmatter}\n\n${String(unit.content || '').trim()}\n`;
@@ -161,14 +162,15 @@ function createKnowledgeWriter({ libraryDir }) {
                 return { fileName, kind: 'card' };
             })();
         },
-        writeLongDoc(unit) {
+        writeLongDoc(unit, { fetchedAtByUrl = null } = {}) {
             return (async () => {
                 const { longDocs, allNames } = listLibraryFiles(libDir);
                 const seq = nextLongDocSequence(longDocs);
                 const fileName = `${String(seq).padStart(2, '0')}_${slugify(unit.title, 24)}.md`;
                 const unique = uniqueFileName(libDir, fileName.replace(/\.md$/, ''), '.md', allNames);
                 const filePath = path.join(libDir, unique);
-                const header = `# ${unit.title}\n\n> ${unit.oneLiner}\n> 来源：${(unit.sourceUrls || []).join(' ; ')}\n> 抓取时间：${new Date().toISOString()}\n\n`;
+                const fetchedTimes = (unit.sourceUrls || []).map((url) => fetchedAtByUrl?.get(url) || new Date().toISOString());
+                const header = `# ${unit.title}\n\n> ${unit.oneLiner}\n> 来源：${(unit.sourceUrls || []).join(' ; ')}\n> 抓取时间：${[...new Set(fetchedTimes)].join(' ; ')}\n\n`;
                 const body = `${header}${String(unit.content || '').trim()}\n`;
                 await assertNoSecrets(body, filePath);
                 await writeAtomic(filePath, body);
@@ -176,7 +178,7 @@ function createKnowledgeWriter({ libraryDir }) {
             })();
         },
         // 红线 3：合并 = 仅向既有卡 frontmatter.sources 追加并集来源，正文不动。
-        mergeSources(cardFile, urls, { fetchedAt }) {
+        mergeSources(cardFile, urls, { fetchedAtByUrl = null, defaultFetchedAt = null }) {
             return (async () => {
                 const filePath = path.join(libDir, cardFile);
                 const raw = await fsp.readFile(filePath, 'utf8');
@@ -188,26 +190,35 @@ function createKnowledgeWriter({ libraryDir }) {
                     throw error;
                 }
                 const sourcesBlock = match[1].match(/^sources:\n((?:  - .*\n?)+)/m);
-                const existing = new Set();
+                // 保留既有来源的原始 fetchedAt（红线 3：合并不改写旧卡的溯源时间）。
+                const existing = new Map();
                 if (sourcesBlock) {
                     for (const line of sourcesBlock[1].split('\n')) {
-                        const url = line.match(/url:\s*"?(.+?)"?\s*(?:,|$)/);
-                        if (url) {
-                            existing.add(url[1].trim());
+                        const pair = line.match(/url:\s*"?(.+?)"?\s*,\s*fetchedAt:\s*"?(.+?)"?\s*(?:,|$)/);
+                        if (pair) {
+                            existing.set(pair[1].trim(), pair[2].trim());
+                        } else {
+                            const url = line.match(/url:\s*"?(.+?)"?\s*(?:,|$)/);
+                            if (url) {
+                                existing.set(url[1].trim(), defaultFetchedAt || new Date().toISOString());
+                            }
                         }
                     }
                 }
                 const added = [];
                 for (const url of urls) {
                     if (!existing.has(url)) {
+                        const fetchedAt = fetchedAtByUrl?.get(url) || defaultFetchedAt || new Date().toISOString();
                         added.push({ url, fetchedAt });
-                        existing.add(url);
+                        existing.set(url, fetchedAt);
                     }
                 }
                 if (added.length === 0) {
                     return { cardFile, addedCount: 0 };
                 }
-                const sourcesLines = Array.from(existing).map((url) => `  - { url: ${yamlEscape(url)}, fetchedAt: ${yamlEscape(fetchedAt)} }`).join('\n');
+                const sourcesLines = Array.from(existing.entries())
+                    .map(([url, fetchedAt]) => `  - { url: ${yamlEscape(url)}, fetchedAt: ${yamlEscape(fetchedAt)} }`)
+                    .join('\n');
                 let nextFrontmatter = match[1];
                 if (sourcesBlock) {
                     nextFrontmatter = nextFrontmatter.replace(sourcesBlock[0], `sources:\n${sourcesLines}\n`);

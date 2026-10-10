@@ -70,6 +70,24 @@ const DISTILL_OUTPUT = JSON.stringify({
             tags: [],
             sourceUrls: [],
             mergeInto: null
+        },
+        {
+            type: 'pitfall',
+            title: '编造来源的单元',
+            oneLiner: '声称的 URL 不在材料清单中。',
+            content: '来源是 LLM 幻觉。',
+            tags: [],
+            sourceUrls: ['https://totally-fabricated.example.com/fake'],
+            mergeInto: null
+        },
+        {
+            type: 'case',
+            title: '半真半假来源的单元',
+            oneLiner: '一条真一条编。',
+            content: '部分来源有效。',
+            tags: [],
+            sourceUrls: ['https://www.smashingmagazine.com/2020/04/color-ui-design/', 'https://fabricated.example.com/also-fake'],
+            mergeInto: null
         }
     ],
     droppedSources: [
@@ -155,7 +173,7 @@ test('distill：分流落盘、出处 frontmatter、质量过滤留档、冒烟�
 
     const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
     const files = fs.readdirSync(libDir);
-    const cardFile = files.find((f) => f.startsWith('K_color-theory_'));
+    const cardFile = files.find((f) => f.startsWith('K_color-theory_') && f.includes('色轮'));
     assert.ok(cardFile, `知识卡应存在，实际：${files}`);
     const cardRaw = fs.readFileSync(path.join(libDir, cardFile), 'utf8');
     assert.match(cardRaw, /^---\n/);
@@ -173,15 +191,32 @@ test('distill：分流落盘、出处 frontmatter、质量过滤留档、冒烟�
     assert.match(docRaw, /^# 界面配色工作流/);
     assert.match(docRaw, /> 来源：https:\/\/www\.smashingmagazine\.com/);
 
-    // 红线 4：无出处单元不入库
+    // 红线 4：无出处单元不入库；编造 URL 的单元整卡拒绝
     assert.ok(!files.some((f) => f.includes('无源概念') || f.includes('对比度无源')), '无出处单元不应入库');
+    assert.ok(!files.some((f) => f.includes('fabricated') || f.includes('编造来源')), '纯编造来源单元不应入库');
+    // 半真半假：入库但剔除编造 URL，只留真实材料来源
+    const halfTrue = files.find((f) => f.includes('半真半假'));
+    assert.ok(halfTrue, '半真半假单元应入库（存在有效来源）');
+    const halfTrueRaw = fs.readFileSync(path.join(libDir, halfTrue), 'utf8');
+    assert.match(halfTrueRaw, /smashingmagazine\.com/);
+    assert.ok(!halfTrueRaw.includes('fabricated.example.com'), '编造 URL 不应出现在知识卡');
 
     // 质量过滤留档
     const droppedPath = path.join(baseDir, 'runs', jobId, 'distill-dropped.json');
     assert.ok(fs.existsSync(droppedPath));
     const dropped = JSON.parse(fs.readFileSync(droppedPath, 'utf8'));
-    assert.ok(dropped.dropped.length >= 2, '丢弃留档含 LLM 丢弃 + 无出处丢弃');
+    assert.ok(dropped.dropped.length >= 4, '丢弃留档含 LLM 丢弃 + 无出处 + 编造来源');
     assert.ok(dropped.dropped.some((d) => d.url === '(no source)' && d.reason.includes('红线 4')));
+    assert.ok(dropped.dropped.some((d) => d.url === 'https://totally-fabricated.example.com/fake' && d.reason.includes('疑似编造')), '编造来源留档');
+    assert.ok(dropped.dropped.some((d) => d.url === 'https://fabricated.example.com/also-fake' && d.reason.includes('疑似编造')), '半真单元的编造来源留档');
+
+    // S3：知识卡 fetchedAt 回填材料抓取时刻（而非蒸馏时刻）
+    const cardMeta = fs.readdirSync(path.join(baseDir, 'runs', jobId, 'raw', 'color-theory'))
+        .filter((f) => f.endsWith('.meta.json'))
+        .map((f) => JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'raw', 'color-theory', f), 'utf8')))
+        .find((meta) => meta.url.includes('interaction-design.org'));
+    const cardFetchedAt = cardRaw.match(/fetchedAt: (\S+)\s*\n|fetchedAt: ([^\n}]+)/)?.[0] || '';
+    assert.ok(cardFetchedAt.includes(cardMeta.fetchedAt.slice(0, 19)), `卡片时间应回填材料抓取时刻：${cardFetchedAt} vs ${cardMeta.fetchedAt}`);
 
     // 冒烟查询
     assert.equal(smokeCalls.length >= 1, true);
@@ -239,6 +274,8 @@ tags: [旧]
     assert.match(mergedRaw, /interaction-design\.org/);
     const sources = mergedRaw.match(/sources:\n((?:  - .*\n)+)/)[1];
     assert.equal((sources.match(/url:/g) || []).length, 2, '来源并集');
+    // S2：既有来源的原始 fetchedAt 不被合并时刻改写
+    assert.match(sources, /2026-10-01T00:00:00\.000Z/, '旧来源时间戳保留');
 
     const runDir = path.join(baseDir, 'runs', jobId);
     const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'distill.json'), 'utf8'));

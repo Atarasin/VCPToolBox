@@ -180,31 +180,48 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                 throw error;
             }
 
+            // 红线 4 白名单：sourceUrls 只认本批材料的 URL——LLM 幻觉出的
+            // 「貌似可信」来源一律降级进 dropped，不混入知识卡。
+            const materialUrlToFetchedAt = new Map(materials.map((material) => [material.url, material.fetchedAt]));
             const titleToCard = new Map(existingCards.map((card) => [card.title, card.file]));
             for (const unit of payload.knowledgeUnits) {
                 if (!unit || !UNIT_TYPES.has(unit.type) || !unit.title || !unit.content) {
                     logger?.(`distill: 丢弃格式非法的知识单元：${JSON.stringify(unit?.title || unit)}`);
                     continue;
                 }
-                // 红线 4：无出处不入库。
-                const sourceUrls = Array.isArray(unit.sourceUrls) ? unit.sourceUrls.filter(Boolean) : [];
+                const declared = Array.isArray(unit.sourceUrls) ? unit.sourceUrls.filter(Boolean) : [];
+                const fabricated = declared.filter((url) => !materialUrlToFetchedAt.has(url));
+                for (const url of fabricated) {
+                    dropped.push({ url, reason: `LLM 声称的来源不在材料清单中（疑似编造），已剔除（红线 4）` });
+                }
+                const sourceUrls = declared.filter((url) => materialUrlToFetchedAt.has(url));
                 if (sourceUrls.length === 0) {
-                    dropped.push({ url: '(no source)', reason: `知识单元「${unit.title}」无出处，不入库（红线 4）` });
+                    dropped.push({ url: '(no source)', reason: `知识单元「${unit.title}」无有效出处，不入库（红线 4）` });
                     continue;
                 }
                 const normalized = { ...unit, sourceUrls };
 
                 if (unit.mergeInto && titleToCard.has(unit.mergeInto)) {
-                    const mergeResult = await writer.mergeSources(titleToCard.get(unit.mergeInto), sourceUrls, { fetchedAt });
+                    const mergeResult = await writer.mergeSources(titleToCard.get(unit.mergeInto), sourceUrls, {
+                        fetchedAtByUrl: materialUrlToFetchedAt,
+                        defaultFetchedAt: fetchedAt
+                    });
                     merged.push({ into: unit.mergeInto, addedSources: mergeResult.addedCount });
                     continue;
                 }
                 // D2 分流：methodology → 长文档；其余 → 知识卡。
                 if (normalized.type === 'methodology') {
-                    const result = await writer.writeLongDoc(normalized);
+                    const result = await writer.writeLongDoc(normalized, {
+                        fetchedAtByUrl: materialUrlToFetchedAt,
+                        defaultFetchedAt: fetchedAt
+                    });
                     written.push(result);
                 } else {
-                    const result = await writer.writeCard(normalized, { subskillId: subskill.id, fetchedAt });
+                    const result = await writer.writeCard(normalized, {
+                        subskillId: subskill.id,
+                        fetchedAtByUrl: materialUrlToFetchedAt,
+                        defaultFetchedAt: fetchedAt
+                    });
                     written.push(result);
                 }
             }
