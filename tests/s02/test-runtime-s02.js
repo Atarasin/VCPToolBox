@@ -622,7 +622,7 @@ describe('S02 — RecallRuntimeService extensions', () => {
             assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.timeAware, true);
             assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.rerank, true);
             assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.tagMemo, true);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 5); // rag baseK
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 8); // rag baseK（M3 默认 5→8）
         });
 
         it('gated_rag gate behavior unchanged', async () => {

@@ -422,6 +422,7 @@
 | `targets` | 是 | `object` | 召回目标配置，必须包含 `diaries` 数组。 | 无默认值。缺失时该 rule 无效。 |
 | `targets.diaries` | 是 | `string[]` | 要检索的日记本名称列表。 | 无默认值。空数组会导致该 rule 无法产生有效目标。 |
 | `targets.kMultiplier` | 否 | `number` | 召回倍率乘数。大于 1 扩大召回量，小于 1 缩小。 | 默认 `1.0`。非法值会回退到 `1.0`。 |
+| `targets.k` | 否 | `number` | Rule 级绝对召回条数覆盖（M3 新增）。设置后忽略 `kMultiplier` 的倍率语义，直接以该值作为该 rule 的 k。 | 未设置时使用 `默认 k(8) × targets.kMultiplier`。会被夹取到全局上限 `50`。 |
 | `targets.aggregate` | 否 | `boolean` | 是否对该 rule 的结果做聚合去重。 | 单 diary 时可省略；结构化多 diary rule 未显式设为 `true` 时，不会自动聚合，并会在运行时视为无效配置。 |
 | `projection` | 否 | `string \| object` | 结果视图偏好。字符串如 `"items"`；对象写法 `{ "emit": "items" }`。它影响对外返回时推荐使用的结果视图，不改变底层检索策略。 | 未显式指定时，先回退到 profile-level / rule-level 汇总结果，再由运行时自动推断。 |
 | `gateThreshold` | 条件必填 | `number` | **门控阈值**，仅 `gated_rag` / `gated_full_text` 需要。范围建议 `0.2 ~ 0.5`。 | 默认 `null`。省略时等价于不做门控，但对 gated 类型应显式配置。 |

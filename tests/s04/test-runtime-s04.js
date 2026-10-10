@@ -453,7 +453,7 @@ describe('RecallRuntimeService S04 — merge policy', () => {
             const result = await service.executeRecall({ agentId: 'AgentStructuredK', query: 'query' });
             assert.strictEqual(result.success, true);
             assert.strictEqual(mockCollectRagItemsCalls.length, 1);
-            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 10);
+            assert.strictEqual(mockCollectRagItemsCalls[0].ragOptions.k, 16); // 默认 8 × kMultiplier 2（M3）
             assert.strictEqual(result.diagnostics.rules[0].targetMode, 'single');
         });
 

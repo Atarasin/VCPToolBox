@@ -14,8 +14,10 @@ const {
     estimateTokenCount
 } = require('../../services/recallProjectionService');
 
-const DEFAULT_RAG_K = 5;
-const MAX_RAG_K = 20;
+// 检索预算（D6·方案A 保守放开）：默认 k 5→8、上限 20→50；k/上限可经 recall
+// profile 档案字段 targets.k 覆盖，tagBoost 经 modifiers.tagMemo.weight 覆盖。
+const DEFAULT_RAG_K = 8;
+const MAX_RAG_K = 50;
 const TAG_BOOST = 0.15;
 const DEFAULT_CONTEXT_MAX_BLOCKS = 4;
 const DEFAULT_CONTEXT_TOKEN_BUDGET = 1200;
@@ -407,9 +409,11 @@ async function collectRagItems(params) {
     const vectors = await prepareRagVectors({ query, ragOptions, ragRetrieverPort });
     const { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector, preparedMemoObservation } = vectors;
 
+    // rerank 开启时候选池翻倍供重排消费；k 本身已由 extractRagOptions /
+    // buildRagOptionsFromModifiers 注入默认值，此处不再设下限（显式小 k 应被尊重）。
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
-        : Math.max(ragOptions.k, DEFAULT_RAG_K);
+        : ragOptions.k;
     // 语义检索引擎分支：全局开关（AGENT_GATEWAY_RECALL_MODE / recall_profiles.json 顶层
     // recallMode，热加载）。2026-10-09 用户决策默认 knn（M2.S4 实测 river 落后，M3 混合
     // 检索完成后重评）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的

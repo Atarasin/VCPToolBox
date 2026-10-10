@@ -154,6 +154,11 @@ function normalizeRule(rule) {
     const kMultiplier = typeof rawKMultiplier === 'number' && Number.isFinite(rawKMultiplier) && rawKMultiplier > 0
         ? rawKMultiplier
         : 1.0;
+    // M3.S1（D6·方案A）：rule 级绝对 k 覆盖（targets.k）；运行时夹到全局上限
+    const rawRuleK = rawTargets?.k !== undefined ? rawTargets.k : rule.k;
+    const ruleK = typeof rawRuleK === 'number' && Number.isFinite(rawRuleK) && rawRuleK >= 1
+        ? Math.floor(rawRuleK)
+        : undefined;
     const meta = rule.meta && typeof rule.meta === 'object' && !Array.isArray(rule.meta)
         ? { ...rule.meta }
         : undefined;
@@ -166,12 +171,16 @@ function normalizeRule(rule) {
         targets: {
             diaries,
             ...(aggregate !== undefined ? { aggregate } : {}),
-            kMultiplier
+            kMultiplier,
+            ...(ruleK !== undefined ? { k: ruleK } : {})
         },
         modifiers,
         gateThreshold,
         kMultiplier
     };
+    if (ruleK !== undefined) {
+        result.k = ruleK;
+    }
     if (id !== undefined) {
         result.id = id;
     }

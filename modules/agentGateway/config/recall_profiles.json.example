@@ -25,7 +25,8 @@
           "baseMode": "rag",
           "targets": {
             "diaries": ["DiaryName日记本"],
-            "kMultiplier": 1.5
+            "kMultiplier": 1.5,
+            "k": 12
           },
           "modifiers": {
             "time": true,
