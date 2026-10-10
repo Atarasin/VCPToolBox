@@ -168,6 +168,11 @@ config.env.local
 **/config.env
 !**/config.env.example
 
+# 专家铸造炉运行数据（画像草稿/运行档案/门禁报告；templates 与人设资产除外）
+Agent/forge/blueprints/
+Agent/forge/runs/
+Agent/forge/gate-*.json
+
 # 有 .example 对应的运行时配置
 ModelRedirect.json
 agent_map.json
