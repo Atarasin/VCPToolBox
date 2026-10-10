@@ -7,12 +7,13 @@ const {
     validateBlueprint,
     writeBlueprint
 } = require('./blueprint');
+const { createHarvestStepRunner } = require('./harvest');
 
 /**
  * 铸造五步状态机的步骤定义（§3.2）。
- * M1 交付编排骨架：blueprint 步骤完整实现（LLM 起草画像 → 校验 → 落盘）；
- * harvest / distill / synthesize / trial 分别由 M2.S1 / M2.S2 / M3.S1 / M4.S1
- * 以真实能力实现替换（经 options.stepRunners 注入，编排器不改）。
+ * M1 交付编排骨架；M2.S1 起接入真实能力：blueprint（M1，LLM 起草画像）与
+ * harvest（M2.S1，检索采集）已实现；distill / synthesize / trial 分别由
+ * M2.S2 / M3.S1 / M4.S1 交付（经 options.stepRunners 可再覆盖）。
  */
 
 const BLUEPRINT_DRAFT_PROMPT = `你是一名「专家铸造师」。请根据用户的一句话需求，起草一份专家画像（blueprint）JSON。
@@ -184,7 +185,7 @@ function createBlueprintStepRunner({ baseDir }) {
 function createStepRegistry({ baseDir, stepRunners = {} }) {
     const defaults = {
         blueprint: createBlueprintStepRunner({ baseDir }),
-        harvest: createPendingStepRunner('harvest', 'M2.S1'),
+        harvest: createHarvestStepRunner(),
         distill: createPendingStepRunner('distill', 'M2.S2'),
         synthesize: createPendingStepRunner('synthesize', 'M3.S1'),
         trial: createPendingStepRunner('trial', 'M4.S1')
