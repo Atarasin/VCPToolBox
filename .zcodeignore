@@ -422,3 +422,4 @@ wheels/
 Agent/forge/blueprints/
 Agent/forge/runs/
 Agent/forge/gate-*.json
+Agent/forge/gate-baseline-*.txt

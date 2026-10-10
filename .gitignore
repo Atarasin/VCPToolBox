@@ -172,6 +172,7 @@ config.env.local
 Agent/forge/blueprints/
 Agent/forge/runs/
 Agent/forge/gate-*.json
+Agent/forge/gate-baseline-*.txt
 
 # 有 .example 对应的运行时配置
 ModelRedirect.json

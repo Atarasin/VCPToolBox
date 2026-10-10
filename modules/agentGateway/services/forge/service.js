@@ -5,7 +5,10 @@ const path = require('path');
 const { JOB_STATUS } = require('../jobRuntimeService');
 const { createRunStore } = require('./runStore');
 const { createCostMeter } = require('./costMeter');
-const { ForgeNameConflictError, createStepRegistry } = require('./steps');
+const { createStepRegistry } = require('./steps');
+const { ForgeNameConflictError } = require('./nameConflict');
+const { blueprintLibraryName } = require('./blueprint');
+const { renameAtSynthesize } = require('./synthesize');
 
 /**
  * forge job 编排服务（§3.2）：
@@ -128,6 +131,9 @@ function createForgeRuntimeService(options = {}) {
         knowledgeRoot = null,
         smokeRetries = null,
         smokeIntervalMs = null,
+        agentMapPath = null,
+        knowledgePolicyPath = null,
+        guidanceConfigPath = null,
         prices = null,
         defaultBudgetCny = DEFAULT_BUDGET_CNY,
         llmConfig = null,
@@ -150,6 +156,9 @@ function createForgeRuntimeService(options = {}) {
         knowledgeRoot: effectiveKnowledgeRoot,
         smokeRetries,
         smokeIntervalMs,
+        agentMapPath,
+        knowledgePolicyPath,
+        guidanceConfigPath,
         stepRunners
     });
     const effectiveLlmConfig = llmConfig !== null ? llmConfig : resolveForgeLlmConfig();
@@ -305,6 +314,7 @@ function createForgeRuntimeService(options = {}) {
                     runDir: runStore.runDir(jobId),
                     knowledgeRoot: effectiveKnowledgeRoot,
                     knowledgeStorePort,
+                    overwriteApproved: Boolean(runRecord.overwriteApproved),
                     llm: wrapLlm(meter, jobId, authContext, step.id),
                     toolInvoker: wrapToolInvoker(meter, jobId, authContext, step.id),
                     agentDirectoryPort,
@@ -336,9 +346,9 @@ function createForgeRuntimeService(options = {}) {
                 }
             } catch (error) {
                 if (error instanceof ForgeNameConflictError) {
-                    // 红线 3：默认绝不覆盖——暂停待人工确认（改名后重跑 blueprint）。
+                    // 红线 3：默认绝不覆盖——暂停待人工确认（改名或人工明确覆盖）。
                     const { conflicts, draft } = error.details;
-                    await runStore.updateRun(jobId, { pendingNameConflict: { draft, conflicts } });
+                    await runStore.updateRun(jobId, { pendingNameConflict: { step: step.id, draft, conflicts } });
                     log('forge.name.conflict', { jobId, step: step.id, conflicts });
                     jobRuntimeService.updateJob(jobId, {
                         status: JOB_STATUS.PENDING_CONFIRM,
@@ -537,7 +547,7 @@ function createForgeRuntimeService(options = {}) {
             scheduleDrive(job.jobId, authContext);
             return { jobId: job.jobId, runRecord };
         },
-        async confirmBlueprint(jobId, { approved, feedback = null, renameTo = null, authContext = null } = {}) {
+        async confirmBlueprint(jobId, { approved, feedback = null, renameTo = null, overwrite = false, authContext = null } = {}) {
             const job = getJobOrThrow(jobId, authContext);
             if (job.status !== JOB_STATUS.PENDING_CONFIRM) {
                 const error = new Error(`job 当前状态 ${job.status}，不在确认门禁`);
@@ -562,9 +572,42 @@ function createForgeRuntimeService(options = {}) {
                 return { jobId, outcome: 'rejected' };
             }
 
-            // 红线 3 的重名确认分支：必须提供新名字，改写画像草稿后从 blueprint 重跑。
+            // 红线 3 的重名确认分支。
             if (runRecord.pendingNameConflict) {
+                const conflictStep = runRecord.pendingNameConflict.step || 'blueprint';
                 const newName = normalizeString(renameTo);
+
+                if (conflictStep === 'synthesize') {
+                    // synthesize 阶段冲突：改名（迁移画像与知识库目录后仅重跑 synthesize）
+                    // 或人工明确覆盖（红线 3 的显式例外）。
+                    if (newName) {
+                        const oldName = runRecord.expertName;
+                        await renameAtSynthesize({
+                            baseDir,
+                            knowledgeRoot: effectiveKnowledgeRoot,
+                            runRecord,
+                            runStore,
+                            jobId,
+                            newName
+                        });
+                        await runStore.updateRun(jobId, { pendingNameConflict: null });
+                        log('forge.name.renamed', { jobId, step: conflictStep, from: oldName, to: newName });
+                        scheduleDrive(jobId, authContext);
+                        return { jobId, outcome: 'renamed' };
+                    }
+                    if (approved === true && overwrite === true) {
+                        await runStore.updateRun(jobId, { pendingNameConflict: null, overwriteApproved: true });
+                        log('forge.name.overwrite_approved', { jobId, expertName: runRecord.expertName });
+                        scheduleDrive(jobId, authContext);
+                        return { jobId, outcome: 'overwrite_approved' };
+                    }
+                    const error = new Error('synthesize 阶段重名冲突的确认必须提供 renameTo（新专家名）或 overwrite: true（人工明确覆盖）');
+                    error.status = 400;
+                    error.code = 'AGW_VALIDATION_ERROR';
+                    throw error;
+                }
+
+                // blueprint 阶段冲突：必须提供新名字，改写画像草稿后从 blueprint 重跑。
                 if (!newName) {
                     const error = new Error('重名冲突的确认必须提供 renameTo（新专家名）');
                     error.status = 400;
@@ -576,7 +619,7 @@ function createForgeRuntimeService(options = {}) {
                     blueprintOverride: renamedDraft,
                     pendingNameConflict: null
                 });
-                log('forge.name.renamed', { jobId, from: runRecord.pendingNameConflict.draft?.name, to: newName });
+                log('forge.name.renamed', { jobId, step: conflictStep, from: runRecord.pendingNameConflict.draft?.name, to: newName });
                 scheduleDrive(jobId, authContext);
                 return { jobId, outcome: 'renamed' };
             }
