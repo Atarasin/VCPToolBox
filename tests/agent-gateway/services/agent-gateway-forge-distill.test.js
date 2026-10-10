@@ -220,7 +220,7 @@ test('distill：分流落盘、出处 frontmatter、质量过滤留档、冒烟�
 
     // 冒烟查询
     assert.equal(smokeCalls.length >= 1, true);
-    assert.equal(smokeCalls[0].options.library, 'UIDesigner知识库');
+    assert.deepEqual(smokeCalls[0].options.libraries, ['UIDesigner知识库']);
     assert.equal(smokeCalls[0].query, 'color theory UI design');
 });
 
