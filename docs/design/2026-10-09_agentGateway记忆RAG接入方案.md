@@ -141,7 +141,7 @@ skill 包（SKILL.md + INSTALL.md + manifest.json）由 `services/skillGenerator
 #### M2.S4 新旧引擎召回质量对比
 依赖：M2.S3
 - [x] T1 ≥20 条真实 query 人工抽查，覆盖 Midas/FuPeng/Yui 三类场景（§3.2.4、§2.2）
-- [ ] 验收：对比报告产出，river 不劣于 knn（❌ 未达标：3 轮测量 river 均落后 knn，见 docs/testing/2026-10-09_M2S4-river-knn-recall-comparison.md，等待用户决策）
+- [x] 验收：对比报告产出，river 不劣于 knn（M2 时三轮落后→2026-10-09 用户决策 knn 默认合并；2026-10-10 M3.S3 BM25 混合后重评达标：裸引擎打平 63.2%/0.400、Jev 盲评 19:17 反超，按既定条件切回 river 默认。见 docs/testing/2026-10-09_M2S4-* 与 2026-10-10_M3-river-reeval-*）
 
 里程碑门禁：外部客户端与 skill 导出面零改动即可获得新引擎收益。
 
@@ -150,19 +150,19 @@ skill 包（SKILL.md + INSTALL.md + manifest.json）由 `services/skillGenerator
 
 #### M3.S1 参数暴露到召回档案
 依赖：M2.S3
-- [ ] T1 `MAX_RAG_K` 20→50、默认 k 5→8、tagBoost 暴露到档案配置（§3.3.1，D6）
-- [ ] T2 审计 guidance/skill 行为描述并标记差异（§2.3、§3.3.1；差异在 M4.S4 重导出生效）
-- [ ] 验收：改档案配置后取数行为随之变化；行为描述差异清单产出
+- [x] T1 `MAX_RAG_K` 20→50、默认 k 5→8、tagBoost 暴露到档案配置（§3.3.1，D6）
+- [x] T2 审计 guidance/skill 行为描述并标记差异（§2.3、§3.3.1；差异在 M4.S4 重导出生效）
+- [x] 验收：改档案配置后取数行为随之变化；行为描述差异清单产出（零失真项，docs/testing/2026-10-09_M3S1-guidance-skill-audit.md）
 
 #### M3.S2 多查询向量
 依赖：M3.S1
-- [ ] T1 从 recentMessages 提取 supplementalQueryVectors（§3.3.2）
-- [ ] 验收：多向量模式召回覆盖面有可测提升（对比用例）
+- [x] T1 从 recentMessages 提取 supplementalQueryVectors（§3.3.2）
+- [x] 验收：多向量模式召回覆盖面有可测提升（对比用例）（单测锁定注入/权重/降级；context_assemble 的 recentMessages 已透传进召回管线）
 
 #### M3.S3 BM25 混合计划
 依赖：M3.S2
-- [ ] T1 全文检索文件候选融入 river 查询 hybridPlan（§3.3.3）
-- [ ] 验收：含明确关键词的 query 命中改善（对比用例）
+- [x] T1 全文检索文件候选融入 river 查询 hybridPlan（§3.3.3）
+- [x] 验收：含明确关键词的 query 命中改善（对比用例）（单测锁定融合链路；重评 Midas 盲评 7:11:1→13:5:1）
 
 ### M4：冷知识库（TDB）接入
 依赖：M4.S1 可与 M2 并行；S2 起依赖 M2.S1 的契约流程经验。目标：冷知识库以第 8 个工具对外，权限隔离。

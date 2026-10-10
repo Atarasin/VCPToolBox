@@ -517,8 +517,8 @@ async function collectRagItems(params) {
         timeRanges = await Promise.resolve(ragRetrieverPort.parseTimeRanges(query));
     }
     // 语义检索引擎分支：全局开关（AGENT_GATEWAY_RECALL_MODE / recall_profiles.json 顶层
-    // recallMode，热加载）。2026-10-09 用户决策默认 knn（M2.S4 实测 river 落后，M3 混合
-    // 检索完成后重评）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的
+    // recallMode，热加载）。默认 river（2026-10-10 M3 混合检索后重评达标切回，重评报告见
+    // docs/testing/）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的
     // riverQuery 不会抛上游异常。
     const recallMode = resolveGlobalRecallMode();
     const riverEligible = recallMode === 'river' && typeof ragRetrieverPort.riverQuery === 'function';

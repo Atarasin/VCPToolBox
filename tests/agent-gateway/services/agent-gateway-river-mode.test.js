@@ -17,7 +17,7 @@ function writeTempConfig(payload) {
     return configPath;
 }
 
-test('global recall mode defaults to knn and honors env/config precedence', () => {
+test('global recall mode defaults to river and honors env/config precedence', () => {
     const previousEnv = process.env.AGENT_GATEWAY_RECALL_MODE;
     try {
         delete process.env.AGENT_GATEWAY_RECALL_MODE;
@@ -25,20 +25,20 @@ test('global recall mode defaults to knn and honors env/config precedence', () =
         const riverConfig = writeTempConfig({ recallMode: 'river', agents: {}, profiles: {} });
         const invalidConfig = writeTempConfig({ recallMode: 'bogus', agents: {}, profiles: {} });
 
-        // 2026-10-09 用户决策：默认 knn（M2.S4 实测后，M3 完成后重评）
-        assert.equal(DEFAULT_RECALL_MODE, 'knn');
+        // 2026-10-10 M3 后重评达标（盲评 19:17、裸引擎打平），按用户既定条件切回 river 默认
+        assert.equal(DEFAULT_RECALL_MODE, 'river');
         assert.equal(resolveGlobalRecallMode(knnConfig), 'knn');
         assert.equal(resolveGlobalRecallMode(riverConfig), 'river');
-        assert.equal(resolveGlobalRecallMode(invalidConfig), 'knn');
+        assert.equal(resolveGlobalRecallMode(invalidConfig), 'river');
 
-        // env 覆盖 config（一键切换开关）
-        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
-        assert.equal(resolveGlobalRecallMode(knnConfig), 'river');
+        // env 覆盖 config（一键切换开关，双向）
         process.env.AGENT_GATEWAY_RECALL_MODE = 'knn';
         assert.equal(resolveGlobalRecallMode(riverConfig), 'knn');
+        process.env.AGENT_GATEWAY_RECALL_MODE = 'river';
+        assert.equal(resolveGlobalRecallMode(knnConfig), 'river');
         // env 非法值被忽略，回落到 config
         process.env.AGENT_GATEWAY_RECALL_MODE = 'nope';
-        assert.equal(resolveGlobalRecallMode(riverConfig), 'river');
+        assert.equal(resolveGlobalRecallMode(knnConfig), 'knn');
     } finally {
         if (previousEnv === undefined) {
             delete process.env.AGENT_GATEWAY_RECALL_MODE;
