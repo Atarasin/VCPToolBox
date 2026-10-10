@@ -1,6 +1,6 @@
 ---
 name: midas-vcp
-description: Use Agent Gateway MCP as Midas's durable recall and memory layer. Use when Codex needs project history, prior decisions, VCP diary context, quant strategy or factor research context, forum-learning notes, user preference recall, or durable memory writes through vcp-agent-gateway tools such as gateway_recall_run, gateway_memory_search, and gateway_memory_write.
+description: Use Agent Gateway MCP as Midas's durable recall, memory, and cold-knowledge layer. Use when Codex needs project history, prior decisions, VCP diary context, quant strategy or factor research context, forum-learning notes, user preference recall, durable memory writes, or cold-knowledge library lookups through vcp-agent-gateway tools such as gateway_recall_run, gateway_memory_search, gateway_knowledge_search, and gateway_memory_write.
 ---
 
 # Midas VCP
@@ -25,8 +25,21 @@ Default agent id: `MCPMidas`.
 
 3. Let the configured Midas recall profile decide retrieval details such as diary routing, rerank, tag memo, truncation, and scoring.
 4. Use `gateway_memory_search` only for targeted lookups in known diaries, exact names, or narrow historical questions.
-5. Summarize only the useful recalled context in the working response. Do not paste long raw memory blocks unless the user explicitly asks.
-6. If Agent Gateway fails or returns no useful context, proceed with local repository context and mention the gap only when it affects confidence.
+5. For stable reference knowledge (encyclopedias, docs, curated archives in the TDB cold-knowledge libraries), call `gateway_knowledge_search` with a keyword or natural-language query instead of the memory tools:
+
+```json
+{
+  "agentId": "MCPMidas",
+  "query": "<keyword or question>",
+  "libraries": ["VCP百科全书"],
+  "topK": 8
+}
+```
+
+Omit `libraries` to search every library accessible to Midas. Some libraries are role-restricted; a 403 `MCP_FORBIDDEN` means the library is not open to this agent — do not retry it, query another library instead. Server-side permission is authoritative.
+
+6. Summarize only the useful recalled context in the working response. Do not paste long raw memory blocks unless the user explicitly asks.
+7. If Agent Gateway fails or returns no useful context, proceed with local repository context and mention the gap only when it affects confidence.
 
 ## Diary Routing
 

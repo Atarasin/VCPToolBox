@@ -1,11 +1,11 @@
 ---
-name: vcp-agent-gateway-mcpmidas
+name: vcp-mcpmidas
 description: "Midas（VCP Agent Gateway agent MCPMidas）的量化选股与策略工程人格与记忆层：先用 gateway_agent_bootstrap 取回Midas本人的角色设定与按当前问题检索到的语料，再用 gateway_recall_run 召回历史结论，用 gateway_memory_write 存档新结论。当用户在 quant-select-stock-pro 或相关量化仓库里做因子、策略、回测、选股流程的开发与调试；需要 Midas 既往的因子结论、策略取舍、踩坑记录或工程约定时使用。不适用：与该量化项目无关的通用编码任务。"
 ---
 
 # Midas｜VCP Agent Gateway
 
-已连接的 MCP server `vcp-agent-gateway`（`http://10.126.126.2:6005/mcp`）就是Midas，agent id `MCPMidas`。
+已连接的 MCP server `vcp-agent-gateway`（`http://10.126.126.2:6005/mcp/mcp`）就是Midas，agent id `MCPMidas`。
 
 凭据已绑定该 agent：**所有 `gateway_*` 工具都不要传 `agentId`**。传了也必须与 `MCPMidas` 逐字一致，否则 `AGW_FORBIDDEN`。
 
@@ -67,7 +67,9 @@ gateway_memory_write {
 
 1. 任务依赖历史决策、bug、策略研究或用户偏好时，先调用 gateway_recall_run。
 2. 已知日记本、确切名称或窄范围历史问题才使用 gateway_memory_search。
-3. 召回为空或失败时继续使用本地仓库上下文，不中断任务。
+3. 需要稳定的参考知识（百科、文档、观点库等冷知识库）时调用 gateway_knowledge_search：按关键词或自然语言查询，可用 library/libraries 定向，topK 默认 8（上限 50）。
+4. 部分冷知识库按角色受限（如付鹏观点库仅付鹏可用）；未授权调用会得到 403 Forbidden——以服务端权限为准，收到 403 说明该库对你不开放，改查其他库即可，不要重试同一受限库。
+5. 召回为空或失败时继续使用本地仓库上下文，不中断任务。
 
 ## 日记本路由
 
@@ -89,6 +91,7 @@ gateway_memory_write {
 | `gateway_memory_search` | 已知日记本或要找确切名称的窄问题 | `query` |
 | `gateway_context_assemble` | 起草长回答前要一整块预算内的上下文 | `query` 或 `recentMessages` |
 | `gateway_memory_write` | 会话收尾或得出确定结论时存档 | `target.diary` + `memory.text` + `memory.tags` |
+| `gateway_knowledge_search` | 查冷知识库（百科/文档/观点库等稳定参考，非个人记忆） | `query` |
 | `gateway_job_get` / `gateway_job_cancel` | 轮询或取消 deferred 任务 | `jobId` |
 
 ## 出错了怎么办
@@ -96,7 +99,7 @@ gateway_memory_write {
 | 现象 | 含义 | 动作 |
 | --- | --- | --- |
 | 返回文本以 `GATEWAY NOTICE` 开头 | 本次渲染降级（多半漏传 `query`） | 带上 `query` 重调一次 |
-| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`，或写了授权外的日记本 | 去掉 `agentId`；日记本换回路由表内的名字 |
+| `AGW_FORBIDDEN` | 传了不匹配的 `agentId`、写了授权外的日记本，或请求了角色受限的冷知识库 | 去掉 `agentId`；日记本换回路由表内的名字；受限知识库收到 403 说明对你不开放，改查其他库，不要重试 |
 | HTTP 401 | 凭据失效或被吊销 | 停止重试，告知用户联系网关运维方 |
 | `AGW_CONFIG_UNAVAILABLE`（503） | 网关配置暂不可用 | 降级用本地上下文继续，并说明缺少网关支撑 |
 | 召回/检索返回空 | 合法状态，不是错误 | 继续回答，声明缺少历史存档支撑 |

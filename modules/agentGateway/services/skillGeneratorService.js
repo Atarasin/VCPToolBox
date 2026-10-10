@@ -340,6 +340,7 @@ function renderToolCheatsheet() {
         '| `gateway_memory_search` | 已知日记本或要找确切名称的窄问题 | `query` |',
         '| `gateway_context_assemble` | 起草长回答前要一整块预算内的上下文 | `query` 或 `recentMessages` |',
         '| `gateway_memory_write` | 会话收尾或得出确定结论时存档 | `target.diary` + `memory.text` + `memory.tags` |',
+        '| `gateway_knowledge_search` | 查冷知识库（百科/文档/观点库等稳定参考，非个人记忆） | `query` |',
         '| `gateway_job_get` / `gateway_job_cancel` | 轮询或取消 deferred 任务 | `jobId` |'
     ].join('\n');
 }
@@ -356,7 +357,7 @@ function renderFailureSemantics(guidance) {
         '| 现象 | 含义 | 动作 |',
         '| --- | --- | --- |',
         '| 返回文本以 `GATEWAY NOTICE` 开头 | 本次渲染降级（多半漏传 `query`） | 带上 `query` 重调一次 |',
-        `| \`AGW_FORBIDDEN\` | 传了不匹配的 \`agentId\`，或写了授权外的日记本 | ${forbiddenAction} |`,
+        `| \`AGW_FORBIDDEN\` | 传了不匹配的 \`agentId\`、写了授权外的日记本，或请求了角色受限的冷知识库 | ${forbiddenAction}；受限知识库收到 403 说明对你不开放，改查其他库，不要重试 |`,
         '| HTTP 401 | 凭据失效或被吊销 | 停止重试，告知用户联系网关运维方 |',
         '| `AGW_CONFIG_UNAVAILABLE`（503） | 网关配置暂不可用 | 降级用本地上下文继续，并说明缺少网关支撑 |',
         '| 召回/检索返回空 | 合法状态，不是错误 | 继续回答，声明缺少历史存档支撑 |'

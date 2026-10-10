@@ -68,7 +68,7 @@ test('guidance schema accepts the checked-in example config', () => {
     const result = parseAgentGuidanceConfig(raw);
     assert.equal(result.valid, true, JSON.stringify(result.errors));
     assert.equal(result.config.agents.MCPMidas.displayName, 'Midas');
-    assert.equal(result.config.shared.workflow.length, 3);
+    assert.equal(result.config.shared.workflow.length, 5); // M4 增补冷知识库两条
 });
 
 test('guidance schema accepts a valid config and freezes the result', () => {

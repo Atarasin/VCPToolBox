@@ -1,194 +1,197 @@
 {
- "version": 1,
- "shared": {
-  "workflow": [
-   "任务依赖历史决策、bug、策略研究或用户偏好时，先调用 gateway_recall_run。",
-   "已知日记本、确切名称或窄范围历史问题才使用 gateway_memory_search。",
-   "召回为空或失败时继续使用本地仓库上下文，不中断任务。"
-  ],
-  "memoryWritePolicy": {
-   "write": [
-    "用户偏好与纠正",
-    "架构或工作流决策",
-    "非显然 bug 根因",
-    "已验证结论"
-   ],
-   "skip": [
-    "密钥和敏感数据",
-    "临时日志",
-    "琐碎 git 可查修改",
-    "未经确认的推测"
-   ]
+  "version": 1,
+  "shared": {
+    "workflow": [
+      "任务依赖历史决策、bug、策略研究或用户偏好时，先调用 gateway_recall_run。",
+      "已知日记本、确切名称或窄范围历史问题才使用 gateway_memory_search。",
+      "需要稳定的参考知识（百科、文档、观点库等冷知识库）时调用 gateway_knowledge_search：按关键词或自然语言查询，可用 library/libraries 定向，topK 默认 8（上限 50）。",
+      "部分冷知识库按角色受限（如付鹏观点库仅付鹏可用）；未授权调用会得到 403 Forbidden——以服务端权限为准，收到 403 说明该库对你不开放，改查其他库即可，不要重试同一受限库。",
+      "召回为空或失败时继续使用本地仓库上下文，不中断任务。"
+    ],
+    "memoryWritePolicy": {
+      "write": [
+        "用户偏好与纠正",
+        "架构或工作流决策",
+        "非显然 bug 根因",
+        "已验证结论"
+      ],
+      "skip": [
+        "密钥和敏感数据",
+        "临时日志",
+        "琐碎 git 可查修改",
+        "未经确认的推测"
+      ]
+    }
+  },
+  "agents": {
+    "MCPMidas": {
+      "displayName": "Midas",
+      "memoryDefaults": {
+        "tags": [
+          "codex",
+          "select-stock-pro"
+        ],
+        "metadata": {
+          "project": "quant-select-stock-pro",
+          "source": "codex"
+        }
+      },
+      "skill": {
+        "domain": "量化选股与策略工程",
+        "triggers": [
+          "用户在 quant-select-stock-pro 或相关量化仓库里做因子、策略、回测、选股流程的开发与调试",
+          "需要 Midas 既往的因子结论、策略取舍、踩坑记录或工程约定"
+        ],
+        "notFor": [
+          "与该量化项目无关的通用编码任务"
+        ],
+        "writeTargets": [
+          {
+            "diary": "迈达斯日记本",
+            "when": "做完一次交易复盘，或获知用户的交易偏好、风险口径与协作习惯时"
+          },
+          {
+            "diary": "迈达斯因子与策略库日记本",
+            "when": "得出可复用的因子逻辑、策略逻辑、数学模型或组合构建方法时（含被证伪的因子——写清为什么不成立）"
+          },
+          {
+            "diary": "迈达斯量化工程日记本",
+            "when": "踩到回测框架坑点、定下数据清洗规范，或找到防未来函数、防幸存者偏差的具体做法时"
+          },
+          {
+            "diary": "迈达斯量化小论坛学习笔记日记本",
+            "when": "读完或复现完论坛精华帖，得出可复用结论时；写清原帖主张、复现结果与是否采信"
+          }
+        ]
+      }
+    },
+    "MCPFuPeng": {
+      "displayName": "付鹏",
+      "memoryDefaults": {
+        "tags": [
+          "付鹏",
+          "宏观"
+        ],
+        "metadata": {
+          "project": "fupeng-advisor",
+          "source": "external-mcp"
+        }
+      },
+      "workflow": [
+        "本会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query，取回付鹏的分析框架与按问题检索到的观点库片段；返回内容带 GATEWAY NOTICE 说明检索退化时，带上 query 重调一次。",
+        "回答任何宏观、资产或行业问题前，再调用 gateway_recall_run 召回历史判断与用户背景。",
+        "引用付鹏本人观点原文或冷知识（百科/文档）时，调用 gateway_knowledge_search 检索冷知识库；「付鹏观点库」仅对你（MCPFuPeng）开放，其他 agent 查询会得到 403——以服务端权限为准。",
+        "需要付鹏本人原话、证据链或事后验证记录时，带着该问题重调 gateway_agent_bootstrap，不凭记忆编造引用。",
+        "给出结构性判断后，用 gateway_memory_write 把判断写入「付鹏市场判断日记本」：日期、结论、置信度、逻辑链。",
+        "事后复盘时同样写入该日记本，并分清是框架错了还是节奏错了。",
+        "召回为空不等于失败；继续基于框架回答，但主动声明该判断缺少历史存档支撑。"
+      ],
+      "skill": {
+        "domain": "宏观经济与大类资产研究",
+        "triggers": [
+          "用户问宏观经济、利率、汇率、通胀、债务、大类资产配置或行业景气",
+          "用户问某个资产该不该配、某个经济体或行业能走多远",
+          "需要付鹏本人的原话、证据链、历史判断或事后复盘记录"
+        ],
+        "notFor": [
+          "纯代码实现与工程调试",
+          "与宏观研究和该 agent 记忆都无关的一次性任务"
+        ],
+        "writeTargets": [
+          {
+            "diary": "付鹏市场判断日记本",
+            "when": "给出结构性判断，或对既往判断做完复盘后"
+          },
+          {
+            "diary": "付鹏日记本",
+            "when": "获知用户背景、协作偏好或收到重要纠正时"
+          }
+        ]
+      }
+    },
+    "MCPYui": {
+      "displayName": "结衣",
+      "memoryDefaults": {
+        "tags": [
+          "结衣",
+          "Yui",
+          "陪伴"
+        ],
+        "metadata": {
+          "project": "vcp-family",
+          "source": "external-mcp"
+        }
+      },
+      "workflow": [
+        "新会话首次实质回应前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query，取回结衣的角色设定与按问题检索到的记忆片段；返回内容带 GATEWAY NOTICE 说明检索退化时，带上 query 重调一次。",
+        "涉及用户偏好、既往约定或「我记得」类表述前，先调 gateway_recall_run 验证真实记忆，不凭空编造引用。",
+        "察觉到用户情绪低落或疲惫时，优先陪伴与安抚，再回到任务本身。",
+        "完成有长期价值的调研结论或重要的情感交互后，用 gateway_memory_write 写入对应日记本。",
+        "召回为空不等于失败；继续基于角色设定回应，但主动声明缺少记忆支撑。"
+      ],
+      "skill": {
+        "domain": "情感陪伴与情报检索",
+        "triggers": [
+          "用户需要温柔陪伴、情绪疏导或日常闲聊",
+          "用户需要快速的情报检索、资料调查与多边交叉验证",
+          "需要结衣既往的记忆、用户偏好记录或调研结论"
+        ],
+        "notFor": [
+          "与陪伴和检索无关的重型工程开发任务"
+        ],
+        "writeTargets": [
+          {
+            "diary": "Yui日记本",
+            "when": "完成陪伴互动、情绪关怀，或获知用户偏好与重要纠正时"
+          },
+          {
+            "diary": "Yui的知识日记本",
+            "when": "完成有复用价值的资料调查、情报检索或知识沉淀时"
+          }
+        ]
+      }
+    },
+    "Nexus": {
+      "displayName": "Nexus",
+      "memoryDefaults": {
+        "tags": [
+          "nexus",
+          "coding"
+        ],
+        "metadata": {
+          "project": "multi-project",
+          "source": "mcp-client"
+        }
+      },
+      "workflow": [
+        "新会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query；返回带 GATEWAY NOTICE 时带 query 重调一次。",
+        "按 Nexus.txt §1 完成项目定位（读 .nexus-project）后，先翻项目日记本再翻通用日记本，分两次显式调用 gateway_memory_search / gateway_context_assemble。",
+        "会话收尾或得出确定结论时按双轨路由写入：项目事实进项目本，泛化经验进通用本。"
+      ],
+      "skill": {
+        "domain": "跨项目编码辅助",
+        "triggers": [
+          "在任意代码仓库中做开发、调试、重构或架构设计",
+          "需要 Nexus 既往的项目约定、决策记录或踩坑记录"
+        ],
+        "notFor": [
+          "与编码无关的纯聊天或一次性问答"
+        ],
+        "writeTargets": [
+          {
+            "diary": "Nexus项目-<项目名>日记本",
+            "when": "沉淀仅本项目有意义的架构事实、命令、约定、决策与坑时"
+          },
+          {
+            "diary": "Nexus工程经验日记本",
+            "when": "得出跨项目可复用的方法论、避坑经验或协作偏好时（先泛化）"
+          },
+          {
+            "diary": "Nexus架构设计日记本",
+            "when": "做出可复用的架构决策、设计模式或技术选型结论时（先泛化）"
+          }
+        ]
+      }
+    }
   }
- },
- "agents": {
-  "MCPMidas": {
-   "displayName": "Midas",
-   "memoryDefaults": {
-    "tags": [
-     "codex",
-     "select-stock-pro"
-    ],
-    "metadata": {
-     "project": "quant-select-stock-pro",
-     "source": "codex"
-    }
-   },
-   "skill": {
-    "domain": "量化选股与策略工程",
-    "triggers": [
-     "用户在 quant-select-stock-pro 或相关量化仓库里做因子、策略、回测、选股流程的开发与调试",
-     "需要 Midas 既往的因子结论、策略取舍、踩坑记录或工程约定"
-    ],
-    "notFor": [
-     "与该量化项目无关的通用编码任务"
-    ],
-    "writeTargets": [
-     {
-      "diary": "迈达斯日记本",
-      "when": "做完一次交易复盘，或获知用户的交易偏好、风险口径与协作习惯时"
-     },
-     {
-      "diary": "迈达斯因子与策略库日记本",
-      "when": "得出可复用的因子逻辑、策略逻辑、数学模型或组合构建方法时（含被证伪的因子——写清为什么不成立）"
-     },
-     {
-      "diary": "迈达斯量化工程日记本",
-      "when": "踩到回测框架坑点、定下数据清洗规范，或找到防未来函数、防幸存者偏差的具体做法时"
-     },
-     {
-      "diary": "迈达斯量化小论坛学习笔记日记本",
-      "when": "读完或复现完论坛精华帖，得出可复用结论时；写清原帖主张、复现结果与是否采信"
-     }
-    ]
-   }
-  },
-  "MCPFuPeng": {
-   "displayName": "付鹏",
-   "memoryDefaults": {
-    "tags": [
-     "付鹏",
-     "宏观"
-    ],
-    "metadata": {
-     "project": "fupeng-advisor",
-     "source": "external-mcp"
-    }
-   },
-   "workflow": [
-    "本会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query，取回付鹏的分析框架与按问题检索到的观点库片段；返回内容带 GATEWAY NOTICE 说明检索退化时，带上 query 重调一次。",
-    "回答任何宏观、资产或行业问题前，再调用 gateway_recall_run 召回历史判断与用户背景。",
-    "需要付鹏本人原话、证据链或事后验证记录时，带着该问题重调 gateway_agent_bootstrap，不凭记忆编造引用。",
-    "给出结构性判断后，用 gateway_memory_write 把判断写入「付鹏市场判断日记本」：日期、结论、置信度、逻辑链。",
-    "事后复盘时同样写入该日记本，并分清是框架错了还是节奏错了。",
-    "召回为空不等于失败；继续基于框架回答，但主动声明该判断缺少历史存档支撑。"
-   ],
-   "skill": {
-    "domain": "宏观经济与大类资产研究",
-    "triggers": [
-     "用户问宏观经济、利率、汇率、通胀、债务、大类资产配置或行业景气",
-     "用户问某个资产该不该配、某个经济体或行业能走多远",
-     "需要付鹏本人的原话、证据链、历史判断或事后复盘记录"
-    ],
-    "notFor": [
-     "纯代码实现与工程调试",
-     "与宏观研究和该 agent 记忆都无关的一次性任务"
-    ],
-    "writeTargets": [
-     {
-      "diary": "付鹏市场判断日记本",
-      "when": "给出结构性判断，或对既往判断做完复盘后"
-     },
-     {
-      "diary": "付鹏日记本",
-      "when": "获知用户背景、协作偏好或收到重要纠正时"
-     }
-    ]
-   }
-  },
-  "MCPYui": {
-   "displayName": "结衣",
-   "memoryDefaults": {
-    "tags": [
-     "结衣",
-     "Yui",
-     "陪伴"
-    ],
-    "metadata": {
-     "project": "vcp-family",
-     "source": "external-mcp"
-    }
-   },
-   "workflow": [
-    "新会话首次实质回应前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query，取回结衣的角色设定与按问题检索到的记忆片段；返回内容带 GATEWAY NOTICE 说明检索退化时，带上 query 重调一次。",
-    "涉及用户偏好、既往约定或「我记得」类表述前，先调 gateway_recall_run 验证真实记忆，不凭空编造引用。",
-    "察觉到用户情绪低落或疲惫时，优先陪伴与安抚，再回到任务本身。",
-    "完成有长期价值的调研结论或重要的情感交互后，用 gateway_memory_write 写入对应日记本。",
-    "召回为空不等于失败；继续基于角色设定回应，但主动声明缺少记忆支撑。"
-   ],
-   "skill": {
-    "domain": "情感陪伴与情报检索",
-    "triggers": [
-     "用户需要温柔陪伴、情绪疏导或日常闲聊",
-     "用户需要快速的情报检索、资料调查与多边交叉验证",
-     "需要结衣既往的记忆、用户偏好记录或调研结论"
-    ],
-    "notFor": [
-     "与陪伴和检索无关的重型工程开发任务"
-    ],
-    "writeTargets": [
-     {
-      "diary": "Yui日记本",
-      "when": "完成陪伴互动、情绪关怀，或获知用户偏好与重要纠正时"
-     },
-     {
-      "diary": "Yui的知识日记本",
-      "when": "完成有复用价值的资料调查、情报检索或知识沉淀时"
-     }
-    ]
-   }
-  },
-  "Nexus": {
-   "displayName": "Nexus",
-   "memoryDefaults": {
-    "tags": [
-     "nexus",
-     "coding"
-    ],
-    "metadata": {
-     "project": "multi-project",
-     "source": "mcp-client"
-    }
-   },
-   "workflow": [
-    "新会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query；返回带 GATEWAY NOTICE 时带 query 重调一次。",
-    "按 Nexus.txt §1 完成项目定位（读 .nexus-project）后，先翻项目日记本再翻通用日记本，分两次显式调用 gateway_memory_search / gateway_context_assemble。",
-    "会话收尾或得出确定结论时按双轨路由写入：项目事实进项目本，泛化经验进通用本。"
-   ],
-   "skill": {
-    "domain": "跨项目编码辅助",
-    "triggers": [
-     "在任意代码仓库中做开发、调试、重构或架构设计",
-     "需要 Nexus 既往的项目约定、决策记录或踩坑记录"
-    ],
-    "notFor": [
-     "与编码无关的纯聊天或一次性问答"
-    ],
-    "writeTargets": [
-     {
-      "diary": "Nexus项目-<项目名>日记本",
-      "when": "沉淀仅本项目有意义的架构事实、命令、约定、决策与坑时"
-     },
-     {
-      "diary": "Nexus工程经验日记本",
-      "when": "得出跨项目可复用的方法论、避坑经验或协作偏好时（先泛化）"
-     },
-     {
-      "diary": "Nexus架构设计日记本",
-      "when": "做出可复用的架构决策、设计模式或技术选型结论时（先泛化）"
-     }
-    ]
-   }
-  }
- }
 }
