@@ -75,7 +75,11 @@ function main() {
         : '';
     const result = spawnSync(process.execPath, nodeArgs, {
         cwd: ROOT_DIR,
-        env: process.env,
+        env: {
+            ...process.env,
+            // forge 定期进修调度器的 node-schedule 句柄会挂起测试进程
+            FORGE_LIFELONG_AUTOSTART: '0'
+        },
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024
     });

@@ -244,6 +244,40 @@ async function executeKnowledgeSearch(context) {
     });
 }
 
+async function executeForgeService(context, action) {
+    const { bundle, name, args, input, operation, executeManaged } = context;
+    return executeManaged({
+        bundle, name, args, input,
+        operationName: operation.operationName,
+        source: operation.source,
+        async execute({ body, requestContext }) {
+            let result;
+            try {
+                const agentId = String(body.agentId || requestContext.agentId || '').trim();
+                const payload = action === 'reportGap'
+                    ? await bundle.forgeRuntimeService.reportGap({ ...body, agentId })
+                    : await bundle.forgeRuntimeService.startExpertLearnJob({ ...body, authContext: null });
+                result = {
+                    success: true,
+                    requestId: requestContext.requestId,
+                    status: action === 'reportGap' ? 'completed' : 'accepted',
+                    data: payload
+                };
+            } catch (error) {
+                result = {
+                    success: false,
+                    requestId: requestContext.requestId,
+                    status: error.status || 500,
+                    code: error.code || AGW_ERROR_CODES.INTERNAL_ERROR,
+                    error: error.message,
+                    ...(error.details ? { details: error.details } : {})
+                };
+            }
+            return attachRequestId(result, requestContext.requestId);
+        }
+    });
+}
+
 const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     render: executeRender,
     jobGet: (context) => executeJob(context, 'pollJob'),
@@ -252,7 +286,9 @@ const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     contextAssemble: (context) => executeDiary(context, 'buildRecallContext'),
     memoryWrite: executeMemoryWrite,
     recallRun: executeRecallRun,
-    knowledgeSearch: executeKnowledgeSearch
+    knowledgeSearch: executeKnowledgeSearch,
+    gapReport: (context) => executeForgeService(context, 'reportGap'),
+    forgeLearn: (context) => executeForgeService(context, 'startExpertLearnJob')
 });
 
 async function callMcpTool({

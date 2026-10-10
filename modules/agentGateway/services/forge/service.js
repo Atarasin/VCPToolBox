@@ -10,6 +10,7 @@ const { createStepRegistry } = require('./steps');
 const { ForgeNameConflictError } = require('./nameConflict');
 const { blueprintLibraryName } = require('./blueprint');
 const { renameAtSynthesize } = require('./synthesize');
+const { createGapRegistry } = require('./gapRegistry');
 const { PASS_RATIO } = require('./trial');
 
 /**
@@ -153,6 +154,7 @@ function createForgeRuntimeService(options = {}) {
     }
 
     const runStore = createRunStore({ baseDir });
+    const gapRegistry = createGapRegistry({ baseDir });
     const effectiveKnowledgeRoot = knowledgeRoot || resolveKnowledgeRoot(baseDir);
     const stepRegistry = createStepRegistry({
         baseDir,
@@ -454,6 +456,30 @@ function createForgeRuntimeService(options = {}) {
 
         }
 
+        // §3.8 学习档案：learn job 完成时追加（读过什么/学过什么/为什么学）。
+        if (runRecord.jobKind === 'expert.learn' && runRecord.expertName) {
+            try {
+                const harvestMarker = markers.get('harvest');
+                const distillMarker = markers.get('distill');
+                const sourceCount = (harvestMarker?.state?.manifests || []).reduce((sum, m) => sum + (m.materials || 0), 0);
+                await gapRegistry.appendLearningHistory(runRecord.expertName, {
+                    trigger: runRecord.scope?.reason || 'manual',
+                    scope: runRecord.scope || null,
+                    sources: sourceCount,
+                    distilledFiles: distillMarker?.state?.writtenCount ?? 0,
+                    jobId
+                });
+                // 进修完成 → 关闭相关 subskill 的 open 缺口（§3.8 触发 a 闭环）。
+                const scopeIds = Array.isArray(runRecord.scope?.subskillIds) ? runRecord.scope.subskillIds : null;
+                const closed = await gapRegistry.closeGaps(runRecord.expertName, scopeIds || []);
+                if (closed > 0) {
+                    log('forge.gap.closed', { jobId, expertName: runRecord.expertName, closed });
+                }
+            } catch (error) {
+                log('forge.history.append_failed', { jobId, message: error.message });
+            }
+        }
+
         await updateForgeMetadata(jobId, buildForgeMetadata({
             runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
             extra: { completedAt: new Date().toISOString() }
@@ -520,6 +546,7 @@ function createForgeRuntimeService(options = {}) {
     serviceApi = {
         FORGE_JOB_OPERATIONS,
         FORGE_ALLOWED_TOOLS,
+        gapRegistry,
         baseDir,
         knowledgeRoot: effectiveKnowledgeRoot,
         async startExpertCreateJob({ requirement, authContext = null, blueprintOverride = null, budgetCny = null } = {}) {
@@ -717,6 +744,34 @@ function createForgeRuntimeService(options = {}) {
             log('forge.job.resumed', { jobId, fromStatus: job.status, raiseBudgetToCny: patch.budgetCny || null });
             scheduleDrive(jobId, authContext);
             return { jobId, outcome: 'resumed' };
+        },
+        // §3.8 缺口登记（gateway_gap_report 的服务端）：向 Agent/forge/<name>/gaps.json
+        // 追加一条 open 缺口并触发审计 forge.gap.reported。
+        async reportGap({ agentId, subskillId, question, whyInsufficient }, authContext = null) {
+            const expertName = normalizeString(agentId);
+            if (!expertName || !normalizeString(question)) {
+                const error = new Error('agentId 与 question 不能为空');
+                error.status = 400;
+                error.code = 'AGW_VALIDATION_ERROR';
+                throw error;
+            }
+            if (!fs.existsSync(path.join(baseDir, 'blueprints', `${expertName}.json`))) {
+                const error = new Error(`未知专家：${expertName}（无画像）`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            const gap = await gapRegistry.appendGap({
+                expertName,
+                subskillId: normalizeString(subskillId) || null,
+                question: normalizeString(question),
+                whyInsufficient: normalizeString(whyInsufficient) || null
+            });
+            log('forge.gap.reported', { expertName, gapId: gap.id, subskillId: gap.subskillId });
+            return { expertName, gap };
+        },
+        async listOpenGaps(expertName) {
+            return gapRegistry.listOpenGaps(normalizeString(expertName));
         },
         async listJobs({ authContext = null } = {}) {
             const result = jobRuntimeService.listJobs({ authContext, filters: { operationPrefix: 'forge.' } });

@@ -1059,5 +1059,161 @@
         }
       }
     }
+  },
+  {
+    "toolName": "gateway_gap_report",
+    "operationId": "gap.report",
+    "argsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "专家 agent 标识（凭据已绑定时可省；显式给必须匹配）。"
+        },
+        "subskillId": {
+          "type": "string",
+          "description": "缺口所属子技能 id（画像 subskills[].id；不确定时可省）。"
+        },
+        "question": {
+          "type": "string",
+          "description": "遇到的具体问题（知识库答不好/查不到的内容）。"
+        },
+        "whyInsufficient": {
+          "type": "string",
+          "description": "为什么现有知识不够（一句话即可）。"
+        }
+      }
+    },
+    "resultSchema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "errors": [
+      "MCP_INVALID_REQUEST",
+      "MCP_INVALID_ARGUMENTS",
+      "MCP_FORBIDDEN",
+      "MCP_NOT_FOUND",
+      "MCP_RUNTIME_ERROR"
+    ],
+    "execution": {
+      "operationName": "gap.report",
+      "source": "mcp-gap-report",
+      "executor": "gapReport",
+      "backendExecutor": "gapReport",
+      "credentialAction": "execute"
+    },
+    "mcp": {
+      "tool": {
+        "name": "gateway_gap_report",
+        "title": "Gateway Gap Report",
+        "description": "Register a knowledge gap for a forge-cast expert (appends an open gap to Agent/forge/<name>/gaps.json and emits forge.gap.reported audit). Call when confident an answer is weak or the knowledge library has nothing on the question. Lifelong learning consumes open gaps for targeted study.",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "question"
+          ],
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "subskillId": {
+              "type": "string"
+            },
+            "question": {
+              "type": "string"
+            },
+            "whyInsufficient": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "toolName": "gateway_forge_learn",
+    "operationId": "forge.learn",
+    "argsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expertName"
+      ],
+      "properties": {
+        "expertName": {
+          "type": "string",
+          "description": "要进修的专家名（须已铸造，有画像）。"
+        },
+        "subskillIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "限定进修的子技能 id 列表；省略则全量增量学习。"
+        },
+        "topic": {
+          "type": "string",
+          "description": "主题式进修（手动指令「去学一下 XX」的主题词）。"
+        },
+        "since": {
+          "type": "string",
+          "description": "时间过滤起点（ISO），只检索此后的新增内容；省略由学习档案推算。"
+        }
+      }
+    },
+    "resultSchema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "errors": [
+      "MCP_INVALID_REQUEST",
+      "MCP_INVALID_ARGUMENTS",
+      "MCP_FORBIDDEN",
+      "MCP_NOT_FOUND",
+      "MCP_RUNTIME_ERROR"
+    ],
+    "execution": {
+      "operationName": "forge.learn",
+      "source": "mcp-forge-learn",
+      "executor": "forgeLearn",
+      "backendExecutor": "forgeLearn",
+      "credentialAction": "execute"
+    },
+    "mcp": {
+      "tool": {
+        "name": "gateway_forge_learn",
+        "title": "Gateway Forge Learn",
+        "description": "Launch a forge.expert.learn incremental study job for a cast expert (harvest→distill, optional retest). Use for manual study requests ('去学一下 XX' via ForgeMaster) or gap-driven targeted backfill. Returns a deferred job — poll with gateway_job_get.",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expertName"
+          ],
+          "properties": {
+            "expertName": {
+              "type": "string"
+            },
+            "subskillIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "topic": {
+              "type": "string"
+            },
+            "since": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
   }
 ]

@@ -405,6 +405,61 @@
           }
         }
       }
+    },
+    {
+      "name": "gateway_gap_report",
+      "title": "Gateway Gap Report",
+      "description": "Register a knowledge gap for a forge-cast expert (appends an open gap to Agent/forge/<name>/gaps.json and emits forge.gap.reported audit). Call when confident an answer is weak or the knowledge library has nothing on the question. Lifelong learning consumes open gaps for targeted study.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "subskillId": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "whyInsufficient": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway_forge_learn",
+      "title": "Gateway Forge Learn",
+      "description": "Launch a forge.expert.learn incremental study job for a cast expert (harvest→distill, optional retest). Use for manual study requests ('去学一下 XX' via ForgeMaster) or gap-driven targeted backfill. Returns a deferred job — poll with gateway_job_get.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expertName"
+        ],
+        "properties": {
+          "expertName": {
+            "type": "string"
+          },
+          "subskillIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "topic": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        }
+      }
     }
   ],
   "prompts": [

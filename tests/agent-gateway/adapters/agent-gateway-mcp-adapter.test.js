@@ -394,6 +394,8 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
             'ChromeBridge',
             'gateway_agent_bootstrap',
             'gateway_context_assemble',
+            'gateway_forge_learn',
+            'gateway_gap_report',
             'gateway_job_cancel',
             'gateway_job_get',
             'gateway_knowledge_search',
