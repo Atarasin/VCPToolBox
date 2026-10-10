@@ -306,6 +306,23 @@ function createJobStoreApi(store, eventStore) {
         }
 
         const nextStatus = normalizeJobRuntimeString(updates.status) || existingJob.status;
+        // 终态保护：completed/failed/cancelled 不可被常规 update 迁出，
+        // 防止 worker 的迟到回写覆盖外部取消（红线 5）。
+        // 显式续跑（resumeFromTerminal）是唯一例外，如 forge 的单步重试。
+        if (TERMINAL_JOB_STATUSES.has(existingJob.status) &&
+            nextStatus !== existingJob.status &&
+            !updates.resumeFromTerminal) {
+            return {
+                success: false,
+                status: 409,
+                code: AGW_ERROR_CODES.VALIDATION_ERROR,
+                error: 'Job is in terminal state; explicit resume required to change status',
+                details: {
+                    jobId: normalizedJobId,
+                    status: existingJob.status
+                }
+            };
+        }
         const updatedAt = new Date().toISOString();
         const nextMetadata = updates.metadata && typeof updates.metadata === 'object'
             ? {

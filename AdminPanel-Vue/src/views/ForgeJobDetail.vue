@@ -269,7 +269,7 @@ function statusVariant(status: ForgeJobStatus) {
     case "accepted":
       return "info";
     case "pending_confirm":
-      return "secondary";
+      return "purple";
     case "paused_budget":
       return "warning";
     case "failed":

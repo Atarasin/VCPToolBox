@@ -5,7 +5,7 @@ const path = require('path');
 const { JOB_STATUS } = require('../jobRuntimeService');
 const { createRunStore } = require('./runStore');
 const { createCostMeter } = require('./costMeter');
-const { createStepRegistry } = require('./steps');
+const { ForgeNameConflictError, createStepRegistry } = require('./steps');
 
 /**
  * forge job 编排服务（§3.2）：
@@ -29,6 +29,10 @@ const FORGE_JOB_OPERATIONS = Object.freeze({
 
 const DEFAULT_BASE_DIR = path.join(__dirname, '..', '..', '..', '..', 'Agent', 'forge');
 const DEFAULT_BUDGET_CNY = 10;
+
+// 红线 1：铸造流程的 toolInvoker 只允许检索类插件（§3.3 fallback 顺序即此三者）。
+// M2 harvest 接入后如需扩展，在此白名单显式追加。
+const FORGE_ALLOWED_TOOLS = new Set(['AnySearch', 'FlashDeepSearch', 'BrowserSearch']);
 
 const RESUMABLE_JOB_STATUSES = new Set([
     JOB_STATUS.FAILED,
@@ -196,6 +200,13 @@ function createForgeRuntimeService(options = {}) {
         }
         return {
             async invoke(toolName, args, clientIp) {
+                if (!FORGE_ALLOWED_TOOLS.has(toolName)) {
+                    const error = new Error(`铸造流程不允许调用插件：${toolName}（白名单：${Array.from(FORGE_ALLOWED_TOOLS).join(' / ')}）`);
+                    error.code = 'FORGE_TOOL_NOT_ALLOWED';
+                    error.status = 403;
+                    log('forge.tool.rejected', { jobId, step: stepId, toolName });
+                    throw error;
+                }
                 ensureActive(jobId, authContext);
                 const result = await toolInvokerPort.invoke(toolName, args, clientIp);
                 meter.recordTool({ plugin: toolName, step: stepId });
@@ -249,7 +260,9 @@ function createForgeRuntimeService(options = {}) {
 
             ensureActive(jobId, authContext);
             if (jobRuntimeService.pollJob(jobId, authContext)?.data?.job?.status !== JOB_STATUS.RUNNING) {
-                jobRuntimeService.updateJob(jobId, { status: JOB_STATUS.RUNNING });
+                // resumeFromTerminal：failed/cancelled 续跑是显式意图；
+                // 取消竞态由上一行 ensureActive（同步）先行拦截。
+                jobRuntimeService.updateJob(jobId, { status: JOB_STATUS.RUNNING, resumeFromTerminal: true });
             }
 
             await updateForgeMetadata(jobId, buildForgeMetadata({
@@ -298,6 +311,26 @@ function createForgeRuntimeService(options = {}) {
                     });
                 }
             } catch (error) {
+                if (error instanceof ForgeNameConflictError) {
+                    // 红线 3：默认绝不覆盖——暂停待人工确认（改名后重跑 blueprint）。
+                    const { conflicts, draft } = error.details;
+                    await runStore.updateRun(jobId, { pendingNameConflict: { draft, conflicts } });
+                    log('forge.name.conflict', { jobId, step: step.id, conflicts });
+                    jobRuntimeService.updateJob(jobId, {
+                        status: JOB_STATUS.PENDING_CONFIRM,
+                        metadata: { forge: buildForgeMetadata({
+                            runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
+                            extra: {
+                                pendingConfirm: {
+                                    kind: 'name-conflict',
+                                    conflicts,
+                                    hint: '专家名与既有 agent/文件冲突，等待改名确认'
+                                }
+                            }
+                        }) }
+                    });
+                    return;
+                }
                 if (error instanceof BudgetExceededError) {
                     const breakdown = meter.getBreakdown();
                     log('forge.budget.paused', { jobId, step: step.id, ...breakdown });
@@ -410,6 +443,7 @@ function createForgeRuntimeService(options = {}) {
 
     return {
         FORGE_JOB_OPERATIONS,
+        FORGE_ALLOWED_TOOLS,
         baseDir,
         async startExpertCreateJob({ requirement, authContext = null, blueprintOverride = null, budgetCny = null } = {}) {
             const normalizedRequirement = normalizeString(requirement);
@@ -478,10 +512,10 @@ function createForgeRuntimeService(options = {}) {
             scheduleDrive(job.jobId, authContext);
             return { jobId: job.jobId, runRecord };
         },
-        async confirmBlueprint(jobId, { approved, feedback = null, authContext = null } = {}) {
+        async confirmBlueprint(jobId, { approved, feedback = null, renameTo = null, authContext = null } = {}) {
             const job = getJobOrThrow(jobId, authContext);
             if (job.status !== JOB_STATUS.PENDING_CONFIRM) {
-                const error = new Error(`job 当前状态 ${job.status}，不在画像确认门禁`);
+                const error = new Error(`job 当前状态 ${job.status}，不在确认门禁`);
                 error.status = 409;
                 error.code = 'AGW_VALIDATION_ERROR';
                 throw error;
@@ -502,6 +536,26 @@ function createForgeRuntimeService(options = {}) {
                 log('forge.blueprint.rejected', { jobId, feedback: normalizeString(feedback) || null });
                 return { jobId, outcome: 'rejected' };
             }
+
+            // 红线 3 的重名确认分支：必须提供新名字，改写画像草稿后从 blueprint 重跑。
+            if (runRecord.pendingNameConflict) {
+                const newName = normalizeString(renameTo);
+                if (!newName) {
+                    const error = new Error('重名冲突的确认必须提供 renameTo（新专家名）');
+                    error.status = 400;
+                    error.code = 'AGW_VALIDATION_ERROR';
+                    throw error;
+                }
+                const renamedDraft = { ...runRecord.pendingNameConflict.draft, name: newName };
+                await runStore.updateRun(jobId, {
+                    blueprintOverride: renamedDraft,
+                    pendingNameConflict: null
+                });
+                log('forge.name.renamed', { jobId, from: runRecord.pendingNameConflict.draft?.name, to: newName });
+                scheduleDrive(jobId, authContext);
+                return { jobId, outcome: 'renamed' };
+            }
+
             await runStore.updateRun(jobId, { blueprintApproved: true });
             log('forge.blueprint.confirmed', { jobId, expertName: runRecord.expertName });
             scheduleDrive(jobId, authContext, { startAfterStep: 'blueprint' });

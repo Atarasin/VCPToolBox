@@ -2556,6 +2556,8 @@
             "accepted",
             "running",
             "waiting_approval",
+            "pending_confirm",
+            "paused_budget",
             "completed",
             "failed",
             "cancelled"

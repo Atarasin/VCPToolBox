@@ -54,7 +54,7 @@
           <th>状态</th>
           <th>当前步骤</th>
           <th>费用 / 预算</th>
-          <th>更新时间</th>
+          <th>创建 / 更新</th>
           <th></th>
         </tr>
       </thead>
@@ -90,7 +90,10 @@
               {{ formatCny(job.costSoFarCny) }} / {{ job.budgetCny == null ? '未设预算' : formatCny(job.budgetCny) }}
             </small>
           </td>
-          <td class="mono-cell">{{ formatTime(job.updatedAt) }}</td>
+          <td class="mono-cell">
+            <div>{{ formatTime(job.createdAt) }}</div>
+            <div class="cell-sub">{{ formatTime(job.updatedAt) }}</div>
+          </td>
           <td>
             <RouterLink
               class="forge-detail-link"
@@ -154,7 +157,7 @@ function statusVariant(status: ForgeJobStatus) {
     case "accepted":
       return "info";
     case "pending_confirm":
-      return "secondary";
+      return "purple";
     case "paused_budget":
       return "warning";
     case "failed":
