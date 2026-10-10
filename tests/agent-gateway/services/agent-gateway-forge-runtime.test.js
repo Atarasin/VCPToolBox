@@ -252,7 +252,7 @@ test('预算护栏：≥90% 告警继续执行，≥100% 自动转 paused_budget
 
 // ── 五步状态机：未交付能力的步骤以明确错误失败（M2.S1 后 harvest 已接入）──
 
-test('toolInvoker 缺失时 harvest 报 FORGE_TOOL_INVOKER_UNAVAILABLE；distill/synthesize/trial 仍为待接入桩', async () => {
+test('toolInvoker 缺失时 harvest 报 FORGE_TOOL_INVOKER_UNAVAILABLE（端口前置检查）', async () => {
     const baseDir = createTempDir();
     const { jobRuntimeService, forgeRuntimeService } = buildService({ baseDir });
     const { jobId } = await forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
@@ -266,6 +266,9 @@ test('toolInvoker 缺失时 harvest 报 FORGE_TOOL_INVOKER_UNAVAILABLE；distill
 test('forge.expert.learn 增量学习 job 走 harvest→distill 两步', async () => {
     const baseDir = createTempDir();
     const { jobRuntimeService, forgeRuntimeService } = buildService({ baseDir });
+    // learn 需要既有画像（subskills/来源策略）——先落一份。
+    const { writeBlueprint } = require('../../../modules/agentGateway/services/forge/blueprint');
+    await writeBlueprint(path.join(baseDir, 'blueprints', 'UIDesigner.json'), JSON.parse(validBlueprintJson()));
     const { jobId } = await forgeRuntimeService.startExpertLearnJob({
         expertName: 'UIDesigner',
         scope: { subskillIds: ['color-theory'] }
@@ -288,6 +291,16 @@ test('listJobs / getJobDetail 提供只读视图，learn/create 均可枚举', a
     jobRuntimeService.createAcceptedJob({ operation: 'tool.invoke', target: { type: 'tool', id: 'X' } });
 
     const createJob = await forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
+    await waitFor(() => statusOf(jobRuntimeService, createJob.jobId) === JOB_STATUS.PENDING_CONFIRM);
+    const { writeBlueprint } = require('../../../modules/agentGateway/services/forge/blueprint');
+    await writeBlueprint(path.join(baseDir, 'blueprints', 'UIDesigner.json'), {
+        name: 'UIDesigner', displayName: 'UI 设计专家',
+        scope: { responsibilities: ['UI 设计'], boundaries: [] },
+        subskills: [{ id: 'color-theory', title: '配色理论', searchQueries: ['color theory'] }],
+        examOutline: [{ subskillId: 'color-theory', conceptQuestions: 1, appliedQuestions: 1 }],
+        practicalExam: { prompt: 'p', gradingDimensions: ['d'] },
+        acceptanceSample: 'a'
+    });
     const learnJob = await forgeRuntimeService.startExpertLearnJob({ expertName: 'UIDesigner' });
     await waitFor(() => statusOf(jobRuntimeService, createJob.jobId) === JOB_STATUS.PENDING_CONFIRM);
     await waitFor(() => statusOf(jobRuntimeService, learnJob.jobId) === JOB_STATUS.FAILED);

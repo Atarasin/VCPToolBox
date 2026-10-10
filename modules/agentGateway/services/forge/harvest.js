@@ -193,12 +193,23 @@ function createHarvestStepRunner() {
 
         const { readBlueprint } = require('./blueprint');
         const blueprint = await readBlueprint(ctx.blueprintPath);
+        // 增量学习（§3.7/§3.8）：scope.subskillIds 限定只采缺口子技能，不推倒重来。
+        const scopeIds = Array.isArray(ctx.scope?.subskillIds) ? ctx.scope.subskillIds : null;
+        const subskills = scopeIds
+            ? blueprint.subskills.filter((subskill) => scopeIds.includes(subskill.id))
+            : blueprint.subskills;
+        if (subskills.length === 0) {
+            const error = new Error(`scope.subskillIds 未命中任何子技能：${JSON.stringify(scopeIds)}`);
+            error.code = 'FORGE_SCOPE_EMPTY';
+            error.status = 400;
+            throw error;
+        }
         const minDomains = Number(blueprint.sourcePolicy?.minDomainsPerSubskill) || 3;
         const throttle = createDomainThrottle();
 
         const manifests = [];
         const warnings = [];
-        for (const subskill of blueprint.subskills) {
+        for (const subskill of subskills) {
             const queries = [...(subskill.searchQueries || [])];
             const rawDir = path.join(runDir, 'raw', subskill.id);
             await fsp.mkdir(rawDir, { recursive: true });
