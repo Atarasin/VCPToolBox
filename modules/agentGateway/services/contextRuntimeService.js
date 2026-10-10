@@ -140,7 +140,9 @@ async function runRecall(ctx) {
     const args = { agentId: ctx.agentId, query: ctx.query, requestContext: ctx.requestContext,
         authContext: ctx.authContext, agentPolicyResolver: ctx.state.agentPolicyResolver,
         adapterAppliedDefaultDiaryPolicy: ctx.diaryPolicy.appliedDefault === true ||
-            ctx.body?.__defaultDiaryPolicyApplied === true };
+            ctx.body?.__defaultDiaryPolicyApplied === true,
+        // M3.S2：recentMessages 透传给召回管线——river 模式下提取辅助查询向量
+        messages: Array.isArray(ctx.body?.recentMessages) ? ctx.body.recentMessages : undefined };
     const recallResult = await ctx.state.getRecallRuntimeService().executeRecall(profileName
         ? { ...args, profileName }
         : { ...args, inlineRule: buildInlineRule(ctx.requestedDiaries, ctx.ragOptions) });

@@ -1,4 +1,8 @@
 const { collectRagItems } = require('./ragRetriever');
+// 检索预算常量与 core/recall/ragRetriever 保持一致（D6 保守档：k 5→8、上限 20→50）。
+// 用字面量而非再导出：测试桩会整体替换 ragRetriever 模块缓存，再导出会取不到值。
+const DEFAULT_RAG_K = 8;
+const MAX_RAG_K = 50;
 const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 const { estimateTokenCount, truncateTextByTokens } = require('./recallProjectionService');
 const {
@@ -22,13 +26,15 @@ const MODIFIER_TO_RAG_OPTION = Object.freeze({
     time: 'timeAware',
     group: 'groupAware',
     rerank: 'rerank',
-    tagMemo: 'tagMemo'
+    tagMemo: 'tagMemo',
+    bm25: 'bm25'
 });
 
 const MODIFIER_PIPELINE_ORDER = Object.freeze([
     'time',
     'group',
     'tagMemo',
+    'bm25',
     'rerank',
     'timeDecay',
     'roleValve',
@@ -84,6 +90,19 @@ function resolveRuleKMultiplier(rule) {
     return typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0
         ? rawValue
         : 1.0;
+}
+
+/**
+ * M3.S1（D6·方案A）：rule 级绝对 k 覆盖（targets.k）。返回 null 表示未配置，
+ * 由调用方回退默认 k；夹取上限由调用方执行（避免 core↔policy 循环依赖）。
+ */
+function resolveRuleBaseK(rule) {
+    const rawValue = rule?.targets?.k !== undefined
+        ? rule.targets.k
+        : rule?.k;
+    return typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue >= 1
+        ? Math.floor(rawValue)
+        : null;
 }
 
 function resolveRuleTargetMode(rule) {
@@ -332,6 +351,15 @@ function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
                 if (typeof modifierValue.weight === 'number' && Number.isFinite(modifierValue.weight)) {
                     options.rerankWeight = modifierValue.weight;
                 }
+            } else if (modifierKey === 'bm25' && modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
+                // M3.S3：BM25 混合检索——{mode: 'tag'|'body', weight}（mode 对齐生产 ::BM25 / ::BM25+）
+                options.bm25 = modifierValue.enabled !== false;
+                if (modifierValue.mode === 'body' || modifierValue.mode === 'tag') {
+                    options.bm25Mode = modifierValue.mode;
+                }
+                if (typeof modifierValue.weight === 'number' && Number.isFinite(modifierValue.weight)) {
+                    options.bm25Weight = Math.max(0, Math.min(1, modifierValue.weight));
+                }
             } else {
                 options[ragOptionKey] = parseModifierValue(modifierKey, modifierValue);
             }
@@ -378,6 +406,8 @@ function evaluateGateWithPort(rule, queryVector, ragRetrieverPort) {
 
 module.exports = {
     AGW_ERROR_CODES,
+    DEFAULT_RAG_K,
+    MAX_RAG_K,
     MODIFIER_TO_RAG_OPTION,
     MODIFIER_PIPELINE_ORDER,
     GATED_RULE_TYPES,
@@ -390,6 +420,7 @@ module.exports = {
     resolveRuleProjection,
     resolveRuleAggregate,
     resolveRuleKMultiplier,
+    resolveRuleBaseK,
     resolveRuleTargetMode,
     parseBoolean,
     parseJsonObject,

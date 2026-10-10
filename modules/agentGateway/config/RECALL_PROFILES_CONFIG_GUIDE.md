@@ -42,7 +42,7 @@
 
 | 字段 | 必填 | 说明 | 默认值 / 缺省行为 |
 |------|------|------|------------------|
-| `recallMode` | 否 | 网关全局语义检索引擎：`river`＝原生 RiverMemo 联合查询，`knn`＝KNN+TagMemo 路径。热加载，改后立即生效，无需重启。环境变量 `AGENT_GATEWAY_RECALL_MODE` 优先级更高（需重启进程生效）。当前默认 `knn`（2026-10-09 实测对比后的用户决策，M3 混合检索完成后重评）。 | `knn` |
+| `recallMode` | 否 | 网关全局语义检索引擎：`river`＝原生 RiverMemo 联合查询（含 BM25 混合），`knn`＝KNN+TagMemo 路径。热加载，改后立即生效，无需重启。环境变量 `AGENT_GATEWAY_RECALL_MODE` 优先级更高（需重启进程生效）。默认 `river`（2026-10-10 M3 混合检索后重评达标切回，重评报告见 docs/testing/）。 | `river` |
 | `agents` | 是 | 顶层 Agent 绑定映射，键为 Agent 名称或别名。 | 无默认值。缺失时视为没有任何 Agent 绑定。 |
 | `defaultProfile` | 否 | 默认使用的 profile 名称。 | 未设置时，优先取 `allowedProfiles` 的第一项；若也未设置，则回退到顶层 `profiles` 中的第一个可用项。 |
 | `allowedProfiles` | 否 | Agent 允许使用的 profile 名称列表。 | 未设置时，表示允许使用该 Agent 可见的全部 profile。 |
@@ -422,6 +422,7 @@
 | `targets` | 是 | `object` | 召回目标配置，必须包含 `diaries` 数组。 | 无默认值。缺失时该 rule 无效。 |
 | `targets.diaries` | 是 | `string[]` | 要检索的日记本名称列表。 | 无默认值。空数组会导致该 rule 无法产生有效目标。 |
 | `targets.kMultiplier` | 否 | `number` | 召回倍率乘数。大于 1 扩大召回量，小于 1 缩小。 | 默认 `1.0`。非法值会回退到 `1.0`。 |
+| `targets.k` | 否 | `number` | Rule 级绝对召回条数覆盖（M3 新增）。设置后忽略 `kMultiplier` 的倍率语义，直接以该值作为该 rule 的 k。 | 未设置时使用 `默认 k(8) × targets.kMultiplier`。会被夹取到全局上限 `50`。 |
 | `targets.aggregate` | 否 | `boolean` | 是否对该 rule 的结果做聚合去重。 | 单 diary 时可省略；结构化多 diary rule 未显式设为 `true` 时，不会自动聚合，并会在运行时视为无效配置。 |
 | `projection` | 否 | `string \| object` | 结果视图偏好。字符串如 `"items"`；对象写法 `{ "emit": "items" }`。它影响对外返回时推荐使用的结果视图，不改变底层检索策略。 | 未显式指定时，先回退到 profile-level / rule-level 汇总结果，再由运行时自动推断。 |
 | `gateThreshold` | 条件必填 | `number` | **门控阈值**，仅 `gated_rag` / `gated_full_text` 需要。范围建议 `0.2 ~ 0.5`。 | 默认 `null`。省略时等价于不做门控，但对 gated 类型应显式配置。 |
@@ -546,6 +547,7 @@ Legacy 示例（仍可用但不推荐）：
 | `group` | `boolean` | 启用**语义组增强**，利用语义分组提升相关度。 | 默认 `false`，即关闭。 |
 | `rerank` | `boolean` | 启用**重排序**，对初筛结果做二次精排。 | 默认 `false`，即关闭。 |
 | `tagMemo` | `boolean` | 启用 **TagMemo** 标签增强，融入标签关联信息。 | 默认 `false`，即关闭。 |
+| `bm25` | `boolean \| object` | 启用 **BM25 稀疏混合检索**（M3 新增，仅 river 检索模式消费）：关键词命中的文件作为稀疏候选并入 river 联合查询的 `hybridPlan.fileCandidates`，含明确关键词的 query 命中显著改善。对象写法 `{ "mode": "body", "weight": 0.6 }`：`mode` 为 `tag`（标签域，等价生产 `::BM25`）或 `body`（正文域，等价 `::BM25+`），`weight` 为稀疏路权重（0~1）。旧宿主无 BM25 能力时静默跳过。 | 默认 `false`，即关闭；`mode` 默认 `tag`，`weight` 默认 `0.6`。 |
 
 ### 4.2 S02 修饰符（后处理）
 

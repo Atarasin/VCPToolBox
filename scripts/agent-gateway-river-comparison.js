@@ -24,7 +24,7 @@ const path = require('node:path');
 const MAIN_ROOT = path.resolve(__dirname, '..');
 
 function parseArgs(argv) {
-    const args = { k: 5, out: null, json: null, 'dairynote-root': null, 'vector-store': null, config: null, judge: true };
+    const args = { k: 5, out: null, json: null, 'dairynote-root': null, 'vector-store': null, config: null, 'river-features': '', judge: true };
     for (let i = 2; i < argv.length; i += 2) {
         const key = argv[i] && argv[i].replace(/^--/, '');
         const value = argv[i + 1];
@@ -34,6 +34,7 @@ function parseArgs(argv) {
         else if (key === 'dairynote-root') args['dairynote-root'] = value;
         else if (key === 'vector-store') args['vector-store'] = value;
         else if (key === 'config') args.config = value;
+        else if (key === 'river-features') args['river-features'] = value;
         else if (key === 'no-judge') { args.judge = false; i -= 1; }
     }
     return args;
@@ -53,6 +54,8 @@ process.env.KNOWLEDGEBASE_FULL_SCAN_ON_STARTUP = 'false';
 
 const knowledgeBaseManager = require(path.join(MAIN_ROOT, 'KnowledgeBaseManager.js'));
 const embeddingUtils = require(path.join(MAIN_ROOT, 'EmbeddingUtils.js'));
+// 模块导出的是单例实例（Plugin.js 直接加载该实例）
+const ragPluginInstance = require(path.join(MAIN_ROOT, 'Plugin/RAGDiaryPlugin/RAGDiaryPlugin.js'));
 const jevClient = require(path.join(MAIN_ROOT, 'modules/jevClient.js'));
 const { createRagBindings } = require(path.join(MAIN_ROOT, 'modules/agentGateway/composition/vcpPortBindings.js'));
 const { createRagRetrieverPort } = require(path.join(MAIN_ROOT, 'modules/agentGateway/ports/index.js'));
@@ -131,16 +134,20 @@ function extractQueryWorthyLine(filePath) {
     return candidates[Math.floor(seededRandom() * candidates.length)];
 }
 
-async function runMode(mode, queryItem, k, port) {
+async function runMode(mode, queryItem, k, port, riverFeatures = '') {
     const previous = process.env.AGENT_GATEWAY_RECALL_MODE;
     try {
         if (mode === 'knn') process.env.AGENT_GATEWAY_RECALL_MODE = 'knn';
         else delete process.env.AGENT_GATEWAY_RECALL_MODE;
+        // M3 特性注入：bm25 = river 路径启用 BM25 稀疏混合（对齐 Midas 档案 body 模式）
+        const riverRagOptions = riverFeatures.includes('bm25')
+            ? { bm25: true, bm25Mode: 'body', bm25Weight: 0.6 }
+            : {};
         const result = await collectRagItems({
             query: queryItem.query,
             requestedDiaries: queryItem.diaries,
             agentId: 'ComparisonRunner',
-            ragOptions: { mode: 'rag', k, timeAware: false, groupAware: false, rerank: false, tagMemo: true },
+            ragOptions: { mode: 'rag', k, timeAware: false, groupAware: false, rerank: false, tagMemo: true, ...riverRagOptions },
             ragRetrieverPort: port,
             ragConfig: { allowCrossRoleAccess: true }
         });
@@ -171,6 +178,8 @@ function aggregate(rows) {
 }
 
 function fmtPct(v) { return `${(v * 100).toFixed(1)}%`; }
+
+let FEATURES_TAG = '';
 
 const JUDGE_TIE_THRESHOLD = 0.15;
 
@@ -270,7 +279,7 @@ function renderReport(perQuery, k, generatedAt, judgeEnabled) {
     const lines = [];
     lines.push('# M2.S4 River / KNN 召回质量对比报告');
     lines.push('');
-    lines.push(`> 生成时间：${generatedAt} | query：确定性随机种子（20261009）从真实日记采样内容子句 | k=${k} | 候选池=${Math.max(10, k * 2)} → ${judgeEnabled ? '同权 Jev 重排 → top-k（生产链路形态）' : '直接 top-k（rerank=off）'}`);
+    lines.push(`> 生成时间：${generatedAt} | query：确定性随机种子（20261009）从真实日记采样内容子句 | k=${k} | 候选池=${Math.max(10, k * 2)} → ${judgeEnabled ? '同权 Jev 重排 → top-k（生产链路形态）' : '直接 top-k（rerank=off）'}${FEATURES_TAG ? ` | river 特性：${FEATURES_TAG}` : ''}`);
     lines.push('');
     const riverAll = aggregate(perQuery.map((r) => ({ rank: r.riverRank })));
     const knnAll = aggregate(perQuery.map((r) => ({ rank: r.knnRank })));
@@ -331,10 +340,13 @@ async function main() {
     console.log(`[compare] diary root: ${dairyRoot}`);
     console.log('[compare] initializing KnowledgeBaseManager...');
     await knowledgeBaseManager.initialize();
-    const bindings = createRagBindings(knowledgeBaseManager, null, embeddingUtils);
+    // 真实 ragPlugin 单例：提供生产端 _getBM25FileCandidates（BM25 稀疏召回控制面）
+    const bindings = createRagBindings(knowledgeBaseManager, ragPluginInstance, embeddingUtils);
     const port = createRagRetrieverPort(bindings);
     console.log(`[compare] riverQuery available: ${port.capabilities().riverQuery}`);
+    console.log(`[compare] bm25 available: ${port.capabilities().getBM25FileCandidates}`);
     const judgeEnabled = args.judge && jevClient?.isConfigured?.() === true;
+    FEATURES_TAG = args['river-features'] || '';
     console.log(`[compare] jev judge enabled: ${judgeEnabled}`);
 
     const queries = buildQueries(dairyRoot);
@@ -364,7 +376,7 @@ async function main() {
         const q = queries[i];
         process.stdout.write(`[compare] ${i + 1}/${queries.length} ${q.diary}/${q.file} ... `);
         // 生产链路形态：两引擎各取 poolSize 候选池 → 同权 Jev 重排 → top-k
-        let riverItems = await runMode('river', q, poolSize, port);
+        let riverItems = await runMode('river', q, poolSize, port, args['river-features'] || '');
         let knnItems = await runMode('knn', q, poolSize, port);
         const rawRiverRank = rankOf(riverItems, q.file);
         const rawKnnRank = rankOf(knnItems, q.file);

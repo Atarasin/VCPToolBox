@@ -110,11 +110,17 @@ async function retrieveRule(ruleContext, state, dependencies) {
     if (support.FULL_TEXT_RULE_TYPES.has(type)) {
         return { result: await dependencies.fullTextRetriever({ ...shared, rule }), modifierDetails: [] };
     }
-    const effectiveK = Math.max(1, Math.round(5 * support.resolveRuleKMultiplier(rule)));
+    // M3.S1（D6·方案A）：rule 级绝对 k（targets.k）优先；未配置时用默认 k × kMultiplier。
+    // 夹取全局上限 MAX_RAG_K（50），保证档案配置无法突破保守档预算。
+    const ruleBaseK = support.resolveRuleBaseK(rule);
+    const effectiveK = ruleBaseK !== null
+        ? Math.min(support.MAX_RAG_K, Math.max(1, ruleBaseK))
+        : Math.min(support.MAX_RAG_K, Math.max(1, Math.round(support.DEFAULT_RAG_K * support.resolveRuleKMultiplier(rule))));
     const { options: ragOptions } = support.buildRagOptionsFromModifiers(rule.modifiers, effectiveK);
     const result = await dependencies.collectRagItems({
         ...shared,
         ragOptions,
+        recentMessages: state.roleValveMessages,
         ragConfig: dependencies.ragConfig,
         ragRetrieverPort: dependencies.ragRetrieverPort
     });

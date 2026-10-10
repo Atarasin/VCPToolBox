@@ -19,7 +19,8 @@ const ALLOWED_MODIFIERS = Object.freeze(new Set([
     'timeDecay',
     'roleValve',
     'base64Memo',
-    'aiMemo'
+    'aiMemo',
+    'bm25'
 ]));
 
 const ALLOWED_RULE_TYPES = Object.freeze(new Set([
@@ -30,11 +31,12 @@ const ALLOWED_RULE_TYPES = Object.freeze(new Set([
 ]));
 
 // 网关全局语义检索模式：river = 原生 RiverMemo 联合查询（对齐 VCPChat 生产），
-// knn = 旧 KNN 路径。2026-10-09 用户决策：默认 knn（M2.S4 三轮实测 river 落后 knn，
-// 差距集中在术语精确场景），M3.S3 BM25 混合检索完成后重跑对比，达标再切 river 默认。
+// knn = KNN+TagMemo 路径。2026-10-09 用户决策：M2 时以 knn 默认合并；M3.S3 BM25 混合
+// 检索完成后重评达标（裸引擎打平 63.2%/0.400，Jev 盲评 river 19:17 反超，见
+// docs/testing/2026-10-10_M3-river-reeval-comparison.md），按既定条件切回 river 默认。
 // 档案级 mode 覆盖不进本期。
 const ALLOWED_RECALL_MODES = Object.freeze(new Set(['knn', 'river']));
-const DEFAULT_RECALL_MODE = 'knn';
+const DEFAULT_RECALL_MODE = 'river';
 
 const _deprecationFlags = {
     type: false,
@@ -61,7 +63,7 @@ const loadRecallProfiles = createHotJsonConfigLoader({
 /**
  * 解析网关全局检索模式。优先级：环境变量 AGENT_GATEWAY_RECALL_MODE（river|knn）
  * > recall_profiles.json 顶层 recallMode（热加载，改文件立即生效，无需重启）
- * > 默认 knn（2026-10-09 用户决策，M3.S3 后重评）。
+ * > 默认 river（2026-10-10 M3 后重评达标切回，详见 docs/testing/）。
  */
 function resolveGlobalRecallMode(configPath = DEFAULT_CONFIG_PATH) {
     const envMode = normalizeString(process.env.AGENT_GATEWAY_RECALL_MODE).toLowerCase();
@@ -154,6 +156,11 @@ function normalizeRule(rule) {
     const kMultiplier = typeof rawKMultiplier === 'number' && Number.isFinite(rawKMultiplier) && rawKMultiplier > 0
         ? rawKMultiplier
         : 1.0;
+    // M3.S1（D6·方案A）：rule 级绝对 k 覆盖（targets.k）；运行时夹到全局上限
+    const rawRuleK = rawTargets?.k !== undefined ? rawTargets.k : rule.k;
+    const ruleK = typeof rawRuleK === 'number' && Number.isFinite(rawRuleK) && rawRuleK >= 1
+        ? Math.floor(rawRuleK)
+        : undefined;
     const meta = rule.meta && typeof rule.meta === 'object' && !Array.isArray(rule.meta)
         ? { ...rule.meta }
         : undefined;
@@ -166,12 +173,16 @@ function normalizeRule(rule) {
         targets: {
             diaries,
             ...(aggregate !== undefined ? { aggregate } : {}),
-            kMultiplier
+            kMultiplier,
+            ...(ruleK !== undefined ? { k: ruleK } : {})
         },
         modifiers,
         gateThreshold,
         kMultiplier
     };
+    if (ruleK !== undefined) {
+        result.k = ruleK;
+    }
     if (id !== undefined) {
         result.id = id;
     }

@@ -214,7 +214,7 @@ function applyS02Modifiers(items, modifiers, options = {}) {
 
     const postModifiers = MODIFIER_PIPELINE_ORDER
         .map((key) => MODIFIER_REGISTRY[key])
-        .filter((definition) => definition.stage === 'post' && modifiers[definition.key] !== undefined);
+        .filter((definition) => definition && definition.stage === 'post' && modifiers[definition.key] !== undefined);
     for (const definition of postModifiers) {
         const modifierStartedAt = Date.now();
         const inputCount = currentItems.length;
@@ -238,6 +238,9 @@ const MODIFIER_REGISTRY = Object.freeze({
     time: Object.freeze({ key: 'time', stage: 'retrieval' }),
     group: Object.freeze({ key: 'group', stage: 'retrieval' }),
     tagMemo: Object.freeze({ key: 'tagMemo', stage: 'retrieval' }),
+    // M3.S3：BM25 稀疏混合检索在 collectRagItems 检索阶段消费（river hybridPlan），
+    // 无后处理动作，但必须注册以匹配 runtimeSupport 的 MODIFIER_PIPELINE_ORDER。
+    bm25: Object.freeze({ key: 'bm25', stage: 'retrieval' }),
     rerank: Object.freeze({ key: 'rerank', stage: 'retrieval' }),
     timeDecay: Object.freeze({
         key: 'timeDecay', stage: 'post',

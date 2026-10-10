@@ -34,8 +34,9 @@ describe('S02 — RecallProfileResolver extensions', () => {
             assert.ok(ALLOWED_MODIFIERS.has('base64Memo'));
         });
 
-        it('has exactly 9 modifiers (S01 5 + S02 4)', () => {
-            assert.strictEqual(ALLOWED_MODIFIERS.size, 9);
+        it('has exactly 10 modifiers (S01 5 + S02 4 + M3 bm25)', () => {
+            assert.strictEqual(ALLOWED_MODIFIERS.size, 10);
+            assert.ok(ALLOWED_MODIFIERS.has('bm25'));
         });
     });
 

@@ -14,8 +14,10 @@ const {
     estimateTokenCount
 } = require('../../services/recallProjectionService');
 
-const DEFAULT_RAG_K = 5;
-const MAX_RAG_K = 20;
+// 检索预算（D6·方案A 保守放开）：默认 k 5→8、上限 20→50；k/上限可经 recall
+// profile 档案字段 targets.k 覆盖，tagBoost 经 modifiers.tagMemo.weight 覆盖。
+const DEFAULT_RAG_K = 8;
+const MAX_RAG_K = 50;
 const TAG_BOOST = 0.15;
 const DEFAULT_CONTEXT_MAX_BLOCKS = 4;
 const DEFAULT_CONTEXT_TOKEN_BUDGET = 1200;
@@ -389,6 +391,103 @@ async function prepareRagVectors({ query, ragOptions, ragRetrieverPort }) {
     return { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector, preparedMemoObservation };
 }
 
+// M3.S2：辅助向量条数与时间衰减（对齐 RAGDiaryPlugin 生产端 shotgun 历史段参数）
+const SUPPLEMENTAL_MESSAGE_LIMIT = 3;
+const SUPPLEMENTAL_DECAY_FACTOR = 0.85;
+
+async function buildSupplementalQueryVectors({ recentMessages, ragRetrieverPort }) {
+    const messages = (Array.isArray(recentMessages) ? recentMessages : [])
+        .map((message) => normalizeContextContentText(message?.content ?? message?.text))
+        .filter(Boolean)
+        .slice(-SUPPLEMENTAL_MESSAGE_LIMIT);
+    if (messages.length === 0 || typeof ragRetrieverPort?.embedQuery !== 'function') {
+        return [];
+    }
+    const supplemental = [];
+    for (let index = 0; index < messages.length; index += 1) {
+        try {
+            const vector = await Promise.resolve(ragRetrieverPort.embedQuery(messages[index]));
+            if (!Array.isArray(vector) || vector.length === 0) continue;
+            supplemental.push({
+                vector,
+                weight: Math.pow(SUPPLEMENTAL_DECAY_FACTOR, messages.length - index)
+            });
+        } catch (_error) {
+            // 单条辅助向量失败不影响主查询
+        }
+    }
+    return supplemental;
+}
+
+/**
+ * M3.S3：river 混合计划的稀疏文件候选——BM25 候选与 time 命中文件按 path 合并，
+ * 打法对齐 RAGDiaryPlugin 生产端（mergeNativeFileCandidate：分数取 max、time 来源优先）。
+ */
+async function buildRiverFileCandidates({ targetDiaries, query, ragOptions, ragRetrieverPort, semanticSearchK, timeRanges }) {
+    const byPath = new Map();
+    const merge = (candidate) => {
+        const candidatePath = normalizeContextString(candidate?.path);
+        if (!candidatePath) return;
+        const existing = byPath.get(candidatePath) || {
+            path: candidatePath,
+            bm25Score: 0,
+            normalizedBM25Score: 0,
+            timeScore: 0,
+            source: ''
+        };
+        existing.bm25Score = Math.max(existing.bm25Score, Number(candidate?.bm25Score) || 0);
+        existing.normalizedBM25Score = Math.max(existing.normalizedBM25Score, Number(candidate?.normalizedBM25Score) || 0);
+        existing.timeScore = Math.max(existing.timeScore, Number(candidate?.timeScore) || 0);
+        const nextSource = normalizeContextString(candidate?.source);
+        if (nextSource === 'time' || !existing.source || existing.source === 'rag') {
+            existing.source = nextSource;
+        }
+        byPath.set(candidatePath, existing);
+    };
+
+    if (ragOptions.bm25 && typeof ragRetrieverPort.getBM25FileCandidates === 'function') {
+        const bm25Limit = Math.max(
+            semanticSearchK,
+            ragOptions.k * (ragOptions.rerank ? 5 : 3)
+        );
+        try {
+            const bm25 = await Promise.resolve(ragRetrieverPort.getBM25FileCandidates(
+                targetDiaries,
+                query,
+                bm25Limit,
+                ragOptions.bm25Mode === 'body' ? 'body' : 'tag',
+                ragOptions.bm25Weight !== undefined ? ragOptions.bm25Weight : 0.6
+            ));
+            for (const file of Array.isArray(bm25?.files) ? bm25.files : []) {
+                merge(file);
+            }
+        } catch (error) {
+            // BM25 失败不阻断主查询，仅损失稀疏路
+            console.warn(`[AgentGatewayRecall] BM25 file candidates unavailable: ${error.message}`);
+        }
+    }
+
+    // timeLimits 透传：timeAware 命中的时间范围文件以 timeScore=1 并入候选
+    if (timeRanges.length > 0 && typeof ragRetrieverPort.getTimeRangeFilePaths === 'function') {
+        try {
+            const filePaths = (await Promise.all(
+                targetDiaries.map(async (targetDiary) => Promise.all(
+                    timeRanges.map((timeRange) => Promise.resolve(
+                        ragRetrieverPort.getTimeRangeFilePaths(targetDiary, timeRange)
+                    ))
+                ))
+            )).flat(2);
+            for (const filePath of new Set(filePaths.map((p) => normalizeContextString(p)).filter(Boolean))) {
+                merge({ path: filePath, timeScore: 1, source: 'time' });
+            }
+        } catch (error) {
+            console.warn(`[AgentGatewayRecall] Time file candidates unavailable: ${error.message}`);
+        }
+    }
+
+    return Array.from(byPath.values());
+}
+
 /**
  * 共享 search/context 的检索主流程，避免在 adapter 内复制实现。
  */
@@ -407,18 +506,53 @@ async function collectRagItems(params) {
     const vectors = await prepareRagVectors({ query, ragOptions, ragRetrieverPort });
     const { activatedGroups, coreTags, effectiveTagBoost, finalQueryVector, scoringVector, preparedMemoObservation } = vectors;
 
+    // rerank 开启时候选池翻倍供重排消费；k 本身已由 extractRagOptions /
+    // buildRagOptionsFromModifiers 注入默认值，此处不再设下限（显式小 k 应被尊重）。
     const semanticSearchK = ragOptions.rerank
         ? Math.max(ragOptions.k * 2, 10)
-        : Math.max(ragOptions.k, DEFAULT_RAG_K);
+        : ragOptions.k;
+    // 时间范围解析前置：river 混合计划需要把 time 命中文件并入 fileCandidates
+    let timeRanges = [];
+    if (ragOptions.timeAware && ragRetrieverPort.parseTimeRanges) {
+        timeRanges = await Promise.resolve(ragRetrieverPort.parseTimeRanges(query));
+    }
     // 语义检索引擎分支：全局开关（AGENT_GATEWAY_RECALL_MODE / recall_profiles.json 顶层
-    // recallMode，热加载）。2026-10-09 用户决策默认 knn（M2.S4 实测 river 落后，M3 混合
-    // 检索完成后重评）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的
+    // recallMode，热加载）。默认 river（2026-10-10 M3 混合检索后重评达标切回，重评报告见
+    // docs/testing/）；river 失败降级已在端口绑定层包装（D1·方案A），此处拿到的
     // riverQuery 不会抛上游异常。
     const recallMode = resolveGlobalRecallMode();
     const riverEligible = recallMode === 'river' && typeof ragRetrieverPort.riverQuery === 'function';
     let riverEngine = null;
     let semanticResults;
     if (riverEligible) {
+        // M3.S2：多查询向量——从 recentMessages 提取辅助向量（越新权重越高，衰减 0.85，
+        // 对齐 RAGDiaryPlugin 生产端 shotgun 打法），作为 supplementalQueryVectors 参与
+        // river 联合查询，扩大召回覆盖面。仅 river 路径消费（KNN 绑定无该参数面）。
+        const supplementalQueryVectors = await buildSupplementalQueryVectors({
+            recentMessages: params.recentMessages,
+            ragRetrieverPort
+        });
+        // M3.S3：BM25 混合计划——稀疏文件候选（生产端 _getBM25FileCandidates 打法）
+        // 与 timeLimits 命中文件融合为 hybridPlan.fileCandidates，Rust 联合层完成
+        // Chunk 展开与向量融合。bm25Limit 对齐生产：max(k, finalK × (rerank?5:3))。
+        const nativeFileCandidates = await buildRiverFileCandidates({
+            targetDiaries,
+            query,
+            ragOptions,
+            ragRetrieverPort,
+            semanticSearchK,
+            timeRanges
+        });
+        const hybridPlan = (nativeFileCandidates.length > 0 || supplementalQueryVectors.length > 0)
+            ? {
+                supplemental: {
+                    perIndexK: Math.max(2, Math.round(semanticSearchK / 2))
+                },
+                fileCandidates: nativeFileCandidates,
+                bm25Weight: ragOptions.bm25Weight !== undefined ? ragOptions.bm25Weight : 0.6,
+                bm25Mode: ragOptions.bm25Mode === 'body' ? 'body' : 'tag'
+            }
+            : null;
         const riverResult = await Promise.resolve(ragRetrieverPort.riverQuery(
             { text: query, vector: finalQueryVector },
             {
@@ -426,6 +560,8 @@ async function collectRagItems(params) {
                 preparedMemoObservation: preparedMemoObservation || undefined,
                 topK: semanticSearchK,
                 coreTags,
+                supplementalQueryVectors,
+                hybridPlan,
                 sourceObservationConfig: {
                     baseTagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
                     coreBoostFactor: 1.33
@@ -472,11 +608,6 @@ async function collectRagItems(params) {
                 : [];
         })
     );
-    }
-
-    let timeRanges = [];
-    if (ragOptions.timeAware && ragRetrieverPort.parseTimeRanges) {
-        timeRanges = await Promise.resolve(ragRetrieverPort.parseTimeRanges(query));
     }
 
     let timeResults = [];

@@ -1,5 +1,5 @@
 {
-    "recallMode": "knn",
+    "recallMode": "river",
     "agents": {
         "Nexus": {
             "defaultProfile": "nexus-default",
@@ -96,7 +96,11 @@
                         "time": true,
                         "rerank": true,
                         "tagMemo": true,
-                        "truncate": 20
+                        "truncate": 20,
+                        "bm25": {
+                            "mode": "body",
+                            "weight": 0.6
+                        }
                     }
                 }
             ]
