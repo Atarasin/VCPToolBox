@@ -350,3 +350,57 @@ test('distill：冒烟持续无结果降级为告警留痕，不阻断步骤（�
     assert.equal(searches, 2, '短重试配置生效');
     assert.ok(fs.existsSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')), '知识文件已落盘');
 });
+
+test('distill：LLM 输出不可解析时同 prompt 重试一次（费用入护栏）', async () => {
+    const baseDir = createTempDir();
+    const llmCalls = [];
+    const jobRuntimeService = require('node:assert');
+    const { createJobRuntimeService: createJrs } = require('../../../modules/agentGateway/services/jobRuntimeService');
+    const jrs = createJrs();
+    const toolInvoker = {
+        async invoke() {
+            return { content: [{ type: 'text', text: anySearchText(MATERIALS) }] };
+        }
+    };
+    const llmPort = {
+        available: true,
+        complete: async (config, payload) => {
+            llmCalls.push(payload);
+            // 第一次输出垃圾，第二次输出合法蒸馏 JSON
+            if (llmCalls.length === 1) {
+                return llmResponse('这不是 JSON，只是模型抖动输出。');
+            }
+            return llmResponse(DISTILL_OUTPUT);
+        }
+    };
+    const { createForgeRuntimeService } = require('../../../modules/agentGateway/services/forge/service');
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: llmPort,
+        toolInvokerPort: toolInvoker,
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ text: 'hit', score: 0.9 }]
+        },
+        baseDir,
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        smokeRetries: 1,
+        smokeIntervalMs: 5
+    });
+    const { jobId } = await svc.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        blueprintOverride: buildUiDesignerBlueprint()
+    });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
+    const job = jrs.pollJob(jobId, null).data.job;
+    assert.equal(job.metadata.forge.error.step, 'synthesize', '重试后 distill 应完成');
+    assert.equal(llmCalls.length, 2, '同 prompt 恰好调用两次');
+    assert.equal(llmCalls[0].messages[0].content, llmCalls[1].messages[0].content, '两次 prompt 一致');
+    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
+    assert.ok(marker.state && marker.state.libraryName === 'UIDesigner知识库', 'marker 携带机器可读 state');
+    assert.equal(marker.state.smoke.verified, true);
+});

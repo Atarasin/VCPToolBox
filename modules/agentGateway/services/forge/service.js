@@ -315,7 +315,8 @@ function createForgeRuntimeService(options = {}) {
                 ensureActive(jobId, authContext); // 执行期间被取消则不覆盖 cancelled 状态。
                 const marker = await runStore.markStepComplete(jobId, step.id, {
                     summary: result.summary || null,
-                    artifacts: result.artifacts || []
+                    artifacts: result.artifacts || [],
+                    state: result.state && typeof result.state === 'object' ? result.state : null
                 });
                 markers.set(step.id, marker);
                 log('forge.step.completed', {
