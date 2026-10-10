@@ -10,7 +10,7 @@ const {
 const { createHarvestStepRunner } = require('./harvest');
 const { createDistillStepRunner } = require('./distill');
 const { createSynthesizeStepRunner } = require('./synthesize');
-const { createTrialStepRunner } = require('./trial');
+const { createTrialStepRunner, createRetestStepRunner } = require('./trial');
 const { ForgeNameConflictError, detectNameConflicts, listExistingAgentNames } = require('./nameConflict');
 const { extractJsonObject } = require('./jsonUtils');
 
@@ -166,6 +166,13 @@ function createStepRegistry({
         { id: 'harvest', name: '增量采集' },
         { id: 'distill', name: '增量提炼' }
     ]);
+    // §3.7：缺口回填的 learn 任务在采集→提炼后附「同一套考题重测」尾步。
+    const LEARN_RETEST_STEPS = Object.freeze([
+        ...LEARN_STEPS,
+        { id: 'retest', name: '回填重测' }
+    ]);
+
+    runners.retest = createRetestStepRunner();
 
     function getRunner(stepId) {
         const runner = runners[stepId];
@@ -175,7 +182,7 @@ function createStepRegistry({
         return runner;
     }
 
-    return { CREATE_STEPS, LEARN_STEPS, getRunner };
+    return { CREATE_STEPS, LEARN_STEPS, LEARN_RETEST_STEPS, getRunner };
 }
 
 module.exports = {

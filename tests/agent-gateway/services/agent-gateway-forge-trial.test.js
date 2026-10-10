@@ -17,10 +17,12 @@ function blueprint() {
         displayName: 'UI 设计专家',
         scope: { responsibilities: ['UI 设计'], boundaries: [] },
         subskills: [
-            { id: 'color-theory', title: '配色理论', searchQueries: ['color theory UI design'] }
+            { id: 'color-theory', title: '配色理论', searchQueries: ['color theory UI design'] },
+            { id: 'layout-typography', title: '版式与排版', searchQueries: ['layout typography'] }
         ],
         examOutline: [
-            { subskillId: 'color-theory', conceptQuestions: 1, appliedQuestions: 1 }
+            { subskillId: 'color-theory', conceptQuestions: 1, appliedQuestions: 1 },
+            { subskillId: 'layout-typography', conceptQuestions: 1, appliedQuestions: 1 }
         ],
         practicalExam: { prompt: 'SaaS 落地页设计方案', gradingDimensions: ['眼前一亮', '去 AI 味', '可落地'] },
         acceptanceSample: '眼前一亮、去 AI 味的设计图'
@@ -59,7 +61,7 @@ function gradeJson(ratio) {
     return JSON.stringify({ gradedQuestions: graded, overallComment: '总评' });
 }
 
-function buildEnv(baseDir, { gradeRatio, jevPort = null } = {}) {
+function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null } = {}) {
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
     const llmPort = {
@@ -72,7 +74,8 @@ function buildEnv(baseDir, { gradeRatio, jevPort = null } = {}) {
             if (content.includes('出题官') || content.includes('考纲')) {
                 output = EXAM_JSON;
             } else if (content.includes('判卷官')) {
-                output = gradeJson(gradeRatio);
+                // 支持分数序列：首考 → 重测（回填后同一套考题）
+                output = gradeJson(gradeRatios && gradeRatios.length > 0 ? gradeRatios.shift() : gradeRatio);
             } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                 output = DISTILL_JSON;
             } else {
@@ -85,7 +88,14 @@ function buildEnv(baseDir, { gradeRatio, jevPort = null } = {}) {
         jobRuntimeService,
         llmCompletionPort: llmPort,
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+            // 按子技能查询词返回不同域名集（避免跨子技能同域 2s 节流拖慢测试）
+            invoke: async (toolName, args) => {
+                const isLayout = String(args?.query || '').includes('layout');
+                const text = isLayout
+                    ? 'D\nhttps://d.dev/grid\ns\n\nE\nhttps://e.org/type\ns2\n\nF\nhttps://f.io/scale\ns3'
+                    : 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3';
+                return { content: [{ type: 'text', text }] };
+            }
         },
         knowledgeStorePort: {
             available: true,
@@ -108,6 +118,23 @@ function buildEnv(baseDir, { gradeRatio, jevPort = null } = {}) {
         fs.writeFileSync(path.join(baseDir, file), content);
     }
     return { jobRuntimeService, forgeRuntimeService, llmCalls };
+}
+
+
+async function waitForLearnJob(env, timeoutMs = 15000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        try {
+            const listed = env.jobRuntimeService.listJobs({ filters: { operationPrefix: 'forge.expert.learn' } }).data.jobs;
+            if (listed.length > 0) {
+                return listed[0].jobId;
+            }
+        } catch {
+            // 轮询期竞态，忽略
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return null;
 }
 
 async function waitFor(predicate, timeoutMs = 10000) {
@@ -176,13 +203,26 @@ test('trial：不及格 → 不推送用户（直接 completed）+ 缺口清单 
     assert.equal(gaps.gaps[0].subskillId, 'color-theory');
     assert.match(gaps.gaps[0].reason, /低于 80%/);
 
-    // M4.S2 T1：缺口 → forge.expert.learn 定向任务（只补缺口）
-    const jobs = await env.forgeRuntimeService.listJobs();
-    const learnJob = jobs.find((j) => j.type === 'learn' && j.expertName === 'UIDesigner');
-    assert.ok(learnJob, '应自动创建 learn job');
-    const learnRun = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', learnJob.jobId, 'run.json'), 'utf8'));
+    // M4.S2 T1：缺口 → forge.expert.learn 定向任务（只补缺口）→ 采→炼→同套重测 全链路
+    const learnJobId = await waitForLearnJob(env);
+    assert.ok(learnJobId, '应自动创建 learn job');
+    assert.equal(await waitFor(() => {
+        const polled = env.jobRuntimeService.pollJob(learnJobId, null);
+        return polled?.success && polled.data.job.terminal;
+    }, 15000), true);
+    const learnJob = env.jobRuntimeService.pollJob(learnJobId, null).data.job;
+    assert.equal(learnJob.status, 'completed', `learn job 应完成（重测不及格不阻断），实际 ${learnJob.status}：${JSON.stringify(learnJob.metadata.forge?.error)}`);
+    const learnRun = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', learnJobId, 'run.json'), 'utf8'));
     assert.deepEqual(learnRun.scope.subskillIds, ['color-theory']);
     assert.equal(learnRun.scope.reason, 'trial-failed-gap-backfill');
+    assert.ok(learnRun.retestOf.examPath.includes('exams/exam.json'), '携带原考卷路径');
+    // scope 过滤：只采缺口子技能的 raw（blueprint 第二子技能 layout-typography 不采）
+    const rawDir = path.join(baseDir, 'forge', 'runs', learnJobId, 'raw');
+    assert.deepEqual(fs.readdirSync(rawDir), ['color-theory'], '只采缺口子技能');
+    // 同套重测留档
+    const retestSummary = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'retest-summary.json'), 'utf8'));
+    assert.equal(retestSummary.retestOf, jobId);
+    assert.ok(Math.abs(retestSummary.previousRatio - 0.5) < 0.001, '记录首考分数');
 });
 
 test('trial：Jev 对照（D7 方案 C）——LLM 与 Jev 分数双双留档 comparison.json', async () => {
@@ -243,4 +283,39 @@ test('trial：盲测作答上下文只含专属库知识卡（红线 1 白名单
         assert.ok(content.includes('唯一的专业资料来源'), '明示只用知识库');
         assert.ok(!content.includes('gateway_memory'), '无记忆工具');
     }
+});
+
+test('trial：回填后同一套考题重测弱项分数提升（M4.S2 验收）', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.5, gradeRatios: [0.5, 0.9] });
+    const jobId = await driveToTrial(env);
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'completed', '首考不及格不推送用户');
+
+    const learnJobId = await waitForLearnJob(env);
+    assert.ok(learnJobId, '应自动创建 learn job');
+    // 重测及格 → learn job 停在 pending_confirm 待用户抽查（D3）→ 确认后完成
+    assert.equal(await waitFor(() => {
+        const polled = env.jobRuntimeService.pollJob(learnJobId, null);
+        return polled?.success && polled.data.job.status === 'pending_confirm';
+    }, 15000), true, '重测及格应停用户抽查门禁');
+    await env.forgeRuntimeService.confirmBlueprint(learnJobId, { approved: true });
+    assert.equal(await waitFor(() => {
+        const polled = env.jobRuntimeService.pollJob(learnJobId, null);
+        return polled?.success && polled.data.job.terminal;
+    }, 15000), true);
+
+    const retestSummary = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'retest-summary.json'), 'utf8'));
+    assert.ok(Math.abs(retestSummary.previousRatio - 0.5) < 0.001, '首考 50%');
+    assert.ok(Math.abs(retestSummary.ratio - 0.9) < 0.001, '重测 90%');
+    assert.ok(retestSummary.improvement > 0, '弱项分数提升');
+    assert.equal(retestSummary.passed, true, '重测及格');
+    const retestMarker = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', learnJobId, 'steps', 'retest.json'), 'utf8'));
+    assert.match(retestMarker.summary, /50\.0% → 90\.0%/);
+    // 同一套考题：learn 的 exam 与首考考卷内容一致（retest 不重新出题）
+    const learnExam = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'answers.json'), 'utf8'));
+    assert.ok(Object.keys(learnExam.answers).length >= 3, '重测作答全部题目');
 });

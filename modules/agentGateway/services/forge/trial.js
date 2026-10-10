@@ -62,7 +62,9 @@ function assertNoSecrets(text, what) {
 
 async function writeExamFile(examsDir, name, payload) {
     await fsp.mkdir(examsDir, { recursive: true });
-    await fsp.writeFile(path.join(examsDir, name), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+    assertNoSecrets(serialized, `考试产物 ${name}`);
+    await fsp.writeFile(path.join(examsDir, name), serialized, 'utf8');
 }
 
 // 盲测代查：只查专属库（红线 1：白名单仅 gateway_knowledge_search 的库面）。
@@ -86,7 +88,7 @@ async function blindSearch(knowledgeStorePort, libraryName, keywords, { topK = 5
     return { cards, skipped: false };
 }
 
-function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName }) {
+function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [] }) {
     const lines = [];
     lines.push(`# ${blueprint.displayName}（${blueprint.name}）上岗验收报告`);
     lines.push('');
@@ -117,6 +119,14 @@ function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio
     lines.push('');
     lines.push(grading.overallComment || '—');
     lines.push('');
+    if (Array.isArray(gaps) && gaps.length > 0) {
+        lines.push(`## 缺口清单（定向补课范围）`);
+        lines.push('');
+        for (const gap of gaps) {
+            lines.push(`- **${gap.subskillId}**：${gap.reason}（考题：${(gap.questionIds || []).join('、')}）`);
+        }
+        lines.push('');
+    }
     return lines.join('\n');
 }
 
@@ -196,8 +206,37 @@ function createTrialStepRunner() {
         }
         await writeExamFile(examsDir, 'exam.json', exam);
 
-        // 2. 盲测（红线 1）：代查专属库 + 人设作答
-        let persona = '';
+        const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
+        const { answers, grading, ratio, passed, gaps, jev } = outcome;
+
+        logger?.(`forge.exam.graded: ${blueprint.name} 总分 ${(ratio * 100).toFixed(1)}%，${passed ? '及格待抽查' : `缺口 ${gaps.length} 项`}`);
+
+        return {
+            summary: `试岗完成：总分 ${(ratio * 100).toFixed(1)}%（${passed ? '及格，待用户抽查' : '未及格，缺口 ' + gaps.length + ' 项'}）；Jev 对照${jev.skipped ? '跳过（' + jev.reason + '）' : '已留档'}`,
+            artifacts: ['exams/grade-report.md', 'exams/comparison.json'],
+            state: {
+                passed,
+                ratio,
+                gaps,
+                userGate: passed ? {
+                    kind: 'trial-report',
+                    reportPath: path.relative(path.join(baseDir, '..'), path.join(examsDir, 'grade-report.md')),
+                    hint: '试岗及格，请用户抽查验收报告（D3）'
+                } : null
+            }
+        };
+    };
+}
+
+/**
+ * 盲测 + 判卷 + 评分 + 报告落盘的共享实现（trial 首考与回填后 retest 复用）。
+ * exam 由调用方给定（retest 传原考卷，实现「同一套考题重测」§3.7）。
+ */
+async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
+    const { llm, llmConfig, knowledgeStorePort, baseDir } = ctx;
+    const libraryName = blueprintLibraryName(blueprint.name);
+    // 盲测（红线 1）：代查专属库 + 人设作答
+    let persona = '';
         try {
             persona = await fsp.readFile(path.join(baseDir, `${blueprint.name}.txt`), 'utf8');
         } catch {
@@ -301,25 +340,69 @@ function createTrialStepRunner() {
         await writeExamFile(examsDir, 'comparison.json', comparison);
         await writeExamFile(examsDir, 'gaps.json', { gaps, generatedAt: new Date().toISOString() });
 
-        // 5. 报告落盘（JSON + 用户可读 markdown）
+        // 5. 报告落盘（JSON + 用户可读 markdown，含缺口清单）
         const report = { passed, ratio, passLine: PASS_RATIO, grading, gaps, libraryName };
         await writeExamFile(examsDir, 'grade-report.json', report);
-        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName });
+        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps });
         assertNoSecrets(reportMarkdown, '验收报告');
         await fsp.writeFile(path.join(examsDir, 'grade-report.md'), reportMarkdown, 'utf8');
 
-        logger?.(`trial: ${blueprint.name} 总分 ${(ratio * 100).toFixed(1)}%，${passed ? '及格待抽查' : `缺口 ${gaps.length} 项`}`);
+        return { answers, grading, ratio, passed, gaps, jev };
+}
+
+/**
+ * 回填后重测（§3.7：对同一套考题重测）——读原 job 的考卷，复用盲测+判卷，
+ * 报告并排本次与前次分数（弱项提升可见）。
+ */
+function createRetestStepRunner() {
+    return async function runRetestStep(ctx) {
+        const { runDir, baseDir } = ctx;
+        const retestOf = ctx.retestOf;
+        if (!retestOf?.examPath) {
+            const error = new Error('retest 需要 retestOf.examPath（原考卷路径）');
+            error.code = 'FORGE_RETEST_SOURCE_MISSING';
+            error.status = 400;
+            throw error;
+        }
+        const exam = JSON.parse(await fsp.readFile(retestOf.examPath, 'utf8'));
+        if (!Array.isArray(exam.questions) || exam.questions.length === 0) {
+            const error = new Error('原考卷不可用（无 questions）');
+            error.code = 'FORGE_RETEST_SOURCE_INVALID';
+            error.status = 502;
+            throw error;
+        }
+        const { readBlueprint, blueprintLibraryName: libName } = require('./blueprint');
+        const blueprint = await readBlueprint(ctx.blueprintPath);
+        void libName;
+        const examsDir = path.join(runDir, 'exams');
+
+        const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
+        const { ratio, passed, gaps, grading } = outcome;
+
+        const previousRatio = Number(retestOf.previousRatio) || 0;
+        const improvement = ratio - previousRatio;
+        const summary = `重测完成（同一套考题）：${(previousRatio * 100).toFixed(1)}% → ${(ratio * 100).toFixed(1)}%（${improvement >= 0 ? '+' : ''}${(improvement * 100).toFixed(1)} 分点，${passed ? '✅ 达到及格线' : '仍未及格，缺口 ' + gaps.length + ' 项'}）`;
+        await writeExamFile(examsDir, 'retest-summary.json', {
+            previousRatio,
+            ratio,
+            improvement,
+            passed,
+            gaps,
+            retestOf: retestOf.jobId || null,
+            gradedAt: new Date().toISOString()
+        });
         return {
-            summary: `试岗完成：总分 ${(ratio * 100).toFixed(1)}%（${passed ? '及格，待用户抽查' : '未及格，缺口 ' + gaps.length + ' 项'}）；Jev 对照${jev.skipped ? '跳过（' + jev.reason + '）' : '已留档'}`,
-            artifacts: ['exams/grade-report.md', 'exams/comparison.json'],
+            summary,
+            artifacts: ['exams/grade-report.md'],
             state: {
                 passed,
                 ratio,
+                improvement,
                 gaps,
                 userGate: passed ? {
                     kind: 'trial-report',
                     reportPath: path.relative(path.join(baseDir, '..'), path.join(examsDir, 'grade-report.md')),
-                    hint: '试岗及格，请用户抽查验收报告（D3）'
+                    hint: '回填后重测及格，请用户抽查验收报告'
                 } : null
             }
         };
@@ -332,6 +415,8 @@ module.exports = {
     FALLBACK_EXAMINE_TEMPLATE,
     FALLBACK_GRADE_TEMPLATE,
     createTrialStepRunner,
+    createRetestStepRunner,
+    runBlindAndGrade,
     jevCrossCheck,
     blindSearch,
     renderReportMarkdown

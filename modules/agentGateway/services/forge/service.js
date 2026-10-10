@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 
 const { JOB_STATUS } = require('../jobRuntimeService');
@@ -254,8 +255,12 @@ function createForgeRuntimeService(options = {}) {
         };
     }
 
-    function stepsForJobKind(jobKind) {
-        return jobKind === 'expert.learn' ? stepRegistry.LEARN_STEPS : stepRegistry.CREATE_STEPS;
+    function stepsForJobKind(runRecord) {
+        if (runRecord.jobKind !== 'expert.learn') {
+            return stepRegistry.CREATE_STEPS;
+        }
+        // §3.7：缺口回填的 learn 带同一套考题重测；手动/定期进修只采集→提炼。
+        return runRecord.retestOf ? stepRegistry.LEARN_RETEST_STEPS : stepRegistry.LEARN_STEPS;
     }
 
     async function updateForgeMetadata(jobId, metadataPatch) {
@@ -273,7 +278,7 @@ function createForgeRuntimeService(options = {}) {
             prices,
             initialEntries: runRecord.cost?.entries
         });
-        const steps = stepsForJobKind(runRecord.jobKind);
+        const steps = stepsForJobKind(runRecord);
         const completedSteps = await runStore.scanCompletedSteps(jobId);
         const markers = new Map();
         for (const stepId of completedSteps) {
@@ -311,6 +316,7 @@ function createForgeRuntimeService(options = {}) {
                     requirement: runRecord.requirement,
                     scope: runRecord.scope || null,
                     since: runRecord.since || null,
+                    retestOf: runRecord.retestOf || null,
                     blueprintOverride: runRecord.blueprintOverride || null,
                     blueprintPath: runRecord.blueprintPath || null,
                     expertName: runRecord.expertName || null,
@@ -373,6 +379,11 @@ function createForgeRuntimeService(options = {}) {
                                 subskillIds: result.state.gaps.map((gap) => gap.subskillId),
                                 reason: 'trial-failed-gap-backfill',
                                 gaps: result.state.gaps
+                            },
+                            retestOf: {
+                                jobId,
+                                examPath: path.join(runStore.runDir(jobId), 'exams', 'exam.json'),
+                                previousRatio: result.state.ratio
                             },
                             budgetCny: runRecord.budgetCny
                         });
@@ -545,12 +556,20 @@ function createForgeRuntimeService(options = {}) {
             scheduleDrive(job.jobId, authContext);
             return { jobId: job.jobId, runRecord };
         },
-        async startExpertLearnJob({ expertName, scope = null, since = null, authContext = null, budgetCny = null } = {}) {
+        async startExpertLearnJob({ expertName, scope = null, since = null, retestOf = null, authContext = null, budgetCny = null } = {}) {
             const normalizedExpertName = normalizeString(expertName);
             if (!normalizedExpertName) {
                 const error = new Error('expertName 不能为空');
                 error.status = 400;
                 error.code = 'AGW_VALIDATION_ERROR';
+                throw error;
+            }
+            // learn 的步骤需要画像（subskills/来源策略）——从既有画像解析。
+            const learnBlueprintPath = path.join(baseDir, 'blueprints', `${normalizedExpertName}.json`);
+            if (!fs.existsSync(learnBlueprintPath)) {
+                const error = new Error(`未找到专家画像：Agent/forge/blueprints/${normalizedExpertName}.json（须先完成全量铸造）`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
                 throw error;
             }
             const job = jobRuntimeService.createAcceptedJob({
@@ -568,8 +587,10 @@ function createForgeRuntimeService(options = {}) {
                 jobId: job.jobId,
                 jobKind: 'expert.learn',
                 expertName: normalizedExpertName,
+                blueprintPath: learnBlueprintPath,
                 scope,
                 since,
+                retestOf: retestOf || null,
                 budgetCny: Number.isFinite(Number(budgetCny)) && Number(budgetCny) > 0 ? Number(budgetCny) : defaultBudgetCny,
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });

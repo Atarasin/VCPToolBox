@@ -156,7 +156,12 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
         const merged = [];
         const dropped = [];
 
-        for (const subskill of blueprint.subskills) {
+        // 增量学习：与 harvest 同 scope 过滤（材料为空的子技能本就跳过，此处显式对齐）。
+        const scopeIds = Array.isArray(ctx.scope?.subskillIds) ? ctx.scope.subskillIds : null;
+        const targetSubskills = scopeIds
+            ? blueprint.subskills.filter((subskill) => scopeIds.includes(subskill.id))
+            : blueprint.subskills;
+        for (const subskill of targetSubskills) {
             const materials = await readRawMaterials(runDir, subskill.id);
             if (materials.length === 0) {
                 logger?.(`distill: subskill ${subskill.id} 无原始材料，跳过（增量学习 scope 外或采集为空）`);
