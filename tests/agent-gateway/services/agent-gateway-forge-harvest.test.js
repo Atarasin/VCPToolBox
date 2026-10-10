@@ -101,9 +101,9 @@ test('harvest：多域名材料采集、永久存档与完整元数据', async (
     });
     await waitForStatus(jobRuntimeService, jobId, 'pending_confirm');
     await forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
-    // harvest 完成后 distill 是 pending 桩 → job 失败于 FORGE_STEP_CAPABILITY_PENDING（证明 harvest 已跑过）
+    // harvest 完成后推进到 distill（fake LLM 返回 '{}' → 蒸馏输出不可解析而失败，
+    // 错误点在 distill 即证明 harvest 已跑过）
     const job = await waitForFailure(jobRuntimeService, jobId);
-    assert.equal(job.metadata.forge.error.code, 'FORGE_STEP_CAPABILITY_PENDING');
     assert.equal(job.metadata.forge.error.step, 'distill', 'harvest 应已完成并推进到 distill');
 
     // 落盘验证
