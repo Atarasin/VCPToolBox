@@ -34,6 +34,15 @@
     （实操题始终包含），费用约为全量卷的 1/3；大规模进修后先冒烟、再决定是否烧全量卷。
   返回 jobId 后用 `gateway_job_get` 查进度；及格会停在 `pending_confirm` 待用户抽查，
   用 `gateway_forge_confirm { "agentId": "ForgeMaster", "jobId": "<任务ID>", "approved": true }` 确认。
+- `gateway_forge_regrade`：补判——历史试岗报告里**判卷缺失的题曾被按 0 分计**（总评含
+  「判卷缺失 N 题……按 0 分计」或任务报 FORGE_GRADE_MISSING）时，对源任务已保存的
+  答卷**只重判缺失题**：合并既有判卷、重算总分、重写报告，不作答不出卷，费用远低于
+  重考。答卷质量本就及格的会直接翻转为及格：
+  ```json
+  { "agentId": "ForgeMaster", "expertName": "<专家名>", "sourceJobId": "<源试岗任务号>" }
+  ```
+  可选 `expectExamHash`（源考卷哈希前缀，防串卷）。返回 jobId 后用 `gateway_job_get`
+  查进度；翻转及格会停在 `pending_confirm` 待用户抽查确认。
 - `gateway_job_get` / `gateway_job_cancel`：查询/取消铸造与进修任务。
 
 ## 职责

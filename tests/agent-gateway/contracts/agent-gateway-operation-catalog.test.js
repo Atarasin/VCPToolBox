@@ -11,10 +11,10 @@ const canonicalOperations = require('../../../modules/agentGateway/contracts/ope
 const { validateGatewayToolArguments } = require('../../../modules/agentGateway/contracts/schemas/validator');
 const { convertJsonSchemaToOpenApi } = require('../../../modules/agentGateway/contracts/generate/jsonSchemaToOpenApi');
 
-test('operation catalog freezes the 28 REST paths and 14 MCP operations', () => {
-    assert.equal(REST_OPERATIONS.length, 28);
-    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 14);
-    assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 28);
+test('operation catalog freezes the 29 REST paths and 15 MCP operations', () => {
+    assert.equal(REST_OPERATIONS.length, 29);
+    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 15);
+    assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 29);
     for (const operation of REST_OPERATIONS) {
         assert.ok(operation.operationId);
         assert.ok(operation.method);
@@ -76,6 +76,8 @@ test('all managed operations preserve the historical AJV acceptance corpus', () 
             invalid: { expertName: null } },
         gateway_forge_retrial: { valid: { expertName: 'UIDesigner', budgetCny: '6', reuseExamFromJobId: 'job_src', expectExamHash: '40faf196', subskillIds: ['color-theory'], unknown: true },
             invalid: { expertName: null } },
+        gateway_forge_regrade: { valid: { expertName: 'UIDesigner', sourceJobId: 'job_incident', expectExamHash: '44815e0e', budgetCny: '3', unknown: true },
+            invalid: { expertName: 'UIDesigner' } },
         gateway_forge_create: { valid: { requirement: '造一个 UI 设计专家', budgetCny: '5', blueprintJson: { name: 'X' }, unknown: true },
             invalid: { requirement: null } },
         gateway_forge_confirm: { valid: { jobId: 'job-1', approved: true, feedback: 'ok', renameTo: 'NewName', overwrite: false, unknown: true },
@@ -107,6 +109,7 @@ test('agentId-less arguments pass schema validation for bound-credential callers
         gateway_gap_report: { question: '深色模式配色' },
         gateway_forge_learn: { expertName: 'UIDesigner' },
         gateway_forge_retrial: { expertName: 'UIDesigner' },
+        gateway_forge_regrade: { expertName: 'UIDesigner', sourceJobId: 'job_incident' },
         gateway_forge_create: { requirement: '造一个 UI 设计专家' },
         gateway_forge_confirm: { jobId: 'job-1', approved: true }
     };

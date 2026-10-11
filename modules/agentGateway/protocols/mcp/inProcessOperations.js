@@ -11,7 +11,8 @@ const {
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
     buildForgeLearnRequest,
-    buildForgeRetrialRequest
+    buildForgeRetrialRequest,
+    buildForgeRegradeRequest
 } = require('../../services/forge/toolAccess');
 
 function normalizeMcpString(value, maxLength = 128) {
@@ -268,7 +269,8 @@ async function executeForgeService(context, action) {
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
     buildForgeLearnRequest,
-    buildForgeRetrialRequest
+    buildForgeRetrialRequest,
+    buildForgeRegradeRequest
 } = require('../../services/forge/toolAccess');
                 assertForgeToolAccess({
                     toolName: name,
@@ -297,6 +299,11 @@ async function executeForgeService(context, action) {
                 } else if (action === 'startExpertRetrialJob') {
                     payload = await bundle.forgeRuntimeService.startExpertRetrialJob({
                         ...buildForgeRetrialRequest(body),
+                        authContext: null
+                    });
+                } else if (action === 'startExpertRegradeJob') {
+                    payload = await bundle.forgeRuntimeService.startExpertRegradeJob({
+                        ...buildForgeRegradeRequest(body),
                         authContext: null
                     });
                 } else {
@@ -338,6 +345,7 @@ const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     gapReport: (context) => executeForgeService(context, 'reportGap'),
     forgeLearn: (context) => executeForgeService(context, 'startExpertLearnJob'),
     forgeRetrial: (context) => executeForgeService(context, 'startExpertRetrialJob'),
+    forgeRegrade: (context) => executeForgeService(context, 'startExpertRegradeJob'),
     forgeCreate: (context) => executeForgeService(context, 'startExpertCreateJob'),
     forgeConfirm: (context) => executeForgeService(context, 'confirmBlueprint')
 });

@@ -1091,6 +1091,51 @@
         }
       }
     },
+    "/agent_gateway/forge/regrade": {
+      "summary": "Re-grade only the questions missing from a previous trial report, reusing saved answers (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "expertName",
+                "sourceJobId"
+              ],
+              "properties": {
+                "expertName": {
+                  "type": "string"
+                },
+                "sourceJobId": {
+                  "type": "string"
+                },
+                "budgetCny": {
+                  "type": "number"
+                },
+                "expectExamHash": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error (or nothing missing to regrade)"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job/exam artifacts)"
+        }
+      }
+    },
     "/agent_gateway/forge/learn": {
       "summary": "Launch an incremental forge expert learn job (ForgeMaster only)",
       "requestBody": {

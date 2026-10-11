@@ -32,7 +32,8 @@ const { PASS_RATIO } = require('./trial');
 const FORGE_JOB_OPERATIONS = Object.freeze({
     EXPERT_CREATE: 'forge.expert.create',
     EXPERT_LEARN: 'forge.expert.learn',
-    EXPERT_RETRIAL: 'forge.expert.retrial'
+    EXPERT_RETRIAL: 'forge.expert.retrial',
+    EXPERT_REGRADE: 'forge.expert.regrade'
 });
 
 const DEFAULT_BASE_DIR = path.join(__dirname, '..', '..', '..', '..', 'Agent', 'forge');
@@ -287,6 +288,10 @@ function createForgeRuntimeService(options = {}) {
             // 与重名冲突（红线 3），失败缺口回填链路照常可用。
             return stepRegistry.RETRIAL_STEPS;
         }
+        if (runRecord.jobKind === 'expert.regrade') {
+            // 补判（缺陷 4 ②）：对源任务已保存答卷仅重判缺失题。
+            return stepRegistry.REGRADE_STEPS;
+        }
         if (runRecord.jobKind !== 'expert.learn') {
             return stepRegistry.CREATE_STEPS;
         }
@@ -310,6 +315,9 @@ function createForgeRuntimeService(options = {}) {
         }
         if (jobKind === 'expert.retrial') {
             return FORGE_JOB_OPERATIONS.EXPERT_RETRIAL;
+        }
+        if (jobKind === 'expert.regrade') {
+            return FORGE_JOB_OPERATIONS.EXPERT_REGRADE;
         }
         return FORGE_JOB_OPERATIONS.EXPERT_CREATE;
     }
@@ -343,7 +351,9 @@ function createForgeRuntimeService(options = {}) {
             };
         }
         const allDone = steps.every((step) => markers.has(step.id));
-        const trialMarker = markers.get('trial');
+        // D3 及格待抽查门禁：trial/retest/regrade 步标记的 state.userGate 均可能
+        // 携带（泛化识别，避免 retest/regrade 门禁恢复时漏判）。
+        const gateMarker = [...markers.values()].find((marker) => marker?.state?.userGate);
         if (!allDone && markers.has('blueprint') && runRecord.jobKind !== 'expert.learn' && !runRecord.blueprintApproved) {
             return {
                 status: JOB_STATUS.PENDING_CONFIRM,
@@ -357,11 +367,11 @@ function createForgeRuntimeService(options = {}) {
                 }
             };
         }
-        if (markers.has('trial') && trialMarker?.state?.userGate && !runRecord.trialApproved) {
+        if (gateMarker && !runRecord.trialApproved) {
             return {
                 status: JOB_STATUS.PENDING_CONFIRM,
                 extra: {
-                    pendingConfirm: { ...trialMarker.state.userGate, restored: true },
+                    pendingConfirm: { ...gateMarker.state.userGate, restored: true },
                     restoredFromRestart: true
                 }
             };
@@ -517,6 +527,7 @@ function createForgeRuntimeService(options = {}) {
                     scope: runRecord.scope || null,
                     since: runRecord.since || null,
                     retestOf: runRecord.retestOf || null,
+                    regradeOf: runRecord.regradeOf || null,
                     examRef: runRecord.examRef || null,
                     fixedExam,
                     examSubskillIds: runRecord.examSubskillIds || null,
@@ -970,6 +981,111 @@ function createForgeRuntimeService(options = {}) {
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });
             log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_RETRIAL, expertName: normalizedExpertName });
+            scheduleDrive(job.jobId, authContext);
+            return { jobId: job.jobId, runRecord };
+        },
+        // 补判入口（2026-10-12 缺陷 4 ②）：判卷缺失题导致误判不及格后，对源任务
+        // 已保存答卷仅重判缺失题——合并既有判卷重算总分，远便宜于整卷重考。
+        // expectExamHash：期望的源考卷哈希前缀，不匹配拒绝（防串卷，同补试岗口径）。
+        async startExpertRegradeJob({ expertName, sourceJobId, expectExamHash = null, budgetCny = null, authContext = null } = {}) {
+            const normalizedExpertName = normalizeString(expertName);
+            const normalizedSourceJobId = normalizeString(sourceJobId);
+            if (!normalizedExpertName || !normalizedSourceJobId) {
+                const error = new Error('expertName 与 sourceJobId 不能为空');
+                error.status = 400;
+                error.code = 'AGW_VALIDATION_ERROR';
+                throw error;
+            }
+            const blueprintPath = path.join(baseDir, 'blueprints', `${normalizedExpertName}.json`);
+            if (!fs.existsSync(blueprintPath)) {
+                const error = new Error(`未找到专家画像：Agent/forge/blueprints/${normalizedExpertName}.json（须先完成全量铸造）`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            if (!runStore.runExists(normalizedSourceJobId)) {
+                const error = new Error(`源任务不存在：${normalizedSourceJobId}`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            const sourceExamsDir = path.join(runStore.runDir(normalizedSourceJobId), 'exams');
+            for (const file of ['exam.json', 'answers.json', 'grade-report.json']) {
+                if (!fs.existsSync(path.join(sourceExamsDir, file))) {
+                    const error = new Error(`源任务缺少考试产物 ${file}（${sourceExamsDir}）——补判需要考卷/答卷/判卷报告齐备`);
+                    error.status = 404;
+                    error.code = 'AGW_NOT_FOUND';
+                    throw error;
+                }
+            }
+            let sourceExam;
+            let sourceReport;
+            try {
+                sourceExam = JSON.parse(await fs.promises.readFile(path.join(sourceExamsDir, 'exam.json'), 'utf8'));
+                sourceReport = JSON.parse(await fs.promises.readFile(path.join(sourceExamsDir, 'grade-report.json'), 'utf8'));
+            } catch (error) {
+                const wrapped = new Error(`源任务考试产物解析失败：${error.message}`);
+                wrapped.status = 502;
+                wrapped.code = 'AGW_VALIDATION_ERROR';
+                throw wrapped;
+            }
+            if (!Array.isArray(sourceExam.questions) || sourceExam.questions.length === 0) {
+                const error = new Error('源任务考卷无效（无 questions）');
+                error.status = 400;
+                error.code = 'AGW_VALIDATION_ERROR';
+                throw error;
+            }
+            if (expectExamHash) {
+                const actualHash = crypto.createHash('sha256').update(JSON.stringify(sourceExam.questions)).digest('hex').slice(0, 16);
+                if (!actualHash.startsWith(String(expectExamHash))) {
+                    const error = new Error(`考卷哈希不匹配：期望前缀 ${expectExamHash}，实际 ${actualHash}（防串卷校验）`);
+                    error.status = 409;
+                    error.code = 'AGW_VALIDATION_ERROR';
+                    throw error;
+                }
+            }
+            // 缺失题预检：判卷完整则无判可补，拒绝启动（省 job）。
+            const existingGradedIds = new Set(
+                (Array.isArray(sourceReport?.grading?.gradedQuestions) ? sourceReport.grading.gradedQuestions : [])
+                    .filter((g) => g && typeof g.id === 'string' && g.scores && typeof g.scores === 'object')
+                    .map((g) => g.id)
+            );
+            const missingIds = sourceExam.questions
+                .filter((question) => !existingGradedIds.has(question.id))
+                .map((question) => question.id);
+            if (missingIds.length === 0) {
+                const error = new Error('源任务判卷完整，无缺失题可补判（如需重考请走补试岗）');
+                error.status = 400;
+                error.code = 'FORGE_REGRADE_NOTHING_MISSING';
+                throw error;
+            }
+
+            const job = jobRuntimeService.createAcceptedJob({
+                operation: FORGE_JOB_OPERATIONS.EXPERT_REGRADE,
+                authContext,
+                target: { type: 'forge', id: 'expert' },
+                metadata: {
+                    forge: {
+                        jobKind: 'expert.regrade',
+                        expertName: normalizedExpertName,
+                        sourceJobId: normalizedSourceJobId,
+                        missingIds
+                    }
+                }
+            });
+            const runRecord = await runStore.initRun({
+                jobId: job.jobId,
+                jobKind: 'expert.regrade',
+                expertName: normalizedExpertName,
+                requirement: `regrade: ${normalizedExpertName}（源任务 ${normalizedSourceJobId}，补判 ${missingIds.length} 题）`,
+                blueprintPath,
+                blueprintApproved: true,
+                regradeOf: { jobId: normalizedSourceJobId, examsDir: sourceExamsDir },
+                budgetCny: Number.isFinite(Number(budgetCny)) && Number(budgetCny) > 0 ? Number(budgetCny) : defaultBudgetCny,
+                authContext: trimAuthContextForRun(authContext),
+                runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
+            });
+            log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_REGRADE, expertName: normalizedExpertName, sourceJobId: normalizedSourceJobId, missingIds });
             scheduleDrive(job.jobId, authContext);
             return { jobId: job.jobId, runRecord };
         },

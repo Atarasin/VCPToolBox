@@ -82,7 +82,7 @@ function gradeJson(ratio, prompt = '') {
     return JSON.stringify({ gradedQuestions: graded, overallComment: '总评' });
 }
 
-function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null, knowledgeStoreOverrides = null, llmDelayMs = 0 } = {}) {
+function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null, knowledgeStoreOverrides = null, llmDelayMs = 0, gradeOutputFn = null } = {}) {
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
     const llmPort = {
@@ -100,8 +100,11 @@ function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null, kno
             } else if (content.includes('出题官') || content.includes('考纲')) {
                 output = scopeAwareExamOutput(content);
             } else if (content.includes('判卷官')) {
-                // 支持分数序列：首考 → 重测（回填后同一套考题）
-                output = gradeJson(gradeRatios && gradeRatios.length > 0 ? gradeRatios.shift() : gradeRatio, content);
+                // 支持分数序列：首考 → 重测（回填后同一套考题）；gradeOutputFn
+                // 供用例注入「丢题/截断」等判卷形态（缺陷 4 场景）。
+                output = typeof gradeOutputFn === 'function'
+                    ? gradeOutputFn(content)
+                    : gradeJson(gradeRatios && gradeRatios.length > 0 ? gradeRatios.shift() : gradeRatio, content);
             } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                 output = DISTILL_JSON;
             } else {
@@ -547,9 +550,9 @@ test('trial：出题输出被截断 → 抢救完整题目继续（分批出题�
     assert.ok(!fs.existsSync(path.join(baseDir, 'forge', 'runs', jobId, 'trial-failed')), '抢救成功不留失败档');
 });
 
-test('trial：判卷缺失题目不静默——总评注明缺失题号并按 0 分计', async () => {
+test('trial：判卷缺失题显式失败 FORGE_GRADE_MISSING——绝不静默按 0 分计（缺陷 4 ①）', async () => {
     const baseDir = createTempDir();
-    // 按卷面 id 只判前 4 题（5 题考卷缺末题 practical-qp）
+    // 按卷面 id 永远漏判末题（5 题考卷缺 practical-qp，补判轮也漏——模拟持续丢题）
     const scoreFull = { correctness: 4.5, completeness: 4.5, professionalism: 4.5, antiAiFlavor: 4.5, actionability: 4.5 };
     const partialGrade = (content) => {
         const ids = [...content.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1]).filter(Boolean);
@@ -563,14 +566,14 @@ test('trial：判卷缺失题目不静默——总评注明缺失题号并按 0 
     });
     const jobId = await driveInlineToTerminal(jrs, svc);
     const job = jrs.pollJob(jobId, null).data.job;
-    assert.equal(job.status, 'completed', '缺失两题按 0 分 → 总分不及格 → 直接完成');
-
+    assert.equal(job.status, 'failed', '判卷缺失即显式失败，不产出被 0 分稀释的成绩');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_GRADE_MISSING');
+    assert.ok(job.metadata.forge.error.message.includes('practical-qp'), '错误点名缺失题');
+    // 答卷已落盘——补判（forge.regrade）有原料，无需整卷重考。
     const examsDir = path.join(baseDir, 'forge', 'runs', jobId, 'exams');
-    const report = JSON.parse(fs.readFileSync(path.join(examsDir, 'grade-report.json'), 'utf8'));
-    assert.ok(Math.abs(report.ratio - 0.72) < 0.001, `4 题 90% + 缺失 1 题 0 分 → 72%，实际 ${report.ratio}`);
-    assert.match(report.grading.overallComment, /判卷缺失 1 题：practical-qp/);
-    const md = fs.readFileSync(path.join(examsDir, 'grade-report.md'), 'utf8');
-    assert.match(md, /判卷缺失 1 题/);
+    const saved = JSON.parse(fs.readFileSync(path.join(examsDir, 'answers.json'), 'utf8'));
+    assert.equal(Object.keys(saved.answers || {}).length, 5, '五题答卷完整保存');
+    assert.ok(!fs.existsSync(path.join(examsDir, 'grade-report.json')), '不再产出按 0 分计的成绩单');
 });
 
 test('retrial：已注册专家仅重跑 trial——不采集不合成不触发重名冲突', async () => {
@@ -1177,4 +1180,174 @@ test('trial：答题要求含通行原则边界火候与禁工具语法（根因
         assert.match(prompt, /严禁输出工具调用语法/, '禁工具语法');
         assert.match(prompt, /本环境无任何可调用工具/, '明示无工具');
     }
+});
+
+// ── 缺陷 4（2026-10-12）：单题判卷失败被静默按 0 分计 ──────────────────────
+
+// 按卷面 id 出分的可定制判卷桩：dropIds 模拟截断抢救丢题（缺失题被判卷官略过）。
+function gradeFor(content, { ratio = 0.9, dropIds = [] } = {}) {
+    const score = Math.round(ratio * 5 * 2) / 2;
+    const ids = [...String(content).matchAll(/"id":\s*"([^"]+)"/g)]
+        .map((m) => m[1])
+        .filter((id) => id && !dropIds.includes(id));
+    return JSON.stringify({
+        gradedQuestions: ids.map((id) => ({
+            id,
+            scores: { correctness: score, completeness: score, professionalism: score, antiAiFlavor: score, actionability: score },
+            comment: '评语',
+            citedKnowledgeCards: []
+        })),
+        overallComment: '总评'
+    });
+}
+
+test('trial：判卷块丢题进入补判轮补齐——不再静默按 0 分计（缺陷 4 ①）', async () => {
+    const baseDir = createTempDir();
+    let gradeCalls = 0;
+    const env = buildEnv(baseDir, {
+        gradeOutputFn: (content) => {
+            gradeCalls += 1;
+            // 首轮判卷丢 1 题（模拟截断抢救只救回部分）；补判轮只送缺失题，判全。
+            return gradeCalls === 1
+                ? gradeFor(content, { ratio: 0.9, dropIds: ['layout-typography-q2'] })
+                : gradeFor(content, { ratio: 0.9 });
+        }
+    });
+    const jobId = await driveToTrial(env);
+
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'pending_confirm', `丢 1 题经补判后应照常及格，实际 ${job.status}`);
+    assert.equal(job.metadata.forge.pendingConfirm.kind, 'trial-report');
+    assert.equal(gradeCalls, 2, '首轮整卷 + 补判轮缺失题');
+
+    const report = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'grade-report.json'), 'utf8'));
+    assert.equal(report.grading.gradedQuestions.length, 5, '五题全部有判卷条目');
+    assert.ok(!report.grading.overallComment.includes('按 0 分计'), '总评不再出现静默 0 分注记');
+    assert.ok(report.ratio >= 0.8, `补判后总分 ${(report.ratio * 100).toFixed(1)}% 应及格`);
+});
+
+test('trial：补判两轮仍缺失 → FORGE_GRADE_MISSING 显式失败，答卷留档可补判（缺陷 4 ①）', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, {
+        gradeOutputFn: (content) => gradeFor(content, { ratio: 0.9, dropIds: ['layout-typography-q2'] })
+    });
+    const jobId = await driveToTrial(env);
+
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_GRADE_MISSING');
+    assert.equal(job.metadata.forge.error.step, 'trial');
+    assert.ok(job.metadata.forge.error.message.includes('layout-typography-q2'), '错误点名缺失题');
+    // 答卷已先行落盘——补判的原料在（不是重考）。
+    const answersPath = path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'answers.json');
+    const saved = JSON.parse(fs.readFileSync(answersPath, 'utf8'));
+    assert.equal(Object.keys(saved.answers).length, 5, '五题答卷完整保存');
+});
+
+test('regrade：对源任务已保存答卷仅补判缺失题——翻转及格进 D3 门禁（缺陷 4 ②）', async () => {
+    const baseDir = createTempDir();
+    // 模拟生产事故源：5 题考卷、答卷完整、判卷报告缺 2 题（曾被按 0 分计为 60%）。
+    const forgeRoot = path.join(baseDir, 'forge');
+    const sourceExams = path.join(forgeRoot, 'runs', 'job_incident', 'exams');
+    fs.mkdirSync(sourceExams, { recursive: true });
+    fs.mkdirSync(path.join(forgeRoot, 'blueprints'), { recursive: true });
+    fs.writeFileSync(path.join(forgeRoot, 'blueprints', 'UIDesigner.json'), JSON.stringify(blueprint(), null, 2));
+    fs.writeFileSync(path.join(forgeRoot, 'runs', 'job_incident', 'run.json'), JSON.stringify({
+        jobId: 'job_incident',
+        jobKind: 'expert.create',
+        expertName: 'UIDesigner',
+        requirement: '造一个 UI 设计专家',
+        budgetCny: 10,
+        blueprintApproved: true,
+        finalStatus: 'completed',
+        createdAt: '2026-10-12T00:00:00.000Z'
+    }));
+    const examQuestions = [
+        { id: 'color-theory-q1', subskillId: 'color-theory', kind: 'concept', prompt: '解释配色核心概念', referencePoints: ['要点'] },
+        { id: 'color-theory-q2', subskillId: 'color-theory', kind: 'applied', prompt: '为登录页应用配色', referencePoints: ['品牌'] },
+        { id: 'layout-typography-q1', subskillId: 'layout-typography', kind: 'concept', prompt: '解释栅格系统', referencePoints: ['要点'] },
+        { id: 'layout-typography-q2', subskillId: 'layout-typography', kind: 'applied', prompt: '为落地页应用栅格', referencePoints: ['响应式'] },
+        { id: 'practical-qp', subskillId: 'practical', kind: 'practical', prompt: 'SaaS 落地页设计方案', gradingDimensions: ['眼前一亮', '去 AI 味', '可落地'] }
+    ];
+    fs.writeFileSync(path.join(sourceExams, 'exam.json'), JSON.stringify({ questions: examQuestions }));
+    fs.writeFileSync(path.join(sourceExams, 'answers.json'), JSON.stringify({
+        answers: Object.fromEntries(examQuestions.map((q) => [q.id, `「${q.id}」的完整答卷：结构清晰、依据充分，质量与其余题相当。`])),
+        retrievals: {},
+        answerMeta: {}
+    }));
+    // 已判 3 题 = 双配色题 + 实操题；缺 layout 两题（对齐生产事故形态）。
+    const gradedThree = [examQuestions[0], examQuestions[1], examQuestions[4]].map((q) => ({
+        id: q.id,
+        scores: { correctness: 4, completeness: 4, professionalism: 4, antiAiFlavor: 4, actionability: 4 },
+        comment: '评语',
+        citedKnowledgeCards: []
+    }));
+    fs.writeFileSync(path.join(sourceExams, 'grade-report.json'), JSON.stringify({
+        passed: false,
+        ratio: 0.6,
+        passLine: 0.8,
+        grading: { gradedQuestions: gradedThree, overallComment: '总评（判卷缺失 2 题：layout-typography-q1、layout-typography-q2，按 0 分计）' },
+        gaps: [],
+        libraryName: 'UIDesigner知识库'
+    }));
+
+    const gradePrompts = [];
+    const env = buildEnv(baseDir, {
+        gradeOutputFn: (content) => {
+            gradePrompts.push(content);
+            return gradeFor(content, { ratio: 0.9 });
+        }
+    });
+    const { jobId } = await env.forgeRuntimeService.startExpertRegradeJob({
+        expertName: 'UIDesigner',
+        sourceJobId: 'job_incident'
+    });
+    assert.equal(await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.status === JOB_STATUS.PENDING_CONFIRM), true,
+        `补判后应翻转及格进 D3 门禁，实际 ${env.jobRuntimeService.pollJob(jobId, null).data.job.status}`);
+
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.operation, 'forge.expert.regrade');
+    assert.equal(job.metadata.forge.pendingConfirm.kind, 'trial-report');
+    assert.match(job.metadata.forge.steps[0].summary, /60\.0% → 8\d\.0%/);
+    assert.match(job.metadata.forge.steps[0].summary, /翻转为及格/);
+
+    // 只重判了缺失的 2 题：判卷 prompt 从未包含其余 3 题。
+    assert.equal(gradePrompts.length, 1, '缺失题凑一块，单次判卷调用');
+    for (const prompt of gradePrompts) {
+        const ids = [...prompt.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1]);
+        assert.deepEqual(ids.sort(), ['layout-typography-q1', 'layout-typography-q2'], '判卷范围仅缺失题');
+    }
+
+    const report = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'grade-report.json'), 'utf8'));
+    assert.equal(report.grading.gradedQuestions.length, 5, '既有 3 题 + 补判 2 题合并');
+    assert.equal(report.regraded.fromJobId, 'job_incident');
+    assert.deepEqual(report.regraded.regradedQuestionIds, ['layout-typography-q1', 'layout-typography-q2']);
+    assert.equal(report.regraded.previousRatio, 0.6);
+    assert.ok(report.ratio >= 0.8 && report.passed === true, `补判后 ${(report.ratio * 100).toFixed(1)}% 应及格`);
+    assert.ok(fs.existsSync(path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'grade-report.md')), '用户可读报告重写');
+});
+
+test('regrade：判卷完整的源任务拒绝启动（无判可补）', async () => {
+    const baseDir = createTempDir();
+    const forgeRoot = path.join(baseDir, 'forge');
+    const sourceExams = path.join(forgeRoot, 'runs', 'job_full', 'exams');
+    fs.mkdirSync(sourceExams, { recursive: true });
+    fs.mkdirSync(path.join(forgeRoot, 'blueprints'), { recursive: true });
+    fs.writeFileSync(path.join(forgeRoot, 'blueprints', 'UIDesigner.json'), JSON.stringify(blueprint(), null, 2));
+    fs.writeFileSync(path.join(forgeRoot, 'runs', 'job_full', 'run.json'), JSON.stringify({ jobId: 'job_full', jobKind: 'expert.create', expertName: 'UIDesigner', budgetCny: 10 }));
+    const questions = [{ id: 'color-theory-q1', subskillId: 'color-theory', kind: 'concept', prompt: 'p', referencePoints: [] }];
+    fs.writeFileSync(path.join(sourceExams, 'exam.json'), JSON.stringify({ questions }));
+    fs.writeFileSync(path.join(sourceExams, 'answers.json'), JSON.stringify({ answers: { 'color-theory-q1': '答' } }));
+    fs.writeFileSync(path.join(sourceExams, 'grade-report.json'), JSON.stringify({
+        passed: true, ratio: 0.9, passLine: 0.8,
+        grading: { gradedQuestions: [{ id: 'color-theory-q1', scores: { correctness: 4 }, comment: '', citedKnowledgeCards: [] }], overallComment: '' },
+        gaps: [], libraryName: 'UIDesigner知识库'
+    }));
+    const env = buildEnv(baseDir, {});
+    await assert.rejects(
+        env.forgeRuntimeService.startExpertRegradeJob({ expertName: 'UIDesigner', sourceJobId: 'job_full' }),
+        (error) => error.code === 'FORGE_REGRADE_NOTHING_MISSING'
+    );
 });

@@ -6,7 +6,7 @@ const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 
 /**
  * forge 工具的访问边界（用户决策 2026-10-11）：
- * - 编排四件套（create/confirm/learn/retrial）仅铸造师 ForgeMaster 可见可调；
+ * - 编排五件套（create/confirm/learn/retrial/regrade）仅铸造师 ForgeMaster 可见可调；
  * - gateway_gap_report 仅对「已铸造专家 + ForgeMaster」可见：专家自报自己
  *   的缺口（目标缺省即调用者本人），ForgeMaster 可经 expertName 代任何
  *   已铸造专家登记；非铸造 agent 不可见（调用也必被服务端画像校验 404 拒）。
@@ -17,7 +17,8 @@ const FORGE_ORCHESTRATION_TOOLS = Object.freeze([
     'gateway_forge_create',
     'gateway_forge_confirm',
     'gateway_forge_learn',
-    'gateway_forge_retrial'
+    'gateway_forge_retrial',
+    'gateway_forge_regrade'
 ]);
 const FORGE_GAP_REPORT_TOOL = 'gateway_gap_report';
 
@@ -153,11 +154,25 @@ function buildForgeRetrialRequest(body = {}) {
     };
 }
 
+// gateway_forge_regrade → startExpertRegradeJob（对源任务已保存答卷仅补判缺失题；
+// 判卷缺失曾被静默按 0 分计导致误判不及格——2026-10-12 缺陷 4）。
+function buildForgeRegradeRequest(body = {}) {
+    return {
+        expertName: body.expertName,
+        sourceJobId: body.sourceJobId,
+        ...(Number.isFinite(Number(body.budgetCny)) && Number(body.budgetCny) > 0
+            ? { budgetCny: Number(body.budgetCny) }
+            : {}),
+        ...(body.expectExamHash ? { expectExamHash: String(body.expectExamHash) } : {})
+    };
+}
+
 module.exports = {
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
     buildForgeLearnRequest,
     buildForgeRetrialRequest,
+    buildForgeRegradeRequest,
     FORGE_MASTER_AGENT,
     defaultIsForgedExpert,
     FORGE_ORCHESTRATION_TOOLS,

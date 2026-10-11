@@ -158,6 +158,139 @@ async function completeJsonResilient({
     return null;
 }
 
+// ── 判卷共享构件（首考 / 回填重测 / 补判共用）──────────────────────────────
+
+const GRADE_COVERAGE_PASSES = 2;
+
+// 作答异常注记随题透传给判卷官：「截断/作答失败」与「没写完/不会」不同罪。
+const ANSWER_ISSUE_NOTES = {
+    empty: '（注：本题为作答失败——模型两轮未输出正文，非考生知识问题；按未作答评分，评语请注明「作答失败」）',
+    'tool-leak': '（注：本答卷重答后仍残留工具调用标记——按标记之外的正文评分，评语请注明「工具调用泄漏」；这是人设/环境适配问题而非知识缺口）',
+    truncated: '（注：本答卷因输出长度上限被截断——请就已写内容评分，评语注明「截断」，并在评语末尾估算「若未截断，本题还可多得几分」——截断失分估算是验收归因依据）',
+    'reasoning-only': '（注：本答卷取自模型推理段（正文未输出）——按内容质量正常评分，评语注明「推理段作答」）'
+};
+
+// 判卷输入条目：考题 + 答卷 + 作答异常注记。
+function buildGradeEntries({ exam, answers, answerMeta = {} }) {
+    return exam.questions.map((question) => ({
+        id: question.id,
+        kind: question.kind,
+        subskillId: question.subskillId,
+        prompt: question.prompt,
+        referencePoints: question.referencePoints,
+        gradingDimensions: question.gradingDimensions,
+        answer: answers[question.id],
+        ...(answerMeta[question.id]
+            ? { answerIssue: ANSWER_ISSUE_NOTES[answerMeta[question.id].issue] || answerMeta[question.id].issue }
+            : {})
+    }));
+}
+
+/**
+ * 覆盖式判卷（2026-10-12 缺陷 4）：分块判卷后核对块内覆盖——截断抢救/
+ * 输出污染丢的题进入下一轮补判（只判缺失题），共 GRADE_COVERAGE_PASSES 轮；
+ * 仍缺失即抛 FORGE_GRADE_MISSING 显式失败，绝不静默按 0 分计（答卷已存
+ * exams/answers.json，可用 gateway_forge_regrade 仅补判缺失题）。
+ */
+async function gradeEntriesWithCoverage({ llm, llmConfig, baseDir, runDir, logger, blueprint, entries, dumpBasePrefix = 'grade' }) {
+    const gradeTemplate = loadTemplate(baseDir, 'grade.md', FALLBACK_GRADE_TEMPLATE);
+    const gradedQuestions = [];
+    const seenGraded = new Set();
+    let overallComment = '';
+    let pending = [...entries];
+    for (let pass = 1; pass <= GRADE_COVERAGE_PASSES && pending.length > 0; pass += 1) {
+        const chunks = [];
+        for (let i = 0; i < pending.length; i += GRADE_CHUNK_SIZE) {
+            chunks.push(pending.slice(i, i + GRADE_CHUNK_SIZE));
+        }
+        const stillMissing = [];
+        for (let index = 0; index < chunks.length; index += 1) {
+            const gradePrompt = gradeTemplate
+                .replace(/\{\{displayName\}\}/g, blueprint.displayName)
+                .replace(/\{\{name\}\}/g, blueprint.name)
+                .replace(/\{\{examWithAnswers\}\}/g, JSON.stringify(chunks[index], null, 2));
+            const payload = await completeJsonResilient({
+                llm, llmConfig,
+                prompt: gradePrompt,
+                temperature: 0.2,
+                runDir,
+                dumpBase: `${dumpBasePrefix}-chunk-${index + 1}${pass > 1 ? `-retry${pass}` : ''}`,
+                arrayField: 'gradedQuestions',
+                // 只要求是数组（允许空）：块输出漏题/空输出交给覆盖轮补判，
+                // 最终仍缺失才 FORGE_GRADE_MISSING（2026-10-12 缺陷 4）。
+                validate: (candidate) => Array.isArray(candidate?.gradedQuestions),
+                logger
+            });
+            if (!payload) {
+                const error = new Error(`判卷输出不可解析（${dumpBasePrefix} 第 ${index + 1}/${chunks.length} 块，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
+                error.code = 'FORGE_GRADE_OUTPUT_INVALID';
+                error.status = 502;
+                throw error;
+            }
+            for (const graded of payload.gradedQuestions) {
+                if (graded && typeof graded.id === 'string' && graded.id && !seenGraded.has(graded.id)) {
+                    seenGraded.add(graded.id);
+                    gradedQuestions.push(graded);
+                }
+            }
+            overallComment = payload.overallComment || overallComment;
+            const covered = new Set(payload.gradedQuestions.map((graded) => graded?.id));
+            stillMissing.push(...chunks[index].filter((entry) => !covered.has(entry.id)));
+        }
+        pending = stillMissing;
+        if (pending.length > 0 && pass < GRADE_COVERAGE_PASSES) {
+            logger?.(`trial: ${dumpBasePrefix} 判卷缺失 ${pending.length} 题（${pending.map((entry) => entry.id).join('、')}），进入补判轮 ${pass + 1}/${GRADE_COVERAGE_PASSES}`);
+        }
+    }
+    if (pending.length > 0) {
+        const error = new Error(`判卷缺失 ${pending.length} 题（${pending.map((entry) => entry.id).join('、')}）——补判 ${GRADE_COVERAGE_PASSES} 轮仍不完整，拒绝按 0 分计（答卷已存 exams/answers.json，可用 gateway_forge_regrade 仅补判缺失题）`);
+        error.code = 'FORGE_GRADE_MISSING';
+        error.status = 502;
+        error.details = { missingIds: pending.map((entry) => entry.id) };
+        throw error;
+    }
+    return { gradedQuestions, overallComment };
+}
+
+// 计分与缺口抽取（首考/重测/补判共用）：五维 0-5 折算总分、及格判定、弱项映射缺口。
+function scoreGrading({ exam, gradedQuestions, overallComment, answerMeta = {} }) {
+    const grading = { gradedQuestions, overallComment };
+    let earned = 0;
+    let full = 0;
+    const weakQuestions = [];
+    for (const question of exam.questions) {
+        const graded = grading.gradedQuestions.find((g) => g.id === question.id);
+        const scores = graded?.scores || {};
+        const dims = GRADE_DIMENSIONS.map((dim) => Number(scores[dim]) || 0);
+        const questionFull = GRADE_DIMENSIONS.length * 5;
+        const questionEarned = dims.reduce((sum, value) => sum + Math.min(5, Math.max(0, value)), 0);
+        earned += questionEarned;
+        full += questionFull;
+        const questionRatio = questionEarned / questionFull;
+        // 作答失败（empty）与工具调用泄漏（tool-leak）是执行面/人设问题
+        // 而非知识缺口——不计入弱项，避免触发无意义的知识回填；截断/
+        // 推理段作答保留（内容仍有信号）。
+        const answerIssue = answerMeta[question.id]?.issue;
+        if (questionRatio < PASS_RATIO && question.subskillId !== 'practical'
+            && answerIssue !== 'empty' && answerIssue !== 'tool-leak') {
+            weakQuestions.push({ id: question.id, subskillId: question.subskillId, ratio: questionRatio });
+        }
+    }
+    const ratio = full > 0 ? earned / full : 0;
+    const passed = ratio >= PASS_RATIO;
+    const gaps = [];
+    for (const weak of weakQuestions) {
+        if (!gaps.some((gap) => gap.subskillId === weak.subskillId)) {
+            gaps.push({
+                subskillId: weak.subskillId,
+                reason: `考题 ${weak.id} 得分 ${(weak.ratio * 100).toFixed(0)}%（低于 80% 及格线）`,
+                questionIds: weakQuestions.filter((w) => w.subskillId === weak.subskillId).map((w) => w.id)
+            });
+        }
+    }
+    return { grading, ratio, passed, gaps };
+}
+
 function assertNoSecrets(text, what) {
     const hits = scanTextForSecrets(text);
     if (hits.length > 0) {
@@ -273,32 +406,40 @@ async function jevCrossCheck(jevPort, { displayName, answers }) {
     if (!jevPort || typeof jevPort.decide !== 'function') {
         return { skipped: true, reason: 'jevPort 未配置（JEV_API_KEY 缺失或试点未启用）' };
     }
-    try {
-        const answerDigest = Object.entries(answers).map(([id, text]) => `[${id}] ${String(text).slice(0, 800)}`).join('\n\n');
-        const decision = await jevPort.decide(
-            { role: `${displayName} 上岗考试答卷`, answers: answerDigest },
-            {
-                isProfessional: {
-                    type: 'choice',
-                    instructions: '答卷整体是否体现该领域专业深度？',
-                    criteria: { professional: '专业准确有深度', partial: '部分专业', unprofessional: '不专业或编造' }
-                },
-                isAiFlavored: {
-                    type: 'choice',
-                    instructions: '答卷是否带有明显 AI 味（套话/空泛/缺乏具体判断）？',
-                    criteria: { heavy: 'AI 味重', mild: '轻微', none: '去 AI 味良好' }
-                },
-                isActionable: {
-                    type: 'choice',
-                    instructions: '答卷内容是否可直接落地执行？',
-                    criteria: { actionable: '可直接执行', partial: '部分可执行', vague: '空泛不可执行' }
-                }
+    const answerDigest = Object.entries(answers).map(([id, text]) => `[${id}] ${String(text).slice(0, 800)}`).join('\n\n');
+    const questions = {
+        isProfessional: {
+            type: 'choice',
+            instructions: '答卷整体是否体现该领域专业深度？',
+            criteria: { professional: '专业准确有深度', partial: '部分专业', unprofessional: '不专业或编造' }
+        },
+        isAiFlavored: {
+            type: 'choice',
+            instructions: '答卷是否带有明显 AI 味（套话/空泛/缺乏具体判断）？',
+            criteria: { heavy: 'AI 味重', mild: '轻微', none: '去 AI 味良好' }
+        },
+        isActionable: {
+            type: 'choice',
+            instructions: '答卷内容是否可直接落地执行？',
+            criteria: { actionable: '可直接执行', partial: '部分可执行', vague: '空泛不可执行' }
+        }
+    };
+    // 网络瞬断（TLS/超时）重试一次——对照试点失败只降级留痕，但能救则救
+    //（2026-10-12 缺陷 4 ③：与判卷缺失同日发生，疑似同源网络抖动）。
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+            const decision = await jevPort.decide(
+                { role: `${displayName} 上岗考试答卷`, answers: answerDigest },
+                questions
+            );
+            return { skipped: false, decision };
+        } catch (error) {
+            if (attempt >= 2) {
+                return { skipped: true, reason: `jev 调用失败（已重试 1 次）：${error.message}` };
             }
-        );
-        return { skipped: false, decision };
-    } catch (error) {
-        return { skipped: true, reason: `jev 调用失败：${error.message}` };
+        }
     }
+    return { skipped: true, reason: 'jev 调用失败：未知错误' };
 }
 
 function createTrialStepRunner() {
@@ -677,102 +818,16 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
             ...(Object.keys(answerMeta).length > 0 ? { answerMeta } : {})
         });
 
-        // 3. 判卷（D7 第一步：五维 0-5 + 评语 + 知识卡引用）——按题分块（每块 ≤5 题），
-        // 块输出远小于 max_tokens，杜绝整卷判卷被截断。
-        // 作答异常注记随题透传给判卷官：「截断/作答失败」与「没写完/不会」不同罪。
-        const ANSWER_ISSUE_NOTES = {
-            empty: '（注：本题为作答失败——模型两轮未输出正文，非考生知识问题；按未作答评分，评语请注明「作答失败」）',
-            'tool-leak': '（注：本答卷重答后仍残留工具调用标记——按标记之外的正文评分，评语请注明「工具调用泄漏」；这是人设/环境适配问题而非知识缺口）',
-            truncated: '（注：本答卷因输出长度上限被截断——请就已写内容评分，评语注明「截断」，并在评语末尾估算「若未截断，本题还可多得几分」——截断失分估算是验收归因依据）',
-            'reasoning-only': '（注：本答卷取自模型推理段（正文未输出）——按内容质量正常评分，评语注明「推理段作答」）'
-        };
-        const examWithAnswers = exam.questions.map((question) => ({
-            id: question.id,
-            kind: question.kind,
-            subskillId: question.subskillId,
-            prompt: question.prompt,
-            referencePoints: question.referencePoints,
-            gradingDimensions: question.gradingDimensions,
-            answer: answers[question.id],
-            ...(answerMeta[question.id] ? { answerIssue: ANSWER_ISSUE_NOTES[answerMeta[question.id].issue] || answerMeta[question.id].issue } : {})
-        }));
-        let overallComment = '';
-        const gradedQuestions = [];
-        const chunks = [];
-        const gradeTemplate = loadTemplate(baseDir, 'grade.md', FALLBACK_GRADE_TEMPLATE);
-        for (let i = 0; i < examWithAnswers.length; i += GRADE_CHUNK_SIZE) {
-            chunks.push(examWithAnswers.slice(i, i + GRADE_CHUNK_SIZE));
-        }
-        for (let index = 0; index < chunks.length; index += 1) {
-            const gradePrompt = gradeTemplate
-                .replace(/\{\{displayName\}\}/g, blueprint.displayName)
-                .replace(/\{\{name\}\}/g, blueprint.name)
-                .replace(/\{\{examWithAnswers\}\}/g, JSON.stringify(chunks[index], null, 2));
-            const payload = await completeJsonResilient({
-                llm, llmConfig,
-                prompt: gradePrompt,
-                temperature: 0.2,
-                runDir,
-                dumpBase: `grade-chunk-${index + 1}`,
-                arrayField: 'gradedQuestions',
-                validate: (candidate) => Array.isArray(candidate?.gradedQuestions),
-                logger
-            });
-            if (!payload) {
-                const error = new Error(`判卷输出不可解析（第 ${index + 1}/${chunks.length} 块，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
-                error.code = 'FORGE_GRADE_OUTPUT_INVALID';
-                error.status = 502;
-                throw error;
-            }
-            gradedQuestions.push(...payload.gradedQuestions);
-            overallComment = payload.overallComment || overallComment;
-        }
-        // 完整性守卫：截断抢救/输出污染可能丢题——缺失题按 0 分计，并在总评注明
-        //（缺失静默计 0 会歪曲及格判定，必须显式可见）。
-        const missingIds = exam.questions
-            .filter((question) => !gradedQuestions.some((graded) => graded && graded.id === question.id))
-            .map((question) => question.id);
-        if (missingIds.length > 0) {
-            logger?.(`trial: 判卷缺失 ${missingIds.length} 题（${missingIds.join('、')}），按 0 分计`);
-            overallComment = `${overallComment}（判卷缺失 ${missingIds.length} 题：${missingIds.join('、')}，按 0 分计）`;
-        }
-        const grading = { gradedQuestions, overallComment };
-
-        // 及格线 80%（D3：到线才请用户抽查）
-        let earned = 0;
-        let full = 0;
-        const weakQuestions = [];
-        for (const question of exam.questions) {
-            const graded = grading.gradedQuestions.find((g) => g.id === question.id);
-            const scores = graded?.scores || {};
-            const dims = GRADE_DIMENSIONS.map((dim) => Number(scores[dim]) || 0);
-            const questionFull = GRADE_DIMENSIONS.length * 5;
-            earned += dims.reduce((sum, value) => sum + Math.min(5, Math.max(0, value)), 0);
-            full += questionFull;
-            const questionRatio = dims.reduce((sum, value) => sum + Math.min(5, Math.max(0, value)), 0) / questionFull;
-            // 作答失败（empty）与工具调用泄漏（tool-leak）是执行面/人设问题
-            // 而非知识缺口——不计入弱项，避免触发无意义的知识回填；截断/
-            // 推理段作答保留（内容仍有信号）。
-            const answerIssue = answerMeta[question.id]?.issue;
-            if (questionRatio < PASS_RATIO && question.subskillId !== 'practical'
-                && answerIssue !== 'empty' && answerIssue !== 'tool-leak') {
-                weakQuestions.push({ id: question.id, subskillId: question.subskillId, ratio: questionRatio });
-            }
-        }
-        const ratio = full > 0 ? earned / full : 0;
-        const passed = ratio >= PASS_RATIO;
-
-        // 缺口清单：弱项题 → subskill（去重）；实操弱计入整体缺口说明。
-        const gaps = [];
-        for (const weak of weakQuestions) {
-            if (!gaps.some((gap) => gap.subskillId === weak.subskillId)) {
-                gaps.push({
-                    subskillId: weak.subskillId,
-                    reason: `考题 ${weak.id} 得分 ${(weak.ratio * 100).toFixed(0)}%（低于 80% 及格线）`,
-                    questionIds: weakQuestions.filter((w) => w.subskillId === weak.subskillId).map((w) => w.id)
-                });
-            }
-        }
+        // 3. 判卷（D7 第一步：五维 0-5 + 评语 + 知识卡引用）——覆盖式：
+        // 分块 → 块内缺失补判 → 仍缺失 FORGE_GRADE_MISSING 显式失败
+        //（绝不静默按 0 分计，2026-10-12 缺陷 4）。
+        const entriesForGrading = buildGradeEntries({ exam, answers, answerMeta });
+        const { gradedQuestions, overallComment } = await gradeEntriesWithCoverage({
+            llm, llmConfig, baseDir, runDir, logger, blueprint, entries: entriesForGrading
+        });
+        const { grading, ratio, passed, gaps } = scoreGrading({
+            exam, gradedQuestions, overallComment, answerMeta
+        });
 
         // 4. Jev 对照试点（D7 方案 C）
         const jev = await jevCrossCheck(ctx.jevPort, { displayName: blueprint.displayName, answers });
@@ -861,13 +916,155 @@ function createRetestStepRunner() {
     };
 }
 
+/**
+ * 补判（2026-10-12 缺陷 4 ②）：判卷缺失题曾被静默按 0 分计导致误判不及格——
+ * 对源任务已保存的答卷**仅重判缺失题**：合并既有判卷、重算总分与缺口、重写
+ * 报告并排前后分；不作答、不出卷，成本远低于整卷重考（补试岗）。
+ */
+function createRegradeStepRunner() {
+    return async function runRegradeStep(ctx) {
+        const { runDir, baseDir, llm, llmConfig, logger } = ctx;
+        const regradeOf = ctx.regradeOf;
+        if (!regradeOf?.examsDir) {
+            const error = new Error('regrade 需要 regradeOf.examsDir（源任务 exams 目录）');
+            error.code = 'FORGE_REGRADE_SOURCE_MISSING';
+            error.status = 400;
+            throw error;
+        }
+        if (!llm || llm.available !== true || !llmConfig?.url) {
+            const error = new Error('llmCompletion 端口不可用，无法补判');
+            error.code = 'FORGE_LLM_UNAVAILABLE';
+            error.status = 503;
+            throw error;
+        }
+        const readSourceJson = async (file) => JSON.parse(await fsp.readFile(path.join(regradeOf.examsDir, file), 'utf8'));
+        let exam;
+        let saved;
+        let previousReport;
+        try {
+            exam = await readSourceJson('exam.json');
+            saved = await readSourceJson('answers.json');
+            previousReport = await readSourceJson('grade-report.json');
+        } catch (error) {
+            const wrapped = new Error(`源任务考试产物不可读（${regradeOf.examsDir}）：${error.message}`);
+            wrapped.code = 'FORGE_REGRADE_SOURCE_INVALID';
+            wrapped.status = 502;
+            throw wrapped;
+        }
+        if (!Array.isArray(exam.questions) || exam.questions.length === 0) {
+            const error = new Error('源任务考卷不可用（无 questions）');
+            error.code = 'FORGE_REGRADE_SOURCE_INVALID';
+            error.status = 502;
+            throw error;
+        }
+        const { readBlueprint } = require('./blueprint');
+        const blueprint = await readBlueprint(ctx.blueprintPath);
+        const libraryName = blueprintLibraryName(blueprint.name);
+        const examsDir = path.join(runDir, 'exams');
+
+        const answers = saved.answers || {};
+        const answerMeta = saved.answerMeta || {};
+        const previousGraded = Array.isArray(previousReport?.grading?.gradedQuestions)
+            ? previousReport.grading.gradedQuestions.filter((g) => g && typeof g.id === 'string' && g.scores && typeof g.scores === 'object')
+            : [];
+        const missingEntries = buildGradeEntries({ exam, answers, answerMeta })
+            .filter((entry) => !previousGraded.some((g) => g.id === entry.id));
+        if (missingEntries.length === 0) {
+            const error = new Error('源任务判卷完整，无缺失题可补判（如需重考请走补试岗）');
+            error.code = 'FORGE_REGRADE_NOTHING_MISSING';
+            error.status = 400;
+            throw error;
+        }
+
+        const { gradedQuestions, overallComment } = await gradeEntriesWithCoverage({
+            llm, llmConfig, baseDir, runDir, logger, blueprint,
+            entries: missingEntries, dumpBasePrefix: 'regrade'
+        });
+        // 合并：既有有效判卷保留 + 本次补判（同 id 以补判为准）。
+        const merged = [
+            ...previousGraded.filter((g) => !gradedQuestions.some((fresh) => fresh.id === g.id)),
+            ...gradedQuestions
+        ];
+        const previousRatio = Number(previousReport?.ratio) || 0;
+        const mergedComment = `${previousReport?.grading?.overallComment || ''}（补判 ${missingEntries.length} 题：${missingEntries.map((e) => e.id).join('、')}）${overallComment}`.trim();
+        const { grading, ratio, passed, gaps } = scoreGrading({
+            exam, gradedQuestions: merged, overallComment: mergedComment, answerMeta
+        });
+
+        // Jev 对照随补判重出（对同一批答卷，与补判后结论对齐）。
+        const jev = await jevCrossCheck(ctx.jevPort, { displayName: blueprint.displayName, answers });
+        const comparison = {
+            comparedAt: new Date().toISOString(),
+            llm: { ratio, passed, gradedQuestions: grading.gradedQuestions },
+            jev,
+            note: '补判后重留档：LLM 主判（既有判卷 + 缺失题补判合并）；Jev 类型化复判对照'
+        };
+        await writeExamFile(examsDir, 'comparison.json', comparison);
+        await writeExamFile(examsDir, 'gaps.json', { gaps, generatedAt: new Date().toISOString() });
+
+        const report = {
+            passed,
+            ratio,
+            passLine: PASS_RATIO,
+            grading,
+            gaps,
+            libraryName,
+            regraded: {
+                fromJobId: regradeOf.jobId || null,
+                regradedQuestionIds: missingEntries.map((entry) => entry.id),
+                previousRatio,
+                at: new Date().toISOString()
+            }
+        };
+        await writeExamFile(examsDir, 'grade-report.json', report);
+        const reportMarkdown = renderReportMarkdown({
+            blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta,
+            indexReadiness: { checked: false, note: '补判复用首考答卷（索引状态以首考报告为准）' },
+            retrievals: saved.retrievals || {}
+        });
+        assertNoSecrets(reportMarkdown, '补判验收报告');
+        await fsp.writeFile(path.join(examsDir, 'grade-report.md'), reportMarkdown, 'utf8');
+
+        ctx.audit?.('forge.exam.regraded', {
+            expertName: blueprint.name,
+            sourceJobId: regradeOf.jobId || null,
+            regradedCount: missingEntries.length,
+            previousRatio,
+            ratio,
+            passed,
+            gapCount: gaps.length
+        });
+        const summary = `补判完成（${missingEntries.length} 题）：${(previousRatio * 100).toFixed(1)}% → ${(ratio * 100).toFixed(1)}%（${passed ? '✅ 翻转为及格，待用户抽查' : '仍未及格，缺口 ' + gaps.length + ' 项'}）`;
+        return {
+            summary,
+            artifacts: ['exams/grade-report.md', 'exams/comparison.json'],
+            state: {
+                passed,
+                ratio,
+                previousRatio,
+                gaps,
+                userGate: passed ? {
+                    kind: 'trial-report',
+                    reportPath: path.relative(path.join(baseDir, '..'), path.join(examsDir, 'grade-report.md')),
+                    hint: '补判后及格，请用户抽查验收报告（D3）'
+                } : null
+            }
+        };
+    };
+}
+
 module.exports = {
     PASS_RATIO,
     GRADE_DIMENSIONS,
+    GRADE_COVERAGE_PASSES,
     FALLBACK_EXAMINE_TEMPLATE,
     FALLBACK_GRADE_TEMPLATE,
     createTrialStepRunner,
     createRetestStepRunner,
+    createRegradeStepRunner,
+    buildGradeEntries,
+    gradeEntriesWithCoverage,
+    scoreGrading,
     runBlindAndGrade,
     jevCrossCheck,
     blindSearch,

@@ -15,7 +15,8 @@ const {
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
     buildForgeLearnRequest,
-    buildForgeRetrialRequest
+    buildForgeRetrialRequest,
+    buildForgeRegradeRequest
 } = require('../../modules/agentGateway/services/forge/toolAccess');
 
 /**
@@ -26,6 +27,8 @@ const {
  * - POST /agent_gateway/forge/gaps           ← gateway_gap_report（专家自报/ForgeMaster 代报）
  * - POST /agent_gateway/forge/retrial        ← 补试岗（REST-only 编排入口，仅 ForgeMaster：
  *                                              已注册专家只重跑 trial，不触发重名冲突）
+ * - POST /agent_gateway/forge/regrade        ← 补判（仅 ForgeMaster：对源任务已保存答卷
+ *                                              仅重判判卷缺失题，不重考不重答）
  * 访问边界与 in-process MCP 面同一实现（assertForgeToolAccess / 编排口径），双面一致。
  */
 
@@ -216,6 +219,48 @@ function registerForgeRoutes(router, context) {
                 try {
                     const result = await forgeRuntimeService.startExpertRetrialJob({
                         ...buildForgeRetrialRequest(req.body),
+                        authContext
+                    });
+                    return sendNativeSuccessWithOperation(res, {
+                        requestId: requestContext.requestId, startedAt,
+                        data: { jobId: result.jobId, runDir: result.runRecord?.runDir || null },
+                        authContext, operationControl
+                    });
+                } catch (error) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: error.status || 500, requestId: requestContext.requestId, startedAt,
+                        code: error.code, error: error.message,
+                        details: error.details, authContext, operationControl
+                    });
+                }
+            }
+        });
+    });
+
+    router.post('/forge/regrade', async (req, res) => {
+        const startedAt = Date.now();
+        const { requestContext, authContext } = buildContext(req, 'forge-regrade');
+        const blocked = guardOrchestration('forge.regrade', authContext);
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'forge.regrade', requestContext, authContext, payload: req.body
+        });
+        if (blocked || (operationControl && !operationControl.allowed)) {
+            if (blocked) {
+                return sendNativeErrorWithOperation(res, {
+                    status: blocked.status, requestId: requestContext.requestId, startedAt,
+                    code: blocked.code, error: blocked.message, details: blocked.details,
+                    authContext, operationControl
+                });
+            }
+            return sendNativeOperationRejection(res, { startedAt, requestContext, authContext, operationControl });
+        }
+        return executeNativeOperationSafely({
+            res, startedAt, requestContext, authContext, operationControl,
+            errorMessage: 'Failed to launch forge expert regrade',
+            handler: async () => {
+                try {
+                    const result = await forgeRuntimeService.startExpertRegradeJob({
+                        ...buildForgeRegradeRequest(req.body),
                         authContext
                     });
                     return sendNativeSuccessWithOperation(res, {

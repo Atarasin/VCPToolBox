@@ -78,6 +78,10 @@ const TOOL_REST_REGISTRY = Object.freeze({
         method: 'POST', signature: 'body', proxy: 'standard',
         binding: 'forgeRetrial', clientMethod: 'forgeRetrial'
     },
+    forgeRegrade: {
+        method: 'POST', signature: 'body', proxy: 'standard',
+        binding: 'forgeRegrade', clientMethod: 'forgeRegrade'
+    },
     forgeConfirm: {
         method: 'POST', signature: 'pathParamBody', proxy: 'standard',
         binding: 'forgeConfirm', pathParam: 'jobId', clientMethod: 'forgeConfirm',

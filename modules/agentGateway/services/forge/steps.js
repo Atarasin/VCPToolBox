@@ -11,7 +11,7 @@ const {
 const { createHarvestStepRunner } = require('./harvest');
 const { createDistillStepRunner } = require('./distill');
 const { createSynthesizeStepRunner } = require('./synthesize');
-const { createTrialStepRunner, createRetestStepRunner } = require('./trial');
+const { createTrialStepRunner, createRetestStepRunner, createRegradeStepRunner } = require('./trial');
 const { ForgeNameConflictError, detectNameConflicts, listExistingAgentNames } = require('./nameConflict');
 const { extractJsonObject } = require('./jsonUtils');
 
@@ -279,7 +279,8 @@ function createStepRegistry({
             guidanceConfigPath: guidanceConfigPath || path.join(__dirname, '..', '..', 'config', 'agent_guidance.json')
         }),
         trial: createTrialStepRunner(),
-        retest: createRetestStepRunner()
+        retest: createRetestStepRunner(),
+        regrade: createRegradeStepRunner()
     };
     const runners = { ...defaults, ...stepRunners };
 
@@ -303,6 +304,10 @@ function createStepRegistry({
         ...LEARN_STEPS,
         { id: 'retest', name: '回填重测' }
     ]);
+    // 2026-10-12 缺陷 4 ②：补判——对源任务已保存答卷仅重判缺失题（不出卷不作答）。
+    const REGRADE_STEPS = Object.freeze([
+        { id: 'regrade', name: '补判' }
+    ]);
 
     function getRunner(stepId) {
         const runner = runners[stepId];
@@ -312,7 +317,7 @@ function createStepRegistry({
         return runner;
     }
 
-    return { CREATE_STEPS, LEARN_STEPS, LEARN_RETEST_STEPS, RETRIAL_STEPS, getRunner };
+    return { CREATE_STEPS, LEARN_STEPS, LEARN_RETEST_STEPS, RETRIAL_STEPS, REGRADE_STEPS, getRunner };
 }
 
 module.exports = {

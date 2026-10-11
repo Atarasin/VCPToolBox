@@ -497,6 +497,33 @@
       }
     },
     {
+      "name": "gateway_forge_regrade",
+      "title": "Gateway Forge Regrade",
+      "description": "Re-grade only the questions missing from a previous trial report, reusing the source job's saved answers (no re-exam, no re-answer). Merges existing grades, recomputes the pass ratio, and rewrites the report. Use when a grading gap silently zero-scored questions (FORGE_GRADE_MISSING or '判卷缺失…按 0 分计' in the overall comment). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expertName",
+          "sourceJobId"
+        ],
+        "properties": {
+          "expertName": {
+            "type": "string"
+          },
+          "sourceJobId": {
+            "type": "string"
+          },
+          "expectExamHash": {
+            "type": "string"
+          },
+          "budgetCny": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
       "name": "gateway_forge_create",
       "title": "Gateway Forge Create",
       "description": "Launch a full forge.expert.create job (blueprint→harvest→distill→synthesize→trial) from a one-line requirement. The job pauses at pending_confirm after the blueprint draft — confirm with gateway_forge_confirm. Poll progress/cost with gateway_job_get; AdminPanel 「专家铸造」 shows the same read-only view.",

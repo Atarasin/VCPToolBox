@@ -24,6 +24,7 @@ const MCP_GATEWAY_TOOL_NAMES = deepFreeze({
     GAP_REPORT: toolName('gap_report'),
     FORGE_LEARN: toolName('forge_learn'),
     FORGE_RETRIAL: toolName('forge_retrial'),
+    FORGE_REGRADE: toolName('forge_regrade'),
     FORGE_CREATE: toolName('forge_create'),
     FORGE_CONFIRM: toolName('forge_confirm')
 });

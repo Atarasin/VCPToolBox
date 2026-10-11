@@ -1312,6 +1312,83 @@
     }
   },
   {
+    "toolName": "gateway_forge_regrade",
+    "operationId": "forge.regrade",
+    "argsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expertName",
+        "sourceJobId"
+      ],
+      "properties": {
+        "expertName": {
+          "type": "string",
+          "description": "要补判的专家名（须已注册且有画像）。"
+        },
+        "sourceJobId": {
+          "type": "string",
+          "description": "源任务编号：读取其 exams/ 下已保存的考卷与答卷，仅重判判卷缺失的题。"
+        },
+        "expectExamHash": {
+          "type": "string",
+          "description": "期望的源考卷哈希前缀（16 位 sha256 前缀）；不匹配拒绝补判（防串卷）。"
+        },
+        "budgetCny": {
+          "type": "number",
+          "description": "本次补判的费用预算上限（元）；省略用默认预算。"
+        }
+      }
+    },
+    "resultSchema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "errors": [
+      "MCP_INVALID_REQUEST",
+      "MCP_INVALID_ARGUMENTS",
+      "MCP_FORBIDDEN",
+      "MCP_NOT_FOUND",
+      "MCP_RUNTIME_ERROR"
+    ],
+    "execution": {
+      "operationName": "forge.regrade",
+      "source": "mcp-forge-regrade",
+      "executor": "forgeRegrade",
+      "backendExecutor": "forgeRegrade",
+      "credentialAction": "execute"
+    },
+    "mcp": {
+      "tool": {
+        "name": "gateway_forge_regrade",
+        "title": "Gateway Forge Regrade",
+        "description": "Re-grade only the questions missing from a previous trial report, reusing the source job's saved answers (no re-exam, no re-answer). Merges existing grades, recomputes the pass ratio, and rewrites the report. Use when a grading gap silently zero-scored questions (FORGE_GRADE_MISSING or '判卷缺失…按 0 分计' in the overall comment). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expertName",
+            "sourceJobId"
+          ],
+          "properties": {
+            "expertName": {
+              "type": "string"
+            },
+            "sourceJobId": {
+              "type": "string"
+            },
+            "expectExamHash": {
+              "type": "string"
+            },
+            "budgetCny": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
     "toolName": "gateway_forge_create",
     "operationId": "forge.create",
     "argsSchema": {
