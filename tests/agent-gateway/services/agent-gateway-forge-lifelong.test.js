@@ -353,3 +353,41 @@ test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保�
         '非 ForgeMaster 冒名代报 403'
     );
 });
+
+// backend-proxy 模式的 tools/list 同边界：midas 等非铸造师 agent 不可见编排工具
+// （用户实测反馈：midas 连接仍能看到 gateway_forge_confirm —— 根因是 proxy 路径漏过滤）。
+test('backendProxy tools/list：非 ForgeMaster 隐藏编排三件套，ForgeMaster 全量', async () => {
+    const { createBackendProxyMcpAdapter } = require('../../../modules/agentGateway/protocols/mcp/backendProxyExecutor');
+    const toolNames = (result) => result.tools.map((tool) => tool.name);
+
+    const adapter = createBackendProxyMcpAdapter({
+        backendClient: { /* listTools 不经网络，占位即可 */ },
+        defaultAgentId: 'MCPMidas',
+        discoveryDefaultAgentEnabled: true
+    });
+
+    // midas（默认 agent）视角
+    const midasList = await adapter.listTools({ requestContext: { requestId: 'req-midas' } });
+    const midasTools = toolNames(midasList);
+    assert.ok(!midasTools.includes('gateway_forge_create'), 'midas 不可见 forge_create');
+    assert.ok(!midasTools.includes('gateway_forge_confirm'), 'midas 不可见 forge_confirm');
+    assert.ok(!midasTools.includes('gateway_forge_learn'), 'midas 不可见 forge_learn');
+    assert.ok(midasTools.includes('gateway_gap_report'), 'gap_report 保留（专家自报通道）');
+    assert.ok(midasTools.includes('gateway_job_get'), '常规工具不受影响');
+
+    // 显式请求 ForgeMaster 视角（绑定凭据场景由 resolveDiscoveryScope 决议，此处直接传）
+    const masterList = await adapter.listTools({
+        agentId: 'ForgeMaster',
+        requestContext: { requestId: 'req-master' }
+    });
+    assert.ok(toolNames(masterList).includes('gateway_forge_confirm'), 'ForgeMaster 全量可见');
+
+    // agent-less（无默认、无请求 agent）也不可见
+    const anonAdapter = createBackendProxyMcpAdapter({
+        backendClient: {},
+        defaultAgentId: '',
+        discoveryDefaultAgentEnabled: false
+    });
+    const anonList = await anonAdapter.listTools({ requestContext: { requestId: 'req-anon' } });
+    assert.ok(!toolNames(anonList).includes('gateway_forge_create'), '匿名发现请求不可见');
+});

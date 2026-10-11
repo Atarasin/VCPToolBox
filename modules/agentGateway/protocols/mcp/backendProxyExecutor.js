@@ -459,8 +459,12 @@ const BACKEND_PROXY_METHODS = {
         return serveFrozenList(input, 'tools', () => {
         const { backendClient, defaultAgentId, gatewayManagedTools, gatewayManagedPrompts } = state;
         const { agentId } = resolveDiscoveryScope(state, input);
+        // forge 编排三件套仅铸造师可见（与 inProcessExecutor.listTools 同一边界；
+        // backend-proxy 模式下 midas 等非铸造师 agent 的发现请求同样不可见）。
+        const { filterGatewayToolsForAgent } = require('../../services/forge/toolAccess');
+        const visibleTools = filterGatewayToolsForAgent(gatewayManagedTools, agentId || '');
         return {
-            tools: gatewayManagedTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
+            tools: visibleTools.slice().sort((left, right) => left.name.localeCompare(right.name)),
             meta: {
                 requestId: normalizeMcpString(input.requestContext?.requestId, 128),
                 ...(agentId ? { agentId } : {})
