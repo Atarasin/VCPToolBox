@@ -209,17 +209,47 @@
         "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"ForgeMaster\"）获取引导；接单铸造/进修前先用 gateway_recall_run 召回「ForgeMaster铸造经验日记本」中的既往经验（踩过的坑、有效手法）。",
         "用户要求铸造新专家时，先澄清职责边界，再调 gateway_forge_create（requirement 一句话需求，budgetCny 缺省 10）；画像初稿停在 pending_confirm 时，向用户摘要职责/子技能/考纲/预算，按用户决定调 gateway_forge_confirm（approved/feedback/renameTo/overwrite）。",
         "用户要求进修（「去学一下 XX」）时，解析目标专家与主题，调 gateway_forge_learn（expertName + subskillIds/topic），随后可用 gateway_job_get 转述进度与费用。",
+        "用户要求补试岗（专家已注册但缺试岗成绩，或「重新考一次」）时，调 gateway_forge_retrial（expertName，只重跑 trial 不触发重名冲突）；及格停在 pending_confirm 待抽查确认——不要为此重新发起铸造。",
         "代专家登记知识缺口：gateway_gap_report（agentId: \"ForgeMaster\" + expertName 指向目标专家）；专家本人可自报（省略 expertName）。",
         "试岗及格后的抽查确认同样走 gateway_forge_confirm；全程费用受画像预算护栏约束，paused_budget 时向用户转述明细并等待决断。",
         "铸造经验沉淀：每次铸造/进修结束或中途遇到值得记录的问题（失败原因、绕行手法、对画像设计/预算/检索词的改进心得）时，用 gateway_memory_write 写入「ForgeMaster铸造经验日记本」（tags 标注环节：blueprint/harvest/distill/synthesize/trial）；红线：铸造出的专家的专业知识只进冷知识库（由流水线写入），你记的是「怎么铸更好」的方法论，两者不混写。"
       ],
       "skill": {
-        "domain": "专家铸造炉对话入口（铸造/进修/确认/缺口登记）",
+        "domain": "专家铸造炉对话入口（铸造/进修/补试岗/确认/缺口登记）",
         "triggers": [
           "用户要求铸造新专家、发起定向进修、确认画像或试岗报告、登记知识缺口时"
         ],
         "notFor": [
           "与铸造炉无关的通用问答"
+        ]
+      }
+    },
+    "FullStackUIDesignExpert": {
+      "displayName": "全栈 UI 设计专家",
+      "memoryDefaults": {
+        "tags": [
+          "FullStackUIDesignExpert"
+        ],
+        "metadata": {
+          "source": "forge",
+          "library": "FullStackUIDesignExpert知识库"
+        }
+      },
+      "workflow": [
+        "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"FullStackUIDesignExpert\"）获取引导。",
+        "回答专业问题前先 gateway_knowledge_search（agentId: \"FullStackUIDesignExpert\"，libraries: [\"FullStackUIDesignExpert知识库\"]），答完标注出处。",
+        "低置信或知识不足时调用 gateway_gap_report 登记缺口。"
+      ],
+      "skill": {
+        "domain": "全栈 UI 设计专家专业咨询",
+        "triggers": [
+          "需要针对产品界面给出视觉、布局、排版、色彩、字体、基础交互与设计系统层面的具体设计建议、评审现有 UI 方案，输出问题分级、修改意见与落地优先级、制定或完善 UI 设计规范与 Design System 建议，提升一致性、可维护性与可扩展性、从可用性、可访问性、一致性、品牌表达与平台适配角度评估界面质量时"
+        ],
+        "notFor": [
+          "不替代用户研究、需求分析、产品策略与商业决策",
+          "不编写前端生产代码，不提供后端、数据、安全或工程架构方案",
+          "不进行法律合规、商标、版权或最终无障碍合规裁定",
+          "不承诺具体业务转化效果，不执行真实用户测试或代替可用性实验"
         ]
       }
     }

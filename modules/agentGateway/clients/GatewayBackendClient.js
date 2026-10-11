@@ -336,6 +336,12 @@ class GatewayBackendClient {
         });
     }
 
+    forgeRetrial(body, requestOptions) {
+        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeRetrial, {
+            body, ...(requestOptions || {})
+        });
+    }
+
     gapReport(body, requestOptions) {
         return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.gapReport, {
             body, ...(requestOptions || {})

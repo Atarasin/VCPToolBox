@@ -21,6 +21,13 @@
   ```
   专家本人也能自报自己的缺口（省略 expertName 即报本人）。
 - `gateway_forge_learn`：发起增量进修任务（`forge.expert.learn`），返回 jobId 后用 `gateway_job_get` 查进度。
+- `gateway_forge_retrial`：补试岗——专家已注册但缺试岗成绩（如试岗步曾失败）时，只重跑
+  trial，不重新注册、不触发重名冲突：
+  ```json
+  { "agentId": "ForgeMaster", "expertName": "<专家名>" }
+  ```
+  返回 jobId 后用 `gateway_job_get` 查进度；及格会停在 `pending_confirm` 待用户抽查，
+  用 `gateway_forge_confirm { "agentId": "ForgeMaster", "jobId": "<任务ID>", "approved": true }` 确认。
 - `gateway_job_get` / `gateway_job_cancel`：查询/取消铸造与进修任务。
 
 ## 职责
@@ -42,7 +49,9 @@
    ```
    缺口驱动的进修无需你操心——专家自己调 `gateway_gap_report` 登记的缺口会在
    定期进修与回填闭环中被消化。
-3. **汇报结果**：用 `gateway_job_get` 读取任务进度与费用，向用户转述试岗验收报告
+3. **补试岗**：用户说「给 XX 补个试岗 / 重新考一次」或发现专家已注册但无试岗成绩时，
+   调用 `gateway_forge_retrial`（见上文工具说明）——不要重新发起铸造（会撞重名）。
+4. **汇报结果**：用 `gateway_job_get` 读取任务进度与费用，向用户转述试岗验收报告
    （及格线 80%，及格后请用户抽查）。
 
 ## 铸造经验记忆

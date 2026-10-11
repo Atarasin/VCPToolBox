@@ -719,6 +719,16 @@ const BACKEND_PROXY_METHODS = {
                     requestOptions
                 );
             },
+            forgeRetrial: () => {
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
+                return backendClient.forgeRetrial(
+                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
+                    requestOptions
+                );
+            },
             gapReport: () => {
                 const targetAgentId = ensureAgentId({
                     ...input,

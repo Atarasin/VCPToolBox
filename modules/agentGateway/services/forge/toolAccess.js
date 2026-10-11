@@ -6,7 +6,7 @@ const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 
 /**
  * forge 工具的访问边界（用户决策 2026-10-11）：
- * - 编排三件套（create/confirm/learn）仅铸造师 ForgeMaster 可见可调；
+ * - 编排四件套（create/confirm/learn/retrial）仅铸造师 ForgeMaster 可见可调；
  * - gateway_gap_report 仅对「已铸造专家 + ForgeMaster」可见：专家自报自己
  *   的缺口（目标缺省即调用者本人），ForgeMaster 可经 expertName 代任何
  *   已铸造专家登记；非铸造 agent 不可见（调用也必被服务端画像校验 404 拒）。
@@ -16,7 +16,8 @@ const FORGE_MASTER_AGENT = 'ForgeMaster';
 const FORGE_ORCHESTRATION_TOOLS = Object.freeze([
     'gateway_forge_create',
     'gateway_forge_confirm',
-    'gateway_forge_learn'
+    'gateway_forge_learn',
+    'gateway_forge_retrial'
 ]);
 const FORGE_GAP_REPORT_TOOL = 'gateway_gap_report';
 
@@ -137,10 +138,21 @@ function buildForgeLearnRequest(body = {}) {
     };
 }
 
+// gateway_forge_retrial → startExpertRetrialJob（已注册专家仅重跑 trial）
+function buildForgeRetrialRequest(body = {}) {
+    return {
+        expertName: body.expertName,
+        ...(Number.isFinite(Number(body.budgetCny)) && Number(body.budgetCny) > 0
+            ? { budgetCny: Number(body.budgetCny) }
+            : {})
+    };
+}
+
 module.exports = {
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
     buildForgeLearnRequest,
+    buildForgeRetrialRequest,
     FORGE_MASTER_AGENT,
     defaultIsForgedExpert,
     FORGE_ORCHESTRATION_TOOLS,

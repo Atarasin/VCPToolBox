@@ -314,7 +314,7 @@ test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保�
         assertForgeToolAccess
     } = require('../../../modules/agentGateway/services/forge/toolAccess');
 
-    const all = ['gateway_job_get', 'gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn', 'gateway_gap_report']
+    const all = ['gateway_job_get', 'gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn', 'gateway_forge_retrial', 'gateway_gap_report']
         .map((name) => ({ name }));
 
     // 列表过滤（注入 baseDir 模拟铸造状态，避免依赖真实运行数据）
@@ -332,7 +332,7 @@ test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保�
     assert.deepEqual(
         filterGatewayToolsForAgent(all, 'UIDesigner', options).map((t) => t.name),
         ['gateway_job_get', 'gateway_gap_report'],
-        '已铸造专家：仅 gap_report（自报通道），编排三件套不可见'
+        '已铸造专家：仅 gap_report（自报通道），编排四件套不可见'
     );
     assert.deepEqual(
         filterGatewayToolsForAgent(all, 'Nexus', options).map((t) => t.name),
@@ -345,8 +345,8 @@ test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保�
         '未认证发现请求同样不可见'
     );
 
-    // 调用守卫矩阵
-    for (const tool of ['gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn']) {
+    // 调用守卫矩阵（编排四件套）
+    for (const tool of ['gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn', 'gateway_forge_retrial']) {
         assert.throws(
             () => assertForgeToolAccess({ toolName: tool, requesterAgentId: 'Nexus' }),
             (error) => error.status === 403 && error.code === 'AGW_FORBIDDEN',
@@ -363,6 +363,14 @@ test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保�
         (error) => error.status === 403,
         '非 ForgeMaster 冒名代报 403'
     );
+});
+
+test('toolAccess：buildForgeRetrialRequest 映射 expertName/budgetCny（非正数预算不注入）', () => {
+    const { buildForgeRetrialRequest } = require('../../../modules/agentGateway/services/forge/toolAccess');
+    assert.deepEqual(buildForgeRetrialRequest({ expertName: 'UIDesigner', budgetCny: '6' }), { expertName: 'UIDesigner', budgetCny: 6 });
+    assert.deepEqual(buildForgeRetrialRequest({ expertName: ' UIDesigner ' }), { expertName: ' UIDesigner ' });
+    assert.deepEqual(buildForgeRetrialRequest({ expertName: 'X', budgetCny: -1 }), { expertName: 'X' });
+    assert.deepEqual(buildForgeRetrialRequest({ expertName: 'X', budgetCny: 'abc' }), { expertName: 'X' });
 });
 
 // backend-proxy 模式的 tools/list 同边界：midas 等非铸造师 agent 不可见编排工具
@@ -383,6 +391,7 @@ test('backendProxy tools/list：非 ForgeMaster 隐藏编排三件套，ForgeMas
     assert.ok(!midasTools.includes('gateway_forge_create'), 'midas 不可见 forge_create');
     assert.ok(!midasTools.includes('gateway_forge_confirm'), 'midas 不可见 forge_confirm');
     assert.ok(!midasTools.includes('gateway_forge_learn'), 'midas 不可见 forge_learn');
+    assert.ok(!midasTools.includes('gateway_forge_retrial'), 'midas 不可见 forge_retrial');
     assert.ok(!midasTools.includes('gateway_gap_report'), 'midas 非铸造专家，gap_report 也不可见');
     assert.ok(midasTools.includes('gateway_job_get'), '常规工具不受影响');
 

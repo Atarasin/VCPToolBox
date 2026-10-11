@@ -465,6 +465,26 @@
       }
     },
     {
+      "name": "gateway_forge_retrial",
+      "title": "Gateway Forge Retrial",
+      "description": "Re-run the trial step only for a registered cast expert (no re-registration, no name conflict). Use when an expert is registered but has no trial score (e.g., a previous trial step failed). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expertName"
+        ],
+        "properties": {
+          "expertName": {
+            "type": "string"
+          },
+          "budgetCny": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
       "name": "gateway_forge_create",
       "title": "Gateway Forge Create",
       "description": "Launch a full forge.expert.create job (blueprint→harvest→distill→synthesize→trial) from a one-line requirement. The job pauses at pending_confirm after the blueprint draft — confirm with gateway_forge_confirm. Poll progress/cost with gateway_job_get; AdminPanel 「专家铸造」 shows the same read-only view.",

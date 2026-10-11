@@ -1224,6 +1224,67 @@
     }
   },
   {
+    "toolName": "gateway_forge_retrial",
+    "operationId": "forge.retrial",
+    "argsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expertName"
+      ],
+      "properties": {
+        "expertName": {
+          "type": "string",
+          "description": "要补试岗的专家名（须已注册且有画像；只重跑 trial，不触发重名冲突）。"
+        },
+        "budgetCny": {
+          "type": "number",
+          "description": "本次补试岗的费用预算上限（元）；省略用默认预算。"
+        }
+      }
+    },
+    "resultSchema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "errors": [
+      "MCP_INVALID_REQUEST",
+      "MCP_INVALID_ARGUMENTS",
+      "MCP_FORBIDDEN",
+      "MCP_NOT_FOUND",
+      "MCP_RUNTIME_ERROR"
+    ],
+    "execution": {
+      "operationName": "forge.retrial",
+      "source": "mcp-forge-retrial",
+      "executor": "forgeRetrial",
+      "backendExecutor": "forgeRetrial",
+      "credentialAction": "execute"
+    },
+    "mcp": {
+      "tool": {
+        "name": "gateway_forge_retrial",
+        "title": "Gateway Forge Retrial",
+        "description": "Re-run the trial step only for a registered cast expert (no re-registration, no name conflict). Use when an expert is registered but has no trial score (e.g., a previous trial step failed). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expertName"
+          ],
+          "properties": {
+            "expertName": {
+              "type": "string"
+            },
+            "budgetCny": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
     "toolName": "gateway_forge_create",
     "operationId": "forge.create",
     "argsSchema": {
