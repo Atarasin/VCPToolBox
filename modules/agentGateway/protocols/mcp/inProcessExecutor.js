@@ -737,7 +737,9 @@ function createMcpAdapter(pluginManager, options = {}) {
         async listTools(input = {}) {
             const scopedInput = applyDiscoveryAgentId(input, resolveDiscoveryAgentId(input, agentDirectoryPort));
             const { requestContext, authContext } = buildMcpContexts(bundle, scopedInput, 'mcp-tools-list');
-            let publishedTools = [...gatewayManagedTools];
+            // forge 编排工具仅铸造师可见（未认证的发现请求同样不可见）
+            const { filterGatewayToolsForAgent } = require('../../services/forge/toolAccess');
+            let publishedTools = filterGatewayToolsForAgent([...gatewayManagedTools], requestContext.agentId || '');
 
             if (requestContext.agentId) {
                 const capabilities = await capabilityService.getCapabilities({
@@ -748,7 +750,7 @@ function createMcpAdapter(pluginManager, options = {}) {
 
                 publishedTools = [
                     ...(capabilities.tools || []).map(buildMcpToolDescriptor),
-                    ...gatewayManagedTools
+                    ...filterGatewayToolsForAgent(gatewayManagedTools, requestContext.agentId)
                 ];
             }
 

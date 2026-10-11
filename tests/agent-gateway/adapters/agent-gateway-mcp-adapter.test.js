@@ -394,7 +394,8 @@ test('MCP adapter lists policy-filtered tools from the shared capability service
             'ChromeBridge',
             'gateway_agent_bootstrap',
             'gateway_context_assemble',
-            'gateway_forge_learn',
+            // forge 编排三件套（create/confirm/learn）仅铸造师可见，Ariadne 不可见；
+            // gap_report 保留（专家自报通道）。
             'gateway_gap_report',
             'gateway_job_cancel',
             'gateway_job_get',

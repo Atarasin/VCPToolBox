@@ -261,6 +261,29 @@ function buildForgeLearnRequest(body = {}) {
     };
 }
 
+// gateway_forge_create 的 MCP args → startExpertCreateJob 参数映射（导出以供测试）。
+function buildForgeCreateRequest(body = {}) {
+    return {
+        requirement: body.requirement,
+        ...(Number.isFinite(Number(body.budgetCny)) && Number(body.budgetCny) > 0
+            ? { budgetCny: Number(body.budgetCny) }
+            : {}),
+        ...(body.blueprintJson && typeof body.blueprintJson === 'object'
+            ? { blueprintOverride: body.blueprintJson }
+            : {})
+    };
+}
+
+// gateway_forge_confirm 的 MCP args → confirmBlueprint 参数映射（导出以供测试）。
+function buildForgeConfirmRequest(body = {}) {
+    return {
+        approved: body.approved === true,
+        ...(body.feedback ? { feedback: body.feedback } : {}),
+        ...(body.renameTo ? { renameTo: body.renameTo } : {}),
+        ...(body.overwrite === true ? { overwrite: true } : {})
+    };
+}
+
 async function executeForgeService(context, action) {
     const { bundle, name, args, input, operation, executeManaged } = context;
     return executeManaged({
@@ -271,12 +294,38 @@ async function executeForgeService(context, action) {
             let result;
             try {
                 const agentId = String(body.agentId || requestContext.agentId || '').trim();
-                const payload = action === 'reportGap'
-                    ? await bundle.forgeRuntimeService.reportGap({ ...body, agentId })
-                    : await bundle.forgeRuntimeService.startExpertLearnJob({
+                // forge 工具访问边界（仅 ForgeMaster 可编排；gap_report 自报/代报）
+                const { assertForgeToolAccess } = require('../../services/forge/toolAccess');
+                assertForgeToolAccess({
+                    toolName: name,
+                    requesterAgentId: agentId,
+                    targetAgentId: action === 'reportGap'
+                        ? String(body.expertName || agentId || '').trim() || null
+                        : null
+                });
+                let payload;
+                if (action === 'reportGap') {
+                    // agentId 是调用者（managed 决议）；缺口归属：expertName（代报）或本人。
+                    payload = await bundle.forgeRuntimeService.reportGap({
+                        ...body,
+                        agentId: String(body.expertName || agentId || '').trim()
+                    });
+                } else if (action === 'startExpertCreateJob') {
+                    payload = await bundle.forgeRuntimeService.startExpertCreateJob({
+                        ...buildForgeCreateRequest(body),
+                        authContext: null
+                    });
+                } else if (action === 'confirmBlueprint') {
+                    payload = await bundle.forgeRuntimeService.confirmBlueprint(
+                        body.jobId,
+                        { ...buildForgeConfirmRequest(body), authContext: null }
+                    );
+                } else {
+                    payload = await bundle.forgeRuntimeService.startExpertLearnJob({
                         ...buildForgeLearnRequest(body),
                         authContext: null
                     });
+                }
                 result = {
                     success: true,
                     requestId: requestContext.requestId,
@@ -308,7 +357,9 @@ const IN_PROCESS_OPERATION_HANDLERS = Object.freeze({
     recallRun: executeRecallRun,
     knowledgeSearch: executeKnowledgeSearch,
     gapReport: (context) => executeForgeService(context, 'reportGap'),
-    forgeLearn: (context) => executeForgeService(context, 'startExpertLearnJob')
+    forgeLearn: (context) => executeForgeService(context, 'startExpertLearnJob'),
+    forgeCreate: (context) => executeForgeService(context, 'startExpertCreateJob'),
+    forgeConfirm: (context) => executeForgeService(context, 'confirmBlueprint')
 });
 
 async function callMcpTool({
@@ -373,6 +424,8 @@ async function callMcpTool({
 
 module.exports = {
     buildForgeLearnRequest,
+    buildForgeCreateRequest,
+    buildForgeConfirmRequest,
     IN_PROCESS_OPERATION_HANDLERS,
     attachRequestId,
     buildBootstrapResult,

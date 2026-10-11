@@ -280,3 +280,76 @@ test('since 时间过滤：已有出处的来源不重采，BrowserSearch 带 ti
     assert.ok(anyCalls.length >= 1);
     assert.equal(anyCalls.every((c) => !c.args.timeRange), true, 'AnySearch 不带 timeRange');
 });
+
+test('gateway_forge_create / gateway_forge_confirm 的 MCP 参数映射', () => {
+    const { buildForgeCreateRequest, buildForgeConfirmRequest } = require('../../../modules/agentGateway/protocols/mcp/inProcessOperations');
+    assert.deepEqual(
+        buildForgeCreateRequest({ requirement: '造一个 UI 设计专家', budgetCny: 5 }),
+        { requirement: '造一个 UI 设计专家', budgetCny: 5 }
+    );
+    assert.deepEqual(
+        buildForgeCreateRequest({ requirement: 'r' }),
+        { requirement: 'r' }, '缺省预算不注入'
+    );
+    assert.deepEqual(
+        buildForgeCreateRequest({ requirement: 'r', blueprintJson: { name: 'X' } }),
+        { requirement: 'r', blueprintOverride: { name: 'X' } }, 'blueprintJson → blueprintOverride'
+    );
+    assert.deepEqual(
+        buildForgeConfirmRequest({ jobId: 'j1', approved: true, feedback: '', renameTo: 'New', overwrite: false }),
+        { approved: true, renameTo: 'New' }, '空 feedback/未开 overwrite 不注入'
+    );
+    assert.deepEqual(
+        buildForgeConfirmRequest({ approved: 'true' }),
+        { approved: false }, '非布尔 true 一律视为拒绝（受控）'
+    );
+});
+
+// ── forge 工具访问边界（用户决策：编排三件套仅 ForgeMaster；gap_report 自报/代报）──
+
+test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保持可见；调用守卫 403 矩阵', () => {
+    const {
+        FORGE_MASTER_AGENT,
+        filterGatewayToolsForAgent,
+        assertForgeToolAccess
+    } = require('../../../modules/agentGateway/services/forge/toolAccess');
+
+    const all = ['gateway_job_get', 'gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn', 'gateway_gap_report']
+        .map((name) => ({ name }));
+
+    // 列表过滤
+    assert.deepEqual(
+        filterGatewayToolsForAgent(all, FORGE_MASTER_AGENT).map((t) => t.name),
+        all.map((t) => t.name),
+        'ForgeMaster 全量可见'
+    );
+    assert.deepEqual(
+        filterGatewayToolsForAgent(all, 'Nexus').map((t) => t.name),
+        ['gateway_job_get', 'gateway_gap_report'],
+        '非 ForgeMaster 隐藏编排三件套，gap_report 保留（专家自报通道）'
+    );
+    assert.deepEqual(
+        filterGatewayToolsForAgent(all, '').map((t) => t.name),
+        ['gateway_job_get', 'gateway_gap_report'],
+        '未认证发现请求同样不可见'
+    );
+
+    // 调用守卫矩阵
+    for (const tool of ['gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn']) {
+        assert.throws(
+            () => assertForgeToolAccess({ toolName: tool, requesterAgentId: 'Nexus' }),
+            (error) => error.status === 403 && error.code === 'AGW_FORBIDDEN',
+            `${tool} 非 ForgeMaster 403`
+        );
+        assertForgeToolAccess({ toolName: tool, requesterAgentId: FORGE_MASTER_AGENT });
+    }
+    // gap_report：自报放行、代报仅 ForgeMaster、冒名 403
+    assertForgeToolAccess({ toolName: 'gateway_gap_report', requesterAgentId: 'UIDesigner', targetAgentId: 'UIDesigner' });
+    assertForgeToolAccess({ toolName: 'gateway_gap_report', requesterAgentId: 'UIDesigner', targetAgentId: null });
+    assertForgeToolAccess({ toolName: 'gateway_gap_report', requesterAgentId: FORGE_MASTER_AGENT, targetAgentId: 'UIDesigner' });
+    assert.throws(
+        () => assertForgeToolAccess({ toolName: 'gateway_gap_report', requesterAgentId: 'Nexus', targetAgentId: 'UIDesigner' }),
+        (error) => error.status === 403,
+        '非 ForgeMaster 冒名代报 403'
+    );
+});

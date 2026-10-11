@@ -428,6 +428,9 @@
           },
           "whyInsufficient": {
             "type": "string"
+          },
+          "expertName": {
+            "type": "string"
           }
         }
       }
@@ -457,6 +460,66 @@
           },
           "since": {
             "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway_forge_create",
+      "title": "Gateway Forge Create",
+      "description": "Launch a full forge.expert.create job (blueprint→harvest→distill→synthesize→trial) from a one-line requirement. The job pauses at pending_confirm after the blueprint draft — confirm with gateway_forge_confirm. Poll progress/cost with gateway_job_get; AdminPanel 「专家铸造」 shows the same read-only view.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requirement"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "budgetCny": {
+            "type": "number",
+            "minimum": 0.01
+          },
+          "blueprintJson": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway_forge_confirm",
+      "title": "Gateway Forge Confirm",
+      "description": "Confirm or reject a forge job waiting at pending_confirm: approve the blueprint draft, approve the passed trial report for user spot-check (D3), resolve name conflicts (renameTo, or overwrite with explicit approval), or reject (cancels the job).",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "jobId",
+          "approved"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "feedback": {
+            "type": "string"
+          },
+          "renameTo": {
+            "type": "string"
+          },
+          "overwrite": {
+            "type": "boolean"
           }
         }
       }

@@ -22,7 +22,9 @@ const MCP_GATEWAY_TOOL_NAMES = deepFreeze({
     RECALL_RUN: toolName('recall_run'),
     KNOWLEDGE_SEARCH: toolName('knowledge_search'),
     GAP_REPORT: toolName('gap_report'),
-    FORGE_LEARN: toolName('forge_learn')
+    FORGE_LEARN: toolName('forge_learn'),
+    FORGE_CREATE: toolName('forge_create'),
+    FORGE_CONFIRM: toolName('forge_confirm')
 });
 
 const REST_OPERATIONS = deepFreeze(restOperations);

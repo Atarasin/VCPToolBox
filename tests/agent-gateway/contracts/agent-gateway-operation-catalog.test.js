@@ -11,9 +11,9 @@ const canonicalOperations = require('../../../modules/agentGateway/contracts/ope
 const { validateGatewayToolArguments } = require('../../../modules/agentGateway/contracts/schemas/validator');
 const { convertJsonSchemaToOpenApi } = require('../../../modules/agentGateway/contracts/generate/jsonSchemaToOpenApi');
 
-test('operation catalog freezes the 22 REST paths and 11 MCP operations', () => {
+test('operation catalog freezes the 22 REST paths and 13 MCP operations', () => {
     assert.equal(REST_OPERATIONS.length, 22);
-    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 11);
+    assert.equal(Object.keys(OPERATION_CATALOG.mcp).length, 13);
     assert.equal(new Set(REST_OPERATIONS.map((operation) => operation.path)).size, 22);
     for (const operation of REST_OPERATIONS) {
         assert.ok(operation.operationId);
@@ -70,10 +70,14 @@ test('all managed operations preserve the historical AJV acceptance corpus', () 
             invalid: { agentId: 'Ariadne', query: null } },
         gateway_knowledge_search: { valid: { agentId: 'Ariadne', query: 'knowledge', library: 'VCP百科全书', topK: '8', unknown: true },
             invalid: { query: 'knowledge', topK: 999 } },
-        gateway_gap_report: { valid: { agentId: 'UIDesigner', subskillId: 'color-theory', question: '深色模式配色', whyInsufficient: '查不到', unknown: true },
+        gateway_gap_report: { valid: { agentId: 'UIDesigner', subskillId: 'color-theory', question: '深色模式配色', whyInsufficient: '查不到', expertName: 'UIDesigner', unknown: true },
             invalid: { question: null } },
         gateway_forge_learn: { valid: { expertName: 'UIDesigner', subskillIds: ['color-theory'], topic: '深色模式', since: '2026-01-01T00:00:00.000Z', unknown: true },
-            invalid: { expertName: null } }
+            invalid: { expertName: null } },
+        gateway_forge_create: { valid: { requirement: '造一个 UI 设计专家', budgetCny: '5', blueprintJson: { name: 'X' }, unknown: true },
+            invalid: { requirement: null } },
+        gateway_forge_confirm: { valid: { jobId: 'job-1', approved: true, feedback: 'ok', renameTo: 'NewName', overwrite: false, unknown: true },
+            invalid: { jobId: 'job-1' } }
     };
 
     assert.deepEqual(Object.keys(corpus).sort(), Object.keys(gatewayToolSchemas).sort());
@@ -99,7 +103,9 @@ test('agentId-less arguments pass schema validation for bound-credential callers
         gateway_recall_run: { query: 'recall' },
         gateway_knowledge_search: { query: 'knowledge' },
         gateway_gap_report: { question: '深色模式配色' },
-        gateway_forge_learn: { expertName: 'UIDesigner' }
+        gateway_forge_learn: { expertName: 'UIDesigner' },
+        gateway_forge_create: { requirement: '造一个 UI 设计专家' },
+        gateway_forge_confirm: { jobId: 'job-1', approved: true }
     };
     assert.deepEqual(Object.keys(omissions).sort(), Object.keys(gatewayToolSchemas).sort());
     for (const [operation, args] of Object.entries(omissions)) {
