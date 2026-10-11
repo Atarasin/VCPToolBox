@@ -421,10 +421,13 @@ test('skillGenerator：无记忆面 agent 的 SKILL.md 不含 recall/memory 教�
     assert.equal(artifact.ok, true, `生成成功，实际 ${JSON.stringify(artifact).slice(0, 120)}`);
     const skillFile = artifact.files.find((file) => file.path.endsWith('.md')) || artifact.files[0];
     const markdown = skillFile.content;
+    // 断言「教唆」形态：调用示例与速查表行不出现；禁止性提及（记忆边界说明）允许存在
     assert.ok(!markdown.includes('gateway_recall_run {'), '不教唆调 recall_run');
-    assert.ok(!markdown.includes('gateway_memory_write'), '不教唆调 memory_write');
-    assert.ok(!markdown.includes('gateway_memory_search'), '不教唆调 memory_search');
+    assert.ok(!markdown.includes('gateway_memory_write {'), '不教唆调 memory_write（无调用示例）');
+    assert.ok(!/\| `gateway_memory_write`/.test(markdown), '速查表不含 memory_write 行');
+    assert.ok(!/\| `gateway_memory_search`/.test(markdown), '速查表不含 memory_search 行');
     assert.match(markdown, /记忆边界（本 agent 无记忆面）/, '含记忆边界说明段');
+    assert.match(markdown, /不要调用.*gateway_memory_write/, '边界说明明确禁止记忆工具');
     assert.match(markdown, /gateway_forge_create/, 'workflow 指引保留');
     // 对照：有记忆面的 agent 行为不变
     const withMemory = generateSkillArtifact({
