@@ -1,58 +1,67 @@
 {
-    "agents": {
-        "Nexus": {
-            "maid": "Nexus",
-            "allowedDiaries": [
-                "Nexus工程经验日记本",
-                "Nexus架构设计日记本",
-                "Nexus项目-*"
-            ],
-            "defaultDiaries": [
-                "Nexus工程经验日记本",
-                "Nexus架构设计日记本"
-            ]
-        },
-        "MCPMidas": {
-            "maid": "迈达斯",
-            "allowedDiaries": [
-                "迈达斯日记本",
-                "迈达斯因子与策略库日记本",
-                "迈达斯量化工程日记本",
-                "迈达斯量化小论坛学习笔记日记本"
-            ],
-            "defaultDiaries": [
-                "迈达斯日记本"
-            ]
-        },
-        "Yui": {
-            "maid": "结衣",
-            "allowedDiaries": [
-                "Yui日记本",
-                "Yui的知识日记本"
-            ],
-            "defaultDiaries": [
-                "Yui日记本"
-            ]
-        },
-        "MCPYui": {
-            "maid": "结衣",
-            "allowedDiaries": [
-                "Yui日记本",
-                "Yui的知识日记本"
-            ],
-            "defaultDiaries": [
-                "Yui日记本"
-            ]
-        },
-        "MCPFuPeng": {
-            "maid": "付鹏",
-            "allowedDiaries": [
-                "付鹏日记本",
-                "付鹏市场判断日记本"
-            ],
-            "defaultDiaries": [
-                "付鹏日记本"
-            ]
-        }
+  "agents": {
+    "Nexus": {
+      "maid": "Nexus",
+      "allowedDiaries": [
+        "Nexus工程经验日记本",
+        "Nexus架构设计日记本",
+        "Nexus项目-*"
+      ],
+      "defaultDiaries": [
+        "Nexus工程经验日记本",
+        "Nexus架构设计日记本"
+      ]
+    },
+    "MCPMidas": {
+      "maid": "迈达斯",
+      "allowedDiaries": [
+        "迈达斯日记本",
+        "迈达斯因子与策略库日记本",
+        "迈达斯量化工程日记本",
+        "迈达斯量化小论坛学习笔记日记本"
+      ],
+      "defaultDiaries": [
+        "迈达斯日记本"
+      ]
+    },
+    "Yui": {
+      "maid": "结衣",
+      "allowedDiaries": [
+        "Yui日记本",
+        "Yui的知识日记本"
+      ],
+      "defaultDiaries": [
+        "Yui日记本"
+      ]
+    },
+    "MCPYui": {
+      "maid": "结衣",
+      "allowedDiaries": [
+        "Yui日记本",
+        "Yui的知识日记本"
+      ],
+      "defaultDiaries": [
+        "Yui日记本"
+      ]
+    },
+    "MCPFuPeng": {
+      "maid": "付鹏",
+      "allowedDiaries": [
+        "付鹏日记本",
+        "付鹏市场判断日记本"
+      ],
+      "defaultDiaries": [
+        "付鹏日记本"
+      ]
+    },
+    "ForgeMaster": {
+      "maid": "ForgeMaster",
+      "allowedDiaries": [
+        "ForgeMaster铸造经验日记本"
+      ],
+      "defaultDiaries": [
+        "ForgeMaster铸造经验日记本"
+      ]
     }
+  }
 }

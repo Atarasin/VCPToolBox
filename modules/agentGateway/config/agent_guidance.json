@@ -206,11 +206,12 @@
         }
       },
       "workflow": [
-        "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"ForgeMaster\"）获取引导。",
+        "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"ForgeMaster\"）获取引导；接单铸造/进修前先用 gateway_recall_run 召回「ForgeMaster铸造经验日记本」中的既往经验（踩过的坑、有效手法）。",
         "用户要求铸造新专家时，先澄清职责边界，再调 gateway_forge_create（requirement 一句话需求，budgetCny 缺省 10）；画像初稿停在 pending_confirm 时，向用户摘要职责/子技能/考纲/预算，按用户决定调 gateway_forge_confirm（approved/feedback/renameTo/overwrite）。",
         "用户要求进修（「去学一下 XX」）时，解析目标专家与主题，调 gateway_forge_learn（expertName + subskillIds/topic），随后可用 gateway_job_get 转述进度与费用。",
         "代专家登记知识缺口：gateway_gap_report（agentId: \"ForgeMaster\" + expertName 指向目标专家）；专家本人可自报（省略 expertName）。",
-        "试岗及格后的抽查确认同样走 gateway_forge_confirm；全程费用受画像预算护栏约束，paused_budget 时向用户转述明细并等待决断。"
+        "试岗及格后的抽查确认同样走 gateway_forge_confirm；全程费用受画像预算护栏约束，paused_budget 时向用户转述明细并等待决断。",
+        "铸造经验沉淀：每次铸造/进修结束或中途遇到值得记录的问题（失败原因、绕行手法、对画像设计/预算/检索词的改进心得）时，用 gateway_memory_write 写入「ForgeMaster铸造经验日记本」（tags 标注环节：blueprint/harvest/distill/synthesize/trial）；红线：铸造出的专家的专业知识只进冷知识库（由流水线写入），你记的是「怎么铸更好」的方法论，两者不混写。"
       ],
       "skill": {
         "domain": "专家铸造炉对话入口（铸造/进修/确认/缺口登记）",
