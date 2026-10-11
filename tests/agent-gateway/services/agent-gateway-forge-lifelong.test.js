@@ -460,7 +460,7 @@ test('forgeRoutes：REST 面双面一致——ForgeMaster 放行、非 ForgeMast
         req.agentGatewayAuth = null;
         next();
     });
-    const stubResolver = ({ providedAuthContext }) => providedAuthContext || {};
+    const stubResolver = ({ authContext }) => authContext || {};
     registerForgeRoutes(app, {
         authContextResolver: stubResolver,
         operabilityService: null,
