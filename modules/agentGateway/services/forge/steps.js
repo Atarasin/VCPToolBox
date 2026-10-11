@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = require('fs').promises;
 const path = require('path');
 
 const {
@@ -72,6 +73,94 @@ class ForgeCapabilityPendingError extends Error {
     }
 }
 
+// ── blueprint 起草的截断韧性（与 trial 作答/出题同款，2026-10-12 缺陷 1）──
+// 长结构化需求会诱导更长的画像 JSON，顶满输出上限被切断 → 单次调用直接
+// FORGE_BLUEPRINT_DRAFT_INVALID。加固：共 3 次尝试；finish_reason=length 时
+// 抬高重试预算；供应商拒收高 max_tokens 时回落；彻底失败把每次原始输出
+// 留档 runDir/blueprint-failed/（与 trial-failed/、distill-failed/ 同构）。
+
+const BLUEPRINT_DRAFT_MAX_ATTEMPTS = 3;
+const BLUEPRINT_DRAFT_MAX_TOKENS = 4000;
+const BLUEPRINT_DRAFT_RETRY_MAX_TOKENS = 12000;
+const BLUEPRINT_DRAFT_RETRY_FALLBACK_TOKENS = 8000;
+
+const BLUEPRINT_DRAFT_RETRY_NOTE = '\n\n【重试要求】上一次输出不可解析（可能被输出长度上限截断，或夹带了 JSON 以外的文字）。请重新输出：只输出一个完整可解析的 JSON 对象，不要代码围栏、不要注释、不要在 JSON 前后附加任何文字；内容保持紧凑（searchQueries 等字段只写关键词，不写长句）。';
+
+// 彻底失败前把每次原始输出留档（留档失败不掩盖原始错误）。
+async function dumpBlueprintFailure(runDir, attempts, promptPreview) {
+    if (!runDir) {
+        return;
+    }
+    try {
+        const dir = path.join(runDir, 'blueprint-failed');
+        await fsp.mkdir(dir, { recursive: true });
+        for (const attempt of attempts) {
+            await fsp.writeFile(
+                path.join(dir, `blueprint-draft.attempt-${attempt.index}.json`),
+                `${JSON.stringify({
+                    attempt: attempt.index,
+                    finishReason: attempt.finishReason,
+                    usage: attempt.usage ?? null,
+                    promptPreview,
+                    rawContent: attempt.content
+                }, null, 2)}\n`,
+                'utf8'
+            );
+        }
+    } catch {
+        // 尽力而为。
+    }
+}
+
+async function completeBlueprintDraftResilient({ llm, llmConfig, prompt, logger }) {
+    const attempts = [];
+    let currentPrompt = prompt;
+    let nextMaxTokens = BLUEPRINT_DRAFT_MAX_TOKENS;
+    for (let index = 1; index <= BLUEPRINT_DRAFT_MAX_ATTEMPTS; index += 1) {
+        const maxTokens = nextMaxTokens;
+        const call = async (tokens) => llm.complete(llmConfig, {
+            model: llmConfig.model,
+            messages: [{ role: 'user', content: currentPrompt }],
+            temperature: 0.4,
+            max_tokens: tokens
+        });
+        let response;
+        try {
+            response = await call(maxTokens);
+        } catch (error) {
+            // 预算耗尽/协作取消等业务信号必须上抛（不吞进 token 回退重试）。
+            if (typeof error?.code === 'string' && error.code.startsWith('FORGE_')) {
+                throw error;
+            }
+            if (maxTokens <= BLUEPRINT_DRAFT_RETRY_FALLBACK_TOKENS) {
+                throw error; // 传输/配置类错误快速失败，不吞。
+            }
+            // 供应商可能拒收超过其输出上限的 max_tokens——回落到既有安全上限再试。
+            logger?.(`forge blueprint 第 ${index} 次以 max_tokens=${maxTokens} 被拒（${error.message}），回落 ${BLUEPRINT_DRAFT_RETRY_FALLBACK_TOKENS}`);
+            response = await call(BLUEPRINT_DRAFT_RETRY_FALLBACK_TOKENS);
+        }
+        const choice = response?.data?.choices?.[0];
+        const content = choice?.message?.content || '';
+        const finishReason = choice?.finish_reason || null;
+        attempts.push({ index, finishReason, usage: response?.data?.usage ?? null, content });
+
+        const draft = extractJsonObject(content);
+        // 根对象签名守卫：截断残片可能被宽松解析救出嵌套子对象（如 scope），
+        // 无 name/displayName 的不是画像本体——视为不可解析，交给重试。
+        if (draft && typeof draft === 'object' && !Array.isArray(draft) &&
+            typeof draft.name === 'string' && typeof draft.displayName === 'string') {
+            return { draft, attempts };
+        }
+        // 截断（length）→ 抬高重试预算；其余形态 → 追加重试要求后同预算重试。
+        nextMaxTokens = finishReason === 'length'
+            ? BLUEPRINT_DRAFT_RETRY_MAX_TOKENS
+            : maxTokens;
+        currentPrompt = prompt + BLUEPRINT_DRAFT_RETRY_NOTE;
+        logger?.(`forge blueprint 第 ${index} 次输出不可解析（finish_reason=${finishReason ?? 'unknown'}），${index < BLUEPRINT_DRAFT_MAX_ATTEMPTS ? `重试（${index}/${BLUEPRINT_DRAFT_MAX_ATTEMPTS - 1}）` : '留档失败'}`);
+    }
+    return { draft: null, attempts };
+}
+
 function createPendingStepRunner(stepId, milestone) {
     return async function pendingStep() {
         throw new ForgeCapabilityPendingError(stepId, milestone);
@@ -83,6 +172,7 @@ function createBlueprintStepRunner({ baseDir }) {
         const { requirement, llm, llmConfig, logger } = ctx;
 
         let draft = ctx.blueprintOverride || null;
+        let draftAttempts = null;
         if (!draft) {
             if (!llm || llm.available !== true || typeof llm.complete !== 'function') {
                 const error = new Error('llmCompletion 端口不可用，无法起草画像');
@@ -98,17 +188,22 @@ function createBlueprintStepRunner({ baseDir }) {
             }
             const prompt = BLUEPRINT_DRAFT_PROMPT.replace('{{requirement}}', String(requirement || '').slice(0, 4000));
             logger?.(`forge blueprint drafting for job ${ctx.jobId}`);
-            const response = await llm.complete(llmConfig, {
-                model: llmConfig.model,
-                messages: [{ role: 'user', content: prompt }],
-                temperature: 0.4,
-                max_tokens: 4000
-            });
-            draft = extractJsonObject(response?.data?.choices?.[0]?.message?.content || '');
+            // 截断韧性（缺陷 1）：多次尝试 + 预算抬升 + 失败留档，替代旧的单次调用。
+            const outcome = await completeBlueprintDraftResilient({ llm, llmConfig, prompt, logger });
+            draftAttempts = outcome.attempts;
+            draft = outcome.draft;
             if (!draft) {
-                const error = new Error('LLM 未返回可解析的画像 JSON');
+                await dumpBlueprintFailure(ctx.runDir, draftAttempts, prompt.slice(0, 2000));
+                const error = new Error('LLM 未返回可解析的画像 JSON（原始输出已留档 blueprint-failed/）');
                 error.code = 'FORGE_BLUEPRINT_DRAFT_INVALID';
                 error.status = 502;
+                error.details = {
+                    attempts: draftAttempts.map(({ index, finishReason, usage }) => ({
+                        attempt: index,
+                        finishReason,
+                        usage
+                    }))
+                };
                 throw error;
             }
         }
@@ -121,6 +216,8 @@ function createBlueprintStepRunner({ baseDir }) {
         }
         const verdict = validateBlueprint(draft, { existingAgentNames });
         if (!verdict.valid) {
+            // 解析成功但校验失败同样留档——便于区分「截断/污染」与「结构不合规」两种形态。
+            await dumpBlueprintFailure(ctx.runDir, draftAttempts || [], (BLUEPRINT_DRAFT_PROMPT.replace('{{requirement}}', String(requirement || '').slice(0, 4000))).slice(0, 2000));
             const error = new Error(`画像起草未通过校验：${verdict.errors.map((e) => `${e.field}: ${e.message}`).join('；')}`);
             error.code = 'FORGE_BLUEPRINT_INVALID';
             error.status = 400;
@@ -220,8 +317,11 @@ function createStepRegistry({
 
 module.exports = {
     BLUEPRINT_DRAFT_PROMPT,
+    BLUEPRINT_DRAFT_MAX_ATTEMPTS,
     ForgeCapabilityPendingError,
     ForgeNameConflictError,
+    completeBlueprintDraftResilient,
+    dumpBlueprintFailure,
     extractJsonObject,
     detectNameConflicts,
     listExistingAgentNames,

@@ -43,6 +43,11 @@ const TERMINAL_JOB_STATUSES = new Set([
     JOB_STATUS.CANCELLED
 ]);
 
+const ALL_JOB_STATUSES = new Set([
+    ...CANCELLABLE_JOB_STATUSES,
+    ...TERMINAL_JOB_STATUSES
+]);
+
 const {
     SESSION_STATES,
     applyAdoption,
@@ -201,6 +206,15 @@ function canAccessJob(job, authContext, { allowAdoption = true, auditLogger = nu
         return false;
     }
 
+    // 缺陷 3（2026-10-12）：持久化改造前的历史 job 恢复时没有可恢复身份，
+    // 空身份字段不再与已识别请求方逐项错配——只要请求方携带任一规范身份
+    // （agentId/sessionId/gatewayId/credentialSubject）即放行，恢复读+确认
+    // 的可访问性。创建即持久化身份的新任务与已回填身份的任务不走此通配。
+    if (job?.identityLostOnRestore) {
+        return Boolean(requesterContext) ||
+            ['agentId', 'sessionId', 'gatewayId'].some((field) => normalizeJobRuntimeString(authContext[field]));
+    }
+
     const requestedAgentId = normalizeJobRuntimeString(authContext.agentId);
     const requestedSessionId = normalizeJobRuntimeString(authContext.sessionId);
     const requestedGatewayId = normalizeJobRuntimeString(authContext.gatewayId);
@@ -285,6 +299,62 @@ function createJobStoreApi(store, eventStore) {
         return cloneJob(job);
     }
 
+    // 重启恢复（2026-10-12 缺陷 2）：job 注册表为进程内存态，重启即丢；
+    // 持久层（如 forge runStore）重建记录时用原 jobId/状态/创建时间回注，
+    // 使 pending_confirm 等门禁态跨重启可追认。已在内存中的活记录优先，绝不覆盖。
+    // 缺陷 3：持久化改造前的历史 run 记录没有落盘身份——恢复后打
+    // identityLostOnRestore 标记（canAccessJob 据此放行已识别请求方），
+    // 创建即持久化身份的新任务不走该通配。
+    function restoreJob({ jobId, status, operation, authContext, metadata, target, createdAt }) {
+        const normalizedJobId = normalizeJobRuntimeString(jobId);
+        const normalizedStatus = normalizeJobRuntimeString(status);
+        if (!normalizedJobId || !ALL_JOB_STATUSES.has(normalizedStatus)) {
+            return {
+                success: false,
+                status: 400,
+                code: AGW_ERROR_CODES.VALIDATION_ERROR,
+                error: 'restoreJob requires a valid jobId and a known status',
+                details: {
+                    jobId: normalizedJobId,
+                    status: normalizedStatus
+                }
+            };
+        }
+        if (store.has(normalizedJobId)) {
+            return {
+                success: true,
+                data: {
+                    job: cloneJob(store.get(normalizedJobId)),
+                    restored: false
+                }
+            };
+        }
+        const now = new Date().toISOString();
+        const hasRestorableIdentity = ['agentId', 'sessionId', 'gatewayId', 'credentialSubject']
+            .some((field) => normalizeJobRuntimeString(authContext?.[field]));
+        const job = {
+            ...buildJobRecord({
+                jobId: normalizedJobId,
+                status: normalizedStatus,
+                operation,
+                authContext,
+                metadata,
+                target
+            }),
+            createdAt: normalizeJobRuntimeString(createdAt) || now,
+            updatedAt: now,
+            restoredFromRestart: true,
+            ...(hasRestorableIdentity ? {} : { identityLostOnRestore: true })
+        };
+        return {
+            success: true,
+            data: {
+                job: saveJob(job, { phase: 'restored' }),
+                restored: true
+            }
+        };
+    }
+
     function createJob({ status, operation, authContext, metadata, target }) {
         const job = buildJobRecord({
             status,
@@ -360,11 +430,11 @@ function createJobStoreApi(store, eventStore) {
         };
     }
 
-    return { createJob, updateJob };
+    return { createJob, updateJob, restoreJob };
 }
 
 function createJobRuntimeApi(store, eventStore, jobStore, { auditLogger = null } = {}) {
-    const { createJob, updateJob } = jobStore;
+    const { createJob, updateJob, restoreJob } = jobStore;
     return {
         createAcceptedJob({ operation, authContext, metadata, target }) {
             return createJob({
@@ -385,6 +455,7 @@ function createJobRuntimeApi(store, eventStore, jobStore, { auditLogger = null }
             });
         },
         updateJob,
+        restoreJob,
         completeJob(jobId, metadata) {
             return updateJob(jobId, {
                 status: JOB_STATUS.COMPLETED,

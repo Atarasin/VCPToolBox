@@ -72,7 +72,7 @@ function forgeMeta(jobRuntimeService, jobId) {
     return jobRuntimeService.pollJob(jobId, null).data.job.metadata.forge;
 }
 
-function buildService({ baseDir, llmPort = null, prices = null, stepRunners = {} } = {}) {
+function buildService({ baseDir, llmPort = null, prices = null, stepRunners = {}, ...rest } = {}) {
     const jobRuntimeService = createJobRuntimeService();
     const auditLogger = createFakeAuditLogger();
     const forgeRuntimeService = createForgeRuntimeService({
@@ -82,7 +82,8 @@ function buildService({ baseDir, llmPort = null, prices = null, stepRunners = {}
         baseDir,
         prices,
         llmConfig: { url: 'http://test', apiKey: 'test-key', model: 'test-model' },
-        stepRunners
+        stepRunners,
+        ...rest
     });
     return { jobRuntimeService, auditLogger, forgeRuntimeService };
 }
@@ -488,4 +489,319 @@ test('costMeter：deepseek 双档单价按北京时间时段判定，节假日�
     const variant = createCostMeter({ budgetCny: 10, nowFn: () => new Date('2026-10-17T02:00:00Z') });
     variant.recordLlm({ model: 'deepseek-v4-pro-0813', promptTokens: 1000, completionTokens: 1000 });
     assert.ok(Math.abs(variant.getBreakdown().costSoFarCny - (0.0045 + 0.0135)) < 1e-9, 'v4-pro-0813 空闲档前缀命中');
+});
+
+// ── 缺陷 1（2026-10-12）：blueprint 起草的截断韧性 ────────────────────────
+
+test('forge blueprint：输出截断/不可解析时重试并抬升预算，第三次成功', async () => {
+    const baseDir = createTempDir();
+    const calls = [];
+    const { jobRuntimeService, forgeRuntimeService } = buildService({
+        baseDir,
+        llmPort: {
+            available: true,
+            complete: async (config, payload) => {
+                calls.push({ maxTokens: payload.max_tokens, prompt: payload.messages[0].content });
+                if (calls.length === 1) {
+                    // 模拟 max_tokens 截断：JSON 中段被切断 + finish_reason=length。
+                    // 截断残留可能被宽松解析救出嵌套子对象（无 name 签名）——应视为不可解析。
+                    return {
+                        data: {
+                            choices: [{ message: { content: validBlueprintJson().slice(0, 260) }, finish_reason: 'length' }],
+                            usage: { prompt_tokens: 1000, completion_tokens: 4000 }
+                        }
+                    };
+                }
+                if (calls.length === 2) {
+                    // 模拟「可解析但不是画像本体」：宽松解析能救出对象，但缺
+                    // name/displayName 根签名——守卫应拒绝并继续重试。
+                    return llmResponse(JSON.stringify({ scope: { responsibilities: ['UI 评审'] } }));
+                }
+                // 第三次：围栏 + 前后杂文（可解且根签名完整）。
+                return llmResponse(`好的，以下是画像：\n\`\`\`json\n${validBlueprintJson()}\n\`\`\`\n以上仅供参考。`);
+            }
+        }
+    });
+
+    const { jobId } = await forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
+    const reached = await waitFor(() => statusOf(jobRuntimeService, jobId) === JOB_STATUS.PENDING_CONFIRM);
+    assert.equal(reached, true, `截断两次后第三次应成功，实际 ${statusOf(jobRuntimeService, jobId)}`);
+
+    assert.equal(calls.length, 3, '共 3 次尝试');
+    assert.ok(calls[1].maxTokens > calls[0].maxTokens, 'finish_reason=length 后抬升重试预算');
+    assert.ok(calls[1].prompt.length > calls[0].prompt.length, '重试追加了重试要求');
+    assert.ok(calls[1].prompt.includes('【重试要求】'), '重试提示落地');
+    assert.equal(forgeMeta(jobRuntimeService, jobId).expertName, 'UIDesigner');
+});
+
+test('forge blueprint：三次均不可解析时留档原始输出并报结构化错误（runDir 可查形态）', async () => {
+    const baseDir = createTempDir();
+    const { jobRuntimeService, forgeRuntimeService } = buildService({
+        baseDir,
+        llmPort: {
+            available: true,
+            complete: async () => llmResponse('抱歉，我无法直接生成该配置文件……')
+        }
+    });
+
+    const { jobId } = await forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
+    assert.equal(await waitFor(() => jobRuntimeService.pollJob(jobId, null).data.job.terminal), true);
+
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, JOB_STATUS.FAILED);
+    const error = job.metadata.forge.error;
+    assert.equal(error.code, 'FORGE_BLUEPRINT_DRAFT_INVALID');
+    assert.ok(error.message.includes('blueprint-failed'), '错误信息指向留档目录');
+
+    // 三次尝试的原始输出均留档（finishReason/usage/rawContent）——可区分截断/污染/拒答形态。
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const dumpPath = path.join(baseDir, 'runs', jobId, 'blueprint-failed', `blueprint-draft.attempt-${attempt}.json`);
+        assert.equal(fs.existsSync(dumpPath), true, `留档缺失：attempt ${attempt}`);
+        const dump = JSON.parse(fs.readFileSync(dumpPath, 'utf8'));
+        assert.equal(typeof dump.rawContent, 'string');
+        assert.ok(dump.promptPreview.includes('专家铸造师'));
+    }
+});
+
+// ── 缺陷 2（2026-10-12）：job 注册表重启恢复 ─────────────────────────────
+
+test('jobRuntime restoreJob：按原 jobId/状态回注，内存活记录优先不被覆盖', () => {
+    const jobRuntimeService = createJobRuntimeService();
+    const created = jobRuntimeService.createAcceptedJob({ operation: FORGE_JOB_OPERATIONS.EXPERT_CREATE });
+
+    const skipped = jobRuntimeService.restoreJob({
+        jobId: created.jobId,
+        status: JOB_STATUS.FAILED,
+        operation: FORGE_JOB_OPERATIONS.EXPERT_CREATE
+    });
+    assert.equal(skipped.success, true);
+    assert.equal(skipped.data.restored, false, '活记录优先');
+    assert.equal(statusOf(jobRuntimeService, created.jobId), JOB_STATUS.ACCEPTED, '状态未被覆盖');
+
+    const restored = jobRuntimeService.restoreJob({
+        jobId: 'job_restore-sample',
+        status: JOB_STATUS.PENDING_CONFIRM,
+        operation: FORGE_JOB_OPERATIONS.EXPERT_CREATE,
+        authContext: { agentId: 'ForgeMaster' },
+        metadata: { forge: { pendingConfirm: { kind: 'blueprint' } } },
+        createdAt: '2026-10-11T00:00:00.000Z'
+    });
+    assert.equal(restored.data.restored, true);
+    const job = jobRuntimeService.pollJob('job_restore-sample', { agentId: 'ForgeMaster' }).data.job;
+    assert.equal(job.status, JOB_STATUS.PENDING_CONFIRM);
+    assert.equal(job.createdAt, '2026-10-11T00:00:00.000Z');
+    assert.equal(job.restoredFromRestart, true);
+    assert.equal(job.metadata.forge.pendingConfirm.kind, 'blueprint');
+
+    const invalid = jobRuntimeService.restoreJob({ jobId: 'job_bad', status: 'not-a-status' });
+    assert.equal(invalid.success, false);
+    assert.equal(invalid.status, 400);
+});
+
+test('forge 重启恢复：pending_confirm 任务跨重启可查可追认（blueprint 门禁）', async () => {
+    const baseDir = createTempDir();
+    const first = buildService({ baseDir });
+    const { jobId } = await first.forgeRuntimeService.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
+    assert.equal(await waitFor(() => statusOf(first.jobRuntimeService, jobId) === JOB_STATUS.PENDING_CONFIRM), true);
+
+    // 模拟重启：全新 job 运行时 + 全新 forge 服务，同一 baseDir（磁盘产物仍在）。
+    const second = buildService({ baseDir });
+    assert.equal(await waitFor(() => second.jobRuntimeService.pollJob(jobId, null).success), true, '启动恢复完成');
+
+    const job = second.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, JOB_STATUS.PENDING_CONFIRM);
+    assert.equal(job.restoredFromRestart, true);
+    assert.equal(job.operation, FORGE_JOB_OPERATIONS.EXPERT_CREATE);
+    assert.equal(job.metadata.forge.pendingConfirm.kind, 'blueprint');
+    assert.equal(job.metadata.forge.steps[0].status, 'completed', 'blueprint 标记随恢复可见');
+    assert.equal(job.metadata.forge.requirement, '造一个 UI 设计专家');
+
+    // 追认：确认后从 harvest 续跑（测试环境无 toolInvoker → 止步 harvest 失败，即续跑证据）。
+    await second.forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
+    assert.equal(await waitFor(() => second.jobRuntimeService.pollJob(jobId, null).data.job.terminal), true);
+    const final = second.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(final.status, JOB_STATUS.FAILED);
+    assert.equal(final.metadata.forge.error.step, 'harvest', '确认后越过 blueprint 续跑');
+    const runRecord = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'run.json'), 'utf8'));
+    assert.equal(runRecord.finalStatus, 'failed', '终态已落盘（下次重启按原终态恢复）');
+});
+
+test('forge 重启恢复：中断任务按 failed(FORGE_RESTART_INTERRUPTED)、暂停/终态记录按原状态恢复', async () => {
+    const baseDir = createTempDir();
+    const runsRoot = path.join(baseDir, 'runs');
+    const writeRun = (jobId, record, stepIds = []) => {
+        const dir = path.join(runsRoot, jobId);
+        fs.mkdirSync(path.join(dir, 'steps'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({
+            jobId,
+            jobKind: 'expert.create',
+            requirement: '造一个 UI 设计专家',
+            budgetCny: 10,
+            createdAt: '2026-10-11T00:00:00.000Z',
+            ...record
+        }));
+        for (const stepId of stepIds) {
+            fs.writeFileSync(path.join(dir, 'steps', `${stepId}.json`), JSON.stringify({ stepId, completedAt: '2026-10-11T00:01:00.000Z' }));
+        }
+    };
+
+    // a) 跑到一半进程消失：blueprint 已确认 + harvest 标记在，无终态标记。
+    writeRun('job_interrupted', { blueprintApproved: true }, ['blueprint', 'harvest']);
+    // b) 预算暂停（budgetPausedAtStep 落盘）。
+    writeRun('job_paused', { budgetPausedAtStep: 'distill' }, ['blueprint', 'harvest', 'distill']);
+    // c) 已落终态 completed（含全部步骤标记）。
+    writeRun('job_done', { finalStatus: 'completed', blueprintApproved: true, trialApproved: true },
+        ['blueprint', 'harvest', 'distill', 'synthesize', 'trial']);
+    // d) trial 及格待抽查（D3 门禁）：trial 标记带 userGate。
+    const gateDir = path.join(runsRoot, 'job_trialgate');
+    fs.mkdirSync(path.join(gateDir, 'steps'), { recursive: true });
+    fs.writeFileSync(path.join(gateDir, 'run.json'), JSON.stringify({
+        jobId: 'job_trialgate', jobKind: 'expert.create', requirement: 'x', budgetCny: 10,
+        blueprintApproved: true, expertName: 'UIDesigner', createdAt: '2026-10-11T00:00:00.000Z'
+    }));
+    for (const stepId of ['blueprint', 'harvest', 'distill', 'synthesize', 'trial']) {
+        fs.writeFileSync(path.join(gateDir, 'steps', `${stepId}.json`), JSON.stringify({
+            stepId,
+            completedAt: '2026-10-11T00:01:00.000Z',
+            ...(stepId === 'trial' ? { state: { userGate: { kind: 'trial-report', reportPath: 'Agent/forge/runs/job_trialgate/exams/grade-report.md', hint: '试岗及格，请用户抽查验收报告（D3）' } } } : {})
+        }));
+    }
+
+    const { jobRuntimeService } = buildService({ baseDir });
+    assert.equal(await waitFor(() => jobRuntimeService.pollJob('job_interrupted', null).success), true, '启动恢复完成');
+
+    assert.equal(statusOf(jobRuntimeService, 'job_interrupted'), JOB_STATUS.FAILED);
+    assert.equal(forgeMeta(jobRuntimeService, 'job_interrupted').error.code, 'FORGE_RESTART_INTERRUPTED');
+    assert.equal(forgeMeta(jobRuntimeService, 'job_interrupted').restoredFromRestart, true);
+
+    assert.equal(statusOf(jobRuntimeService, 'job_paused'), JOB_STATUS.PAUSED_BUDGET);
+    assert.equal(statusOf(jobRuntimeService, 'job_done'), JOB_STATUS.COMPLETED);
+
+    // D3 追认：及格待抽查的 trial 门禁恢复后可直接确认盖章。
+    const gateJob = jobRuntimeService.pollJob('job_trialgate', null).data.job;
+    assert.equal(gateJob.status, JOB_STATUS.PENDING_CONFIRM);
+    assert.equal(gateJob.metadata.forge.pendingConfirm.kind, 'trial-report');
+});
+
+// ── 缺陷 3（2026-10-12 回归）：恢复任务的属主/身份校验 ──────────────────────
+
+const FORGEMASTER_AUTH = {
+    agentId: 'ForgeMaster',
+    sessionId: 'mcp-session-1',
+    gatewayId: 'vcp-gateway',
+    credentialSubject: 'forgemaster-ext-2026-10',
+    credentialId: 'forgemaster-ext-2026-10',
+    credentialRevision: 'rev-1'
+};
+
+test('forge 重启恢复（缺陷 3）：身份丢失的历史任务对已识别凭据恢复读写', async () => {
+    const baseDir = createTempDir();
+    // 手工构造持久化改造前的 run：run.json 无 authContext 字段，停在 blueprint 门禁。
+    const runsRoot = path.join(baseDir, 'runs');
+    const dir = path.join(runsRoot, 'job_legacy_gate');
+    fs.mkdirSync(path.join(dir, 'steps'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({
+        jobId: 'job_legacy_gate',
+        jobKind: 'expert.create',
+        requirement: '造一个 UI 设计专家',
+        budgetCny: 10,
+        createdAt: '2026-10-12T00:00:00.000Z'
+    }));
+    fs.writeFileSync(path.join(dir, 'steps', 'blueprint.json'), JSON.stringify({
+        stepId: 'blueprint',
+        completedAt: '2026-10-12T00:01:00.000Z'
+    }));
+
+    const { jobRuntimeService, forgeRuntimeService } = buildService({ baseDir });
+    assert.equal(await waitFor(() => jobRuntimeService.pollJob('job_legacy_gate', null).success), true, '启动恢复完成');
+
+    // 读路径：ForgeMaster 凭据（agentId+sessionId+credentialSubject）可查——回归现场是 403。
+    const polled = jobRuntimeService.pollJob('job_legacy_gate', FORGEMASTER_AUTH);
+    assert.equal(polled.success, true, 'ForgeMaster 读恢复（缺陷 3 回归）');
+    assert.equal(polled.data.job.status, JOB_STATUS.PENDING_CONFIRM);
+    assert.equal(polled.data.job.identityLostOnRestore, true, '标记为身份丢失的历史任务');
+
+    // 无任何身份的请求不放行（通配仅面向已识别请求方）。
+    const anonymous = jobRuntimeService.pollJob('job_legacy_gate', {});
+    assert.equal(anonymous.success, false);
+    assert.equal(anonymous.status, 403);
+
+    // 写路径：确认续跑（confirm 走同一道 canAccessJob 门）。
+    const confirmed = await forgeRuntimeService.confirmBlueprint('job_legacy_gate', { approved: true, authContext: FORGEMASTER_AUTH });
+    assert.equal(confirmed.outcome, 'confirmed', 'ForgeMaster 写恢复（确认门禁可追认）');
+    assert.equal(await waitFor(() => jobRuntimeService.pollJob('job_legacy_gate', null).data.job.terminal), true);
+    const final = jobRuntimeService.pollJob('job_legacy_gate', FORGEMASTER_AUTH).data.job;
+    assert.equal(final.status, JOB_STATUS.FAILED);
+    assert.equal(final.metadata.forge.error.step, 'harvest', '确认后越过 blueprint 续跑');
+});
+
+test('forge 重启恢复（缺陷 3）：已持久化身份的任务按 owner 语义严格比对（不走通配）', async () => {
+    const baseDir = createTempDir();
+    const runsRoot = path.join(baseDir, 'runs');
+    const dir = path.join(runsRoot, 'job_owned_gate');
+    fs.mkdirSync(path.join(dir, 'steps'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({
+        jobId: 'job_owned_gate',
+        jobKind: 'expert.create',
+        requirement: '造一个 UI 设计专家',
+        budgetCny: 10,
+        createdAt: '2026-10-12T00:00:00.000Z',
+        authContext: {
+            agentId: 'ForgeMaster',
+            credentialSubject: 'forgemaster-ext-2026-10',
+            credentialId: 'forgemaster-ext-2026-10',
+            credentialRevision: 'rev-1'
+        }
+    }));
+    fs.writeFileSync(path.join(dir, 'steps', 'blueprint.json'), JSON.stringify({
+        stepId: 'blueprint',
+        completedAt: '2026-10-12T00:01:00.000Z'
+    }));
+
+    const { jobRuntimeService } = buildService({ baseDir });
+    assert.equal(await waitFor(() => jobRuntimeService.pollJob('job_owned_gate', null).success), true, '启动恢复完成');
+    const restored = jobRuntimeService.pollJob('job_owned_gate', null).data.job;
+    assert.equal(restored.identityLostOnRestore, undefined, '有持久化身份——不落通配标记');
+
+    // 同凭据主体换新会话（重启后典型形态）：owner 无 trustedSessionId → 放行。
+    const sameSubjectNewSession = jobRuntimeService.pollJob('job_owned_gate', { ...FORGEMASTER_AUTH, sessionId: 'session-after-restart' });
+    assert.equal(sameSubjectNewSession.success, true, '同主体新会话可读');
+
+    // 异主体：403（owner 语义不因恢复放宽）。
+    const otherSubject = jobRuntimeService.pollJob('job_owned_gate', {
+        agentId: 'MCPYui', sessionId: 's2', credentialSubject: 'yui-ext-2026-08', credentialId: 'yui-ext-2026-08'
+    });
+    assert.equal(otherSubject.success, false);
+    assert.equal(otherSubject.status, 403);
+});
+
+test('forge 新建任务：创建者身份随 run 落盘，重启后按原身份可读写（身份模型不锁新任务）', async () => {
+    const baseDir = createTempDir();
+    const first = buildService({ baseDir });
+    const { jobId } = await first.forgeRuntimeService.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        authContext: FORGEMASTER_AUTH
+    });
+    assert.equal(await waitFor(() => statusOf(first.jobRuntimeService, jobId) === JOB_STATUS.PENDING_CONFIRM), true);
+
+    // 创建者可读（创建路径的身份不受恢复改造影响）。
+    assert.equal(first.jobRuntimeService.pollJob(jobId, FORGEMASTER_AUTH).success, true);
+
+    // 身份已随 run 落盘：下次重启走 owner 语义，而非身份丢失通配。
+    const runRecord = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'run.json'), 'utf8'));
+    assert.equal(runRecord.authContext.agentId, 'ForgeMaster');
+    assert.equal(runRecord.authContext.credentialSubject, 'forgemaster-ext-2026-10');
+
+    // 模拟重启：新进程恢复后，同凭据（新会话）仍可读、可确认。
+    const second = buildService({ baseDir });
+    assert.equal(await waitFor(() => second.jobRuntimeService.pollJob(jobId, FORGEMASTER_AUTH).success), true, '重启恢复完成');
+    const afterRestart = second.jobRuntimeService.pollJob(jobId, { ...FORGEMASTER_AUTH, sessionId: 'session-after-restart' });
+    assert.equal(afterRestart.success, true, '同凭据新会话可读');
+    assert.equal(afterRestart.data.job.identityLostOnRestore, undefined, '身份来自持久化而非通配');
+
+    const confirmed = await second.forgeRuntimeService.confirmBlueprint(jobId, {
+        approved: true,
+        authContext: { ...FORGEMASTER_AUTH, sessionId: 'session-after-restart' }
+    });
+    assert.equal(confirmed.outcome, 'confirmed', '同凭据新会话可确认');
 });

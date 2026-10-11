@@ -86,6 +86,26 @@ function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
+// run 记录只持久化身份字段（不含 credentialRecord），供重启恢复重建 owner 快照。
+function trimAuthContextForRun(authContext) {
+    if (!authContext || typeof authContext !== 'object') {
+        return null;
+    }
+    const fields = [
+        'requestId', 'sessionId', 'agentId', 'source', 'runtime', 'gatewayId',
+        'authMode', 'authSource', 'credentialSubject', 'credentialId', 'credentialRevision',
+        'effectiveAgentId', 'trustedSessionId'
+    ];
+    const trimmed = {};
+    for (const field of fields) {
+        const value = normalizeString(authContext[field]);
+        if (value) {
+            trimmed[field] = value;
+        }
+    }
+    return Object.keys(trimmed).length > 0 ? trimmed : null;
+}
+
 function buildForgeMetadata({ runRecord, steps, completedSteps, currentStep, costBreakdown, extra = {} }) {
     const stepStates = steps.map((step) => {
         const marker = completedSteps.get(step.id);
@@ -276,6 +296,160 @@ function createForgeRuntimeService(options = {}) {
 
     async function updateForgeMetadata(jobId, metadataPatch) {
         jobRuntimeService.updateJob(jobId, { metadata: { forge: metadataPatch } });
+    }
+
+    // ── 重启恢复（2026-10-12 缺陷 2）────────────────────────────────────────
+    // job 注册表是进程内存态（Map），重启即丢——磁盘产物（runDir/steps 标记）
+    // 完好但 pending_confirm 等门禁态无法追认（404）。启动时扫描 runs/ 重建
+    // 注册表：门禁/暂停态原样恢复可确认；跑到一半的按 failed(重启中断)恢复，
+    // 保留断点续跑能力；已有终态标记的按原终态恢复（记录可查）。
+
+    function operationForJobKind(jobKind) {
+        if (jobKind === 'expert.learn') {
+            return FORGE_JOB_OPERATIONS.EXPERT_LEARN;
+        }
+        if (jobKind === 'expert.retrial') {
+            return FORGE_JOB_OPERATIONS.EXPERT_RETRIAL;
+        }
+        return FORGE_JOB_OPERATIONS.EXPERT_CREATE;
+    }
+
+    function classifyRestoredRun({ runRecord, steps, markers }) {
+        // ① 已落终态标记：按原终态恢复（记录可查，语义不漂移）。
+        if (runRecord.finalStatus === 'completed' || runRecord.finalStatus === 'failed' || runRecord.finalStatus === 'cancelled') {
+            return { status: runRecord.finalStatus, extra: { restoredFromRestart: true } };
+        }
+        // ② 门禁/暂停态（非终态、等待用户决断）——恢复后确认/续跑照常可用。
+        if (runRecord.pendingNameConflict) {
+            return {
+                status: JOB_STATUS.PENDING_CONFIRM,
+                extra: {
+                    pendingConfirm: {
+                        kind: 'name-conflict',
+                        conflicts: runRecord.pendingNameConflict.conflicts,
+                        hint: '专家名与既有 agent/文件冲突，等待改名确认（进程重启后恢复）'
+                    },
+                    restoredFromRestart: true
+                }
+            };
+        }
+        if (runRecord.budgetPausedAtStep) {
+            return {
+                status: JOB_STATUS.PAUSED_BUDGET,
+                extra: {
+                    budgetPaused: { step: runRecord.budgetPausedAtStep, restored: true },
+                    restoredFromRestart: true
+                }
+            };
+        }
+        const allDone = steps.every((step) => markers.has(step.id));
+        const trialMarker = markers.get('trial');
+        if (!allDone && markers.has('blueprint') && runRecord.jobKind !== 'expert.learn' && !runRecord.blueprintApproved) {
+            return {
+                status: JOB_STATUS.PENDING_CONFIRM,
+                extra: {
+                    pendingConfirm: {
+                        kind: 'blueprint',
+                        blueprintPath: runRecord.blueprintPath || null,
+                        hint: '画像初稿已生成，等待用户确认后继续采集（进程重启后恢复）'
+                    },
+                    restoredFromRestart: true
+                }
+            };
+        }
+        if (markers.has('trial') && trialMarker?.state?.userGate && !runRecord.trialApproved) {
+            return {
+                status: JOB_STATUS.PENDING_CONFIRM,
+                extra: {
+                    pendingConfirm: { ...trialMarker.state.userGate, restored: true },
+                    restoredFromRestart: true
+                }
+            };
+        }
+        if (allDone) {
+            return { status: JOB_STATUS.COMPLETED, extra: { restoredFromRestart: true } };
+        }
+        // ③ 跑到一半进程消失：如实置 failed（可 resume 断点续跑，已完成步骤不重烧）。
+        return {
+            status: JOB_STATUS.FAILED,
+            extra: {
+                error: {
+                    step: null,
+                    code: 'FORGE_RESTART_INTERRUPTED',
+                    message: '进程重启时任务仍在执行，已按失败恢复；可 resume 断点续跑（已完成步骤不重烧）'
+                },
+                restoredFromRestart: true
+            }
+        };
+    }
+
+    async function restoreJobsFromDisk() {
+        if (typeof jobRuntimeService.restoreJob !== 'function') {
+            return; // 旧注入的 job 运行时不支持恢复——优雅降级（保持旧行为）。
+        }
+        let entries;
+        try {
+            entries = await fs.promises.readdir(runStore.runsRoot, { withFileTypes: true });
+        } catch (error) {
+            if (error.code !== 'ENOENT') {
+                throw error;
+            }
+            return;
+        }
+        const byStatus = {};
+        let identityLostCount = 0;
+        for (const entry of entries) {
+            if (!entry.isDirectory() || !entry.name.startsWith('job_')) {
+                continue;
+            }
+            const jobId = entry.name;
+            let runRecord;
+            try {
+                runRecord = await runStore.readRun(jobId);
+            } catch {
+                continue; // 单条损坏不阻断整批恢复。
+            }
+            if (!runRecord) {
+                continue;
+            }
+            // 持久化改造前的历史记录没有身份（缺陷 3）——统计并在恢复后放行已识别请求方。
+            const hasRestorableIdentity = ['agentId', 'sessionId', 'gatewayId', 'credentialSubject']
+                .some((field) => normalizeString(runRecord.authContext?.[field]));
+            if (!hasRestorableIdentity) {
+                identityLostCount += 1;
+            }
+            const steps = stepsForJobKind(runRecord);
+            const completed = await runStore.scanCompletedSteps(jobId);
+            const markers = new Map();
+            for (const stepId of completed) {
+                markers.set(stepId, await runStore.readStepMarker(jobId, stepId));
+            }
+            const classification = classifyRestoredRun({ runRecord, steps, markers });
+            byStatus[classification.status] = (byStatus[classification.status] || 0) + 1;
+            jobRuntimeService.restoreJob({
+                jobId,
+                status: classification.status,
+                operation: operationForJobKind(runRecord.jobKind),
+                target: { type: 'forge', id: 'expert' },
+                authContext: runRecord.authContext || null,
+                metadata: {
+                    forge: buildForgeMetadata({
+                        runRecord,
+                        steps,
+                        completedSteps: markers,
+                        currentStep: null,
+                        costBreakdown: runRecord.cost,
+                        extra: classification.extra
+                    })
+                },
+                createdAt: runRecord.createdAt
+            });
+        }
+        const restoredCount = Object.values(byStatus).reduce((sum, count) => sum + count, 0);
+        if (restoredCount > 0) {
+            log('forge.jobs.restored', { count: restoredCount, byStatus, identityLost: identityLostCount });
+        }
+        return byStatus;
     }
 
     async function driveJob(jobId, { authContext, startAfterStep = null }) {
@@ -485,6 +659,11 @@ function createForgeRuntimeService(options = {}) {
                 if (error instanceof BudgetExceededError) {
                     const breakdown = meter.getBreakdown();
                     log('forge.budget.paused', { jobId, step: step.id, ...breakdown });
+                    // 持久化暂停标记：重启恢复时按 paused_budget 重建（不误判为中断失败）。
+                    await runStore.updateRun(jobId, {
+                        budgetPausedAtStep: step.id,
+                        budgetPausedAt: new Date().toISOString()
+                    });
                     jobRuntimeService.updateJob(jobId, {
                         status: JOB_STATUS.PAUSED_BUDGET,
                         metadata: { forge: buildForgeMetadata({
@@ -495,9 +674,12 @@ function createForgeRuntimeService(options = {}) {
                     return;
                 }
                 if (error instanceof JobCancelledError) {
-                    return; // 状态已由取消方置为 cancelled。
+                    // 状态已由取消方置为 cancelled；同步落终态标记供重启恢复。
+                    await runStore.updateRun(jobId, { finalStatus: 'cancelled' }).catch(() => undefined);
+                    return;
                 }
                 log('forge.job.failed', { jobId, step: step.id, code: error.code || 'INTERNAL', message: error.message });
+                await runStore.updateRun(jobId, { finalStatus: 'failed' }).catch(() => undefined);
                 await updateForgeMetadata(jobId, buildForgeMetadata({
                     runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
                     extra: { error: { step: step.id, code: error.code || 'INTERNAL', message: error.message } }
@@ -537,6 +719,7 @@ function createForgeRuntimeService(options = {}) {
             }
         }
 
+        await runStore.updateRun(jobId, { finalStatus: 'completed' }).catch(() => undefined);
         await updateForgeMetadata(jobId, buildForgeMetadata({
             runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
             extra: { completedAt: new Date().toISOString() }
@@ -637,6 +820,7 @@ function createForgeRuntimeService(options = {}) {
                 requirement: normalizedRequirement,
                 budgetCny: budget,
                 blueprintOverride,
+                authContext: trimAuthContextForRun(authContext),
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });
             log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_CREATE, requirement: normalizedRequirement });
@@ -679,6 +863,7 @@ function createForgeRuntimeService(options = {}) {
                 since,
                 retestOf: retestOf || null,
                 budgetCny: Number.isFinite(Number(budgetCny)) && Number(budgetCny) > 0 ? Number(budgetCny) : defaultBudgetCny,
+                authContext: trimAuthContextForRun(authContext),
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });
             log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_LEARN, expertName: normalizedExpertName });
@@ -781,6 +966,7 @@ function createForgeRuntimeService(options = {}) {
                 ...(examRef ? { examRef } : {}),
                 ...(Array.isArray(subskillIds) ? { examSubskillIds: subskillIds } : {}),
                 budgetCny: Number.isFinite(Number(budgetCny)) && Number(budgetCny) > 0 ? Number(budgetCny) : defaultBudgetCny,
+                authContext: trimAuthContextForRun(authContext),
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });
             log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_RETRIAL, expertName: normalizedExpertName });
@@ -803,7 +989,11 @@ function createForgeRuntimeService(options = {}) {
                 throw error;
             }
             if (!approved) {
-                await runStore.updateRun(jobId, { blueprintRejected: true, rejectionFeedback: normalizeString(feedback) });
+                await runStore.updateRun(jobId, {
+                    blueprintRejected: true,
+                    rejectionFeedback: normalizeString(feedback),
+                    finalStatus: 'cancelled'
+                });
                 jobRuntimeService.updateJob(jobId, {
                     status: JOB_STATUS.CANCELLED,
                     metadata: { forge: { rejection: { feedback: normalizeString(feedback) || null } } }
@@ -891,7 +1081,8 @@ function createForgeRuntimeService(options = {}) {
                 error.code = 'AGW_NOT_FOUND';
                 throw error;
             }
-            const patch = {};
+            // 续跑即脱离旧终态/暂停态：清掉重启恢复用的持久化标记。
+            const patch = { finalStatus: null, budgetPausedAtStep: null };
             if (Number.isFinite(Number(raiseBudgetToCny)) && Number(raiseBudgetToCny) > 0) {
                 patch.budgetCny = Number(raiseBudgetToCny);
                 patch.budgetRaises = [...(runRecord.budgetRaises || []), {
@@ -899,9 +1090,7 @@ function createForgeRuntimeService(options = {}) {
                     at: new Date().toISOString()
                 }];
             }
-            if (Object.keys(patch).length > 0) {
-                await runStore.updateRun(jobId, patch);
-            }
+            await runStore.updateRun(jobId, patch);
             log('forge.job.resumed', { jobId, fromStatus: job.status, raiseBudgetToCny: patch.budgetCny || null });
             scheduleDrive(jobId, authContext);
             return { jobId, outcome: 'resumed' };
@@ -977,6 +1166,13 @@ function createForgeRuntimeService(options = {}) {
             };
         }
     };
+    // 缺陷 2 修复：启动时从 runDir 恢复 job 注册表（fire-and-forget——扫描
+    // 失败只留审计日志，不阻断服务启动）。测试可用 restoreJobsOnBoot: false 关闭。
+    if (options.restoreJobsOnBoot !== false) {
+        restoreJobsFromDisk().catch((error) => {
+            log('forge.jobs.restore_failed', { message: error?.message || String(error) });
+        });
+    }
     return serviceApi;
 }
 
