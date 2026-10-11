@@ -83,7 +83,51 @@ function assertForgeToolAccess({ toolName, requesterAgentId, targetAgentId }) {
     }
 }
 
+// ── MCP/REST 共用的参数映射（gateway_forge_* 的入参 → service 调用）──────
+
+// gateway_forge_create → startExpertCreateJob
+function buildForgeCreateRequest(body = {}) {
+    return {
+        requirement: body.requirement,
+        ...(Number.isFinite(Number(body.budgetCny)) && Number(body.budgetCny) > 0
+            ? { budgetCny: Number(body.budgetCny) }
+            : {}),
+        ...(body.blueprintJson && typeof body.blueprintJson === 'object'
+            ? { blueprintOverride: body.blueprintJson }
+            : {})
+    };
+}
+
+// gateway_forge_confirm → confirmBlueprint（缺省字段不注入；非布尔 true 一律视为拒绝）
+function buildForgeConfirmRequest(body = {}) {
+    return {
+        approved: body.approved === true,
+        ...(body.feedback ? { feedback: body.feedback } : {}),
+        ...(body.renameTo ? { renameTo: body.renameTo } : {}),
+        ...(body.overwrite === true ? { overwrite: true } : {})
+    };
+}
+
+// gateway_forge_learn → startExpertLearnJob（subskillIds/topic 组装 scope）
+function buildForgeLearnRequest(body = {}) {
+    const scope = (Array.isArray(body.subskillIds) && body.subskillIds.length > 0) || body.topic
+        ? {
+            ...(Array.isArray(body.subskillIds) && body.subskillIds.length > 0 ? { subskillIds: body.subskillIds } : {}),
+            ...(body.topic ? { topic: body.topic } : {}),
+            reason: 'manual'
+        }
+        : undefined;
+    return {
+        expertName: body.expertName,
+        ...(body.since ? { since: body.since } : {}),
+        ...(scope ? { scope } : {})
+    };
+}
+
 module.exports = {
+    buildForgeCreateRequest,
+    buildForgeConfirmRequest,
+    buildForgeLearnRequest,
     FORGE_MASTER_AGENT,
     defaultIsForgedExpert,
     FORGE_ORCHESTRATION_TOOLS,

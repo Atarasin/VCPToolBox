@@ -6,6 +6,13 @@ const { applyDiaryPolicyGate } = require('./diaryPolicyGate');
 const { createMcpError } = require('./resultShapes');
 const { MCP_ERROR_CODES } = require('./constants');
 
+const {
+    assertForgeToolAccess,
+    buildForgeCreateRequest,
+    buildForgeConfirmRequest,
+    buildForgeLearnRequest
+} = require('../../services/forge/toolAccess');
+
 function normalizeMcpString(value, maxLength = 128) {
     return sanitizeRequestContextValue(value, maxLength);
 }
@@ -244,46 +251,6 @@ async function executeKnowledgeSearch(context) {
     });
 }
 
-// gateway_forge_learn 的 MCP args → startExpertLearnJob 参数映射（导出以供测试）：
-// subskillIds/topic 组装为 scope（reason=manual），缺省字段不产生空 scope。
-function buildForgeLearnRequest(body = {}) {
-    const scope = (Array.isArray(body.subskillIds) && body.subskillIds.length > 0) || body.topic
-        ? {
-            ...(Array.isArray(body.subskillIds) && body.subskillIds.length > 0 ? { subskillIds: body.subskillIds } : {}),
-            ...(body.topic ? { topic: body.topic } : {}),
-            reason: 'manual'
-        }
-        : undefined;
-    return {
-        expertName: body.expertName,
-        ...(body.since ? { since: body.since } : {}),
-        ...(scope ? { scope } : {})
-    };
-}
-
-// gateway_forge_create 的 MCP args → startExpertCreateJob 参数映射（导出以供测试）。
-function buildForgeCreateRequest(body = {}) {
-    return {
-        requirement: body.requirement,
-        ...(Number.isFinite(Number(body.budgetCny)) && Number(body.budgetCny) > 0
-            ? { budgetCny: Number(body.budgetCny) }
-            : {}),
-        ...(body.blueprintJson && typeof body.blueprintJson === 'object'
-            ? { blueprintOverride: body.blueprintJson }
-            : {})
-    };
-}
-
-// gateway_forge_confirm 的 MCP args → confirmBlueprint 参数映射（导出以供测试）。
-function buildForgeConfirmRequest(body = {}) {
-    return {
-        approved: body.approved === true,
-        ...(body.feedback ? { feedback: body.feedback } : {}),
-        ...(body.renameTo ? { renameTo: body.renameTo } : {}),
-        ...(body.overwrite === true ? { overwrite: true } : {})
-    };
-}
-
 async function executeForgeService(context, action) {
     const { bundle, name, args, input, operation, executeManaged } = context;
     return executeManaged({
@@ -295,7 +262,12 @@ async function executeForgeService(context, action) {
             try {
                 const agentId = String(body.agentId || requestContext.agentId || '').trim();
                 // forge 工具访问边界（仅 ForgeMaster 可编排；gap_report 自报/代报）
-                const { assertForgeToolAccess } = require('../../services/forge/toolAccess');
+                const {
+    assertForgeToolAccess,
+    buildForgeCreateRequest,
+    buildForgeConfirmRequest,
+    buildForgeLearnRequest
+} = require('../../services/forge/toolAccess');
                 assertForgeToolAccess({
                     toolName: name,
                     requesterAgentId: agentId,

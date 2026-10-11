@@ -9,6 +9,10 @@ const AGENT_GATEWAY_ROUTE_BINDINGS = Object.freeze({
     credentialContext: '/agent_gateway/credential/context',
     jobGet: (jobId) => `/agent_gateway/jobs/${encodeURIComponent(jobId)}`,
     jobCancel: (jobId) => `/agent_gateway/jobs/${encodeURIComponent(jobId)}/cancel`,
+    forgeCreate: '/agent_gateway/forge/experts',
+    forgeConfirm: (jobId) => `/agent_gateway/forge/jobs/${encodeURIComponent(jobId)}/confirm`,
+    forgeLearn: '/agent_gateway/forge/learn',
+    gapReport: '/agent_gateway/forge/gaps',
     eventStream: '/agent_gateway/events/stream'
 });
 

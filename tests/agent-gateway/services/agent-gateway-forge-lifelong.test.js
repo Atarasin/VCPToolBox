@@ -446,3 +446,100 @@ test('skillGenerator：无记忆面 agent 的 SKILL.md 不含 recall/memory 教�
     assert.match(withMemoryMd, /gateway_recall_run/, '有记忆面 agent 保留召回指引');
     assert.match(withMemoryMd, /gateway_memory_write/, '有记忆面 agent 保留存档指引');
 });
+
+// ── forge 族 REST 处理面（backend-proxy 模式的转发落点）──────────────────
+
+test('forgeRoutes：REST 面双面一致——ForgeMaster 放行、非 ForgeMaster 403、gap 自报/代报边界', async () => {
+    const express = require('express');
+    const { registerForgeRoutes } = require('../../../routes/agentGateway/forgeRoutes');
+    const calls = [];
+    const app = express();
+    app.use(express.json());
+    // 鉴权由 /agent_gateway 层承担，这里按 body.authContext.agentId 模拟凭据决议
+    app.use((req, _res, next) => {
+        req.agentGatewayAuth = null;
+        next();
+    });
+    const stubResolver = ({ providedAuthContext }) => providedAuthContext || {};
+    registerForgeRoutes(app, {
+        authContextResolver: stubResolver,
+        operabilityService: null,
+        forgeRuntimeService: {
+            startExpertCreateJob: async (params) => { calls.push({ op: 'create', params }); return { jobId: 'job_c1', runRecord: {} }; },
+            confirmBlueprint: async (jobId, params) => { calls.push({ op: 'confirm', jobId, params }); return { jobId, outcome: 'confirmed' }; },
+            startExpertLearnJob: async (params) => { calls.push({ op: 'learn', params }); return { jobId: 'job_l1' }; },
+            reportGap: async (params) => { calls.push({ op: 'gap', params }); return { expertName: params.agentId, gap: { id: 'g1', status: 'open' } }; }
+        }
+    });
+    const server = await new Promise((resolve) => {
+        const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    try {
+        // ForgeMaster 发起铸造 → 放行
+        const ok = await fetch(`${base}/forge/experts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requirement: '造一个 X', budgetCny: 5, authContext: { agentId: 'ForgeMaster' } })
+        });
+        assert.equal(ok.status, 200);
+        const okBody = await ok.json();
+        assert.equal(okBody.data.jobId, 'job_c1');
+        assert.equal(calls[0].params.requirement, '造一个 X');
+        assert.equal(calls[0].params.budgetCny, 5);
+
+        // 非 ForgeMaster 发起 → 403
+        const denied = await fetch(`${base}/forge/experts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requirement: 'x', authContext: { agentId: 'Nexus' } })
+        });
+        assert.equal(denied.status, 403);
+
+        // confirm（ForgeMaster）
+        const confirm = await fetch(`${base}/forge/jobs/job_c1/confirm`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ approved: true, authContext: { agentId: 'ForgeMaster' } })
+        });
+        assert.equal(confirm.status, 200);
+        assert.equal(calls[1].op, 'confirm');
+        assert.equal(calls[1].params.approved, true);
+
+        // learn：subskillIds/topic → scope（REST 面同映射）
+        await fetch(`${base}/forge/learn`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ expertName: 'UIDesigner', topic: '深色模式', authContext: { agentId: 'ForgeMaster' } })
+        });
+        assert.deepEqual(calls[2].params.scope, { topic: '深色模式', reason: 'manual' });
+
+        // gap：专家自报（无 expertName → 目标=本人）
+        const selfGap = await fetch(`${base}/forge/gaps`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: 'q1', authContext: { agentId: 'UIDesigner' } })
+        });
+        assert.equal(selfGap.status, 200);
+        assert.equal(calls[3].params.agentId, 'UIDesigner');
+
+        // gap：非 ForgeMaster 冒名代报 → 403
+        const forgedGap = await fetch(`${base}/forge/gaps`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: 'q', expertName: 'UIDesigner', authContext: { agentId: 'Nexus' } })
+        });
+        assert.equal(forgedGap.status, 403);
+
+        // gap：ForgeMaster 代报 → 放行且目标正确
+        const masterGap = await fetch(`${base}/forge/gaps`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: 'q2', expertName: 'UIDesigner', authContext: { agentId: 'ForgeMaster' } })
+        });
+        assert.equal(masterGap.status, 200);
+        assert.equal(calls[4].params.agentId, 'UIDesigner');
+    } finally {
+        await new Promise((resolve) => server.close(resolve));
+    }
+});

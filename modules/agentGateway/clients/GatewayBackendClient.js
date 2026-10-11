@@ -318,6 +318,30 @@ class GatewayBackendClient {
         });
     }
 
+    forgeCreate(body, requestOptions) {
+        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeCreate, {
+            body, ...(requestOptions || {})
+        });
+    }
+
+    forgeConfirm(jobId, body, requestOptions) {
+        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeConfirm(jobId), {
+            body, ...(requestOptions || {})
+        });
+    }
+
+    forgeLearn(body, requestOptions) {
+        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeLearn, {
+            body, ...(requestOptions || {})
+        });
+    }
+
+    gapReport(body, requestOptions) {
+        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.gapReport, {
+            body, ...(requestOptions || {})
+        });
+    }
+
     listJobEvents(jobId, query, requestOptions) {
         return this.requestEventStream(AGENT_GATEWAY_ROUTE_BINDINGS.eventStream, {
             query: {

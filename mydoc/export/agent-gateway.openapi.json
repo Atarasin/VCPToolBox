@@ -955,6 +955,182 @@
           }
         }
       }
+    },
+    "/agent_gateway/forge/experts": {
+      "summary": "Launch a full forge expert create job (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "requirement"
+              ],
+              "properties": {
+                "requirement": {
+                  "type": "string"
+                },
+                "budgetCny": {
+                  "type": "number"
+                },
+                "blueprintJson": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "/agent_gateway/forge/jobs/{jobId}/confirm": {
+      "summary": "Confirm or reject a pending_confirm forge job (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "approved"
+              ],
+              "properties": {
+                "approved": {
+                  "type": "boolean"
+                },
+                "feedback": {
+                  "type": "string"
+                },
+                "renameTo": {
+                  "type": "string"
+                },
+                "overwrite": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "/agent_gateway/forge/learn": {
+      "summary": "Launch an incremental forge expert learn job (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "expertName"
+              ],
+              "properties": {
+                "expertName": {
+                  "type": "string"
+                },
+                "subskillIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "topic": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "/agent_gateway/forge/gaps": {
+      "summary": "Register a knowledge gap (forged expert self-report, or ForgeMaster proxy-report with expertName)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "question"
+              ],
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "subskillId": {
+                  "type": "string"
+                },
+                "whyInsufficient": {
+                  "type": "string"
+                },
+                "expertName": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
     }
   },
   "components": {

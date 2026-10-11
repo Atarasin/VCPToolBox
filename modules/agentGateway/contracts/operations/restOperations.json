@@ -1486,29 +1486,78 @@
       "#/components/parameters/RuntimeQuery"
     ],
     "errors": [
-      { "status": 400, "response": { "$ref": "#/components/responses/InvalidRequest" } },
-      { "status": 401, "response": { "$ref": "#/components/responses/Unauthorized" } },
-      { "status": 403, "response": { "$ref": "#/components/responses/Forbidden" } },
-      { "status": 503, "response": { "$ref": "#/components/responses/ServiceUnavailable" } }
+      {
+        "status": 400,
+        "response": {
+          "$ref": "#/components/responses/InvalidRequest"
+        }
+      },
+      {
+        "status": 401,
+        "response": {
+          "$ref": "#/components/responses/Unauthorized"
+        }
+      },
+      {
+        "status": 403,
+        "response": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      },
+      {
+        "status": 503,
+        "response": {
+          "$ref": "#/components/responses/ServiceUnavailable"
+        }
+      }
     ],
     "openapi": {
       "get": {
-        "tags": ["Agents"],
+        "tags": [
+          "Agents"
+        ],
         "summary": "签发一次性 skill 下载 URL（mint；需 gateway:read 授权）",
         "operationId": "mintAgentGatewaySkillDownloadUrl",
         "parameters": [
-          { "$ref": "#/components/parameters/AgentIdPath" },
-          { "$ref": "#/components/parameters/SkillFormatQuery" },
-          { "$ref": "#/components/parameters/RequestIdQuery" },
-          { "$ref": "#/components/parameters/SourceQuery" },
-          { "$ref": "#/components/parameters/RuntimeQuery" }
+          {
+            "$ref": "#/components/parameters/AgentIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/SkillFormatQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RequestIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SourceQuery"
+          },
+          {
+            "$ref": "#/components/parameters/RuntimeQuery"
+          }
         ],
         "responses": {
-          "200": { "description": "Download URL minted", "content": { "application/json": { "schema": { "type": "object" } } } },
-          "400": { "$ref": "#/components/responses/InvalidRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+          "200": {
+            "description": "Download URL minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
         }
       }
     },
@@ -1520,24 +1569,406 @@
     "path": "/agent_gateway/agents/{agentId}/integration/skill/download",
     "parameterLocations": [],
     "errors": [
-      { "status": 401, "response": { "$ref": "#/components/responses/Unauthorized" } },
-      { "status": 403, "response": { "$ref": "#/components/responses/Forbidden" } }
+      {
+        "status": 401,
+        "response": {
+          "$ref": "#/components/responses/Unauthorized"
+        }
+      },
+      {
+        "status": 403,
+        "response": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
     ],
     "openapi": {
       "get": {
-        "tags": ["Agents"],
+        "tags": [
+          "Agents"
+        ],
         "summary": "兑换一次性 skill 下载 URL（redeem；无需原 credential）",
         "operationId": "redeemAgentGatewaySkillDownload",
         "parameters": [
-          { "$ref": "#/components/parameters/AgentIdPath" }
+          {
+            "$ref": "#/components/parameters/AgentIdPath"
+          }
         ],
         "responses": {
-          "200": { "description": "Skill artifact", "content": { "application/json": { "schema": { "type": "object" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "200": {
+            "description": "Skill artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
         }
       }
     },
     "authMechanism": "signedDownloadUrl"
+  },
+  {
+    "operationId": "forge.create",
+    "method": "post",
+    "path": "/agent_gateway/forge/experts",
+    "summary": "Launch a full forge expert create job (ForgeMaster only)",
+    "parameterLocations": [
+      {
+        "name": "requirement",
+        "in": "body",
+        "required": true
+      },
+      {
+        "name": "budgetCny",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "blueprintJson",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "requestContext",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "authContext",
+        "in": "body",
+        "required": false
+      }
+    ],
+    "errors": [
+      "AGW_VALIDATION_ERROR",
+      "AGW_FORBIDDEN",
+      "AGW_NOT_FOUND",
+      "AGW_CAPABILITY_UNAVAILABLE",
+      "AGW_INTERNAL_ERROR"
+    ],
+    "openapi": {
+      "summary": "Launch a full forge expert create job (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "requirement"
+              ],
+              "properties": {
+                "requirement": {
+                  "type": "string"
+                },
+                "budgetCny": {
+                  "type": "number"
+                },
+                "blueprintJson": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "credentialAction": "execute"
+  },
+  {
+    "operationId": "forge.confirm",
+    "method": "post",
+    "path": "/agent_gateway/forge/jobs/{jobId}/confirm",
+    "summary": "Confirm or reject a pending_confirm forge job (ForgeMaster only)",
+    "parameterLocations": [
+      {
+        "name": "approved",
+        "in": "body",
+        "required": true
+      },
+      {
+        "name": "feedback",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "renameTo",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "overwrite",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "requestContext",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "authContext",
+        "in": "body",
+        "required": false
+      }
+    ],
+    "errors": [
+      "AGW_VALIDATION_ERROR",
+      "AGW_FORBIDDEN",
+      "AGW_NOT_FOUND",
+      "AGW_CAPABILITY_UNAVAILABLE",
+      "AGW_INTERNAL_ERROR"
+    ],
+    "openapi": {
+      "summary": "Confirm or reject a pending_confirm forge job (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "approved"
+              ],
+              "properties": {
+                "approved": {
+                  "type": "boolean"
+                },
+                "feedback": {
+                  "type": "string"
+                },
+                "renameTo": {
+                  "type": "string"
+                },
+                "overwrite": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "credentialAction": "execute"
+  },
+  {
+    "operationId": "forge.learn",
+    "method": "post",
+    "path": "/agent_gateway/forge/learn",
+    "summary": "Launch an incremental forge expert learn job (ForgeMaster only)",
+    "parameterLocations": [
+      {
+        "name": "expertName",
+        "in": "body",
+        "required": true
+      },
+      {
+        "name": "subskillIds",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "topic",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "since",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "requestContext",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "authContext",
+        "in": "body",
+        "required": false
+      }
+    ],
+    "errors": [
+      "AGW_VALIDATION_ERROR",
+      "AGW_FORBIDDEN",
+      "AGW_NOT_FOUND",
+      "AGW_CAPABILITY_UNAVAILABLE",
+      "AGW_INTERNAL_ERROR"
+    ],
+    "openapi": {
+      "summary": "Launch an incremental forge expert learn job (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "expertName"
+              ],
+              "properties": {
+                "expertName": {
+                  "type": "string"
+                },
+                "subskillIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "topic": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "credentialAction": "execute"
+  },
+  {
+    "operationId": "gap.report",
+    "method": "post",
+    "path": "/agent_gateway/forge/gaps",
+    "summary": "Register a knowledge gap (forged expert self-report, or ForgeMaster proxy-report with expertName)",
+    "parameterLocations": [
+      {
+        "name": "question",
+        "in": "body",
+        "required": true
+      },
+      {
+        "name": "subskillId",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "whyInsufficient",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "expertName",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "requestContext",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "authContext",
+        "in": "body",
+        "required": false
+      }
+    ],
+    "errors": [
+      "AGW_VALIDATION_ERROR",
+      "AGW_FORBIDDEN",
+      "AGW_NOT_FOUND",
+      "AGW_CAPABILITY_UNAVAILABLE",
+      "AGW_INTERNAL_ERROR"
+    ],
+    "openapi": {
+      "summary": "Register a knowledge gap (forged expert self-report, or ForgeMaster proxy-report with expertName)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "question"
+              ],
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "subskillId": {
+                  "type": "string"
+                },
+                "whyInsufficient": {
+                  "type": "string"
+                },
+                "expertName": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert/job)"
+        }
+      }
+    },
+    "credentialAction": "execute"
   }
 ]

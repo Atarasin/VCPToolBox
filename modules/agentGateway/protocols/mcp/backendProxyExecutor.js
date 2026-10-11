@@ -683,6 +683,52 @@ const BACKEND_PROXY_METHODS = {
                     requestOptions
                 );
             },
+            forgeCreate: () => {
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
+                return backendClient.forgeCreate(
+                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
+                    requestOptions
+                );
+            },
+            forgeConfirm: () => {
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
+                if (!args?.jobId) {
+                    throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_forge_confirm requires jobId', {
+                        field: 'jobId', name
+                    });
+                }
+                return backendClient.forgeConfirm(
+                    args.jobId,
+                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
+                    requestOptions
+                );
+            },
+            forgeLearn: () => {
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
+                return backendClient.forgeLearn(
+                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
+                    requestOptions
+                );
+            },
+            gapReport: () => {
+                const targetAgentId = ensureAgentId({
+                    ...input,
+                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
+                }, `tools/call:${name}`);
+                return backendClient.gapReport(
+                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
+                    requestOptions
+                );
+            },
             removedRender: () => {
                 throw createMcpError(
                     MCP_ERROR_CODES.NOT_FOUND,
