@@ -10,6 +10,7 @@ const integrationRoutes = require('./agentGateway/integrationRoutes');
 const skillDownloadRoutes = require('./agentGateway/skillDownloadRoutes');
 const memoryRoutes = require('./agentGateway/memoryRoutes');
 const runtimeRoutes = require('./agentGateway/runtimeRoutes');
+const { registerKnowledgeSearchRoute } = require('./agentGateway/knowledgeRoutes');
 const { registerForgeRoutes } = require('./agentGateway/forgeRoutes');
 const { registerAdminSessionRoutes } = require('./agentGateway/authSessionRoutes');
 
@@ -20,6 +21,7 @@ const ROUTE_REGISTRARS = [
     ...Object.values(skillDownloadRoutes),
     ...Object.values(memoryRoutes),
     ...Object.values(runtimeRoutes),
+    registerKnowledgeSearchRoute,
     registerForgeRoutes,
     registerAdminSessionRoutes
 ];

@@ -12,6 +12,8 @@ file/document/AgentTask/
 sarprompt.json
 Plugin/SkillBridge/skill-index.txt
 
+*.jsonl
+
 # Logs
 logs
 *.log
