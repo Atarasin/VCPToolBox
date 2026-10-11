@@ -571,3 +571,197 @@ test('retrial：已注册专家仅重跑 trial——不采集不合成不触发�
     const summary = (await env.forgeRuntimeService.listJobs()).find((job) => job.jobId === jobId);
     assert.equal(summary.type, 'retrial');
 });
+
+// ── 盲测作答弹性回归（2026-10-11 补考实测：两题正文为空被判 0 分"未作答"、
+// 一题答卷中途截断 56 分——推理型模型把输出预算耗在推理段 + max_tokens=3000 太小）。
+
+test('trial：盲测作答弹性——空正文重试/推理段兜底/作答失败不入缺口/截断标注', async () => {
+    const baseDir = createTempDir();
+    const jrs = createJobRuntimeService();
+    const answerCalls = {};   // qid -> 次
+    const answerPrompts = []; // 每次作答调用的 prompt（校验重试带直接输出指令）
+    // 判卷只有 q2 低分（0.5）：q2 是 empty 作答失败 → 不应计入缺口 →
+    // 无弱项缺口 → 不触发自动回填 learn（答题调用计数稳定在本轮试岗）。
+    const scores = (ratio) => ({ correctness: ratio * 5, completeness: ratio * 5, professionalism: ratio * 5, antiAiFlavor: ratio * 5, actionability: ratio * 5 });
+    const mixedGrade = JSON.stringify({
+        gradedQuestions: [
+            { id: 'q1', scores: scores(0.9), comment: 'ok', citedKnowledgeCards: [] },
+            { id: 'q2', scores: scores(0.5), comment: '未作答', citedKnowledgeCards: [] },
+            { id: 'qp', scores: scores(0.9), comment: 'ok', citedKnowledgeCards: [] }
+        ],
+        overallComment: '总评'
+    });
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                const content = payload.messages[0].content;
+                let message = { content: 'answer' };
+                let finishReason = null;
+                if (content.includes('# 知识库检索结果')) {
+                    const qid = (content.match(/# 考题（(.*?)）/u) || [])[1] || '?';
+                    answerCalls[qid] = (answerCalls[qid] || 0) + 1;
+                    answerPrompts.push(content);
+                    const attempt = answerCalls[qid];
+                    if (qid === 'q1') {
+                        // 空正文一次 → 重试成功
+                        message = attempt === 1
+                            ? { content: '' }
+                            : { content: '完整答案：色轮以色相环组织颜色，三属性为色相、饱和度、明度。' };
+                        if (attempt === 1) finishReason = 'length';
+                    } else if (qid === 'q2') {
+                        // 两轮空且无推理段 → 作答失败（不入缺口）
+                        message = { content: '' };
+                        finishReason = 'length';
+                    } else if (qid === 'qp') {
+                        // 两轮都有正文但都被截断 → truncated 标注
+                        message = { content: `部分评审内容（第 ${attempt} 轮）` };
+                        finishReason = 'length';
+                    }
+                } else if (content.includes('出题官') || content.includes('考纲')) {
+                    message = { content: EXAM_JSON };
+                } else if (content.includes('判卷官')) {
+                    message = { content: mixedGrade };
+                } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
+                    message = { content: DISTILL_JSON };
+                }
+                return {
+                    data: {
+                        choices: [{ message, ...(finishReason ? { finish_reason: finishReason } : {}) }],
+                        usage: { prompt_tokens: 1, completion_tokens: 1 }
+                    }
+                };
+            }
+        },
+        toolInvokerPort: {
+            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+        },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1 }]
+        },
+        baseDir: path.join(baseDir, 'forge'),
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'agent_map.json'),
+        knowledgePolicyPath: path.join(baseDir, 'policy.json'),
+        guidanceConfigPath: path.join(baseDir, 'guidance.json')
+    });
+    for (const [file, content] of [
+        ['agent_map.json', '{}'],
+        ['policy.json', JSON.stringify({ restrictedLibraries: {} })],
+        ['guidance.json', JSON.stringify({ version: 1, shared: { workflow: [], memoryWritePolicy: { write: [], skip: [] } }, agents: {} })]
+    ]) {
+        fs.writeFileSync(path.join(baseDir, file), content);
+    }
+    const { jobId } = await svc.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        blueprintOverride: blueprint()
+    });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
+
+    const examsDir = path.join(baseDir, 'forge', 'runs', jobId, 'exams');
+    const answersFile = JSON.parse(fs.readFileSync(path.join(examsDir, 'answers.json'), 'utf8'));
+
+    // q1：空正文一次 → 带直接输出指令重试成功（无 issue 留痕）
+    assert.equal(answerCalls.q1, 2, 'q1 恰好两次作答调用');
+    assert.match(answersFile.answers.q1, /完整答案/);
+    assert.equal(answersFile.answerMeta.q1, undefined, '重试成功不留 issue');
+
+    // q2：两轮皆空 → 作答失败留痕，且不计入缺口（执行面问题 ≠ 知识缺口）
+    assert.equal(answersFile.answerMeta.q2.issue, 'empty');
+    const gaps = JSON.parse(fs.readFileSync(path.join(examsDir, 'gaps.json'), 'utf8'));
+    assert.ok(!gaps.gaps.some((gap) => gap.reason.includes('q2')), '作答失败题不触发知识回填缺口');
+
+    // qp：两轮截断 → truncated 留痕
+    assert.equal(answersFile.answerMeta.qp.issue, 'truncated');
+    assert.match(answersFile.answers.qp, /第 2 轮/);
+
+    // 重试调用必须带「直接输出正文」强指令
+    const retryPrompts = answerPrompts.filter((p) => p.includes('【输出要求】'));
+    assert.ok(retryPrompts.length >= 3, `q1/q2/qp 的重试都应带直接输出指令，实际 ${retryPrompts.length}`);
+
+    // 判卷 prompt 携带异常注记；报告显式标注
+    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', jobId, 'steps', 'trial.json'), 'utf8'));
+    assert.match(marker.summary, /作答异常 2 题（q2:empty、qp:truncated）/);
+    const md = fs.readFileSync(path.join(examsDir, 'grade-report.md'), 'utf8');
+    assert.match(md, /⚠️ 作答失败（模型未输出正文，非知识缺口）/);
+    assert.match(md, /⚠️ 答卷被输出上限截断/);
+});
+
+test('trial：两轮空正文但推理段可用 → 以推理段兜底作答并显式标注', async () => {
+    const baseDir = createTempDir();
+    const jrs = createJobRuntimeService();
+    let q1Calls = 0;
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                const content = payload.messages[0].content;
+                let message = { content: 'answer' };
+                let finishReason = null;
+                if (content.includes('# 知识库检索结果')) {
+                    const qid = (content.match(/# 考题（(.*?)）/u) || [])[1] || '?';
+                    if (qid === 'q1') {
+                        q1Calls += 1;
+                        message = { content: '', reasoning_content: '推理段：色轮以色相环组织颜色，三属性为色相、饱和度、明度……' };
+                        finishReason = 'length';
+                    }
+                } else if (content.includes('出题官') || content.includes('考纲')) {
+                    message = { content: EXAM_JSON };
+                } else if (content.includes('判卷官')) {
+                    message = { content: gradeJson(0.9) };
+                } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
+                    message = { content: DISTILL_JSON };
+                }
+                return {
+                    data: {
+                        choices: [{ message, ...(finishReason ? { finish_reason: finishReason } : {}) }],
+                        usage: { prompt_tokens: 1, completion_tokens: 1 }
+                    }
+                };
+            }
+        },
+        toolInvokerPort: {
+            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+        },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1 }]
+        },
+        baseDir: path.join(baseDir, 'forge'),
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'agent_map.json'),
+        knowledgePolicyPath: path.join(baseDir, 'policy.json'),
+        guidanceConfigPath: path.join(baseDir, 'guidance.json')
+    });
+    for (const [file, content] of [
+        ['agent_map.json', '{}'],
+        ['policy.json', JSON.stringify({ restrictedLibraries: {} })],
+        ['guidance.json', JSON.stringify({ version: 1, shared: { workflow: [], memoryWritePolicy: { write: [], skip: [] } }, agents: {} })]
+    ]) {
+        fs.writeFileSync(path.join(baseDir, file), content);
+    }
+    const { jobId } = await svc.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        blueprintOverride: blueprint()
+    });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
+
+    assert.equal(q1Calls, 2, '正文为空先重试一次再兜底');
+    const answersFile = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'answers.json'), 'utf8'));
+    assert.match(answersFile.answers.q1, /推理段：色轮/);
+    assert.equal(answersFile.answerMeta.q1.issue, 'reasoning-only');
+    const md = fs.readFileSync(path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'grade-report.md'), 'utf8');
+    assert.match(md, /⚠️ 以推理段作答（正文未输出）/);
+});
