@@ -425,3 +425,149 @@ test('retest：回填重测不重新出题（出题官调用次数为 0）', asy
     assert.ok(retestSummary2.retestOf, '重测关联原 job');
     void jobId;
 });
+
+// ── 2026-10-11 事故回归：出题整卷单次输出顶满 max_tokens 被截断（completion
+// 恰为上限 6000 ×2），同 prompt 重试必然再截。分批出题 + 截断抢救 + 3 次尝试。────
+
+function buildTrialParseEnv(baseDir, { examOutput, examFinishReason = null, gradeOutput } = {}) {
+    const jrs = createJobRuntimeService();
+    const llmCalls = [];
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                llmCalls.push(payload);
+                const content = payload.messages[0].content;
+                let output;
+                let finishReason = null;
+                if (content.includes('出题官') || content.includes('考纲')) {
+                    output = typeof examOutput === 'function' ? examOutput(content) : examOutput;
+                    finishReason = examFinishReason;
+                } else if (content.includes('判卷官')) {
+                    output = typeof gradeOutput === 'function' ? gradeOutput(content) : gradeOutput;
+                } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
+                    output = DISTILL_JSON;
+                } else {
+                    output = 'answer';
+                }
+                return {
+                    data: {
+                        choices: [{ message: { content: output }, ...(finishReason ? { finish_reason: finishReason } : {}) }],
+                        usage: { prompt_tokens: 1, completion_tokens: 1 }
+                    }
+                };
+            }
+        },
+        toolInvokerPort: {
+            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+        },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1 }]
+        },
+        baseDir: path.join(baseDir, 'forge'),
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'agent_map.json'),
+        knowledgePolicyPath: path.join(baseDir, 'policy.json'),
+        guidanceConfigPath: path.join(baseDir, 'guidance.json')
+    });
+    for (const [file, content] of [
+        ['agent_map.json', '{}'],
+        ['policy.json', JSON.stringify({ restrictedLibraries: {} })],
+        ['guidance.json', JSON.stringify({ version: 1, shared: { workflow: [], memoryWritePolicy: { write: [], skip: [] } }, agents: {} })]
+    ]) {
+        fs.writeFileSync(path.join(baseDir, file), content);
+    }
+    return { jrs, svc, llmCalls };
+}
+
+async function driveInlineToTerminal(jrs, svc) {
+    const { jobId } = await svc.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        blueprintOverride: blueprint()
+    });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
+    return jobId;
+}
+
+test('trial：出题输出被截断 → 抢救完整题目继续（分批出题不放大截断面）', async () => {
+    const baseDir = createTempDir();
+    // 在 q2 题干字符串中途切断：q1 完整可抢救，q2/qp 丢失
+    const truncated = EXAM_JSON.slice(0, EXAM_JSON.indexOf('为登录页选主色') + 3);
+    assert.ok(!truncated.trim().endsWith('}'), '模拟输出应是非完整 JSON');
+    const { jrs, svc } = buildTrialParseEnv(baseDir, {
+        examOutput: truncated,
+        examFinishReason: 'length',
+        gradeOutput: gradeJson(0.9)
+    });
+    const jobId = await driveInlineToTerminal(jrs, svc);
+    const job = jrs.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'pending_confirm', `抢救后 trial 应完成（判卷 0.9 及格），实际 ${job.status}：${job.metadata.forge.error?.message}`);
+
+    const examsDir = path.join(baseDir, 'forge', 'runs', jobId, 'exams');
+    const exam = JSON.parse(fs.readFileSync(path.join(examsDir, 'exam.json'), 'utf8'));
+    assert.equal(exam.questions.length, 1, '只保留抢救出的完整题 q1');
+    assert.equal(exam.questions[0].id, 'q1');
+    assert.ok(!fs.existsSync(path.join(baseDir, 'forge', 'runs', jobId, 'trial-failed')), '抢救成功不留失败档');
+});
+
+test('trial：判卷缺失题目不静默——总评注明缺失题号并按 0 分计', async () => {
+    const baseDir = createTempDir();
+    const partialGrade = JSON.stringify({
+        gradedQuestions: [{
+            id: 'q1',
+            scores: { correctness: 4.5, completeness: 4.5, professionalism: 4.5, antiAiFlavor: 4.5, actionability: 4.5 },
+            comment: '评语',
+            citedKnowledgeCards: []
+        }],
+        overallComment: '总评'
+    });
+    const { jrs, svc } = buildTrialParseEnv(baseDir, {
+        examOutput: EXAM_JSON,
+        gradeOutput: partialGrade
+    });
+    const jobId = await driveInlineToTerminal(jrs, svc);
+    const job = jrs.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'completed', '缺失两题按 0 分 → 总分不及格 → 直接完成');
+
+    const examsDir = path.join(baseDir, 'forge', 'runs', jobId, 'exams');
+    const report = JSON.parse(fs.readFileSync(path.join(examsDir, 'grade-report.json'), 'utf8'));
+    assert.ok(Math.abs(report.ratio - 0.3) < 0.001, `q1 90% + 缺失两题 0 分 → 30%，实际 ${report.ratio}`);
+    assert.match(report.grading.overallComment, /判卷缺失 2 题：q2、qp/);
+    const md = fs.readFileSync(path.join(examsDir, 'grade-report.md'), 'utf8');
+    assert.match(md, /判卷缺失 2 题/);
+});
+
+test('retrial：已注册专家仅重跑 trial——不采集不合成不触发重名冲突', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    const { writeBlueprint } = require('../../../modules/agentGateway/services/forge/blueprint');
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+
+    // 画像缺失 → 404
+    await assert.rejects(
+        () => env.forgeRuntimeService.startExpertRetrialJob({ expertName: 'NotForged' }),
+        (error) => error.status === 404
+    );
+
+    const { jobId } = await env.forgeRuntimeService.startExpertRetrialJob({ expertName: 'UIDesigner' });
+    assert.equal(await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.status === 'pending_confirm'), true,
+        '判卷及格 → 待用户抽查');
+    const run = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', jobId, 'run.json'), 'utf8'));
+    assert.equal(run.jobKind, 'expert.retrial');
+    assert.equal(run.expertName, 'UIDesigner');
+    const stepsDir = path.join(baseDir, 'forge', 'runs', jobId, 'steps');
+    assert.deepEqual(fs.readdirSync(stepsDir), ['trial.json'], '只有 trial 一步');
+    assert.ok(!fs.existsSync(path.join(baseDir, 'forge', 'runs', jobId, 'raw')), 'retrial 不采集');
+    assert.ok(fs.existsSync(path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'exam.json')), '考卷落盘');
+
+    await env.forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
+    assert.equal(await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.status === 'completed'), true);
+    const summary = (await env.forgeRuntimeService.listJobs()).find((job) => job.jobId === jobId);
+    assert.equal(summary.type, 'retrial');
+});

@@ -83,6 +83,19 @@ function assertForgeToolAccess({ toolName, requesterAgentId, targetAgentId }) {
     }
 }
 
+// REST-only 编排入口（如 forge.retrial 补试岗）无对应 MCP 工具名——复用
+// 编排口径：仅 ForgeMaster 可触发。
+function assertForgeOrchestrationAccess({ requesterAgentId, action }) {
+    const label = action || 'forge orchestration';
+    if (requesterAgentId !== FORGE_MASTER_AGENT) {
+        throw createForgeAccessError(
+            label,
+            `${label} 仅铸造师 ${FORGE_MASTER_AGENT} 可触发`,
+            { requesterAgentId: requesterAgentId || null }
+        );
+    }
+}
+
 // ── MCP/REST 共用的参数映射（gateway_forge_* 的入参 → service 调用）──────
 
 // gateway_forge_create → startExpertCreateJob
@@ -133,5 +146,6 @@ module.exports = {
     FORGE_ORCHESTRATION_TOOLS,
     FORGE_GAP_REPORT_TOOL,
     filterGatewayToolsForAgent,
-    assertForgeToolAccess
+    assertForgeToolAccess,
+    assertForgeOrchestrationAccess
 };

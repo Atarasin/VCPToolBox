@@ -30,7 +30,8 @@ const { PASS_RATIO } = require('./trial');
 
 const FORGE_JOB_OPERATIONS = Object.freeze({
     EXPERT_CREATE: 'forge.expert.create',
-    EXPERT_LEARN: 'forge.expert.learn'
+    EXPERT_LEARN: 'forge.expert.learn',
+    EXPERT_RETRIAL: 'forge.expert.retrial'
 });
 
 const DEFAULT_BASE_DIR = path.join(__dirname, '..', '..', '..', '..', 'Agent', 'forge');
@@ -260,6 +261,11 @@ function createForgeRuntimeService(options = {}) {
     }
 
     function stepsForJobKind(runRecord) {
+        if (runRecord.jobKind === 'expert.retrial') {
+            // 补试岗：专家已注册（synthesize 曾完成），只重跑 trial；不触发注册
+            // 与重名冲突（红线 3），失败缺口回填链路照常可用。
+            return stepRegistry.RETRIAL_STEPS;
+        }
         if (runRecord.jobKind !== 'expert.learn') {
             return stepRegistry.CREATE_STEPS;
         }
@@ -520,12 +526,14 @@ function createForgeRuntimeService(options = {}) {
     function parseJobSummary(job) {
         const forge = job?.metadata?.forge || {};
         const operation = job.operation || '';
-        const jobKind = operation === FORGE_JOB_OPERATIONS.EXPERT_LEARN ? 'expert.learn' : 'expert.create';
+        const jobKind = operation === FORGE_JOB_OPERATIONS.EXPERT_LEARN ? 'expert.learn'
+            : (operation === FORGE_JOB_OPERATIONS.EXPERT_RETRIAL ? 'expert.retrial' : 'expert.create');
+        const jobType = jobKind === 'expert.learn' ? 'learn' : (jobKind === 'expert.retrial' ? 'retrial' : 'create');
         return {
             jobId: job.jobId,
             operation,
             jobKind: forge.jobKind || jobKind,
-            type: jobKind === 'expert.learn' ? 'learn' : 'create',
+            type: jobType,
             expertName: forge.expertName || null,
             displayName: forge.displayName || null,
             status: job.status,
@@ -625,6 +633,60 @@ function createForgeRuntimeService(options = {}) {
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });
             log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_LEARN, expertName: normalizedExpertName });
+            scheduleDrive(job.jobId, authContext);
+            return { jobId: job.jobId, runRecord };
+        },
+        // 补试岗入口：已注册专家（如 synthesize 完成但 trial 失败/缺成绩）只重跑
+        // trial——重新 create 会撞重名（红线 3），此处不触碰注册面。
+        async startExpertRetrialJob({ expertName, budgetCny = null, authContext = null } = {}) {
+            const normalizedExpertName = normalizeString(expertName);
+            if (!normalizedExpertName) {
+                const error = new Error('expertName 不能为空');
+                error.status = 400;
+                error.code = 'AGW_VALIDATION_ERROR';
+                throw error;
+            }
+            const blueprintPath = path.join(baseDir, 'blueprints', `${normalizedExpertName}.json`);
+            if (!fs.existsSync(blueprintPath)) {
+                const error = new Error(`未找到专家画像：Agent/forge/blueprints/${normalizedExpertName}.json（须先完成全量铸造）`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            const { readBlueprint } = require('./blueprint');
+            let expertBlueprint;
+            try {
+                expertBlueprint = await readBlueprint(blueprintPath);
+            } catch (error) {
+                const wrapped = new Error(`画像不可读：${error.message}`);
+                wrapped.status = 400;
+                wrapped.code = 'AGW_VALIDATION_ERROR';
+                throw wrapped;
+            }
+            const job = jobRuntimeService.createAcceptedJob({
+                operation: FORGE_JOB_OPERATIONS.EXPERT_RETRIAL,
+                authContext,
+                target: { type: 'forge', id: 'expert' },
+                metadata: {
+                    forge: {
+                        jobKind: 'expert.retrial',
+                        expertName: normalizedExpertName,
+                        displayName: expertBlueprint.displayName || normalizedExpertName
+                    }
+                }
+            });
+            const runRecord = await runStore.initRun({
+                jobId: job.jobId,
+                jobKind: 'expert.retrial',
+                expertName: normalizedExpertName,
+                displayName: expertBlueprint.displayName || normalizedExpertName,
+                requirement: `retrial: ${normalizedExpertName}`,
+                blueprintPath,
+                blueprintApproved: true,
+                budgetCny: Number.isFinite(Number(budgetCny)) && Number(budgetCny) > 0 ? Number(budgetCny) : defaultBudgetCny,
+                runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
+            });
+            log('forge.job.started', { jobId: job.jobId, operation: FORGE_JOB_OPERATIONS.EXPERT_RETRIAL, expertName: normalizedExpertName });
             scheduleDrive(job.jobId, authContext);
             return { jobId: job.jobId, runRecord };
         },

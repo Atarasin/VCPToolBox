@@ -1789,6 +1789,80 @@
     "credentialAction": "execute"
   },
   {
+    "operationId": "forge.retrial",
+    "method": "post",
+    "path": "/agent_gateway/forge/retrial",
+    "summary": "Re-run trial only for a registered forge expert (ForgeMaster only)",
+    "parameterLocations": [
+      {
+        "name": "expertName",
+        "in": "body",
+        "required": true
+      },
+      {
+        "name": "budgetCny",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "requestContext",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "authContext",
+        "in": "body",
+        "required": false
+      }
+    ],
+    "errors": [
+      "AGW_VALIDATION_ERROR",
+      "AGW_FORBIDDEN",
+      "AGW_NOT_FOUND",
+      "AGW_CAPABILITY_UNAVAILABLE",
+      "AGW_INTERNAL_ERROR"
+    ],
+    "openapi": {
+      "summary": "Re-run trial only for a registered forge expert (ForgeMaster only)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "expertName"
+              ],
+              "properties": {
+                "expertName": {
+                  "type": "string"
+                },
+                "budgetCny": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error"
+        },
+        "403": {
+          "description": "Forbidden (forge tools are ForgeMaster-only)"
+        },
+        "404": {
+          "description": "Not found (unknown expert blueprint)"
+        }
+      }
+    },
+    "credentialAction": "execute"
+  },
+  {
     "operationId": "forge.learn",
     "method": "post",
     "path": "/agent_gateway/forge/learn",

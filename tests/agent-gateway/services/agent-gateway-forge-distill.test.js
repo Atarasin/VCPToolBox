@@ -463,16 +463,16 @@ test('distill：确认截断且无可抢救单元时拆半重蒸，彻底失败�
     assert.equal(job.metadata.forge.error.step, 'distill');
     assert.match(job.metadata.forge.error.message, /finish_reason=length/);
 
-    // 拆半轨迹：根批(3 份) → 拆半(2 份) → 再拆(1 份) → 单材料重试一次 = 4 次蒸馏调用
+    // 拆半轨迹：根批(3 份) → 拆半(2 份) → 再拆(1 份) → 单材料重试两次 = 5 次蒸馏调用
     const distillPrompts = llmCalls.map((call) => call.messages[0].content)
         .filter((content) => content.includes('知识蒸馏引擎'));
-    assert.equal(distillPrompts.length, 4, `拆半+重试调用数，实际 ${distillPrompts.length}`);
+    assert.equal(distillPrompts.length, 5, `拆半+重试调用数，实际 ${distillPrompts.length}`);
 
     // 留档：单材料批的两次尝试原始输出（含 finish_reason 与批内材料 URL）
     const failedDir = path.join(baseDir, 'runs', jobId, 'distill-failed');
     const dumps = fs.readdirSync(failedDir).filter((f) => f.endsWith('.json')).sort();
-    assert.deepEqual(dumps, ['color-theory.attempt-1.json', 'color-theory.attempt-2.json']);
-    const dump = JSON.parse(fs.readFileSync(path.join(failedDir, 'color-theory.attempt-2.json'), 'utf8'));
+    assert.deepEqual(dumps, ['color-theory.attempt-1.json', 'color-theory.attempt-2.json', 'color-theory.attempt-3.json']);
+    const dump = JSON.parse(fs.readFileSync(path.join(failedDir, 'color-theory.attempt-3.json'), 'utf8'));
     assert.equal(dump.finishReason, 'length');
     assert.equal(dump.rawContent, truncated);
     assert.ok(Array.isArray(dump.batchUrls) && dump.batchUrls.length === 1, '留档含批内材料 URL');

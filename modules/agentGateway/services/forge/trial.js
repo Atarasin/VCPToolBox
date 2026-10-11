@@ -5,7 +5,7 @@ const fsp = require('fs').promises;
 const path = require('path');
 
 const { readBlueprint, blueprintLibraryName } = require('./blueprint');
-const { extractJsonObject } = require('./jsonUtils');
+const { extractJsonObject, extractCompleteArrayObjects } = require('./jsonUtils');
 const { scanTextForSecrets } = require('./secretScan');
 
 /**
@@ -13,19 +13,28 @@ const { scanTextForSecrets } = require('./secretScan');
  * 设计：docs/design/2026-10-10_专家铸造炉.md §3.7（D3/D7/Q5）。
  *
  * - 出题：LLM 按考纲生成（每 subskill ≥1 概念 + 1 应用 + 1 实操题，评分维度含
- *   眼前一亮/去 AI 味）；
+ *   眼前一亮/去 AI 味）——按考纲条目分次生成（2026-10-11 实测整卷单次输出
+ *   顶满 max_tokens 被截断，completion 恰为上限值 ×2）；
  * - 盲测（红线 1）：被考 agent 只经 gateway_knowledge_search 查自己的库——
  *   实现为「代查专属库 + 人设作答」：以专家人设为 system，答题上下文只注入
  *   专属库命中知识卡，无记忆读写、无其他工具，查不到就答知识边界；
- * - 判卷（D7 第一步）：五维 0-5 分 + 评语 + 引用知识卡；及格线总分 80%，
- *   到线才转 pending_confirm 请用户抽查（D3），不及格不推送用户直接留缺口；
+ * - 判卷（D7 第一步）：五维 0-5 分 + 评语 + 引用知识卡；按题分块判卷（块输出
+ *   远小于 max_tokens）；及格线总分 80%，到线才转 pending_confirm 请用户抽查
+ *   （D3），不及格不推送用户直接留缺口；
  * - Jev 对照（D7 方案 C）：同一批答卷经 jevPort（typesafe-ai Jev）类型化复判
  *   isProfessional / isAiFlavored / isActionable，与 LLM 分数双档
  *   exams/comparison.json；jevPort 未配置记 skipped 原因（不阻断）。
+ *
+ * 解析韧性：出题/判卷共用 completeJsonResilient——整体解析 → 抢救完整数组
+ * 元素 → 同 prompt 重试（共 3 次尝试）；彻底失败前原始输出留档
+ * runDir/trial-failed/ 供事后诊断（与 distill-failed/ 同构）。
  */
 
 const PASS_RATIO = 0.8;
 const GRADE_DIMENSIONS = ['correctness', 'completeness', 'professionalism', 'antiAiFlavor', 'actionability'];
+const TRIAL_MAX_ATTEMPTS = 3;
+const TRIAL_MAX_TOKENS = 8000;
+const GRADE_CHUNK_SIZE = 5;
 
 const FALLBACK_EXAMINE_TEMPLATE = `你是出题官。按考纲为{{displayName}}（{{name}}）出上岗考卷：每子技能 1 概念题+1 应用题，另 1 实操题（{{practicalPrompt}}，维度：{{gradingDimensions}}）。每题带 referencePoints 与 searchKeywords。只输出 JSON：{"questions":[{"id":"","subskillId":"","kind":"concept|applied|practical","prompt":"","gradingDimensions":["..."],"referencePoints":[],"searchKeywords":[]}]}`;
 
@@ -39,14 +48,75 @@ function loadTemplate(baseDir, fileName, fallback) {
     }
 }
 
-async function completeJson(llm, llmConfig, prompt, { temperature = 0.3, maxTokens = 6000 } = {}) {
-    const response = await llm.complete(llmConfig, {
-        model: llmConfig.model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature,
-        max_tokens: maxTokens
-    });
-    return extractJsonObject(response?.data?.choices?.[0]?.message?.content || '');
+// 彻底失败前把原始输出留档（与 distill-failed/ 同构；留档失败不掩盖原始错误）。
+async function dumpTrialFailure(runDir, dumpBase, attempts, promptPreview) {
+    try {
+        const dir = path.join(runDir, 'trial-failed');
+        await fsp.mkdir(dir, { recursive: true });
+        for (const attempt of attempts) {
+            await fsp.writeFile(
+                path.join(dir, `${dumpBase}.attempt-${attempt.index}.json`),
+                `${JSON.stringify({
+                    dumpBase,
+                    attempt: attempt.index,
+                    finishReason: attempt.finishReason,
+                    usage: attempt.usage ?? null,
+                    promptPreview,
+                    rawContent: attempt.content
+                }, null, 2)}\n`,
+                'utf8'
+            );
+        }
+    } catch {
+        // 尽力而为。
+    }
+}
+
+/**
+ * 出题/判卷共用的弹性 JSON 补全：
+ * 整体解析 → 按数组字段抢救完整元素（截断只损失被切开的尾元素）→ 同 prompt
+ * 重试（默认共 3 次尝试）。全部失败时留档 trial-failed/ 并返回 null（调用方
+ * 按语义抛 FORGE_*_OUTPUT_INVALID）。
+ */
+async function completeJsonResilient({
+    llm, llmConfig, prompt, temperature, runDir, dumpBase, arrayField, validate, logger,
+    maxAttempts = TRIAL_MAX_ATTEMPTS, maxTokens = TRIAL_MAX_TOKENS
+}) {
+    const attempts = [];
+    for (let index = 1; index <= maxAttempts; index += 1) {
+        const response = await llm.complete(llmConfig, {
+            model: llmConfig.model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature,
+            max_tokens: maxTokens
+        });
+        const choice = response?.data?.choices?.[0];
+        const content = choice?.message?.content || '';
+        const finishReason = choice?.finish_reason || null;
+
+        const payload = extractJsonObject(content);
+        if (validate(payload)) {
+            return payload;
+        }
+        if (arrayField) {
+            const items = extractCompleteArrayObjects(content, `"${arrayField}"`);
+            if (items.length > 0) {
+                const salvaged = arrayField === 'gradedQuestions'
+                    ? { gradedQuestions: items, overallComment: '' }
+                    : { [arrayField]: items };
+                if (validate(salvaged)) {
+                    logger?.(`trial: ${dumpBase} 输出整体不可解析（finish_reason=${finishReason ?? 'unknown'}），抢救出 ${items.length} 个完整元素`);
+                    return salvaged;
+                }
+            }
+        }
+        attempts.push({ index, finishReason, usage: response?.data?.usage ?? null, content });
+        if (index < maxAttempts) {
+            logger?.(`trial: ${dumpBase} 输出不可解析（finish_reason=${finishReason ?? 'unknown'}），重试（${index}/${maxAttempts - 1}）`);
+        }
+    }
+    await dumpTrialFailure(runDir, dumpBase, attempts, prompt.slice(0, 2000));
+    return null;
 }
 
 function assertNoSecrets(text, what) {
@@ -183,27 +253,84 @@ function createTrialStepRunner() {
         const examsDir = path.join(runDir, 'exams');
 
         // 1. 出题（§3.7：每 subskill ≥1 概念 + 1 应用 + 1 实操，维度含眼前一亮/去 AI 味）
-        const outlineBlock = blueprint.examOutline.map((entry) => {
-            const subskill = blueprint.subskills.find((s) => s.id === entry.subskillId);
-            return `- ${entry.subskillId}（${subskill?.title || ''}）：${entry.conceptQuestions} 概念题 + ${entry.appliedQuestions} 应用题`;
-        }).join('\n');
-        const examinePrompt = loadTemplate(baseDir, 'examine.md', FALLBACK_EXAMINE_TEMPLATE)
+        // 按考纲条目分次生成 + 实操题单独一次：整卷单次输出会顶满 max_tokens 被截断
+        //（2026-10-11 实测 completion 恰为上限 6000 ×2，同 prompt 重试必然再截）。
+        const examTemplate = loadTemplate(baseDir, 'examine.md', FALLBACK_EXAMINE_TEMPLATE);
+        const renderExamPrompt = (outlineBlock, scopeNote) => examTemplate
             .replace(/\{\{displayName\}\}/g, blueprint.displayName)
             .replace(/\{\{name\}\}/g, blueprint.name)
             .replace(/\{\{examOutline\}\}/g, outlineBlock)
             .replace(/\{\{practicalPrompt\}\}/g, blueprint.practicalExam.prompt)
-            .replace(/\{\{gradingDimensions\}\}/g, blueprint.practicalExam.gradingDimensions.join('、'));
-        let exam = await completeJson(llm, llmConfig, examinePrompt, { temperature: 0.5 });
-        if (!exam || !Array.isArray(exam.questions) || exam.questions.length === 0) {
-            logger?.('trial: 出题输出不可解析，重试一次');
-            exam = await completeJson(llm, llmConfig, examinePrompt, { temperature: 0.5 });
+            .replace(/\{\{gradingDimensions\}\}/g, blueprint.practicalExam.gradingDimensions.join('、')) + scopeNote;
+        const CONCEPT_SCOPE_NOTE = '\n\n【本次范围】只出考纲中列出子技能的概念题与应用题；不要出实操题（kind=practical）。';
+        const PRACTICAL_SCOPE_NOTE = '\n\n【本次范围】只出 1 道 kind=practical 的实操题（题目即实操要求，带 gradingDimensions）；不要出概念题/应用题。';
+        const outlineLine = (entry) => {
+            const subskill = blueprint.subskills.find((s) => s.id === entry.subskillId);
+            return `- ${entry.subskillId}（${subskill?.title || ''}）：${entry.conceptQuestions} 概念题 + ${entry.appliedQuestions} 应用题`;
+        };
+
+        // 跨批合并：题干/类型非法的丢弃；id 缺失补默认值；重复 id 去重（保留首个）。
+        const mergedQuestions = [];
+        const seenIds = new Set();
+        const collectQuestions = (payload) => {
+            const questions = Array.isArray(payload?.questions) ? payload.questions : [];
+            for (const [index, question] of questions.entries()) {
+                if (!question || typeof question.prompt !== 'string' || !question.prompt.trim() || !question.kind) {
+                    logger?.(`trial: 丢弃格式非法的题目：${JSON.stringify(question?.id || question)}`);
+                    continue;
+                }
+                const id = String(question.id || `${question.subskillId || 'q'}-${index + 1}`);
+                if (seenIds.has(id)) {
+                    continue;
+                }
+                seenIds.add(id);
+                mergedQuestions.push({ ...question, id });
+            }
+        };
+
+        for (const entry of blueprint.examOutline) {
+            const payload = await completeJsonResilient({
+                llm, llmConfig,
+                prompt: renderExamPrompt(outlineLine(entry), CONCEPT_SCOPE_NOTE),
+                temperature: 0.5,
+                runDir,
+                dumpBase: `exam-${entry.subskillId}`,
+                arrayField: 'questions',
+                validate: (candidate) => Array.isArray(candidate?.questions) && candidate.questions.length > 0,
+                logger
+            });
+            if (!payload) {
+                const error = new Error(`出题输出不可解析（subskill ${entry.subskillId}，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
+                error.code = 'FORGE_EXAM_OUTPUT_INVALID';
+                error.status = 502;
+                throw error;
+            }
+            collectQuestions(payload);
         }
-        if (!exam || !Array.isArray(exam.questions) || exam.questions.length === 0) {
-            const error = new Error('出题输出不可解析（已重试一次）');
+        const practicalPayload = await completeJsonResilient({
+            llm, llmConfig,
+            prompt: renderExamPrompt('（本次不出概念/应用题）', PRACTICAL_SCOPE_NOTE),
+            temperature: 0.5,
+            runDir,
+            dumpBase: 'exam-practical',
+            arrayField: 'questions',
+            validate: (candidate) => Array.isArray(candidate?.questions) && candidate.questions.length > 0,
+            logger
+        });
+        if (!practicalPayload) {
+            const error = new Error(`出题输出不可解析（实操题，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
             error.code = 'FORGE_EXAM_OUTPUT_INVALID';
             error.status = 502;
             throw error;
         }
+        collectQuestions(practicalPayload);
+        if (mergedQuestions.length === 0) {
+            const error = new Error('出题输出不可解析（合并后无有效题目）');
+            error.code = 'FORGE_EXAM_OUTPUT_INVALID';
+            error.status = 502;
+            throw error;
+        }
+        const exam = { questions: mergedQuestions };
         await writeExamFile(examsDir, 'exam.json', exam);
 
         const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
@@ -241,7 +368,7 @@ function createTrialStepRunner() {
  * exam 由调用方给定（retest 传原考卷，实现「同一套考题重测」§3.7）。
  */
 async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
-    const { llm, llmConfig, knowledgeStorePort, baseDir, logger } = ctx;
+    const { llm, llmConfig, knowledgeStorePort, baseDir, logger, runDir } = ctx;
     const libraryName = blueprintLibraryName(blueprint.name);
     // 盲测（红线 1）：代查专属库 + 人设作答
     let persona = '';
@@ -290,21 +417,49 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
             gradingDimensions: question.gradingDimensions,
             answer: answers[question.id]
         }));
-        const gradePrompt = loadTemplate(baseDir, 'grade.md', FALLBACK_GRADE_TEMPLATE)
-            .replace(/\{\{displayName\}\}/g, blueprint.displayName)
-            .replace(/\{\{name\}\}/g, blueprint.name)
-            .replace(/\{\{examWithAnswers\}\}/g, JSON.stringify(examWithAnswers, null, 2));
-        let grading = await completeJson(llm, llmConfig, gradePrompt, { temperature: 0.2 });
-        if (!grading || !Array.isArray(grading.gradedQuestions)) {
-            logger?.('trial: 判卷输出不可解析，重试一次');
-            grading = await completeJson(llm, llmConfig, gradePrompt, { temperature: 0.2 });
+        // 3. 判卷（D7 第一步：五维 0-5 + 评语 + 知识卡引用）——按题分块（每块 ≤5 题），
+        // 块输出远小于 max_tokens，杜绝整卷判卷被截断。
+        const gradeTemplate = loadTemplate(baseDir, 'grade.md', FALLBACK_GRADE_TEMPLATE);
+        let overallComment = '';
+        const gradedQuestions = [];
+        const chunks = [];
+        for (let i = 0; i < examWithAnswers.length; i += GRADE_CHUNK_SIZE) {
+            chunks.push(examWithAnswers.slice(i, i + GRADE_CHUNK_SIZE));
         }
-        if (!grading || !Array.isArray(grading.gradedQuestions)) {
-            const error = new Error('判卷输出不可解析（已重试一次）');
-            error.code = 'FORGE_GRADE_OUTPUT_INVALID';
-            error.status = 502;
-            throw error;
+        for (let index = 0; index < chunks.length; index += 1) {
+            const gradePrompt = gradeTemplate
+                .replace(/\{\{displayName\}\}/g, blueprint.displayName)
+                .replace(/\{\{name\}\}/g, blueprint.name)
+                .replace(/\{\{examWithAnswers\}\}/g, JSON.stringify(chunks[index], null, 2));
+            const payload = await completeJsonResilient({
+                llm, llmConfig,
+                prompt: gradePrompt,
+                temperature: 0.2,
+                runDir,
+                dumpBase: `grade-chunk-${index + 1}`,
+                arrayField: 'gradedQuestions',
+                validate: (candidate) => Array.isArray(candidate?.gradedQuestions),
+                logger
+            });
+            if (!payload) {
+                const error = new Error(`判卷输出不可解析（第 ${index + 1}/${chunks.length} 块，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
+                error.code = 'FORGE_GRADE_OUTPUT_INVALID';
+                error.status = 502;
+                throw error;
+            }
+            gradedQuestions.push(...payload.gradedQuestions);
+            overallComment = payload.overallComment || overallComment;
         }
+        // 完整性守卫：截断抢救/输出污染可能丢题——缺失题按 0 分计，并在总评注明
+        //（缺失静默计 0 会歪曲及格判定，必须显式可见）。
+        const missingIds = exam.questions
+            .filter((question) => !gradedQuestions.some((graded) => graded && graded.id === question.id))
+            .map((question) => question.id);
+        if (missingIds.length > 0) {
+            logger?.(`trial: 判卷缺失 ${missingIds.length} 题（${missingIds.join('、')}），按 0 分计`);
+            overallComment = `${overallComment}（判卷缺失 ${missingIds.length} 题：${missingIds.join('、')}，按 0 分计）`;
+        }
+        const grading = { gradedQuestions, overallComment };
 
         // 及格线 80%（D3：到线才请用户抽查）
         let earned = 0;

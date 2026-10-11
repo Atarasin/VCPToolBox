@@ -468,6 +468,7 @@ test('forgeRoutes：REST 面双面一致——ForgeMaster 放行、非 ForgeMast
             startExpertCreateJob: async (params) => { calls.push({ op: 'create', params }); return { jobId: 'job_c1', runRecord: {} }; },
             confirmBlueprint: async (jobId, params) => { calls.push({ op: 'confirm', jobId, params }); return { jobId, outcome: 'confirmed' }; },
             startExpertLearnJob: async (params) => { calls.push({ op: 'learn', params }); return { jobId: 'job_l1' }; },
+            startExpertRetrialJob: async (params) => { calls.push({ op: 'retrial', params }); return { jobId: 'job_r1', runRecord: { runDir: 'forge/runs/job_r1' } }; },
             reportGap: async (params) => { calls.push({ op: 'gap', params }); return { expertName: params.agentId, gap: { id: 'g1', status: 'open' } }; }
         }
     });
@@ -539,6 +540,27 @@ test('forgeRoutes：REST 面双面一致——ForgeMaster 放行、非 ForgeMast
         });
         assert.equal(masterGap.status, 200);
         assert.equal(calls[4].params.agentId, 'UIDesigner');
+
+        // retrial：REST-only 编排入口——非 ForgeMaster 403
+        const deniedRetrial = await fetch(`${base}/forge/retrial`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ expertName: 'UIDesigner', authContext: { agentId: 'Nexus' } })
+        });
+        assert.equal(deniedRetrial.status, 403);
+
+        // retrial：ForgeMaster 放行，透传 expertName/budgetCny
+        const retrial = await fetch(`${base}/forge/retrial`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ expertName: 'UIDesigner', budgetCny: 6, authContext: { agentId: 'ForgeMaster' } })
+        });
+        assert.equal(retrial.status, 200);
+        const retrialBody = await retrial.json();
+        assert.equal(retrialBody.data.jobId, 'job_r1');
+        assert.equal(calls[5].op, 'retrial');
+        assert.equal(calls[5].params.expertName, 'UIDesigner');
+        assert.equal(calls[5].params.budgetCny, 6);
     } finally {
         await new Promise((resolve) => server.close(resolve));
     }

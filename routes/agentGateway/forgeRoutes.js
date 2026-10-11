@@ -11,6 +11,7 @@ const {
 } = require('./shared');
 const {
     assertForgeToolAccess,
+    assertForgeOrchestrationAccess,
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
     buildForgeLearnRequest
@@ -22,7 +23,9 @@ const {
  * - POST /agent_gateway/forge/jobs/:jobId/confirm ← gateway_forge_confirm（仅 ForgeMaster）
  * - POST /agent_gateway/forge/learn          ← gateway_forge_learn（仅 ForgeMaster）
  * - POST /agent_gateway/forge/gaps           ← gateway_gap_report（专家自报/ForgeMaster 代报）
- * 访问边界与 in-process MCP 面同一实现（assertForgeToolAccess），双面一致。
+ * - POST /agent_gateway/forge/retrial        ← 补试岗（REST-only 编排入口，仅 ForgeMaster：
+ *                                              已注册专家只重跑 trial，不触发重名冲突）
+ * 访问边界与 in-process MCP 面同一实现（assertForgeToolAccess / 编排口径），双面一致。
  */
 
 function registerForgeRoutes(router, context) {
@@ -47,6 +50,16 @@ function registerForgeRoutes(router, context) {
         // REST 面调用者身份 = 凭据决议的 agentId；与 MCP 面同一守卫。
         try {
             assertForgeToolAccess({ toolName, requesterAgentId: authContext?.agentId, targetAgentId });
+            return null;
+        } catch (error) {
+            return error;
+        }
+    }
+
+    function guardOrchestration(action, authContext) {
+        // REST-only 编排入口（无 MCP 工具名）：与编排三件套同口径，仅 ForgeMaster。
+        try {
+            assertForgeOrchestrationAccess({ requesterAgentId: authContext?.agentId, action });
             return null;
         } catch (error) {
             return error;
@@ -165,6 +178,52 @@ function registerForgeRoutes(router, context) {
                     return sendNativeSuccessWithOperation(res, {
                         requestId: requestContext.requestId, startedAt,
                         data: { jobId: result.jobId },
+                        authContext, operationControl
+                    });
+                } catch (error) {
+                    return sendNativeErrorWithOperation(res, {
+                        status: error.status || 500, requestId: requestContext.requestId, startedAt,
+                        code: error.code, error: error.message,
+                        details: error.details, authContext, operationControl
+                    });
+                }
+            }
+        });
+    });
+
+    router.post('/forge/retrial', async (req, res) => {
+        const startedAt = Date.now();
+        const { requestContext, authContext } = buildContext(req, 'forge-retrial');
+        const blocked = guardOrchestration('forge.retrial', authContext);
+        const operationControl = beginNativeOperation(operabilityService, {
+            operationName: 'forge.retrial', requestContext, authContext, payload: req.body
+        });
+        if (blocked || (operationControl && !operationControl.allowed)) {
+            if (blocked) {
+                return sendNativeErrorWithOperation(res, {
+                    status: blocked.status, requestId: requestContext.requestId, startedAt,
+                    code: blocked.code, error: blocked.message, details: blocked.details,
+                    authContext, operationControl
+                });
+            }
+            return sendNativeOperationRejection(res, { startedAt, requestContext, authContext, operationControl });
+        }
+        return executeNativeOperationSafely({
+            res, startedAt, requestContext, authContext, operationControl,
+            errorMessage: 'Failed to launch forge expert retrial',
+            handler: async () => {
+                try {
+                    const budgetCny = Number.isFinite(Number(req.body?.budgetCny)) && Number(req.body.budgetCny) > 0
+                        ? Number(req.body.budgetCny)
+                        : null;
+                    const result = await forgeRuntimeService.startExpertRetrialJob({
+                        expertName: req.body?.expertName,
+                        ...(budgetCny != null ? { budgetCny } : {}),
+                        authContext
+                    });
+                    return sendNativeSuccessWithOperation(res, {
+                        requestId: requestContext.requestId, startedAt,
+                        data: { jobId: result.jobId, runDir: result.runRecord?.runDir || null },
                         authContext, operationControl
                     });
                 } catch (error) {

@@ -1,24 +1,79 @@
 'use strict';
 
 /**
- * LLM 输出的宽松 JSON 提取：容忍代码围栏与前后杂文，取首个平衡的 JSON 对象。
+ * LLM 输出的宽松 JSON 提取：容忍代码围栏与前后杂文。
+ *
+ * 两级策略：
+ * 1. 快路径：剥掉所有 ``` / ```json 围栏后取首 `{` 到末 `}` 的整体跨度（历史行为）；
+ * 2. 平衡扫描：整体跨度解析失败时，字符串感知地逐个 `{` 起点找**首个可解析的
+ *    完整对象**——覆盖「JSON 前后有带大括号的散文」「一次输出多个对象」
+ *    「围栏内外夹注释」等污染形态（2026-10-11 出题/蒸馏抖动实测）。
  */
+
+function stripCodeFences(text) {
+    return text.replace(/```(?:json)?/gi, '');
+}
+
+// 从 start 起做字符串感知的括号平衡扫描；返回完整对象的文本切片，未闭合返回 null。
+function scanBalancedObject(text, start) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i += 1) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch === '\\') {
+                escaped = true;
+            } else if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (ch === '"') {
+            inString = true;
+        } else if (ch === '{') {
+            depth += 1;
+        } else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return text.slice(start, i + 1);
+            }
+            if (depth < 0) {
+                return null;
+            }
+        }
+    }
+    return null;
+}
 
 function extractJsonObject(text) {
     if (typeof text !== 'string') {
         return null;
     }
-    const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start === -1 || end === -1 || end <= start) {
-        return null;
+    const cleaned = stripCodeFences(text);
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+        try {
+            return JSON.parse(cleaned.slice(start, end + 1));
+        } catch {
+            // 落入平衡扫描。
+        }
     }
-    try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-    } catch {
-        return null;
+    for (let i = cleaned.indexOf('{'); i !== -1; i = cleaned.indexOf('{', i + 1)) {
+        const candidate = scanBalancedObject(cleaned, i);
+        if (candidate === null) {
+            continue;
+        }
+        try {
+            return JSON.parse(candidate);
+        } catch {
+            // 试下一个起点。
+        }
     }
+    return null;
 }
 
 /**

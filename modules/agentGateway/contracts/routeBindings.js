@@ -12,6 +12,7 @@ const AGENT_GATEWAY_ROUTE_BINDINGS = Object.freeze({
     forgeCreate: '/agent_gateway/forge/experts',
     forgeConfirm: (jobId) => `/agent_gateway/forge/jobs/${encodeURIComponent(jobId)}/confirm`,
     forgeLearn: '/agent_gateway/forge/learn',
+    forgeRetrial: '/agent_gateway/forge/retrial',
     gapReport: '/agent_gateway/forge/gaps',
     eventStream: '/agent_gateway/events/stream'
 });

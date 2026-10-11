@@ -169,6 +169,10 @@ function createStepRegistry({
         { id: 'harvest', name: '增量采集' },
         { id: 'distill', name: '增量提炼' }
     ]);
+    // §3.7 补试岗：专家已注册，仅重跑 trial（不触碰注册面/重名冲突）。
+    const RETRIAL_STEPS = Object.freeze([
+        { id: 'trial', name: '试岗（补考）' }
+    ]);
     // §3.7：缺口回填的 learn 任务在采集→提炼后附「同一套考题重测」尾步。
     const LEARN_RETEST_STEPS = Object.freeze([
         ...LEARN_STEPS,
@@ -183,7 +187,7 @@ function createStepRegistry({
         return runner;
     }
 
-    return { CREATE_STEPS, LEARN_STEPS, LEARN_RETEST_STEPS, getRunner };
+    return { CREATE_STEPS, LEARN_STEPS, LEARN_RETEST_STEPS, RETRIAL_STEPS, getRunner };
 }
 
 module.exports = {

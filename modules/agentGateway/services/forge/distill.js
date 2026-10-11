@@ -151,7 +151,8 @@ async function distillMaterialBatch({ subskill, batch, template, llm, llmConfig,
         max_tokens: DISTILL_MAX_TOKENS
     });
     const attempts = [];
-    for (let index = 1; index <= 2; index += 1) {
+    const maxAttempts = 3;
+    for (let index = 1; index <= maxAttempts; index += 1) {
         const response = await completeOnce();
         const choice = response?.data?.choices?.[0];
         const content = choice?.message?.content || '';
@@ -188,13 +189,13 @@ async function distillMaterialBatch({ subskill, batch, template, llm, llmConfig,
             return merged;
         }
 
-        if (index === 1) {
-            logger?.(`distill: subskill ${subskill.id} 输出不可解析（finish_reason=${finishReason ?? 'unknown'}），重试一次`);
+        if (index < maxAttempts) {
+            logger?.(`distill: subskill ${subskill.id} 输出不可解析（finish_reason=${finishReason ?? 'unknown'}），重试（${index}/${maxAttempts - 1}）`);
         }
     }
     await dumpDistillFailure(runDir, subskill, batch, attempts, prompt.slice(0, 2000));
     const error = new Error(
-        `subskill ${subskill.id} 蒸馏输出不可解析（已重试一次；finish_reason=${attempts.map((a) => a.finishReason ?? 'unknown').join('/')}，原始输出已留档 distill-failed/）`
+        `subskill ${subskill.id} 蒸馏输出不可解析（已重试 ${attempts.length - 1} 次；finish_reason=${attempts.map((a) => a.finishReason ?? 'unknown').join('/')}，原始输出已留档 distill-failed/）`
     );
     error.code = 'FORGE_DISTILL_OUTPUT_INVALID';
     error.status = 502;

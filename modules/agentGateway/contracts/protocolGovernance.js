@@ -39,6 +39,7 @@ const PUBLISHED_NATIVE_GATEWAY_PATHS = Object.freeze([
     '/agent_gateway/forge/experts',
     '/agent_gateway/forge/jobs/{jobId}/confirm',
     '/agent_gateway/forge/learn',
+    '/agent_gateway/forge/retrial',
     '/agent_gateway/forge/gaps',
     '/agent_gateway/events/stream',
     '/agent_gateway/auth/admin-session'
