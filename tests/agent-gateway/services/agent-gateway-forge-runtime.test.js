@@ -458,3 +458,33 @@ test('铸造流程 toolInvoker 仅允许检索类插件（AnySearch/FlashDeepSea
     assert.deepEqual(invoked, ['AnySearch']);
     assert.deepEqual(svc.FORGE_ALLOWED_TOOLS, new Set(['AnySearch', 'FlashDeepSearch', 'BrowserSearch']));
 });
+
+// ── 费用计量：DeepSeek 双档时段计价（元/1K，高峰/空闲动态判定）──────────
+
+test('costMeter：deepseek 双档单价按北京时间时段判定，节假日按高峰保守处理', () => {
+    const { createCostMeter, isPeakBeijingTime } = require('../../../modules/agentGateway/services/forge/costMeter');
+    // 时段边界：工作日 9-12 / 14-18 高峰；午休、清晨、周末空闲
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T00:59:00Z')), false, '北京 08:59 空闲');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T01:00:00Z')), true, '北京 09:00 整进入高峰');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T02:00:00Z')), true, '北京周三 10:00 高峰');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T03:59:00Z')), true, '北京 11:59 高峰');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T04:00:00Z')), false, '北京 12:00 午休空闲');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T06:00:00Z')), true, '北京 14:00 高峰');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T09:59:00Z')), false, '北京 17:59 后空闲');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-17T02:00:00Z')), false, '周六空闲');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-18T02:00:00Z')), false, '周日空闲');
+
+    // 双档计价：同样 1K+1K tokens，空闲价 = 高峰价一半
+    const peak = createCostMeter({ budgetCny: 10, nowFn: () => new Date('2026-10-14T02:00:00Z') });
+    peak.recordLlm({ model: 'deepseek-flash', promptTokens: 1000, completionTokens: 1000 });
+    assert.ok(Math.abs(peak.getBreakdown().costSoFarCny - 0.01) < 1e-9, '高峰 flash 1K+1K = 0.01 元');
+
+    const offpeak = createCostMeter({ budgetCny: 10, nowFn: () => new Date('2026-10-17T02:00:00Z') });
+    offpeak.recordLlm({ model: 'deepseek-flash', promptTokens: 1000, completionTokens: 1000 });
+    assert.ok(Math.abs(offpeak.getBreakdown().costSoFarCny - 0.005) < 1e-9, '空闲 flash 1K+1K = 0.005 元（半价）');
+
+    // 前缀变体同样命中双档
+    const variant = createCostMeter({ budgetCny: 10, nowFn: () => new Date('2026-10-17T02:00:00Z') });
+    variant.recordLlm({ model: 'deepseek-v4-pro-0813', promptTokens: 1000, completionTokens: 1000 });
+    assert.ok(Math.abs(variant.getBreakdown().costSoFarCny - (0.0045 + 0.0135)) < 1e-9, 'v4-pro-0813 空闲档前缀命中');
+});

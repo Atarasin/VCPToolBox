@@ -25,15 +25,51 @@ const DEFAULT_MODEL_PRICES = Object.freeze({
         'gemini-2.5-flash': { input: 0.0003, output: 0.0025 },
         'gemini-2.5-pro': { input: 0.00125, output: 0.01 },
         'deepseek-chat': { input: 0.00027, output: 0.0011 },
+        // DeepSeek 官方价（元/百万 tokens）换算为元/1K，双档按调用时刻判定：
+        // flash: 输入未命中 1(空闲)/2(高峰)、输出 4/8 元/M
+        // v4-pro: 输入 4.5/9、输出 13.5/27 元/M（缓存命中价忽略，保守按未命中）
+        'deepseek-flash': {
+            peak: { input: 0.002, output: 0.008 },
+            offpeak: { input: 0.001, output: 0.004 }
+        },
+        'deepseek-v4-flash': {
+            peak: { input: 0.002, output: 0.008 },
+            offpeak: { input: 0.001, output: 0.004 }
+        },
+        'deepseek-v4-pro': {
+            peak: { input: 0.009, output: 0.027 },
+            offpeak: { input: 0.0045, output: 0.0135 }
+        },
         'glm-4.7': { input: 0.0006, output: 0.0022 },
         'qwen-plus': { input: 0.0004, output: 0.0012 }
     }
 });
 
-function resolveModelPrice(prices, model) {
+// DeepSeek 官方时段定义：北京时间周一至五 9:00-12:00、14:00-18:00 为高峰，
+// 其余（含周末）为空闲（价格为高峰一半）；法定节假日无法本地判定，按高峰
+// 处理——估算偏保守（护栏宁高勿漏）。
+function isPeakBeijingTime(date) {
+    const beijing = new Date(date.getTime() + 8 * 3600 * 1000);
+    const day = beijing.getUTCDay(); // 0=周日 … 6=周六
+    const hour = beijing.getUTCHours();
+    if (day === 0 || day === 6) {
+        return false;
+    }
+    return (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18);
+}
+
+// 条目支持双档：{ peak: {input, output}, offpeak: {...} } 或单档 {input, output}。
+function resolveTier(entry, now) {
+    if (entry && entry.peak && entry.offpeak) {
+        return isPeakBeijingTime(now) ? entry.peak : entry.offpeak;
+    }
+    return entry;
+}
+
+function resolveModelPrice(prices, model, now = new Date()) {
     const table = prices && typeof prices === 'object' ? prices : DEFAULT_MODEL_PRICES;
     const models = table.models && typeof table.models === 'object' ? table.models : {};
-    const direct = models[model];
+    const direct = resolveTier(models[model], now);
     if (direct && Number.isFinite(direct.input) && Number.isFinite(direct.output)) {
         return direct;
     }
@@ -42,7 +78,10 @@ function resolveModelPrice(prices, model) {
         .filter((key) => typeof model === 'string' && model.startsWith(key))
         .sort((a, b) => b.length - a.length)[0];
     if (matchedKey) {
-        return models[matchedKey];
+        const matched = resolveTier(models[matchedKey], now);
+        if (matched && Number.isFinite(matched.input)) {
+            return matched;
+        }
     }
     const fallback = table.fallback && Number.isFinite(table.fallback.input)
         ? table.fallback
@@ -50,7 +89,7 @@ function resolveModelPrice(prices, model) {
     return fallback;
 }
 
-function createCostMeter({ budgetCny, prices = null, warnRatio = BUDGET_WARN_RATIO, initialEntries = null } = {}) {
+function createCostMeter({ budgetCny, prices = null, warnRatio = BUDGET_WARN_RATIO, initialEntries = null, nowFn = null } = {}) {
     if (!Number.isFinite(budgetCny) || budgetCny <= 0) {
         throw new Error(`[ForgeCostMeter] 预算必须是正数，收到：${budgetCny}`);
     }
@@ -90,7 +129,7 @@ function createCostMeter({ budgetCny, prices = null, warnRatio = BUDGET_WARN_RAT
             return budgetCny;
         },
         recordLlm({ model, promptTokens, completionTokens, step }) {
-            const price = resolveModelPrice(prices, model);
+            const price = resolveModelPrice(prices, model, nowFn ? nowFn() : new Date());
             const input = Math.max(0, Number(promptTokens) || 0);
             const output = Math.max(0, Number(completionTokens) || 0);
             const costCny = (input / 1000) * price.input + (output / 1000) * price.output;
@@ -134,6 +173,7 @@ function createCostMeter({ budgetCny, prices = null, warnRatio = BUDGET_WARN_RAT
 
 module.exports = {
     BUDGET_WARN_RATIO,
+    isPeakBeijingTime,
     DEFAULT_MODEL_PRICES,
     createCostMeter
 };
