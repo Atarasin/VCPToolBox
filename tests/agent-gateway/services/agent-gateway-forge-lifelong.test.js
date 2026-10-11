@@ -574,3 +574,101 @@ test('forgeRoutes：REST 面双面一致——ForgeMaster 放行、非 ForgeMast
         await new Promise((resolve) => server.close(resolve));
     }
 });
+
+// ── knowledge.search REST 处理面（2026-10-11 注册表收敛时补齐的缺失链）──────
+
+test('knowledgeRoutes：成功映射 / 403 策略抛错 / 503 知识库未启用 / 400 缺 query', async () => {
+    const express = require('express');
+    const { registerKnowledgeSearchRoute } = require('../../../routes/agentGateway/knowledgeRoutes');
+    const calls = [];
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+        req.agentGatewayAuth = null;
+        next();
+    });
+    const searchImpl = async ({ body, requestContext }) => {
+        calls.push({ body, agentId: requestContext.agentId });
+        if (!body.query) {
+            return { success: false, requestId: 'req-k', status: 400, code: 'AGW_VALIDATION_ERROR', error: 'query is required' };
+        }
+        if (body.query === 'forbidden') {
+            const error = new Error('Agent lacks library scope');
+            error.status = 403;
+            error.code = 'AGW_FORBIDDEN';
+            throw error;
+        }
+        if (body.query === 'unavailable') {
+            return { success: false, requestId: 'req-k', status: 503, code: 'AGW_CONFIG_UNAVAILABLE', error: 'Knowledge store is not available' };
+        }
+        return { success: true, requestId: 'req-k', data: { items: [{ library: 'VCP百科全书', score: 0.9, text: '命中' }], resultCount: 1 } };
+    };
+    registerKnowledgeSearchRoute(app, {
+        authContextResolver: () => ({}),
+        operabilityService: null,
+        knowledgeRuntimeService: { search: searchImpl }
+    });
+    const server = await new Promise((resolve) => {
+        const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    try {
+        const ok = await fetch(`${base}/knowledge/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: 'VCP 是什么', agentId: 'Nexus' })
+        });
+        assert.equal(ok.status, 200);
+        const okBody = await ok.json();
+        assert.equal(okBody.success, true);
+        assert.equal(okBody.data.resultCount, 1);
+        assert.equal(calls[0].agentId, 'Nexus', 'agentId 透传（policy 按 agent 判定）');
+
+        const forbidden = await fetch(`${base}/knowledge/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: 'forbidden' })
+        });
+        assert.equal(forbidden.status, 403);
+
+        const unavailable = await fetch(`${base}/knowledge/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: 'unavailable' })
+        });
+        assert.equal(unavailable.status, 503);
+
+        const invalid = await fetch(`${base}/knowledge/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        assert.equal(invalid.status, 400);
+    } finally {
+        await new Promise((resolve) => server.close(resolve));
+    }
+});
+
+test('backendProxy tools/call：gateway_knowledge_search 经注册表标准 handler 转发（修复 -32000）', async () => {
+    const { createBackendProxyMcpAdapter } = require('../../../modules/agentGateway/protocols/mcp/backendProxyExecutor');
+    const clientCalls = [];
+    const adapter = createBackendProxyMcpAdapter({
+        backendClient: {
+            searchKnowledge: async (body) => {
+                clientCalls.push(body);
+                return { ok: true, payload: { success: true, requestId: 'req-ks', data: { items: [], resultCount: 0 } } };
+            }
+        },
+        defaultAgentId: '',
+        discoveryDefaultAgentEnabled: false
+    });
+    const result = await adapter.callTool({
+        name: 'gateway_knowledge_search',
+        arguments: { agentId: 'Nexus', query: '色彩理论' },
+        requestContext: { requestId: 'req-ks' }
+    });
+    assert.ok(!result.isError, `knowledge_search 不应再报 Unsupported gateway-managed tool：${JSON.stringify(result)}`);
+    assert.equal(clientCalls.length, 1);
+    assert.equal(clientCalls[0].agentId, 'Nexus');
+    assert.equal(clientCalls[0].query, '色彩理论');
+});

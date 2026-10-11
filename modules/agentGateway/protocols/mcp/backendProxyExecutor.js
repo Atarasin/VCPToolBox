@@ -44,6 +44,7 @@ const { serveFrozenList } = require('../../policy/discoverySnapshot');
 const { defaultAgentTargetTelemetry } = require('../../policy/agentTargetTelemetry');
 const { resolveTraceId } = require('../../infra/trace');
 const { validateGatewayToolArguments } = require('../../contracts/schemas/validator');
+const { TOOL_REST_REGISTRY } = require('../../contracts/operations/toolRestRegistry');
 
 const DEFERRED_RESULT_TOOL_NAMES = new Set([
     MCP_GATEWAY_TOOL_NAMES.AGENT_RENDER,
@@ -454,6 +455,170 @@ function resolveDiscoveryScope(state, input) {
     return { agentId: requestedAgentId || normalizeMcpString(discoveryDefault), outOfScope: false };
 }
 
+// ── tools/call 处理器工厂（双面接线收敛，2026-10-11）────────────────────────
+// standard 条目由 contracts/operations/toolRestRegistry 生成（ensureAgentId →
+// requireArgs 前置校验 → buildBody → backendClient 转发）；diary 策略门、
+// diary 规范化、job 身份等特殊语义保留 bespoke 实现。导出供 mcp-shared-core
+// 完整性测试断言「每个 backendExecutor 都有真实 handler」——历史上
+// knowledge.search 整条链缺失（-32000）正是缺这道护栏。
+function createProxyToolHandlers({
+    backendClient,
+    input,
+    args,
+    name,
+    requestOptions,
+    ensureAgentId,
+    resolveDirectAgentTarget,
+    buildBody,
+    ensureJobIdentity,
+    buildJobQuery,
+    applyDiaryPolicyGate,
+    normalizeMcpString,
+    createMcpError,
+    mcpErrorCodes,
+    createFailureResult
+}) {
+    const tag = `tools/call:${name}`;
+
+    const executeDiaryOperation = async (methodName) => {
+        // §5.4：先经 resolveDirectAgentTarget 补全绑定身份，再过 diary
+        // 策略门——门必须按填充后的 agentId 执行 allowedDiaries，透传
+        // 空 agentId 会绕过 per-agent 日记授权。
+        const diaryTargetAgentId = resolveDirectAgentTarget(input, args, tag);
+        const scopedInput = diaryTargetAgentId ? { ...input, agentId: diaryTargetAgentId } : input;
+        const scoped = applyDiaryPolicyGate({
+            toolName: name,
+            payload: buildBody(scopedInput, args),
+            input: scopedInput
+        });
+        if (scoped.rejection) {
+            return { finalResult: createFailureResult(scoped.rejection) };
+        }
+        return {
+            response: await backendClient[methodName](scoped.payload, requestOptions)
+        };
+    };
+
+    // 标准处理器（注册表 proxy: 'standard'）：与 forge 族历史行为逐字对齐
+    //（telemetry:false + requireSession:false + pathParam 支持）。
+    const standardToolHandler = (entry) => () => {
+        const targetAgentId = ensureAgentId({
+            ...input,
+            agentId: resolveDirectAgentTarget(input, args, tag, { telemetry: false })
+        }, tag);
+        for (const field of entry.requireArgs || []) {
+            if (!args?.[field]) {
+                throw createMcpError(mcpErrorCodes.INVALID_ARGUMENTS, `${name} requires ${field}`, {
+                    field, name
+                });
+            }
+        }
+        const body = buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false });
+        return entry.pathParam
+            ? backendClient[entry.clientMethod](args[entry.pathParam], body, requestOptions)
+            : backendClient[entry.clientMethod](body, requestOptions);
+    };
+
+    const handlers = {
+        memorySearch: () => executeDiaryOperation('searchMemory'),
+        contextAssemble: () => executeDiaryOperation('assembleContext'),
+        memoryWrite: async () => {
+            // §5.4：绑定 credential 省略 agentId 时以绑定身份补全；
+            // 未绑定省略由 buildBody 内 ensureAgentId 受控报错。
+            const writeTargetAgentId = resolveDirectAgentTarget(input, args, tag);
+            const writeBody = buildBody(
+                writeTargetAgentId ? { ...input, agentId: writeTargetAgentId } : input,
+                args
+            );
+            const idempotencyKey = normalizeMcpString(
+                writeBody.options?.idempotencyKey || writeBody.target?.idempotencyKey ||
+                args.idempotencyKey || writeBody.idempotencyKey,
+                256
+            );
+            const resolvedDiary = normalizeDiaryCanonicalName(
+                normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
+            );
+            if (resolvedDiary) {
+                writeBody.diary = resolvedDiary;
+                if (writeBody.target && typeof writeBody.target === 'object') {
+                    writeBody.target.diary = resolvedDiary;
+                }
+            }
+            if (idempotencyKey) {
+                writeBody.idempotencyKey = idempotencyKey;
+                writeBody.options = { ...(writeBody.options || {}), idempotencyKey };
+            }
+            return backendClient.writeMemory(writeBody, requestOptions);
+        },
+        recallRun: async () => {
+            const targetAgentId = ensureAgentId({
+                ...input,
+                agentId: resolveDirectAgentTarget(input, args, tag)
+            }, tag);
+            const recallBody = buildBody(
+                { ...input, agentId: targetAgentId },
+                args,
+                { requireSession: false }
+            );
+            if (!normalizeMcpString(recallBody.query, 4096)) {
+                throw createMcpError(mcpErrorCodes.INVALID_ARGUMENTS, 'gateway_recall_run requires query', {
+                    field: 'query'
+                });
+            }
+            return backendClient.runRecall(recallBody, requestOptions);
+        },
+        render: () => {
+            const targetAgentId = ensureAgentId({
+                ...input,
+                agentId: resolveDirectAgentTarget(input, args, tag)
+            }, tag);
+            return backendClient.renderAgent(
+                targetAgentId,
+                buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
+                requestOptions
+            );
+        },
+        jobGet: () => {
+            // job 是间接对象操作（服务端 owner lookup 决议 target），不计入
+            // 显式 agentId 迁移比例遥测。
+            const targetAgentId = ensureAgentId({
+                ...input,
+                agentId: resolveDirectAgentTarget(input, args, tag, { telemetry: false })
+            }, tag);
+            const scopedInput = { ...input, agentId: targetAgentId };
+            ensureJobIdentity(scopedInput, tag);
+            return backendClient.getJob(args.jobId, buildJobQuery(scopedInput, args), requestOptions);
+        },
+        jobCancel: () => {
+            const targetAgentId = ensureAgentId({
+                ...input,
+                agentId: resolveDirectAgentTarget(input, args, tag, { telemetry: false })
+            }, tag);
+            const scopedInput = { ...input, agentId: targetAgentId };
+            ensureJobIdentity(scopedInput, tag);
+            return backendClient.cancelJob(
+                args.jobId,
+                buildBody(scopedInput, args, { requireSession: false }),
+                requestOptions
+            );
+        },
+        removedRender: () => {
+            throw createMcpError(
+                mcpErrorCodes.NOT_FOUND,
+                'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
+                { field: 'name', name, primarySurface: 'prompts/get' }
+            );
+        }
+    };
+
+    for (const [executor, entry] of Object.entries(TOOL_REST_REGISTRY)) {
+        if (entry.proxy === 'standard') {
+            handlers[executor] = standardToolHandler(entry);
+        }
+    }
+    return handlers;
+}
+
 const BACKEND_PROXY_METHODS = {
     async listTools(state, input = {}) {
         return serveFrozenList(input, 'tools', () => {
@@ -581,172 +746,23 @@ const BACKEND_PROXY_METHODS = {
             });
         }
 
-        const executeDiaryOperation = async (methodName) => {
-            // §5.4：先经 resolveDirectAgentTarget 补全绑定身份，再过 diary
-            // 策略门——门必须按填充后的 agentId 执行 allowedDiaries，透传
-            // 空 agentId 会绕过 per-agent 日记授权。
-            const diaryTargetAgentId = resolveDirectAgentTarget(input, args, `tools/call:${name}`);
-            const scopedInput = diaryTargetAgentId ? { ...input, agentId: diaryTargetAgentId } : input;
-            const scoped = applyDiaryPolicyGate({
-                toolName: name,
-                payload: buildBody(scopedInput, args),
-                input: scopedInput
-            });
-            if (scoped.rejection) {
-                return { finalResult: createFailureResult(scoped.rejection) };
-            }
-            return {
-                response: await backendClient[methodName](scoped.payload, requestOptions)
-            };
-        };
-
-        const handlers = {
-            memorySearch: () => executeDiaryOperation('searchMemory'),
-            contextAssemble: () => executeDiaryOperation('assembleContext'),
-            memoryWrite: async () => {
-                // §5.4：绑定 credential 省略 agentId 时以绑定身份补全；
-                // 未绑定省略由 buildBody 内 ensureAgentId 受控报错。
-                const writeTargetAgentId = resolveDirectAgentTarget(input, args, `tools/call:${name}`);
-                const writeBody = buildBody(
-                    writeTargetAgentId ? { ...input, agentId: writeTargetAgentId } : input,
-                    args
-                );
-                const idempotencyKey = normalizeMcpString(
-                    writeBody.options?.idempotencyKey || writeBody.target?.idempotencyKey ||
-                    args.idempotencyKey || writeBody.idempotencyKey,
-                    256
-                );
-                const resolvedDiary = normalizeDiaryCanonicalName(
-                    normalizeMcpString(writeBody.diary || writeBody.target?.diary, 256)
-                );
-                if (resolvedDiary) {
-                    writeBody.diary = resolvedDiary;
-                    if (writeBody.target && typeof writeBody.target === 'object') {
-                        writeBody.target.diary = resolvedDiary;
-                    }
-                }
-                if (idempotencyKey) {
-                    writeBody.idempotencyKey = idempotencyKey;
-                    writeBody.options = { ...(writeBody.options || {}), idempotencyKey };
-                }
-                return backendClient.writeMemory(writeBody, requestOptions);
-            },
-            recallRun: async () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`)
-                }, `tools/call:${name}`);
-                const recallBody = buildBody(
-                    { ...input, agentId: targetAgentId },
-                    args,
-                    { requireSession: false }
-                );
-                if (!normalizeMcpString(recallBody.query, 4096)) {
-                    throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_recall_run requires query', {
-                        field: 'query'
-                    });
-                }
-                return backendClient.runRecall(recallBody, requestOptions);
-            },
-            render: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`)
-                }, `tools/call:${name}`);
-                return backendClient.renderAgent(
-                    targetAgentId,
-                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            jobGet: () => {
-                // job 是间接对象操作（服务端 owner lookup 决议 target），不计入
-                // 显式 agentId 迁移比例遥测。
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                const scopedInput = { ...input, agentId: targetAgentId };
-                ensureJobIdentity(scopedInput, `tools/call:${name}`);
-                return backendClient.getJob(args.jobId, buildJobQuery(scopedInput, args), requestOptions);
-            },
-            jobCancel: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                const scopedInput = { ...input, agentId: targetAgentId };
-                ensureJobIdentity(scopedInput, `tools/call:${name}`);
-                return backendClient.cancelJob(
-                    args.jobId,
-                    buildBody(scopedInput, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            forgeCreate: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                return backendClient.forgeCreate(
-                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            forgeConfirm: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                if (!args?.jobId) {
-                    throw createMcpError(MCP_ERROR_CODES.INVALID_ARGUMENTS, 'gateway_forge_confirm requires jobId', {
-                        field: 'jobId', name
-                    });
-                }
-                return backendClient.forgeConfirm(
-                    args.jobId,
-                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            forgeLearn: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                return backendClient.forgeLearn(
-                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            forgeRetrial: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                return backendClient.forgeRetrial(
-                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            gapReport: () => {
-                const targetAgentId = ensureAgentId({
-                    ...input,
-                    agentId: resolveDirectAgentTarget(input, args, `tools/call:${name}`, { telemetry: false })
-                }, `tools/call:${name}`);
-                return backendClient.gapReport(
-                    buildBody({ ...input, agentId: targetAgentId }, args, { requireSession: false }),
-                    requestOptions
-                );
-            },
-            removedRender: () => {
-                throw createMcpError(
-                    MCP_ERROR_CODES.NOT_FOUND,
-                    'gateway_agent_render is no longer published as a MCP tool; use prompts/get instead',
-                    { field: 'name', name, primarySurface: 'prompts/get' }
-                );
-            }
-        };
+        const handlers = createProxyToolHandlers({
+            backendClient,
+            input,
+            args,
+            name,
+            requestOptions,
+            ensureAgentId,
+            resolveDirectAgentTarget,
+            buildBody,
+            ensureJobIdentity,
+            buildJobQuery,
+            applyDiaryPolicyGate,
+            normalizeMcpString,
+            createMcpError,
+            mcpErrorCodes: MCP_ERROR_CODES,
+            createFailureResult
+        });
 
         const handler = handlers[operation.backendExecutor];
         if (!handler) {
@@ -1037,5 +1053,6 @@ module.exports = {
     createBackendProxyMcpAdapter,
     createBackendProxyMcpServerHarness,
     createBackendProxyExecutor: createBackendProxyMcpAdapter,
+    createProxyToolHandlers,
     sanitizeMcpErrorDetails
 };

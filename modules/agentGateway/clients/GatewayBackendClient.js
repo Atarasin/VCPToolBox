@@ -277,23 +277,25 @@ class GatewayBackendClient {
         });
     }
 
-    assembleContext(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.contextAssemble, {
+    // ── 签名特殊的转发方法（path 参数 / query / SSE），手写保留 ──────────────
+
+    renderAgent(agentId, body, requestOptions) {
+        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.agentRender(agentId), {
             body,
             ...(requestOptions || {})
         });
     }
 
-    writeMemory(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.memoryWrite, {
-            body,
+    getAgentGuidance(agentId, query, requestOptions) {
+        return this.requestJson('GET', AGENT_GATEWAY_ROUTE_BINDINGS.agentGuidance(agentId), {
+            query,
             ...(requestOptions || {})
         });
     }
 
-    runRecall(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.recallRun, {
-            body,
+    getMemoryTargets(query, requestOptions) {
+        return this.requestJson('GET', AGENT_GATEWAY_ROUTE_BINDINGS.memoryTargets, {
+            query,
             ...(requestOptions || {})
         });
     }
@@ -318,32 +320,8 @@ class GatewayBackendClient {
         });
     }
 
-    forgeCreate(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeCreate, {
-            body, ...(requestOptions || {})
-        });
-    }
-
     forgeConfirm(jobId, body, requestOptions) {
         return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeConfirm(jobId), {
-            body, ...(requestOptions || {})
-        });
-    }
-
-    forgeLearn(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeLearn, {
-            body, ...(requestOptions || {})
-        });
-    }
-
-    forgeRetrial(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.forgeRetrial, {
-            body, ...(requestOptions || {})
-        });
-    }
-
-    gapReport(body, requestOptions) {
-        return this.requestJson('POST', AGENT_GATEWAY_ROUTE_BINDINGS.gapReport, {
             body, ...(requestOptions || {})
         });
     }
@@ -357,6 +335,25 @@ class GatewayBackendClient {
             ...(requestOptions || {})
         });
     }
+}
+
+// ── (body, requestOptions) 签名的转发方法由注册表生成（单点接线，2026-10-11）──
+// 新增工具只需在 TOOL_REST_REGISTRY 加 signature='body' 条目，client 方法即有。
+const { TOOL_REST_REGISTRY } = require('../contracts/operations/toolRestRegistry');
+for (const [executor, entry] of Object.entries(TOOL_REST_REGISTRY)) {
+    if (entry.signature !== 'body' || !entry.clientMethod) {
+        continue;
+    }
+    if (typeof GatewayBackendClient.prototype[entry.clientMethod] === 'function') {
+        continue; // 手写实现优先（如 diary 族的 searchMemory）
+    }
+    const route = AGENT_GATEWAY_ROUTE_BINDINGS[entry.binding];
+    GatewayBackendClient.prototype[entry.clientMethod] = function generatedJsonPost(body, requestOptions) {
+        return this.requestJson(entry.method || 'POST', route, {
+            body,
+            ...(requestOptions || {})
+        });
+    };
 }
 
 module.exports = {

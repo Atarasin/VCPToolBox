@@ -698,6 +698,44 @@ paths:
         description: Forbidden (forge tools are ForgeMaster-only)
       "404":
         description: Not found (unknown expert/job)
+  /agent_gateway/knowledge/search:
+    summary: Search cold knowledge libraries (TDB) with per-agent scope enforcement
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - query
+            properties:
+              query:
+                type: string
+              libraries:
+                type: array
+                items:
+                  type: string
+              library:
+                type: string
+              topK:
+                type: number
+              minScore:
+                type: number
+              expand:
+                type: boolean
+              agentId:
+                type: string
+    responses:
+      "200":
+        description: Success
+      "400":
+        description: Validation error (query is required)
+      "403":
+        description: Forbidden (agent lacks library scope)
+      "404":
+        description: Not found (requested library does not exist)
+      "503":
+        description: Knowledge store unavailable
 components:
   securitySchemes:
     gatewayKeyHeader:

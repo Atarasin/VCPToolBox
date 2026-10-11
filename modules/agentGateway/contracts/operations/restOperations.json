@@ -2044,5 +2044,125 @@
       }
     },
     "credentialAction": "execute"
+  },
+  {
+    "operationId": "knowledge.search",
+    "method": "post",
+    "path": "/agent_gateway/knowledge/search",
+    "summary": "Search cold knowledge libraries (TDB) with per-agent scope enforcement",
+    "parameterLocations": [
+      {
+        "name": "query",
+        "in": "body",
+        "required": true
+      },
+      {
+        "name": "libraries",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "library",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "topK",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "minScore",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "expand",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "agentId",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "requestContext",
+        "in": "body",
+        "required": false
+      },
+      {
+        "name": "authContext",
+        "in": "body",
+        "required": false
+      }
+    ],
+    "errors": [
+      "AGW_VALIDATION_ERROR",
+      "AGW_FORBIDDEN",
+      "AGW_NOT_FOUND",
+      "AGW_CONFIG_UNAVAILABLE",
+      "AGW_INTERNAL_ERROR"
+    ],
+    "openapi": {
+      "summary": "Search cold knowledge libraries (TDB) with per-agent scope enforcement",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "query"
+              ],
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "libraries": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "library": {
+                  "type": "string"
+                },
+                "topK": {
+                  "type": "number"
+                },
+                "minScore": {
+                  "type": "number"
+                },
+                "expand": {
+                  "type": "boolean"
+                },
+                "agentId": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Success"
+        },
+        "400": {
+          "description": "Validation error (query is required)"
+        },
+        "403": {
+          "description": "Forbidden (agent lacks library scope)"
+        },
+        "404": {
+          "description": "Not found (requested library does not exist)"
+        },
+        "503": {
+          "description": "Knowledge store unavailable"
+        }
+      }
+    },
+    "credentialAction": "execute"
   }
 ]
