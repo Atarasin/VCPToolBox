@@ -39,6 +39,24 @@ const GRADE_CHUNK_SIZE = 5;
 // 盲测作答弹性（2026-10-11 补考实测）：应用/实操题是长交付物，3000 会中途
 // 截断；推理型模型还可能把整个输出预算耗在推理段导致 message.content 为空
 //（两题 0 分「未作答」）——空正文/截断时带「直接输出正文」强指令加预算重试。
+// 工具调用标记泄漏检测：标记块（DSML / VCP TOOL_REQUEST / invoke）之外的
+// 正文过薄即判定为泄漏——叙述性提及工具（正常答卷）不会被误伤。
+const TOOL_CALL_MARKER_PATTERN = /<｜｜DSML｜｜|<<<\[TOOL_REQUEST\]>>>|<invoke[\s>]|antml:invoke/;
+function stripToolCallMarkup(text) {
+    return String(text || '')
+        .replace(/<｜｜DSML｜｜[\s\S]*?(?:<\/｜｜DSML｜｜\s*calls>|$)/g, '')
+        .replace(/<<<\[TOOL_REQUEST\]>>>[\s\S]*?(?:<<<\[END_TOOL_REQUEST\]>>>|$)/g, '')
+        .replace(/<invoke[\s\S]*?(?:<\/invoke>|$)/g, '')
+        .trim();
+}
+function detectToolCallLeak(text) {
+    if (typeof text !== 'string' || !text || !TOOL_CALL_MARKER_PATTERN.test(text)) {
+        return null;
+    }
+    const prose = stripToolCallMarkup(text);
+    return prose.length < 200 ? { prose } : null;
+}
+
 // 索引就绪闸门（P1.3）：learn/蒸馏刚写盘的文件要等 TDB 队列消化（embedding
 // 分钟级）才可检索——learn 完成 ≠ 知识可检索。开考前等待队列清零；超时或
 // 端口无此能力 → 放行但在 summary/报告显式标注「检索可能缺最新知识」。
@@ -53,6 +71,7 @@ const ANSWER_MAX_TOKENS = 6000;
 const ANSWER_RETRY_MAX_TOKENS = 12000;
 const ANSWER_RETRY_FALLBACK_TOKENS = 8000;
 const DIRECT_OUTPUT_NOTE = '\n\n【输出要求】直接输出答案正文本身（结论/清单/方案本体在前）；不要输出推理过程、开场白或前置免责声明；依据的知识卡编号与不确定处放在正文末尾一行。';
+const NO_TOOL_CALL_NOTE = '\n\n【考试环境说明】本环境没有任何可调用的工具——检索已由系统代为完成（见上方知识库检索结果）。严禁输出任何工具调用语法（<invoke>、DSML 标记、「始」「末」协议块等）；工具标记文本不是回答，出现即视为未作答。';
 
 const FALLBACK_EXAMINE_TEMPLATE = `你是出题官。按考纲为{{displayName}}（{{name}}）出上岗考卷。考纲：
 {{examOutline}}
@@ -163,11 +182,19 @@ async function blindSearch(knowledgeStorePort, libraryName, keywords, { topK = 5
         return { cards: [], skipped: true };
     }
     const cards = [];
+    const seenCards = new Set();
     try {
         const hits = await knowledgeStorePort.search(keywords[0] || '', { libraries: [libraryName], topK });
         for (const hit of Array.isArray(hits) ? hits : []) {
+            const title = hit.title || hit.sourceFile || '(untitled)';
+            // 同一知识卡的多 chunk 会重复占位（2026-10-11 实测：topK 5 实际仅
+            // 3 张唯一卡）——按标题去重，把配额还给多样性。
+            if (seenCards.has(title)) {
+                continue;
+            }
+            seenCards.add(title);
             cards.push({
-                title: hit.title || hit.sourceFile || '(untitled)',
+                title,
                 text: String(hit.text || hit.content || '').slice(0, 1200),
                 score: hit.score
             });
@@ -181,6 +208,7 @@ async function blindSearch(knowledgeStorePort, libraryName, keywords, { topK = 5
 function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {}, indexReadiness = null, retrievals = null }) {
     const ISSUE_TAGS = {
         empty: '⚠️ 作答失败（模型未输出正文，非知识缺口）',
+        'tool-leak': '⚠️ 工具调用标记泄漏（已剥离标记，非知识缺口）',
         truncated: '⚠️ 答卷被输出上限截断',
         'reasoning-only': '⚠️ 以推理段作答（正文未输出）'
     };
@@ -559,20 +587,29 @@ async function completeBlindAnswer({ llm, llmConfig, prompt, questionId, logger 
     let choice = (await completeOnce(ANSWER_MAX_TOKENS))?.data?.choices?.[0];
     let content = String(choice?.message?.content || '').trim();
     let finishReason = choice?.finish_reason || null;
-    if (content && finishReason !== 'length') {
+    let leak = content ? detectToolCallLeak(content) : null;
+    if (!leak && content && finishReason !== 'length') {
         return { text: content, issue: null };
     }
-    const why = content ? '正文被截断（finish_reason=length）' : '正文为空（疑似推理段耗尽输出预算）';
-    logger?.(`trial: 考题 ${questionId} 作答${why}，带直接输出指令与篇幅纪律重试一次`);
+    const why = leak
+        ? '正文本体是工具调用标记（DSML/TOOL_REQUEST 泄漏）'
+        : (content ? '正文被截断（finish_reason=length）' : '正文为空（疑似推理段耗尽输出预算）');
+    logger?.(`trial: 考题 ${questionId} 作答${why}，带直接输出指令重试一次`);
+    const retryNote = DIRECT_OUTPUT_NOTE + (leak ? NO_TOOL_CALL_NOTE : '');
     try {
-        choice = (await completeOnce(ANSWER_RETRY_MAX_TOKENS, DIRECT_OUTPUT_NOTE))?.data?.choices?.[0];
+        choice = (await completeOnce(ANSWER_RETRY_MAX_TOKENS, retryNote))?.data?.choices?.[0];
     } catch (error) {
         // 供应商可能拒收超过其输出上限的 max_tokens——回落到既有安全上限再试。
         logger?.(`trial: 考题 ${questionId} 重试上限 ${ANSWER_RETRY_MAX_TOKENS} 被拒（${error.message}），回落 ${ANSWER_RETRY_FALLBACK_TOKENS}`);
-        choice = (await completeOnce(ANSWER_RETRY_FALLBACK_TOKENS, DIRECT_OUTPUT_NOTE))?.data?.choices?.[0];
+        choice = (await completeOnce(ANSWER_RETRY_FALLBACK_TOKENS, retryNote))?.data?.choices?.[0];
     }
     content = String(choice?.message?.content || '').trim();
     finishReason = choice?.finish_reason || null;
+    leak = content ? detectToolCallLeak(content) : null;
+    if (leak) {
+        // 重答仍泄漏：保留剥离标记后的残余正文（可能为空），显式留痕。
+        return { text: leak.prose, issue: 'tool-leak' };
+    }
     if (content) {
         return { text: content, issue: finishReason === 'length' ? 'truncated' : null };
     }
@@ -624,7 +661,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
                 '',
                 // 正文先行：先给结论/清单本体，依据与边界说明收尾——避免大段
                 // 前置免责声明稀释交付物（判卷 antiAiFlavor 实测扣分点）。
-                '要求：依据上面的知识库资料作答；直接以答案正文开头（结论/清单/方案本体在前）；依据的知识卡编号与不确定处放在正文末尾；资料不足时在正文内说明知识边界；给出处；不编造。篇幅纪律：正文控制在约 1500 字内，表格与要点优先、论述从简——超出部分视为未作答。'
+                '要求：依据上面的知识库资料作答；直接以答案正文开头（结论/清单/方案本体在前）；依据的知识卡编号与不确定处放在正文末尾；资料未覆盖的部分，先用公认专业原则给出判断并标注「（通行原则，库内无直接资料）」，不要整体拒答（2026-10-11 教训：单纯声明边界导致概念题漏气）；给出处；不编造。篇幅纪律：正文控制在约 1500 字内，表格与要点优先、论述从简——超出部分视为未作答。本环境无任何可调用工具，严禁输出工具调用语法。'
             ].join('\n');
             const { text, issue } = await completeBlindAnswer({
                 llm, llmConfig, prompt: answerPrompt, questionId: question.id, logger
@@ -645,6 +682,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         // 作答异常注记随题透传给判卷官：「截断/作答失败」与「没写完/不会」不同罪。
         const ANSWER_ISSUE_NOTES = {
             empty: '（注：本题为作答失败——模型两轮未输出正文，非考生知识问题；按未作答评分，评语请注明「作答失败」）',
+            'tool-leak': '（注：本答卷重答后仍残留工具调用标记——按标记之外的正文评分，评语请注明「工具调用泄漏」；这是人设/环境适配问题而非知识缺口）',
             truncated: '（注：本答卷因输出长度上限被截断——请就已写内容评分，评语注明「截断」，并在评语末尾估算「若未截断，本题还可多得几分」——截断失分估算是验收归因依据）',
             'reasoning-only': '（注：本答卷取自模型推理段（正文未输出）——按内容质量正常评分，评语注明「推理段作答」）'
         };
@@ -712,9 +750,12 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
             earned += dims.reduce((sum, value) => sum + Math.min(5, Math.max(0, value)), 0);
             full += questionFull;
             const questionRatio = dims.reduce((sum, value) => sum + Math.min(5, Math.max(0, value)), 0) / questionFull;
-            // 作答失败（empty）是执行面问题而非知识缺口——不计入弱项，
-            // 避免触发无意义的知识回填；截断/推理段作答保留（内容仍有信号）。
-            if (questionRatio < PASS_RATIO && question.subskillId !== 'practical' && answerMeta[question.id]?.issue !== 'empty') {
+            // 作答失败（empty）与工具调用泄漏（tool-leak）是执行面/人设问题
+            // 而非知识缺口——不计入弱项，避免触发无意义的知识回填；截断/
+            // 推理段作答保留（内容仍有信号）。
+            const answerIssue = answerMeta[question.id]?.issue;
+            if (questionRatio < PASS_RATIO && question.subskillId !== 'practical'
+                && answerIssue !== 'empty' && answerIssue !== 'tool-leak') {
                 weakQuestions.push({ id: question.id, subskillId: question.subskillId, ratio: questionRatio });
             }
         }

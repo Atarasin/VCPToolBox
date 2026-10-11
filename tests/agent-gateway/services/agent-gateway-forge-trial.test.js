@@ -1050,3 +1050,131 @@ test('retrial：subskillIds 抽考——只出指定子技能 + 实操，门禁�
     const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'trial.json'), 'utf8'));
     assert.match(marker.summary, /考卷 3 题覆盖 1\/1 子技能/);
 });
+
+// ── 根因 A：DSML 工具调用标记泄漏（补考 6 两题 0 分的答卷本体是未执行的
+// 调用标记）——采集侧拦截 + 带考试环境说明重答；持续泄漏剥离留痕且不入缺口。
+
+const DSML_LEAK_SAMPLE = [
+    '<｜｜DSML｜｜ calls>',
+    '<｜｜DSML｜｜ invoke name="gateway_knowledge_search">',
+    '<｜｜DSML｜｜ parameter name="agentId" string="true">FullStackUIDesignExpert</｜｜DSML｜｜ parameter>',
+    '<｜｜DSML｜｜ parameter name="query" string="true">视觉层级 对比手段</｜｜DSML｜｜ parameter>',
+    '</｜｜DSML｜｜ invoke>',
+    '</｜｜DSML｜｜ calls>'
+].join('\n');
+
+test('trial：DSML 工具调用泄漏——首答泄漏触发重答恢复；持续泄漏剥离留痕不入缺口', async () => {
+    const baseDir = createTempDir();
+    const jrs = createJobRuntimeService();
+    const answerCalls = {};
+    const retryPrompts = [];
+    const scores = (ratio) => ({ correctness: ratio * 5, completeness: ratio * 5, professionalism: ratio * 5, antiAiFlavor: ratio * 5, actionability: ratio * 5 });
+    const mixedGrade = JSON.stringify({
+        gradedQuestions: [
+            { id: 'color-theory-q1', scores: scores(0.9), comment: 'ok', citedKnowledgeCards: [] },
+            { id: 'color-theory-q2', scores: scores(0.5), comment: '泄漏', citedKnowledgeCards: [] },
+            { id: 'layout-typography-q1', scores: scores(0.9), comment: 'ok', citedKnowledgeCards: [] },
+            { id: 'layout-typography-q2', scores: scores(0.9), comment: 'ok', citedKnowledgeCards: [] },
+            { id: 'practical-qp', scores: scores(0.9), comment: 'ok', citedKnowledgeCards: [] }
+        ],
+        overallComment: '总评'
+    });
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                const content = payload.messages[0].content;
+                let message = { content: 'ans' };
+                if (content.includes('# 知识库检索结果')) {
+                    const qid = (content.match(/# 考题（(.*?)）/u) || [])[1] || '?';
+                    answerCalls[qid] = (answerCalls[qid] || 0) + 1;
+                    if (content.includes('【考试环境说明】')) {
+                        retryPrompts.push(qid);
+                    }
+                    if (qid === 'color-theory-q1') {
+                        // 首答 DSML 泄漏 → 重答恢复
+                        message = answerCalls[qid] === 1
+                            ? { content: DSML_LEAK_SAMPLE }
+                            : { content: '恢复后的正常答案：视觉层级是留白、对比与节奏的协同。' };
+                    } else if (qid === 'color-theory-q2') {
+                        // 两轮都泄漏 → 剥离留痕（残余正文为空）
+                        message = { content: DSML_LEAK_SAMPLE };
+                    }
+                } else if (content.includes('专家铸造师')) {
+                    message = { content: JSON.stringify(blueprint()) };
+                } else if (content.includes('出题官') || content.includes('考纲')) {
+                    message = { content: scopeAwareExamOutput(content) };
+                } else if (content.includes('判卷官')) {
+                    message = { content: mixedGrade };
+                } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
+                    message = { content: DISTILL_JSON };
+                }
+                return { data: { choices: [{ message: { content: message.content } }], usage: { prompt_tokens: 1, completion_tokens: 1 } } };
+            }
+        },
+        toolInvokerPort: {
+            invoke: async (toolName, args) => {
+                const isLayout = String(args?.query || '').includes('layout');
+                return { content: [{ type: 'text', text: isLayout ? 'D\nhttps://d.dev/g\ns' : 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2' }] };
+            }
+        },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1 }]
+        },
+        baseDir: path.join(baseDir, 'forge'),
+        knowledgeRoot: path.join(baseDir, 'knowledge'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'agent_map.json'),
+        knowledgePolicyPath: path.join(baseDir, 'policy.json'),
+        guidanceConfigPath: path.join(baseDir, 'guidance.json')
+    });
+    for (const [file, content] of [
+        ['agent_map.json', '{}'],
+        ['policy.json', JSON.stringify({ restrictedLibraries: {} })],
+        ['guidance.json', JSON.stringify({ version: 1, shared: { workflow: [], memoryWritePolicy: { write: [], skip: [] } }, agents: {} })]
+    ]) {
+        fs.writeFileSync(path.join(baseDir, file), content);
+    }
+    const { jobId } = await svc.startExpertCreateJob({ requirement: '造一个 UI 设计专家' });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
+
+    // q1：首答泄漏 → 重答带考试环境说明 → 恢复（无 issue）
+    assert.equal(answerCalls['color-theory-q1'], 2);
+    assert.ok(retryPrompts.includes('color-theory-q1'), '重答 prompt 必须带考试环境说明');
+    const answersFile = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'answers.json'), 'utf8'));
+    assert.match(answersFile.answers['color-theory-q1'], /恢复后的正常答案/);
+    assert.equal(answersFile.answerMeta['color-theory-q1'], undefined);
+
+    // q2：持续泄漏 → 剥离标记后残余为空，issue=tool-leak，不入缺口
+    assert.equal(answersFile.answerMeta['color-theory-q2'].issue, 'tool-leak');
+    assert.equal(answersFile.answers['color-theory-q2'], '');
+    const gaps = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'gaps.json'), 'utf8'));
+    assert.ok(!gaps.gaps.some((gap) => gap.reason.includes('color-theory-q2')), '泄漏题不触发知识回填缺口');
+    const marker = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'steps', 'trial.json'), 'utf8'));
+    assert.match(marker.summary, /color-theory-q2:tool-leak/);
+    const md = fs.readFileSync(path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'grade-report.md'), 'utf8');
+    assert.match(md, /⚠️ 工具调用标记泄漏/);
+    assert.ok(!md.includes('<｜｜DSML｜｜'), '报告中的答卷展示不应保留 DSML 标记本体');
+});
+
+test('trial：答题要求含通行原则边界火候与禁工具语法（根因 C + A 提示侧）', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    await driveToTrial(env);
+    const answerCalls = env.llmCalls.map((payload) => payload.messages[0].content)
+        .filter((content) => content.includes('# 知识库检索结果'));
+    assert.ok(answerCalls.length >= 5);
+    for (const prompt of answerCalls) {
+        assert.match(prompt, /通行原则，库内无直接资料/, '边界火候：未覆盖部分用通行原则作答并标注');
+        assert.match(prompt, /严禁输出工具调用语法/, '禁工具语法');
+        assert.match(prompt, /本环境无任何可调用工具/, '明示无工具');
+    }
+});
