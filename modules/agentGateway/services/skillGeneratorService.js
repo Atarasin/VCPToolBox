@@ -145,8 +145,11 @@ function buildSkillDescription(guidance) {
     const subject = domain
         ? `${displayName}（VCP Agent Gateway agent ${guidance.agentId}）的${domain}人格与记忆层`
         : `${displayName}（VCP Agent Gateway agent ${guidance.agentId}）的人格与记忆层`;
-    const mechanism = `先用 gateway_agent_bootstrap 取回${displayName}本人的角色设定与按当前问题检索到的语料，`
-        + '再用 gateway_recall_run 召回历史结论，用 gateway_memory_write 存档新结论。';
+    const mechanism = hasMemorySurface(guidance)
+        ? `先用 gateway_agent_bootstrap 取回${displayName}本人的角色设定与按当前问题检索到的语料，`
+            + '再用 gateway_recall_run 召回历史结论，用 gateway_memory_write 存档新结论。'
+        : `用 gateway_agent_bootstrap 取回${displayName}本人的角色设定与按当前问题检索到的语料。`
+            + '该 agent 无记忆召回面（不做历史召回与日记存档）。';
     const trigger = triggers.length > 0
         ? `当${triggers.join('；')}时使用。`
         : `当任务依赖该 agent 的人格、历史决策、既往结论或用户偏好时使用${defaultDiary ? `，结论写回「${defaultDiary}」` : ''}。`;
@@ -173,7 +176,22 @@ function renderBootstrapStep(guidance) {
     ].join('\n');
 }
 
+// 记忆面判定：guidance bundle 的日记名单（memory policy 注入）为空即无记忆面
+// （如 ForgeMaster 等纯编排 agent——红线 1：不做记忆召回/存档）。
+function hasMemorySurface(guidance) {
+    return normalizeList(guidance.allowedDiaries).some(isConcreteDiaryName)
+        || normalizeList(guidance.defaultDiaries).some(isConcreteDiaryName);
+}
+
 function renderRecallStep(guidance) {
+    if (!hasMemorySurface(guidance)) {
+        return [
+            '### 第 2 步：记忆边界（本 agent 无记忆面）',
+            '',
+            '- 该 agent 没有日记本召回面：**不要调用** `gateway_recall_run` / `gateway_memory_search` / `gateway_context_assemble` / `gateway_memory_write`（调用会得到 404/403，这不是故障）。',
+            '- 需要跨会话沉淀的内容按该 agent 的专属机制处理（如 forge 专家的知识缺口登记 / 铸造档案），不写记忆。'
+        ].join('\n');
+    }
     const defaultDiaries = normalizeList(guidance.defaultDiaries).filter(isConcreteDiaryName);
     const lines = [
         '### 第 2 步：召回历史结论',
@@ -199,6 +217,9 @@ function renderRecallStep(guidance) {
  * 即 400。所以这里直接渲染成可原样照抄的成品，而不是描述字段。
  */
 function renderWriteStep(guidance) {
+    if (!hasMemorySurface(guidance)) {
+        return '';
+    }
     const allowedDiaries = normalizeList(guidance.allowedDiaries);
     const defaultDiaries = normalizeList(guidance.defaultDiaries);
     const memoryDefaults = guidance.memoryDefaults || {};
@@ -329,17 +350,22 @@ function renderAgentWorkflow(guidance) {
     return lines.join('\n');
 }
 
-function renderToolCheatsheet() {
+function renderToolCheatsheet(guidance) {
+    const memoryRows = hasMemorySurface(guidance)
+        ? [
+            '| `gateway_recall_run` | 回答前召回历史结论，不必知道日记本 | `query` |',
+            '| `gateway_memory_search` | 已知日记本或要找确切名称的窄问题 | `query` |',
+            '| `gateway_context_assemble` | 起草长回答前要一整块预算内的上下文 | `query` 或 `recentMessages` |',
+            '| `gateway_memory_write` | 会话收尾或得出确定结论时存档 | `target.diary` + `memory.text` + `memory.tags` |'
+        ]
+        : [];
     return [
         '## 工具速查',
         '',
         '| 工具 | 什么时候用 | 必填 |',
         '| --- | --- | --- |',
         '| `gateway_agent_bootstrap` | 会话首次回答前、话题切换时取回人格与语料 | 建议传 `query` |',
-        '| `gateway_recall_run` | 回答前召回历史结论，不必知道日记本 | `query` |',
-        '| `gateway_memory_search` | 已知日记本或要找确切名称的窄问题 | `query` |',
-        '| `gateway_context_assemble` | 起草长回答前要一整块预算内的上下文 | `query` 或 `recentMessages` |',
-        '| `gateway_memory_write` | 会话收尾或得出确定结论时存档 | `target.diary` + `memory.text` + `memory.tags` |',
+        ...memoryRows,
         '| `gateway_knowledge_search` | 查冷知识库（百科/文档/观点库等稳定参考，非个人记忆） | `query` |',
         '| `gateway_job_get` / `gateway_job_cancel` | 轮询或取消 deferred 任务 | `jobId` |'
     ].join('\n');
@@ -424,7 +450,7 @@ function renderSkillMarkdown({ guidance, baseUrl }) {
         procedure,
         renderAgentWorkflow(guidance),
         renderDiaryRouting(guidance),
-        renderToolCheatsheet(),
+        renderToolCheatsheet(guidance),
         renderFailureSemantics(guidance),
         renderHardRules(guidance)
     ]);
@@ -614,6 +640,7 @@ function buildIntegrationSummary({ guidance, baseUrl }) {
 }
 
 module.exports = {
+    hasMemorySurface,
     PUBLIC_BASE_URL_ENV,
     SECRET_SCAN_PATTERNS,
     SKILL_FORMATS,

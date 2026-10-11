@@ -402,3 +402,44 @@ test('backendProxy tools/list：非 ForgeMaster 隐藏编排三件套，ForgeMas
     const anonList = await anonAdapter.listTools({ requestContext: { requestId: 'req-anon' } });
     assert.ok(!toolNames(anonList).includes('gateway_forge_create'), '匿名发现请求不可见');
 });
+
+// SKILL.md 生成按记忆面定制：无日记面的 agent（ForgeMaster）不被教唆调记忆工具。
+test('skillGenerator：无记忆面 agent 的 SKILL.md 不含 recall/memory 教唆，含记忆边界说明', () => {
+    const { generateSkillArtifact, hasMemorySurface, SKILL_FORMATS } = require('../../../modules/agentGateway/services/skillGeneratorService');
+    const guidance = {
+        agentId: 'ForgeMaster',
+        displayName: 'ForgeMaster（铸造师）',
+        allowedDiaries: [],
+        defaultDiaries: [],
+        memoryDefaults: { tags: ['ForgeMaster'], metadata: {} },
+        workflow: ['发起铸造用 gateway_forge_create'],
+        skill: { domain: '专家铸造炉对话入口', triggers: ['铸造新专家'], notFor: ['无关问答'] }
+    };
+    assert.equal(hasMemorySurface(guidance), false, 'ForgeMaster 无记忆面');
+
+    const artifact = generateSkillArtifact({ guidance, format: SKILL_FORMATS.MARKDOWN, baseUrl: 'http://127.0.0.1:6005' });
+    assert.equal(artifact.ok, true, `生成成功，实际 ${JSON.stringify(artifact).slice(0, 120)}`);
+    const skillFile = artifact.files.find((file) => file.path.endsWith('.md')) || artifact.files[0];
+    const markdown = skillFile.content;
+    assert.ok(!markdown.includes('gateway_recall_run {'), '不教唆调 recall_run');
+    assert.ok(!markdown.includes('gateway_memory_write'), '不教唆调 memory_write');
+    assert.ok(!markdown.includes('gateway_memory_search'), '不教唆调 memory_search');
+    assert.match(markdown, /记忆边界（本 agent 无记忆面）/, '含记忆边界说明段');
+    assert.match(markdown, /gateway_forge_create/, 'workflow 指引保留');
+    // 对照：有记忆面的 agent 行为不变
+    const withMemory = generateSkillArtifact({
+        guidance: {
+            ...guidance,
+            agentId: 'MCPFuPeng',
+            displayName: '付鹏',
+            allowedDiaries: ['付鹏市场判断日记本'],
+            defaultDiaries: ['付鹏市场判断日记本']
+        },
+        format: SKILL_FORMATS.MARKDOWN,
+        baseUrl: 'http://127.0.0.1:6005'
+    });
+    const withMemoryFile = withMemory.files.find((file) => file.path.endsWith('.md')) || withMemory.files[0];
+    const withMemoryMd = withMemoryFile.content;
+    assert.match(withMemoryMd, /gateway_recall_run/, '有记忆面 agent 保留召回指引');
+    assert.match(withMemoryMd, /gateway_memory_write/, '有记忆面 agent 保留存档指引');
+});
