@@ -82,17 +82,22 @@ function gradeJson(ratio, prompt = '') {
     return JSON.stringify({ gradedQuestions: graded, overallComment: '总评' });
 }
 
-function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null } = {}) {
+function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null, knowledgeStoreOverrides = null, llmDelayMs = 0 } = {}) {
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
     const llmPort = {
         available: true,
         complete: async (config, payload) => {
             llmCalls.push(payload);
-            // 按 prompt 内容路由：蒸馏 → 出题 → 盲测作答 → 判卷
+            if (llmDelayMs > 0) {
+                await new Promise((resolve) => setTimeout(resolve, llmDelayMs));
+            }
+            // 按 prompt 内容路由：起草画像 → 蒸馏 → 出题 → 盲测作答 → 判卷
             const content = payload.messages[0].content;
             let output;
-            if (content.includes('出题官') || content.includes('考纲')) {
+            if (content.includes('专家铸造师')) {
+                output = JSON.stringify(blueprint());
+            } else if (content.includes('出题官') || content.includes('考纲')) {
                 output = scopeAwareExamOutput(content);
             } else if (content.includes('判卷官')) {
                 // 支持分数序列：首考 → 重测（回填后同一套考题）
@@ -121,7 +126,8 @@ function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null } = 
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: '色轮与色彩三属性', text: '色轮组织颜色……', score: 0.9 }]
+            search: async () => [{ title: '色轮与色彩三属性', text: '色轮组织颜色……', score: 0.9 }],
+            ...(knowledgeStoreOverrides || {})
         },
         jevPort,
         baseDir: path.join(baseDir, 'forge'),
@@ -810,4 +816,167 @@ test('trial：考卷按考纲全量覆盖——每条目概念+应用+实操各�
     for (const question of exam.questions) {
         assert.match(question.id, question.kind === 'practical' ? /^practical-/ : new RegExp(`^${question.subskillId}-`));
     }
+});
+
+// ── P1.1 完整性门禁与考卷元数据（残卷曾以完整卷外观流出两轮无效成绩）──────
+
+test('trial：残卷被完整性门禁拦截——FORGE_EXAM_INCOMPLETE，不进入评分，残卷留盘取证', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    // 劫持出题：layout-typography 条目返回的题目挂错 subskillId → 该条目零覆盖
+    const originalComplete = env.forgeRuntimeService;
+    const examsDirOf = (jobId) => path.join(baseDir, 'forge', 'runs', jobId, 'exams');
+    const jrs = env.jobRuntimeService;
+    // 用独立桩替换：直接再建一个 service 太重——改用 buildEnv 的 llm 输出不可注入，
+    // 因此这里内联最小环境（出题仅覆盖 color-theory，实操正常）。
+    const svc = createForgeRuntimeService({
+        jobRuntimeService: jrs,
+        llmCompletionPort: {
+            available: true,
+            complete: async (config, payload) => {
+                const content = payload.messages[0].content;
+                let output;
+                if (content.includes('出题官') || content.includes('考纲')) {
+                    if (content.includes('【本次范围】只出 1 道 kind=practical')) {
+                        output = PRACTICAL_EXAM_JSON;
+                    } else if (content.includes('- layout-typography（')) {
+                        // 题目挂错 subskillId → layout-typography 条目零覆盖
+                        output = entryExamJson('color-theory');
+                    } else {
+                        output = entryExamJson('color-theory');
+                    }
+                } else if (content.includes('判卷官')) {
+                    output = gradeJson(0.9, content);
+                } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
+                    output = DISTILL_JSON;
+                } else {
+                    output = 'ans';
+                }
+                return { data: { choices: [{ message: { content: output } }], usage: { prompt_tokens: 1, completion_tokens: 1 } } };
+            }
+        },
+        toolInvokerPort: { async invoke() { return { content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns' }] }; } },
+        knowledgeStorePort: { available: true, listLibraries: async () => ['UIDesigner知识库'], search: async () => [{ title: 't', text: 'x', score: 1 }] },
+        baseDir: path.join(baseDir, 'forge2'),
+        knowledgeRoot: path.join(baseDir, 'knowledge2'),
+        llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
+        agentMapPath: path.join(baseDir, 'agent_map.json'),
+        knowledgePolicyPath: path.join(baseDir, 'policy.json'),
+        guidanceConfigPath: path.join(baseDir, 'guidance.json')
+    });
+    const { jobId } = await svc.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家',
+        blueprintOverride: blueprint()
+    });
+    await waitFor(() => jrs.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await svc.confirmBlueprint(jobId, { approved: true });
+    assert.equal(await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal), true);
+
+    const job = jrs.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_EXAM_INCOMPLETE');
+    assert.equal(job.metadata.forge.error.step, 'trial');
+    assert.match(job.metadata.forge.error.message, /缺失：layout-typography/);
+
+    const examsDir = path.join(baseDir, 'forge2', 'runs', jobId, 'exams');
+    const exam = JSON.parse(fs.readFileSync(path.join(examsDir, 'exam.json'), 'utf8'));
+    assert.equal(exam.meta.incomplete, true, '残卷留盘取证');
+    assert.ok(!fs.existsSync(path.join(examsDir, 'grade-report.md')), '残卷不进入评分');
+    assert.ok(!fs.existsSync(path.join(examsDir, 'answers.json')), '残卷不作答');
+    void env; void originalComplete;
+});
+
+test('trial：完整考卷带元数据——exam.json meta + 报告考卷行 + 步骤 summary/状态', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    const jobId = await driveToTrial(env);
+    const runDir = path.join(baseDir, 'forge', 'runs', jobId);
+    const exam = JSON.parse(fs.readFileSync(path.join(runDir, 'exams', 'exam.json'), 'utf8'));
+    assert.equal(exam.meta.questionCount, 5);
+    assert.deepEqual(exam.meta.coveredSubskills, ['color-theory', 'layout-typography']);
+    assert.equal(exam.meta.practicalIncluded, true);
+    assert.deepEqual(exam.meta.degradedEntries, []);
+    assert.match(exam.meta.examHash, /^[a-f0-9]{16}$/);
+
+    const md = fs.readFileSync(path.join(runDir, 'exams', 'grade-report.md'), 'utf8');
+    assert.match(md, /- 考卷：5 题 \/ 覆盖 2\/2 子技能 \/ 哈希 [a-f0-9]{16}/);
+
+    const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'trial.json'), 'utf8'));
+    assert.equal(marker.state.examMeta.questionCount, 5);
+    assert.match(marker.summary, /考卷 5 题覆盖 2\/2 子技能（哈希 [a-f0-9]{8}）/);
+});
+
+// ── P1.3 索引就绪闸门：队列未清空 → 等待；超时 → 放行但显式告警 ────────────
+
+test('trial：TDB 队列短时未清空 → 等待后开考（无告警）；持续未清空 → 超时放行并告警', async () => {
+    const previousTimeout = process.env.FORGE_INDEX_READINESS_TIMEOUT_MS;
+    const previousInterval = process.env.FORGE_INDEX_READINESS_INTERVAL_MS;
+    process.env.FORGE_INDEX_READINESS_TIMEOUT_MS = '150';
+    process.env.FORGE_INDEX_READINESS_INTERVAL_MS = '40';
+    const baseDir = createTempDir();
+    let pending = 3;
+    const env = buildEnv(baseDir, {
+        gradeRatio: 0.9,
+        knowledgeStoreOverrides: {
+            pendingIngestCount: () => pending
+        }
+    });
+    // 队列两次轮询后归零 → 正常开考
+    setTimeout(() => { pending = 0; }, 100);
+    const jobId = await driveToTrial(env);
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'pending_confirm', '队列清零后正常开考');
+    const marker = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', jobId, 'steps', 'trial.json'), 'utf8'));
+    assert.equal(marker.state.indexReadiness.ready, true);
+    assert.ok(!marker.summary.includes('索引队列未清空'));
+
+    // 持续未清空 → 超时放行 + summary/报告告警
+    const baseDir2 = createTempDir();
+    const env2 = buildEnv(baseDir2, {
+        gradeRatio: 0.9,
+        knowledgeStoreOverrides: { pendingIngestCount: () => 7 }
+    });
+    const jobId2 = await driveToTrial(env2);
+    const runDir2 = path.join(baseDir2, 'forge', 'runs', jobId2);
+    const marker2 = JSON.parse(fs.readFileSync(path.join(runDir2, 'steps', 'trial.json'), 'utf8'));
+    assert.match(marker2.summary, /⚠️ 开考时索引队列未清空（剩余 7 项）/);
+    assert.equal(marker2.state.indexReadiness.ready, false);
+    const md = fs.readFileSync(path.join(runDir2, 'exams', 'grade-report.md'), 'utf8');
+    assert.match(md, /开考时索引队列未清空（剩余 7 项）/, '报告头显式告警');
+
+    if (previousTimeout === undefined) delete process.env.FORGE_INDEX_READINESS_TIMEOUT_MS;
+    else process.env.FORGE_INDEX_READINESS_TIMEOUT_MS = previousTimeout;
+    if (previousInterval === undefined) delete process.env.FORGE_INDEX_READINESS_INTERVAL_MS;
+    else process.env.FORGE_INDEX_READINESS_INTERVAL_MS = previousInterval;
+});
+
+// ── P2.4 步内心跳：长步骤期间作业记录的 updatedAt/进度/费用不再冻结 ─────────
+
+test('driveJob：步内心跳——长步骤执行中作业元数据持续刷新（heartbeatAt）', async () => {
+    const previous = process.env.FORGE_STEP_HEARTBEAT_MS;
+    process.env.FORGE_STEP_HEARTBEAT_MS = '10';
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9, llmDelayMs: 200 });
+    // 不传 blueprintOverride：blueprint 步经 LLM 起草（每次调用延迟 200ms），
+    // 10ms 心跳在该步执行期间应多次刷新作业元数据。
+    const { jobId } = await env.forgeRuntimeService.startExpertCreateJob({
+        requirement: '造一个 UI 设计专家'
+    });
+    let sawHeartbeat = false;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+        if (job.metadata?.forge?.heartbeatAt) {
+            sawHeartbeat = true;
+            break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(sawHeartbeat, true, '步骤执行期间应看到 heartbeatAt 刷新');
+    await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.status === 'pending_confirm');
+    await env.forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
+    await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.terminal);
+    if (previous === undefined) delete process.env.FORGE_STEP_HEARTBEAT_MS;
+    else process.env.FORGE_STEP_HEARTBEAT_MS = previous;
 });

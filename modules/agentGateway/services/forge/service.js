@@ -343,7 +343,37 @@ function createForgeRuntimeService(options = {}) {
                     logger: (message) => log('forge.step.running', { jobId, step: step.id, message }),
                     audit: (event, payload) => log(event, { jobId, step: step.id, ...payload })
                 };
-                const result = await stepRegistry.getRunner(step.id)(ctx) || {};
+                // 步内心跳（P2.4）：长步骤（蒸馏分钟级）期间作业记录不再冻结——
+                // 定时刷新 updatedAt/进度/费用；心跳失败不阻断步骤。
+                const heartbeatIntervalMs = Number.parseInt(process.env.FORGE_STEP_HEARTBEAT_MS || '', 10);
+                const heartbeatMs = Number.isFinite(heartbeatIntervalMs) && heartbeatIntervalMs > 0
+                    ? heartbeatIntervalMs
+                    : 30000;
+                let heartbeatTimer = null;
+                if (heartbeatMs > 0) {
+                    heartbeatTimer = setInterval(() => {
+                        try {
+                            updateForgeMetadata(jobId, buildForgeMetadata({
+                                runRecord, steps, completedSteps: markers, currentStep: step.id, costBreakdown: meter.getBreakdown(),
+                                extra: {
+                                    progressDetail: `${step.name}（${markers.size + 1}/${steps.length}）进行中`,
+                                    heartbeatAt: new Date().toISOString()
+                                }
+                            }));
+                        } catch {
+                            // 心跳失败不阻断。
+                        }
+                    }, heartbeatMs);
+                    heartbeatTimer.unref?.();
+                }
+                let result;
+                try {
+                    result = await stepRegistry.getRunner(step.id)(ctx) || {};
+                } finally {
+                    if (heartbeatTimer) {
+                        clearInterval(heartbeatTimer);
+                    }
+                }
                 ensureActive(jobId, authContext); // 执行期间被取消则不覆盖 cancelled 状态。
                 const marker = await runStore.markStepComplete(jobId, step.id, {
                     summary: result.summary || null,

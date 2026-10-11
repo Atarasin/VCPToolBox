@@ -347,7 +347,11 @@ function bindVcpPorts(pluginManager, options = {}) {
             typeof tdbKnowledgeManager.listLibraries === 'function'
             ? createKnowledgeStorePort({
                 search: (queryText, searchOptions = {}) => tdbKnowledgeManager.search(queryText, searchOptions),
-                listLibraries: () => tdbKnowledgeManager.listLibraries()
+                listLibraries: () => tdbKnowledgeManager.listLibraries(),
+                // 索引就绪闸门（试岗开考前检查）：未消化摄取项数，能力可选
+                ...(typeof tdbKnowledgeManager.pendingIngestCount === 'function'
+                    ? { pendingIngestCount: () => tdbKnowledgeManager.pendingIngestCount() }
+                    : {})
             })
             : createKnowledgeStorePort({ enabled: false, reason: 'tdb_knowledge_unavailable', optional: true }),
         configuration: Object.freeze({

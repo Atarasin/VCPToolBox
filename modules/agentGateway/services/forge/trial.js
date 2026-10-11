@@ -3,6 +3,7 @@
 const fs = require('fs');
 const fsp = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 
 const { readBlueprint, blueprintLibraryName } = require('./blueprint');
 const { extractJsonObject, extractCompleteArrayObjects } = require('./jsonUtils');
@@ -38,6 +39,14 @@ const GRADE_CHUNK_SIZE = 5;
 // 盲测作答弹性（2026-10-11 补考实测）：应用/实操题是长交付物，3000 会中途
 // 截断；推理型模型还可能把整个输出预算耗在推理段导致 message.content 为空
 //（两题 0 分「未作答」）——空正文/截断时带「直接输出正文」强指令加预算重试。
+// 索引就绪闸门（P1.3）：learn/蒸馏刚写盘的文件要等 TDB 队列消化（embedding
+// 分钟级）才可检索——learn 完成 ≠ 知识可检索。开考前等待队列清零；超时或
+// 端口无此能力 → 放行但在 summary/报告显式标注「检索可能缺最新知识」。
+// env 在调用时读取（默认参数求值时机），120s/5s。
+const resolvePositiveEnvInt = (name, fallback) => {
+    const parsed = Number.parseInt(process.env[name] || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 const ANSWER_MAX_TOKENS = 6000;
 const ANSWER_RETRY_MAX_TOKENS = 8000;
 const DIRECT_OUTPUT_NOTE = '\n\n【输出要求】直接输出答案正文本身（结论/清单/方案本体在前）；不要输出推理过程、开场白或前置免责声明；依据的知识卡编号与不确定处放在正文末尾一行。';
@@ -114,7 +123,7 @@ async function completeJsonResilient({
                     : { [arrayField]: items };
                 if (validate(salvaged)) {
                     logger?.(`trial: ${dumpBase} 输出整体不可解析（finish_reason=${finishReason ?? 'unknown'}），抢救出 ${items.length} 个完整元素`);
-                    return salvaged;
+                    return { ...salvaged, salvaged: true };
                 }
             }
         }
@@ -166,7 +175,7 @@ async function blindSearch(knowledgeStorePort, libraryName, keywords, { topK = 5
     return { cards, skipped: false };
 }
 
-function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {} }) {
+function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {}, indexReadiness = null }) {
     const ISSUE_TAGS = {
         empty: '⚠️ 作答失败（模型未输出正文，非知识缺口）',
         truncated: '⚠️ 答卷被输出上限截断',
@@ -178,6 +187,13 @@ function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio
     lines.push(`- 及格线：${PASS_RATIO * 100}%（Q5：${blueprint.acceptanceSample}）`);
     lines.push(`- 总分：${(ratio * 100).toFixed(1)}%（${passed ? '✅ 及格，待用户抽查（D3）' : '❌ 未及格，进入定向补课'}）`);
     lines.push(`- 知识库：${libraryName}`);
+    if (exam.meta) {
+        const meta = exam.meta;
+        lines.push(`- 考卷：${meta.questionCount} 题 / 覆盖 ${meta.coveredSubskills.length}/${meta.outlinedSubskills.length} 子技能 / 哈希 ${meta.examHash}${meta.salvagedGenerations > 0 ? `（含 ${meta.salvagedGenerations} 批截断抢救）` : ''}${meta.degradedEntries.length > 0 ? `（⚠️ 题量不足条目：${meta.degradedEntries.join('、')}）` : ''}`);
+    }
+    if (indexReadiness && indexReadiness.checked && indexReadiness.ready === false) {
+        lines.push(`- ⚠️ 开考时索引队列未清空（剩余 ${indexReadiness.pending} 项）：检索可能缺最新入库知识`);
+    }
     lines.push('');
     for (const question of exam.questions) {
         const graded = grading.gradedQuestions.find((g) => g.id === question.id) || {};
@@ -289,6 +305,13 @@ function createTrialStepRunner() {
         // 随机漂移）；命名空间内重复仍去重（保留首个）。
         const mergedQuestions = [];
         const seenIds = new Set();
+        let salvagedGenerations = 0;
+        const noteSalvage = (payload) => {
+            if (payload && payload.salvaged === true) {
+                salvagedGenerations += 1;
+            }
+            return payload;
+        };
         const collectQuestions = (payload, scopeKey) => {
             const questions = Array.isArray(payload?.questions) ? payload.questions : [];
             for (const [index, question] of questions.entries()) {
@@ -323,6 +346,7 @@ function createTrialStepRunner() {
                 error.status = 502;
                 throw error;
             }
+            noteSalvage(payload);
             collectQuestions(payload, entry.subskillId);
         }
         const practicalPayload = await completeJsonResilient({
@@ -341,18 +365,48 @@ function createTrialStepRunner() {
             error.status = 502;
             throw error;
         }
+        noteSalvage(practicalPayload);
         collectQuestions(practicalPayload, 'practical');
-        if (mergedQuestions.length === 0) {
-            const error = new Error('出题输出不可解析（合并后无有效题目）');
-            error.code = 'FORGE_EXAM_OUTPUT_INVALID';
+
+        // 完整性门禁（P1.1）：考纲条目零覆盖或缺实操题 = 残卷，直接 fail——
+        // 残卷评分与完整卷在外观上无法区分，曾误导进修决策（47.2%/56.0% 两轮
+        // 无效成绩）。残卷仍落盘供取证（meta.incomplete），但不进入评分。
+        const outlinedEntries = blueprint.examOutline.map((entry) => ({
+            subskillId: entry.subskillId,
+            expected: (entry.conceptQuestions || 0) + (entry.appliedQuestions || 0)
+        }));
+        const coverage = outlinedEntries.map((entry) => ({
+            ...entry,
+            actual: mergedQuestions.filter((question) => question.subskillId === entry.subskillId).length
+        }));
+        const examMeta = {
+            questionCount: mergedQuestions.length,
+            outlinedSubskills: outlinedEntries.map((entry) => entry.subskillId),
+            coveredSubskills: coverage.filter((entry) => entry.actual > 0).map((entry) => entry.subskillId),
+            practicalIncluded: mergedQuestions.some((question) => question.kind === 'practical'),
+            degradedEntries: coverage.filter((entry) => entry.actual > 0 && entry.actual < entry.expected).map((entry) => entry.subskillId),
+            salvagedGenerations,
+            examHash: crypto.createHash('sha256').update(JSON.stringify(mergedQuestions)).digest('hex').slice(0, 16),
+            generatedAt: new Date().toISOString()
+        };
+        const missingCoverage = coverage.filter((entry) => entry.actual === 0).map((entry) => entry.subskillId);
+        if (missingCoverage.length > 0 || !examMeta.practicalIncluded || mergedQuestions.length === 0) {
+            const error = new Error(
+                `考卷不完整（覆盖 ${examMeta.coveredSubskills.length}/${outlinedEntries.length} 子技能，`
+                + `${missingCoverage.length > 0 ? `缺失：${missingCoverage.join('、')}；` : ''}`
+                + `${examMeta.practicalIncluded ? '' : '缺实操题；'}已留盘 exam.json 供取证，不进入评分）`
+            );
+            error.code = 'FORGE_EXAM_INCOMPLETE';
             error.status = 502;
+            error.details = { examMeta, missingCoverage };
+            await writeExamFile(examsDir, 'exam.json', { questions: mergedQuestions, meta: { ...examMeta, incomplete: true } });
             throw error;
         }
-        const exam = { questions: mergedQuestions };
+        const exam = { questions: mergedQuestions, meta: examMeta };
         await writeExamFile(examsDir, 'exam.json', exam);
 
         const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
-        const { answers, grading, ratio, passed, gaps, jev, answerMeta } = outcome;
+        const { answers, grading, ratio, passed, gaps, jev, answerMeta, indexReadiness } = outcome;
 
         // §3.9 独立审计事件（区别于 forge.step.running 的步骤消息流）。
         ctx.audit?.('forge.exam.graded', {
@@ -368,13 +422,19 @@ function createTrialStepRunner() {
         const issueNote = Object.keys(answerMeta || {}).length > 0
             ? `；作答异常 ${Object.keys(answerMeta).length} 题（${Object.entries(answerMeta).map(([id, meta]) => `${id}:${meta.issue}`).join('、')}）`
             : '';
+        const examNote = `；考卷 ${examMeta.questionCount} 题覆盖 ${examMeta.coveredSubskills.length}/${examMeta.outlinedSubskills.length} 子技能（哈希 ${examMeta.examHash.slice(0, 8)}）`;
+        const indexNote = indexReadiness && indexReadiness.checked && indexReadiness.ready === false
+            ? `；⚠️ 开考时索引队列未清空（剩余 ${indexReadiness.pending} 项），检索可能缺最新知识`
+            : '';
         return {
-            summary: `试岗完成：总分 ${(ratio * 100).toFixed(1)}%（${passed ? '及格，待用户抽查' : '未及格，缺口 ' + gaps.length + ' 项'}）${issueNote}；Jev 对照${jev.skipped ? '跳过（' + jev.reason + '）' : '已留档'}`,
+            summary: `试岗完成：总分 ${(ratio * 100).toFixed(1)}%（${passed ? '及格，待用户抽查' : '未及格，缺口 ' + gaps.length + ' 项'}）${examNote}${issueNote}${indexNote}；Jev 对照${jev.skipped ? '跳过（' + jev.reason + '）' : '已留档'}`,
             artifacts: ['exams/grade-report.md', 'exams/comparison.json'],
             state: {
                 passed,
                 ratio,
                 gaps,
+                examMeta,
+                indexReadiness,
                 userGate: passed ? {
                     kind: 'trial-report',
                     reportPath: path.relative(path.join(baseDir, '..'), path.join(examsDir, 'grade-report.md')),
@@ -383,6 +443,37 @@ function createTrialStepRunner() {
             }
         };
     };
+}
+
+// 索引就绪闸门：pendingIngestCount 归零或超时；端口无此能力按「未知」放行。
+async function waitForIndexReadiness(knowledgeStorePort, { logger, timeoutMs = resolvePositiveEnvInt('FORGE_INDEX_READINESS_TIMEOUT_MS', 120000), intervalMs = resolvePositiveEnvInt('FORGE_INDEX_READINESS_INTERVAL_MS', 5000) } = {}) {
+    if (!knowledgeStorePort || knowledgeStorePort.available === false) {
+        return { checked: false };
+    }
+    if (typeof knowledgeStorePort.pendingIngestCount !== 'function') {
+        return { checked: false, reason: '端口未暴露 pendingIngestCount' };
+    }
+    const readCount = async () => {
+        try {
+            const value = await knowledgeStorePort.pendingIngestCount();
+            return Number.isFinite(value) ? value : null;
+        } catch {
+            return null;
+        }
+    };
+    let pending = await readCount();
+    if (pending === null) {
+        return { checked: false, reason: '队列深度不可读' };
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (pending > 0 && Date.now() < deadline) {
+        logger?.(`trial: TDB 摄取队列未清空（${pending} 项），等待索引就绪…`);
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        pending = await readCount();
+    }
+    return pending > 0
+        ? { checked: true, ready: false, pending }
+        : { checked: true, ready: true, pending };
 }
 
 /**
@@ -427,6 +518,8 @@ async function completeBlindAnswer({ llm, llmConfig, prompt, questionId, logger 
 async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
     const { llm, llmConfig, knowledgeStorePort, baseDir, logger, runDir } = ctx;
     const libraryName = blueprintLibraryName(blueprint.name);
+    // 索引就绪闸门（P1.3）：刚写盘的知识未被消化时盲测检索不到——等待或显式告警。
+    const indexReadiness = await waitForIndexReadiness(knowledgeStorePort, { logger });
     // 盲测（红线 1）：代查专属库 + 人设作答
     let persona = '';
         try {
@@ -577,11 +670,11 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         // 5. 报告落盘（JSON + 用户可读 markdown，含缺口清单）
         const report = { passed, ratio, passLine: PASS_RATIO, grading, gaps, libraryName };
         await writeExamFile(examsDir, 'grade-report.json', report);
-        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta });
+        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta, indexReadiness });
         assertNoSecrets(reportMarkdown, '验收报告');
         await fsp.writeFile(path.join(examsDir, 'grade-report.md'), reportMarkdown, 'utf8');
 
-        return { answers, grading, ratio, passed, gaps, jev, answerMeta };
+        return { answers, grading, ratio, passed, gaps, jev, answerMeta, indexReadiness };
 }
 
 /**

@@ -1541,8 +1541,22 @@ class TDBKnowledgeManager {
         return Math.round((16 * 1024 * 1024) + activeWindowBytes);
     }
 
-    _safeLibraryStats(handle) {
-        if (!handle?.db) return null;
+    // 未消化摄取项计数（pending+retry+processing）——供试岗等消费方做
+    //「索引就绪」闸门（2026-10-11：learn 刚写盘的知识在队列清空前检索不到，
+    // 补考带旧库应考）。store 未初始化/异常返回 null（调用方按未知处理）。
+    pendingIngestCount() {
+        if (!this.metaDb) return null;
+        try {
+            const row = this.metaDb
+                .prepare("SELECT COUNT(*) AS n FROM ingest_queue WHERE status IN ('pending','retry','processing')")
+                .get();
+            return Number.isFinite(row?.n) ? row.n : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    _safeLibraryStats(handle) {        if (!handle?.db) return null;
 
         for (const methodName of ['stats', 'getStats', 'memoryUsage', 'memory_usage']) {
             if (typeof handle.db[methodName] !== 'function') continue;
