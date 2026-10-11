@@ -470,7 +470,8 @@ test('costMeter：deepseek 双档单价按北京时间时段判定，节假日�
     assert.equal(isPeakBeijingTime(new Date('2026-10-14T03:59:00Z')), true, '北京 11:59 高峰');
     assert.equal(isPeakBeijingTime(new Date('2026-10-14T04:00:00Z')), false, '北京 12:00 午休空闲');
     assert.equal(isPeakBeijingTime(new Date('2026-10-14T06:00:00Z')), true, '北京 14:00 高峰');
-    assert.equal(isPeakBeijingTime(new Date('2026-10-14T09:59:00Z')), false, '北京 17:59 后空闲');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T09:59:00Z')), true, '北京 17:59 仍在高峰');
+    assert.equal(isPeakBeijingTime(new Date('2026-10-14T10:00:00Z')), false, '北京 18:00 整退出高峰');
     assert.equal(isPeakBeijingTime(new Date('2026-10-17T02:00:00Z')), false, '周六空闲');
     assert.equal(isPeakBeijingTime(new Date('2026-10-18T02:00:00Z')), false, '周日空闲');
 
