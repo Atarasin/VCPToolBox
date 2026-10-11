@@ -28,8 +28,13 @@ function buildUiDesignerBlueprint() {
     };
 }
 
-function llmResponse(content) {
-    return { data: { choices: [{ message: { content } }], usage: { prompt_tokens: 800, completion_tokens: 600 } } };
+function llmResponse(content, finishReason) {
+    return {
+        data: {
+            choices: [{ message: { content }, ...(finishReason ? { finish_reason: finishReason } : {}) }],
+            usage: { prompt_tokens: 800, completion_tokens: 600 }
+        }
+    };
 }
 
 function anySearchText(entries) {
@@ -106,12 +111,12 @@ async function waitFor(predicate, timeoutMs = 8000, intervalMs = 25) {
     return false;
 }
 
-function buildPipeline({ baseDir, llmOutputs, knowledgeStorePort, smokeRetries = null, smokeIntervalMs = null }) {
+function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, smokeRetries = null, smokeIntervalMs = null, materials = MATERIALS }) {
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
     const toolInvoker = {
         async invoke() {
-            return { content: [{ type: 'text', text: anySearchText(MATERIALS) }] };
+            return { content: [{ type: 'text', text: anySearchText(materials) }] };
         }
     };
     const llmPort = {
@@ -119,7 +124,7 @@ function buildPipeline({ baseDir, llmOutputs, knowledgeStorePort, smokeRetries =
         complete: async (config, payload) => {
             llmCalls.push(payload);
             const next = llmOutputs.length > 1 ? llmOutputs.shift() : llmOutputs[0];
-            return llmResponse(next);
+            return llmResponse(next, finishReason);
         }
     };
     const forgeRuntimeService = createForgeRuntimeService({
@@ -403,4 +408,128 @@ test('distill：LLM 输出不可解析时同 prompt 重试一次（费用入护�
     const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
     assert.ok(marker.state && marker.state.libraryName === 'UIDesigner知识库', 'marker 携带机器可读 state');
     assert.equal(marker.state.smoke.verified, true);
+});
+
+// 2026-10-11 事故回归：两单 distill 连续败于 max_tokens=8000 截断
+// （completion 稳定顶满 8000，JSON 半途被切断）。
+test('distill：max_tokens 截断时抢救完整知识单元，被切断的尾单元丢弃', async () => {
+    const baseDir = createTempDir();
+    // 模拟 finish_reason=length：JSON 在 case 单元（半真半假）的 oneLiner 中途被切断
+    const cutAt = DISTILL_OUTPUT.indexOf('半真半假') + 10;
+    const truncated = DISTILL_OUTPUT.slice(0, cutAt);
+    assert.ok(!truncated.trim().endsWith('}'), '模拟输出应是非完整 JSON');
+    const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
+        baseDir,
+        llmOutputs: [truncated],
+        finishReason: 'length',
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ text: 'hit', score: 0.9 }]
+        },
+        smokeRetries: 1,
+        smokeIntervalMs: 5
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.metadata.forge.error.step, 'synthesize', '抢救后 distill 应完成');
+
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    const files = fs.readdirSync(libDir);
+    assert.ok(files.some((f) => f.includes('色轮')), '抢救出的完整单元应入库');
+    assert.ok(files.some((f) => /^\d{2}_/.test(f)), '抢救出的 methodology 长文档应入库');
+    assert.ok(!files.some((f) => f.includes('半真半假')), '被截断的尾单元不应入库');
+    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
+    assert.equal(marker.state.salvagedBatches.length, 1);
+    assert.match(marker.summary, /截断抢救/);
+});
+
+test('distill：确认截断且无可抢救单元时拆半重蒸，彻底失败留档原始输出', async () => {
+    const baseDir = createTempDir();
+    // 第一个单元就被切断：无完整单元可抢救
+    const truncated = '{"knowledgeUnits": [{"type": "concept", "title": "被切断的单元", "oneLiner": "输出在半途被 max_tokens';
+    const { jobRuntimeService, forgeRuntimeService, llmCalls } = buildPipeline({
+        baseDir,
+        llmOutputs: [truncated],
+        finishReason: 'length',
+        knowledgeStorePort: null,
+        smokeRetries: 1,
+        smokeIntervalMs: 5
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_DISTILL_OUTPUT_INVALID');
+    assert.equal(job.metadata.forge.error.step, 'distill');
+    assert.match(job.metadata.forge.error.message, /finish_reason=length/);
+
+    // 拆半轨迹：根批(3 份) → 拆半(2 份) → 再拆(1 份) → 单材料重试一次 = 4 次蒸馏调用
+    const distillPrompts = llmCalls.map((call) => call.messages[0].content)
+        .filter((content) => content.includes('知识蒸馏引擎'));
+    assert.equal(distillPrompts.length, 4, `拆半+重试调用数，实际 ${distillPrompts.length}`);
+
+    // 留档：单材料批的两次尝试原始输出（含 finish_reason 与批内材料 URL）
+    const failedDir = path.join(baseDir, 'runs', jobId, 'distill-failed');
+    const dumps = fs.readdirSync(failedDir).filter((f) => f.endsWith('.json')).sort();
+    assert.deepEqual(dumps, ['color-theory.attempt-1.json', 'color-theory.attempt-2.json']);
+    const dump = JSON.parse(fs.readFileSync(path.join(failedDir, 'color-theory.attempt-2.json'), 'utf8'));
+    assert.equal(dump.finishReason, 'length');
+    assert.equal(dump.rawContent, truncated);
+    assert.ok(Array.isArray(dump.batchUrls) && dump.batchUrls.length === 1, '留档含批内材料 URL');
+});
+
+test('distill：材料分批蒸馏，跨批 mergeInto 合并且批间刷新既有卡', async () => {
+    const baseDir = createTempDir();
+    // 异域材料：红线 6 同域节流为 ≥2s/份，同域 5 份会把测试拖进 8s+ 超时。
+    const fiveMaterials = [1, 2, 3, 4, 5].map((i) => ({
+        title: `Material ${i}`, url: `https://site${i}.example.org/m${i}`, snippet: `材料 ${i} 内容。`
+    }));
+    const batch1Output = JSON.stringify({
+        knowledgeUnits: [{
+            type: 'concept', title: '批次一知识卡', oneLiner: 'x',
+            content: '批次一内容', tags: [],
+            sourceUrls: ['https://site1.example.org/m1'], mergeInto: null
+        }],
+        droppedSources: []
+    });
+    const batch2Output = JSON.stringify({
+        knowledgeUnits: [{
+            type: 'concept', title: '批次二同义单元', oneLiner: 'x',
+            content: '应合并而非新建', tags: [],
+            sourceUrls: ['https://site5.example.org/m5'], mergeInto: '批次一知识卡'
+        }],
+        droppedSources: []
+    });
+    const { jobRuntimeService, forgeRuntimeService, llmCalls } = buildPipeline({
+        baseDir,
+        llmOutputs: [batch1Output, batch2Output],
+        materials: fiveMaterials,
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ text: 'hit', score: 0.9 }]
+        },
+        smokeRetries: 1,
+        smokeIntervalMs: 5
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.metadata.forge.error.step, 'synthesize');
+
+    const distillPrompts = llmCalls.map((call) => call.messages[0].content)
+        .filter((content) => content.includes('知识蒸馏引擎'));
+    assert.equal(distillPrompts.length, 2, '5 份材料默认 4 份/批 → 2 次蒸馏调用');
+    assert.ok(distillPrompts[0].includes('https://site4.example.org/m4') && !distillPrompts[0].includes('https://site5.example.org/m5'),
+        '第一批含 1–4 号材料');
+    assert.ok(distillPrompts[1].includes('https://site5.example.org/m5'), '第二批含第 5 号材料');
+    assert.ok(distillPrompts[1].includes('- 批次一知识卡'), '第二批 prompt 应看到第一批写入的既有卡（批间刷新）');
+
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    const cards = fs.readdirSync(libDir).filter((f) => f.startsWith('K_'));
+    assert.equal(cards.length, 1, '跨批同义单元应合并而非新建');
+    const mergedRaw = fs.readFileSync(path.join(libDir, cards[0]), 'utf8');
+    assert.match(mergedRaw, /site1\.example\.org\/m1/);
+    assert.match(mergedRaw, /site5\.example\.org\/m5/);
+    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
+    assert.match(marker.summary, /1 次合并/);
 });

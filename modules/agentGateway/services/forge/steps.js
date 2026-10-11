@@ -133,6 +133,7 @@ function createStepRegistry({
     knowledgeRoot,
     smokeRetries = null,
     smokeIntervalMs = null,
+    distillBatchMaterials = null,
     agentMapPath = null,
     knowledgePolicyPath = null,
     guidanceConfigPath = null,
@@ -144,7 +145,8 @@ function createStepRegistry({
         distill: createDistillStepRunner({
             knowledgeRoot,
             ...(smokeRetries != null ? { smokeRetries } : {}),
-            ...(smokeIntervalMs != null ? { smokeIntervalMs } : {})
+            ...(smokeIntervalMs != null ? { smokeIntervalMs } : {}),
+            ...(distillBatchMaterials != null ? { batchMaterials: distillBatchMaterials } : {})
         }),
         synthesize: createSynthesizeStepRunner({
             agentMapPath: agentMapPath || path.join(path.resolve(baseDir, '..', '..'), 'agent_map.json'),
