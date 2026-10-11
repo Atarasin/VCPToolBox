@@ -253,3 +253,25 @@ test('protocolGovernance resolves dedicated auth, native request context and ide
     assert.equal(idempotencyKey, 'tool-idem-001');
     assert.deepEqual(GATEWAY_CAPABILITY_SECTIONS, ['tools', 'memory', 'context', 'jobs', 'events']);
 });
+
+// 2026-10-11 复盘回归：knowledgeStore 端口的可选能力（pendingIngestCount）
+// 必须真实穿透工厂——此前装配侧传了、工厂侧丢弃，索引就绪闸门静默失效
+//（固定卷复考 89.8% 那轮 indexReadiness.checked=false 的根因）。
+test('knowledgeStore port passes through optional pendingIngestCount capability', () => {
+    const { createKnowledgeStorePort } = require('../../../modules/agentGateway/ports/knowledgeStore');
+    const noop = async () => [];
+    const withCapability = createKnowledgeStorePort({
+        search: noop,
+        listLibraries: noop,
+        pendingIngestCount: () => 3
+    });
+    assert.equal(typeof withCapability.pendingIngestCount, 'function');
+    assert.equal(withCapability.pendingIngestCount(), 3);
+
+    const withoutCapability = createKnowledgeStorePort({ search: noop, listLibraries: noop });
+    assert.equal(typeof withoutCapability.pendingIngestCount, 'undefined', '未提供能力的端口不带该方法（调用方按未知处理）');
+
+    // 非函数形式的可选字段不得穿透（防把数据当能力暴露）
+    const bogus = createKnowledgeStorePort({ search: noop, listLibraries: noop, pendingIngestCount: 42 });
+    assert.equal(typeof bogus.pendingIngestCount, 'undefined');
+});
