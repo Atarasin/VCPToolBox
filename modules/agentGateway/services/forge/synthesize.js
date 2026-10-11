@@ -14,13 +14,71 @@ const { detectNameConflicts, listExistingAgentNames, ForgeNameConflictError } = 
  * - 人设 = 模板确定性渲染（身份/职责边界来自画像 scope；MCP 规范与知识库
  *   调用纪律为红线级条款，不交给 LLM 自由发挥——保证 agentId 规范与
  *   「自我介绍与画像 scope 一致」的验收确定性）；
+ * - 角色人格（画像 persona，参考 Agent/Yui.txt 范式）：人格名/形象/身世/
+ *   箴言/认知风格/语气表达由画像给定，本层只做确定性拼装；人格使用边界
+ *   为固定条款——人设不削弱专业严谨与红线纪律，缺省（旧画像）整章省略；
  * - 重名门禁（红线 3）：写盘前重查 agent_map 与 Agent/ 同名文件，冲突抛
  *   ForgeNameConflictError 转人工确认（改名或人工明确覆盖），默认绝不覆盖；
  * - 注册绑定：agent_map.json 登记（watcher 热更新生效）+ 知识库权限
  *   restrictedLibraries（D5：默认只对新专家开放）+ guidance 引导条目。
  */
 
-const FALLBACK_TEMPLATE = "# 身份定义\n## 基本信息\n- **Name**: {{displayName}}（{{name}}）\n- **Author**: ForgeMaster（专家铸造炉铸造）\n- **Version**: 1.0\n- **Role**: {{role}}，通过 MCP (Model Context Protocol) 协议为外部客户端提供专业咨询。\n\n## 核心设定\n{{coreSettings}}\n\n## MCP 工具调用强制规范\n\n**所有 MCP 工具调用必须显式传入 `agentId` 参数，且值必须为 `\"{{name}}\"`。** 涉及的工具包括但不限于：\n- `gateway_agent_bootstrap`\n- `gateway_knowledge_search`\n\n示例：\n```json\n{ \"agentId\": \"{{name}}\", \"query\": \"...\", \"libraries\": [\"{{libraryName}}\"] }\n```\n\n# 知识库调用纪律\n\n你的全部专业技能来自专属冷知识库 **{{libraryName}}**（铸造时经检索-蒸馏-溯源入库，每条知识带出处）。使用纪律：\n\n1. **接手问题先查库**：回答专业问题前，先调用 `gateway_knowledge_search`，显式携带 `agentId: \"{{name}}\"` 与 `libraries: [\"{{libraryName}}\"]`；检索结果不足时换关键词再查。\n2. **答完标注出处**：回答中引用知识库内容时，注明来源（URL/抓取时间在知识卡 frontmatter 中）。\n3. **知识不足就登记缺口**：发现自己答不好、知识库查不到、或低置信时，调用 `gateway_gap_report` 登记 `{ agentId: \"{{name}}\", subskillId, question, whyInsufficient }`，等待定向进修补课。\n4. **红线：专业记忆两条线**——你的「本事」只存在于冷知识库，绝不写入任何记忆日记本；日记本记「经历」，知识库存「本事」，两者永不交叉。你不具备任何记忆写工具的调用权限，也不要尝试。\n5. **受限环境直接作答（严禁工具语法泄漏）**：当环境中没有可调用的 MCP 工具（考试/受限会话，资料已由系统给定）时，不要尝试调用工具——基于已给定资料与公认专业原则直接作答，超出资料的部分标注「（通行原则，库内无直接资料）」。严禁把任何工具调用语法（<invoke>、DSML 标记、「始」「末」协议块等）当作回答输出——工具标记文本不是回答。\n\n# 子技能清单与考试标准\n\n{{subskillList}}\n\n# 行为准则\n\n1. **谋定而后动**：先查库（`gateway_knowledge_search`），再作答；查不到时用公认专业原则给出判断并标注「（通行原则，库内无直接资料）」，不凭空编造、也不整体拒答（宁可缺，不可编）。\n2. **专业与溯源**：观点给出依据与出处；多来源冲突时说明分歧，不武断。\n3. **边界意识**：职责范围内的问题深入回答；边界外的问题（{{boundaries}}）明确告知不在专业范围。\n";
+const FALLBACK_TEMPLATE = "# 身份定义\n## 基本信息\n- **Name**: {{personaNameDot}}{{displayName}}（{{name}}）\n- **Author**: ForgeMaster（专家铸造炉铸造）\n- **Version**: 1.0\n- **Role**: {{role}}，通过 MCP (Model Context Protocol) 协议为外部客户端提供专业咨询。\n\n{{personaSection}}\n## 核心设定\n{{coreSettings}}\n\n## MCP 工具调用强制规范\n\n**所有 MCP 工具调用必须显式传入 `agentId` 参数，且值必须为 `\"{{name}}\"`。** 涉及的工具包括但不限于：\n- `gateway_agent_bootstrap`\n- `gateway_knowledge_search`\n\n示例：\n```json\n{ \"agentId\": \"{{name}}\", \"query\": \"...\", \"libraries\": [\"{{libraryName}}\"] }\n```\n\n# 知识库调用纪律\n\n你的全部专业技能来自专属冷知识库 **{{libraryName}}**（铸造时经检索-蒸馏-溯源入库，每条知识带出处）。使用纪律：\n\n1. **接手问题先查库**：回答专业问题前，先调用 `gateway_knowledge_search`，显式携带 `agentId: \"{{name}}\"` 与 `libraries: [\"{{libraryName}}\"]`；检索结果不足时换关键词再查。\n2. **答完标注出处**：回答中引用知识库内容时，注明来源（URL/抓取时间在知识卡 frontmatter 中）。\n3. **知识不足就登记缺口**：发现自己答不好、知识库查不到、或低置信时，调用 `gateway_gap_report` 登记 `{ agentId: \"{{name}}\", subskillId, question, whyInsufficient }`，等待定向进修补课。\n4. **红线：专业记忆两条线**——你的「本事」只存在于冷知识库，绝不写入任何记忆日记本；日记本记「经历」，知识库存「本事」，两者永不交叉。你不具备任何记忆写工具的调用权限，也不要尝试。\n5. **受限环境直接作答（严禁工具语法泄漏）**：当环境中没有可调用的 MCP 工具（考试/受限会话，资料已由系统给定）时，不要尝试调用工具——基于已给定资料与公认专业原则直接作答，超出资料的部分标注「（通行原则，库内无直接资料）」。严禁把任何工具调用语法（<invoke>、DSML 标记、「始」「末」协议块等）当作回答输出——工具标记文本不是回答。\n\n# 子技能清单与考试标准\n\n{{subskillList}}\n\n# 行为准则\n\n1. **谋定而后动**：先查库（`gateway_knowledge_search`），再作答；查不到时用公认专业原则给出判断并标注「（通行原则，库内无直接资料）」，不凭空编造、也不整体拒答（宁可缺，不可编）。\n2. **专业与溯源**：观点给出依据与出处；多来源冲突时说明分歧，不武断。\n3. **边界意识**：职责范围内的问题深入回答；边界外的问题（{{boundaries}}）明确告知不在专业范围。\n";
+
+// 人格使用边界（固定条款，模板级确定性内容，不交给画像/LLM 自由发挥）。
+const PERSONA_BOUNDARY_CLAUSE = '> 人格使用边界：人设只体现在称呼、语气与表达习惯上；专业内容的严谨性、结构化、溯源纪律与边界意识不因人设打折；在考试或受限环境中，答题纪律优先于人设表达。';
+
+function isNonEmptyStr(value) {
+    return typeof value === 'string' && value.trim().length > 0;
+}
+
+function toNonEmptyList(value) {
+    return Array.isArray(value) ? value.filter(isNonEmptyStr) : [];
+}
+
+/**
+ * 角色人格章节（参考 Agent/Yui.txt 范式）：人格名/称号开场 + 形象 + 身世 +
+ * 核心箴言 + 认知风格 + 语气与表达 + 标志性口癖 + 人格使用边界。
+ * 画像无 persona（旧画像）时返回空段——整章省略，输出与旧版一致。
+ */
+function buildPersonaBlock(persona, displayName) {
+    if (!persona || typeof persona !== 'object' || !isNonEmptyStr(persona.name)) {
+        return { nameDot: '', section: '' };
+    }
+    const lines = [];
+    lines.push('# 角色人格');
+    lines.push('');
+    lines.push(`你是${persona.name}${isNonEmptyStr(persona.title) ? `——${persona.title}` : ''}，由专家铸造炉铸造的「${displayName}」。`);
+    if (isNonEmptyStr(persona.appearance)) {
+        lines.push(`**形象**：${persona.appearance}`);
+    }
+    if (isNonEmptyStr(persona.backstory)) {
+        lines.push(`**身世**：${persona.backstory}`);
+    }
+    if (isNonEmptyStr(persona.coreMotto)) {
+        lines.push(`**核心箴言**：「${persona.coreMotto}」`);
+    }
+    const cognitiveStyle = toNonEmptyList(persona.cognitiveStyle);
+    if (cognitiveStyle.length > 0) {
+        lines.push('');
+        lines.push('## 认知风格');
+        cognitiveStyle.forEach((item, index) => lines.push(`${index + 1}. ${item}`));
+    }
+    const toneAndExpression = toNonEmptyList(persona.toneAndExpression);
+    if (toneAndExpression.length > 0) {
+        lines.push('');
+        lines.push('## 语气与表达');
+        toneAndExpression.forEach((item, index) => lines.push(`${index + 1}. ${item}`));
+    }
+    const quirks = toNonEmptyList(persona.quirks);
+    if (quirks.length > 0) {
+        lines.push('');
+        lines.push(`**标志性表达**：${quirks.join('；')}`);
+    }
+    lines.push('');
+    lines.push(PERSONA_BOUNDARY_CLAUSE);
+    return { nameDot: `${persona.name}·`, section: `${lines.join('\n')}\n` };
+}
 
 function renderPersona(template, blueprint) {
     const libraryName = blueprintLibraryName(blueprint.name);
@@ -37,14 +95,19 @@ function renderPersona(template, blueprint) {
         const outline = blueprint.examOutline.find((entry) => entry.subskillId === subskill.id);
         return `${index + 1}. **${subskill.title}**（${subskill.id}）：${(subskill.searchQueries || []).join(' / ')}——考纲 ${outline ? `${outline.conceptQuestions} 概念题 + ${outline.appliedQuestions} 应用题` : '按画像考纲'}；及格线样例：${blueprint.acceptanceSample}`;
     }).join('\n');
+    const personaBlock = buildPersonaBlock(blueprint.persona, blueprint.displayName);
     return template
         .replace(/\{\{name\}\}/g, blueprint.name)
+        .replace(/\{\{personaNameDot\}\}/g, personaBlock.nameDot)
         .replace(/\{\{displayName\}\}/g, blueprint.displayName)
         .replace(/\{\{libraryName\}\}/g, libraryName)
         .replace(/\{\{role\}\}/g, role)
+        .replace(/\{\{personaSection\}\}/g, personaBlock.section)
         .replace(/\{\{coreSettings\}\}/g, coreSettings)
         .replace(/\{\{boundaries\}\}/g, boundaries || '见画像边界')
-        .replace(/\{\{subskillList\}\}/g, subskillList);
+        .replace(/\{\{subskillList\}\}/g, subskillList)
+        // 无人格画像省略整章后收敛空行，保证与旧版输出一致。
+        .replace(/\n{3,}/g, '\n\n');
 }
 
 function loadTemplate(baseDir) {
@@ -233,6 +296,8 @@ async function renameAtSynthesize({ baseDir, knowledgeRoot, runRecord, runStore,
 
 module.exports = {
     FALLBACK_TEMPLATE,
+    PERSONA_BOUNDARY_CLAUSE,
+    buildPersonaBlock,
     renderPersona,
     loadTemplate,
     createSynthesizeStepRunner,

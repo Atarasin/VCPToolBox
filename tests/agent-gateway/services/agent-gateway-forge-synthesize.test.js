@@ -6,6 +6,11 @@ const test = require('node:test');
 
 const { createForgeRuntimeService } = require('../../../modules/agentGateway/services/forge/service');
 const { createJobRuntimeService, JOB_STATUS } = require('../../../modules/agentGateway/services/jobRuntimeService');
+const {
+    renderPersona,
+    FALLBACK_TEMPLATE,
+    PERSONA_BOUNDARY_CLAUSE
+} = require('../../../modules/agentGateway/services/forge/synthesize');
 const { resolveKnowledgeLibraryAccess } = require('../../../modules/agentGateway/policy/knowledgeScopeGuard');
 const { validateAgentGuidanceConfig } = require('../../../modules/agentGateway/policy/agentGuidanceConfig');
 
@@ -96,10 +101,10 @@ function buildEnv(baseDir, { agentMap = {}, policy = null, guidance = null } = {
     return { jobRuntimeService, forgeRuntimeService, paths };
 }
 
-async function driveToEnd(jobRuntimeService, forgeRuntimeService) {
+async function driveToEnd(jobRuntimeService, forgeRuntimeService, blueprint = buildUiDesignerBlueprint()) {
     const { jobId } = await forgeRuntimeService.startExpertCreateJob({
         requirement: '造一个 UI 设计专家',
-        blueprintOverride: buildUiDesignerBlueprint()
+        blueprintOverride: blueprint
     });
     await waitFor(() => jobRuntimeService.pollJob(jobId, null).data.job.status === JOB_STATUS.PENDING_CONFIRM);
     await forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
@@ -147,6 +152,67 @@ test('synthesize：人设合成含知识库纪律章节、agentId 规范与画�
     const map = JSON.parse(fs.readFileSync(paths.agentMapPath, 'utf8'));
     assert.equal(map.Nexus, 'coding/Nexus.txt', '既有条目保留');
     assert.equal(map.UIDesigner, 'forge/UIDesigner.txt', '新条目登记为 forge/ 相对路径');
+});
+
+// ── 人格化铸造（参考 Agent/Yui.txt）：铸造时设计的名字与性格渲染进人设 ──
+
+function buildMinqingPersona(overrides = {}) {
+    return {
+        name: '沐晴',
+        title: '像素炼金术士',
+        appearance: '束马尾的年轻设计师，瞳孔里常映着栅格线。',
+        backstory: '从专家铸造炉中醒来，专属知识库就是她被铸出来的记忆。',
+        coreMotto: '设计是戴着镣铐的舞蹈',
+        cognitiveStyle: ['先看信息层级再看细节', '每个取舍都要给出理由'],
+        toneAndExpression: ['温和但直接', '评审意见按优先级分层给出'],
+        quirks: ['爱用「这里差一口气」形容临门一脚的缺陷'],
+        ...overrides
+    };
+}
+
+test('synthesize：画像带 persona 时渲染角色人格章节（人格名/形象/身世/箴言/认知风格/语气/使用边界）', () => {
+    const rendered = renderPersona(FALLBACK_TEMPLATE, buildUiDesignerBlueprint({ persona: buildMinqingPersona() }));
+    assert.match(rendered, /# 角色人格/, '角色人格章节');
+    assert.match(rendered, /\*\*Name\*\*: 沐晴·UI 设计专家（UIDesigner）/, 'Name 行 = 人格名·职能名（agent 名）');
+    assert.match(rendered, /你是沐晴——像素炼金术士，由专家铸造炉铸造的「UI 设计专家」。/, '人格开场衔接铸造炉世界观');
+    assert.match(rendered, /\*\*形象\*\*：束马尾的年轻设计师/, '形象（Yui 式）');
+    assert.match(rendered, /\*\*身世\*\*：从专家铸造炉中醒来/, '身世（Yui 式）');
+    assert.match(rendered, /\*\*核心箴言\*\*：「设计是戴着镣铐的舞蹈」/, '核心箴言');
+    assert.match(rendered, /## 认知风格/, '认知风格清单');
+    assert.match(rendered, /## 语气与表达/, '语气与表达清单');
+    assert.match(rendered, /标志性表达.*这里差一口气/, '标志性口癖');
+    assert.ok(rendered.includes(PERSONA_BOUNDARY_CLAUSE), '固定人格使用边界条款（人设不削弱专业纪律）');
+    // 红线章节不受人格影响
+    assert.match(rendered, /# 知识库调用纪律/, '红线章节保留');
+    assert.match(rendered, /"agentId": "UIDesigner"/, 'agentId 规范不变');
+});
+
+test('synthesize：画像无 persona 时整章省略，输出与旧版一致（旧画像兼容）', () => {
+    const rendered = renderPersona(FALLBACK_TEMPLATE, buildUiDesignerBlueprint());
+    assert.ok(!rendered.includes('# 角色人格'), '无空章节');
+    assert.ok(!rendered.includes('人格使用边界'), '无边界条款残留');
+    assert.match(rendered, /\*\*Name\*\*: UI 设计专家（UIDesigner）/, 'Name 行保持职能名');
+    assert.ok(!/\n{3,}/.test(rendered), '省略整章后不残留多余空行');
+});
+
+test('synthesize：全链路带 persona 铸造——人设 txt 落盘含名字与性格', async () => {
+    const baseDir = createTempDir();
+    const { jobRuntimeService, forgeRuntimeService } = buildEnv(baseDir, {
+        agentMap: { Nexus: 'coding/Nexus.txt' }
+    });
+    const jobId = await driveToEnd(jobRuntimeService, forgeRuntimeService, buildUiDesignerBlueprint({
+        persona: buildMinqingPersona()
+    }));
+
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.metadata.forge.error.step, 'trial', 'synthesize 应完成，止步 trial 桩');
+
+    const persona = fs.readFileSync(path.join(baseDir, 'forge', 'UIDesigner.txt'), 'utf8');
+    assert.match(persona, /# 角色人格/, '落盘人设含角色人格章节');
+    assert.match(persona, /\*\*Name\*\*: 沐晴·UI 设计专家（UIDesigner）/, 'Name 行含人格名');
+    assert.match(persona, /你是沐晴——像素炼金术士/, '人格开场');
+    assert.ok(persona.includes(PERSONA_BOUNDARY_CLAUSE), '人格使用边界条款');
+    assert.ok(!/sk-[A-Za-z0-9]{20,}/.test(persona), '人格内容零密钥（红线 2）');
 });
 
 // 验收（M3.S2）：权限绑定 + 引导配置，403 边界正确。

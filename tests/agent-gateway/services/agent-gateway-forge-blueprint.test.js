@@ -14,6 +14,7 @@ const {
     blueprintLibraryName,
     listBlueprintNames
 } = require('../../../modules/agentGateway/services/forge/blueprint');
+const { BLUEPRINT_DRAFT_PROMPT } = require('../../../modules/agentGateway/services/forge/steps');
 
 // 验收（M1.S1）：给定「UI 设计专家」一句话需求产出的画像（§3.1 示例）
 // 通过全部校验规则，落盘文件含默认预算 10 元。
@@ -208,4 +209,73 @@ test('forge blueprint: 损坏 JSON 读取报结构化错误', async () => {
         readBlueprint(blueprintPath),
         (error) => error.code === 'FORGE_BLUEPRINT_INVALID'
     );
+});
+
+// ── 人格化铸造（参考 Agent/Yui.txt）：画像 persona 的名字与性格校验 ──
+
+function buildPersona(overrides = {}) {
+    return {
+        name: '沐晴',
+        title: '像素炼金术士',
+        appearance: '束马尾的年轻设计师，瞳孔里常映着栅格线。',
+        backstory: '从专家铸造炉中醒来，专属知识库就是她被铸出来的记忆。',
+        coreMotto: '设计是戴着镣铐的舞蹈',
+        cognitiveStyle: ['先看信息层级再看细节', '每个取舍都要给出理由'],
+        toneAndExpression: ['温和但直接', '评审意见按优先级分层给出'],
+        quirks: ['爱用「这里差一口气」形容临门一脚的缺陷'],
+        ...overrides
+    };
+}
+
+test('forge blueprint: 合法 persona 通过校验并随画像落盘回读', async () => {
+    const dir = createTempDir();
+    const blueprintPath = path.join(dir, 'Minqing.json');
+    const written = await writeBlueprint(blueprintPath, buildUiDesignerBlueprint({
+        name: 'Minqing',
+        persona: buildPersona()
+    }));
+    assert.equal(written.persona.name, '沐晴');
+    const readBack = await readBlueprint(blueprintPath);
+    assert.deepEqual(readBack.persona, buildPersona());
+});
+
+test('forge blueprint: persona 缺省合法（旧画像兼容，补试岗/重考不受影响）', () => {
+    const verdict = validateBlueprint(buildUiDesignerBlueprint());
+    assert.equal(verdict.valid, true);
+});
+
+test('forge blueprint: persona 非法结构逐项拒绝', () => {
+    const cases = [
+        { name: 'persona 非对象', mutate: (b) => { b.persona = '沐晴'; }, field: 'persona' },
+        { name: '缺人格名', mutate: (b) => { delete b.persona.name; }, field: 'persona.name' },
+        { name: '缺核心箴言', mutate: (b) => { delete b.persona.coreMotto; }, field: 'persona.coreMotto' },
+        { name: 'cognitiveStyle 空数组', mutate: (b) => { b.persona.cognitiveStyle = []; }, field: 'persona.cognitiveStyle' },
+        { name: 'toneAndExpression 非数组', mutate: (b) => { b.persona.toneAndExpression = '温和'; }, field: 'persona.toneAndExpression' },
+        { name: 'quirks 非数组', mutate: (b) => { b.persona.quirks = '口癖'; }, field: 'persona.quirks' }
+    ];
+    for (const testCase of cases) {
+        const blueprint = buildUiDesignerBlueprint({ persona: buildPersona() });
+        testCase.mutate(blueprint);
+        const verdict = validateBlueprint(blueprint);
+        assert.equal(verdict.valid, false, `用例应拒绝：${testCase.name}`);
+        assert.ok(
+            verdict.errors.some((error) => error.field === testCase.field),
+            `用例 ${testCase.name} 应命中字段 ${testCase.field}，实际：${JSON.stringify(verdict.errors)}`
+        );
+    }
+});
+
+test('forge blueprint: 人格名与 agent 名解耦——人格名撞既有 agent 名不触发重名门禁', () => {
+    const verdict = validateBlueprint(
+        buildUiDesignerBlueprint({ persona: buildPersona({ name: 'Nexus' }) }),
+        { existingAgentNames: ['Nexus'] }
+    );
+    assert.equal(verdict.valid, true, '重名硬门禁只针对 agent 名，人格名仅显示用');
+});
+
+test('forge blueprint: 起草提示词要求 LLM 一并设计 persona（名字与性格）', () => {
+    assert.match(BLUEPRINT_DRAFT_PROMPT, /"persona"/, '结构示例含 persona 字段');
+    assert.match(BLUEPRINT_DRAFT_PROMPT, /人格名/, '含人格名指引');
+    assert.match(BLUEPRINT_DRAFT_PROMPT, /不得削弱专业严谨/, '性格不得削弱专业纪律');
+    assert.match(BLUEPRINT_DRAFT_PROMPT, /铸造炉/, '身世衔接铸造炉世界观');
 });

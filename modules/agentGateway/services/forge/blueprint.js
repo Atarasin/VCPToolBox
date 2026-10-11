@@ -11,6 +11,8 @@ const { scanTextForSecrets } = require('./secretScan');
  * 设计：docs/design/2026-10-10_专家铸造炉.md §3.1。
  *
  * - name 即 agent 名 / agent_map 键，知识库名由其派生，按文件名安全字符约束；
+ * - persona（人格化设定：人格名/箴言/认知风格/语气表达等）可选，缺省合法
+ *   （兼容旧画像）；人格名仅显示用，不参与重名门禁；
  * - 与 agent_map 现有条目或 Agent/ 现有文件的冲突检测由调用方注入名单
  *   （util 保持纯函数，不直接读运行时状态）；
  * - budget.maxModelCostCny 缺省补默认值 10（Q2 已确认）。
@@ -165,6 +167,40 @@ function validateBlueprint(blueprint, options = {}) {
         }
         if (!isNonEmptyStringArray(practicalExam.gradingDimensions)) {
             fail('practicalExam.gradingDimensions', 'gradingDimensions 必须是非空字符串数组');
+        }
+    }
+
+    // persona（人格化设定，可选）：缺省合法——旧画像（无人格）的补试岗/重考/增量学习不受影响。
+    // 人格名仅显示用，不进 agent_map；重名硬门禁仍只针对 agent id name。
+    if (blueprint.persona !== undefined) {
+        const persona = blueprint.persona;
+        if (!persona || typeof persona !== 'object' || Array.isArray(persona)) {
+            fail('persona', 'persona 必须是对象，含 name / coreMotto / cognitiveStyle / toneAndExpression');
+        } else {
+            if (!isNonEmptyString(persona.name)) {
+                fail('persona.name', '人格名 name 不能为空');
+            }
+            if (!isNonEmptyString(persona.coreMotto)) {
+                fail('persona.coreMotto', '核心箴言 coreMotto 不能为空');
+            }
+            if (!isNonEmptyStringArray(persona.cognitiveStyle)) {
+                fail('persona.cognitiveStyle', 'cognitiveStyle 必须是非空字符串数组');
+            }
+            if (!isNonEmptyStringArray(persona.toneAndExpression)) {
+                fail('persona.toneAndExpression', 'toneAndExpression 必须是非空字符串数组');
+            }
+            if (persona.title !== undefined && !isNonEmptyString(persona.title)) {
+                fail('persona.title', 'title 若提供必须是非空字符串');
+            }
+            if (persona.appearance !== undefined && !isNonEmptyString(persona.appearance)) {
+                fail('persona.appearance', 'appearance 若提供必须是非空字符串');
+            }
+            if (persona.backstory !== undefined && !isNonEmptyString(persona.backstory)) {
+                fail('persona.backstory', 'backstory 若提供必须是非空字符串');
+            }
+            if (persona.quirks !== undefined && !isStringArray(persona.quirks)) {
+                fail('persona.quirks', 'quirks 必须是字符串数组（可为空数组）');
+            }
         }
     }
 
