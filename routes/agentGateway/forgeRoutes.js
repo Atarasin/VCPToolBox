@@ -14,7 +14,8 @@ const {
     assertForgeOrchestrationAccess,
     buildForgeCreateRequest,
     buildForgeConfirmRequest,
-    buildForgeLearnRequest
+    buildForgeLearnRequest,
+    buildForgeRetrialRequest
 } = require('../../modules/agentGateway/services/forge/toolAccess');
 
 /**
@@ -213,12 +214,8 @@ function registerForgeRoutes(router, context) {
             errorMessage: 'Failed to launch forge expert retrial',
             handler: async () => {
                 try {
-                    const budgetCny = Number.isFinite(Number(req.body?.budgetCny)) && Number(req.body.budgetCny) > 0
-                        ? Number(req.body.budgetCny)
-                        : null;
                     const result = await forgeRuntimeService.startExpertRetrialJob({
-                        expertName: req.body?.expertName,
-                        ...(budgetCny != null ? { budgetCny } : {}),
+                        ...buildForgeRetrialRequest(req.body),
                         authContext
                     });
                     return sendNativeSuccessWithOperation(res, {

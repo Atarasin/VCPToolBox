@@ -901,6 +901,11 @@ test('trial：完整考卷带元数据——exam.json meta + 报告考卷行 + �
     const md = fs.readFileSync(path.join(runDir, 'exams', 'grade-report.md'), 'utf8');
     assert.match(md, /- 考卷：5 题 \/ 覆盖 2\/2 子技能 \/ 哈希 [a-f0-9]{16}/);
 
+    // 检索归因（反馈 3）：每题记录当时检索命中的知识卡，报告逐题可查
+    const answersFile = JSON.parse(fs.readFileSync(path.join(runDir, 'exams', 'answers.json'), 'utf8'));
+    assert.deepEqual(answersFile.retrievals['color-theory-q1'], ['色轮与色彩三属性']);
+    assert.match(md, /\*\*检索命中\*\*：色轮与色彩三属性/);
+
     const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'trial.json'), 'utf8'));
     assert.equal(marker.state.examMeta.questionCount, 5);
     assert.match(marker.summary, /考卷 5 题覆盖 2\/2 子技能（哈希 [a-f0-9]{8}）/);
@@ -979,4 +984,69 @@ test('driveJob：步内心跳——长步骤执行中作业元数据持续刷新
     await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.terminal);
     if (previous === undefined) delete process.env.FORGE_STEP_HEARTBEAT_MS;
     else process.env.FORGE_STEP_HEARTBEAT_MS = previous;
+});
+
+// ── 反馈 2：固定考卷重考（复用源任务 exam.json，跨轮可比、零出题费）────────
+
+test('retrial：固定考卷重考——复用源任务考卷（哈希校验通过），零出题调用', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    const { writeBlueprint } = require('../../../modules/agentGateway/services/forge/blueprint');
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+    const sourceJobId = await driveToTrial(env); // 停在 trial-report 抽查门禁
+    const sourceExam = JSON.parse(fs.readFileSync(
+        path.join(baseDir, 'forge', 'runs', sourceJobId, 'exams', 'exam.json'), 'utf8'));
+    const examGenBefore = env.llmCalls.filter((p) => p.messages[0].content.includes('【本次范围】')).length;
+
+    const { jobId } = await env.forgeRuntimeService.startExpertRetrialJob({
+        expertName: 'UIDesigner',
+        reuseExamFromJobId: sourceJobId,
+        expectExamHash: sourceExam.meta.examHash
+    });
+    assert.equal(await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.status === 'pending_confirm'), true,
+        '固定卷判卷 0.9 → 及格待抽查');
+    const runDir = path.join(baseDir, 'forge', 'runs', jobId);
+    const reusedExam = JSON.parse(fs.readFileSync(path.join(runDir, 'exams', 'exam.json'), 'utf8'));
+    assert.deepEqual(reusedExam.questions, sourceExam.questions, '题目与源考卷逐字一致');
+    assert.equal(reusedExam.meta.examHash, sourceExam.meta.examHash);
+    assert.equal(reusedExam.meta.reusedFrom, sourceJobId);
+    const examGenAfter = env.llmCalls.filter((p) => p.messages[0].content.includes('【本次范围】')).length;
+    assert.equal(examGenAfter, examGenBefore, '固定卷重考零出题调用');
+    const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'trial.json'), 'utf8'));
+    assert.match(marker.summary, /固定考卷 [a-f0-9]{8}/);
+
+    // 哈希不匹配 → 409 拒绝（防串卷）
+    await assert.rejects(
+        () => env.forgeRuntimeService.startExpertRetrialJob({
+            expertName: 'UIDesigner', reuseExamFromJobId: sourceJobId, expectExamHash: 'deadbeef'
+        }),
+        (error) => error.status === 409 && /考卷哈希不匹配/.test(error.message)
+    );
+});
+
+// ── 反馈 4：抽考范围（冒烟/定向）——subskillIds 过滤考纲，实操始终包含 ────────
+
+test('retrial：subskillIds 抽考——只出指定子技能 + 实操，门禁按有效条目集', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir, { gradeRatio: 0.9 });
+    const { writeBlueprint } = require('../../../modules/agentGateway/services/forge/blueprint');
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+
+    // 未命中任何考纲条目 → 同步 400
+    await assert.rejects(
+        () => env.forgeRuntimeService.startExpertRetrialJob({ expertName: 'UIDesigner', subskillIds: ['not-exist'] }),
+        (error) => error.status === 400 && /未命中任何考纲条目/.test(error.message)
+    );
+
+    const { jobId } = await env.forgeRuntimeService.startExpertRetrialJob({
+        expertName: 'UIDesigner',
+        subskillIds: ['color-theory']
+    });
+    assert.equal(await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.status === 'pending_confirm'), true);
+    const runDir = path.join(baseDir, 'forge', 'runs', jobId);
+    const exam = JSON.parse(fs.readFileSync(path.join(runDir, 'exams', 'exam.json'), 'utf8'));
+    assert.deepEqual(exam.questions.map((q) => q.id), ['color-theory-q1', 'color-theory-q2', 'practical-qp'], '抽考只含指定子技能 + 实操');
+    assert.equal(exam.meta.scoped, true);
+    const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'trial.json'), 'utf8'));
+    assert.match(marker.summary, /考卷 3 题覆盖 1\/1 子技能/);
 });

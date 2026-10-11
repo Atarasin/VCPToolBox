@@ -48,7 +48,10 @@ const resolvePositiveEnvInt = (name, fallback) => {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 const ANSWER_MAX_TOKENS = 6000;
-const ANSWER_RETRY_MAX_TOKENS = 8000;
+// 2026-10-11 补考 5 实测：重试 8000 仍会被中截（color-font-system-q2）——
+// 交付物型应用题重试提到 12000；供应商若拒收该上限则回落 8000 再试一次。
+const ANSWER_RETRY_MAX_TOKENS = 12000;
+const ANSWER_RETRY_FALLBACK_TOKENS = 8000;
 const DIRECT_OUTPUT_NOTE = '\n\n【输出要求】直接输出答案正文本身（结论/清单/方案本体在前）；不要输出推理过程、开场白或前置免责声明；依据的知识卡编号与不确定处放在正文末尾一行。';
 
 const FALLBACK_EXAMINE_TEMPLATE = `你是出题官。按考纲为{{displayName}}（{{name}}）出上岗考卷。考纲：
@@ -175,7 +178,7 @@ async function blindSearch(knowledgeStorePort, libraryName, keywords, { topK = 5
     return { cards, skipped: false };
 }
 
-function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {}, indexReadiness = null }) {
+function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {}, indexReadiness = null, retrievals = null }) {
     const ISSUE_TAGS = {
         empty: '⚠️ 作答失败（模型未输出正文，非知识缺口）',
         truncated: '⚠️ 答卷被输出上限截断',
@@ -204,6 +207,13 @@ function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio
         lines.push('');
         lines.push(`**题干**：${question.prompt}`);
         lines.push('');
+        // 检索归因（反馈 3）：低分题先看「当时检索到了什么」——知识缺失/
+        // 没召回/召回了没用上，三种归因的修法完全不同。
+        const hits = retrievals?.[question.id];
+        if (Array.isArray(hits)) {
+            lines.push(`**检索命中**：${hits.length > 0 ? hits.join('；') : '（未命中——按知识边界作答）'}`);
+            lines.push('');
+        }
         lines.push(`**答卷**：${(answers[question.id] || '').slice(0, 600)}${(answers[question.id] || '').length > 600 ? '…' : ''}`);
         lines.push('');
         lines.push(`**得分**：${GRADE_DIMENSIONS.map((dim) => `${dim} ${scores[dim] ?? '-'}`).join(' / ')}`);
@@ -329,7 +339,64 @@ function createTrialStepRunner() {
             }
         };
 
-        for (const entry of blueprint.examOutline) {
+        // 固定考卷重考（反馈 2）：复用指定源任务的 exam.json——跨轮分数对比
+        // 消除重新出卷带来的系统性噪声；哈希重算防篡改，形状不合法直接拒绝。
+        if (ctx.fixedExam && Array.isArray(ctx.fixedExam.questions) && ctx.fixedExam.questions.length > 0) {
+            const reusedMeta = ctx.fixedExam.meta && typeof ctx.fixedExam.meta === 'object'
+                ? ctx.fixedExam.meta
+                : {};
+            const exam = {
+                questions: ctx.fixedExam.questions,
+                meta: {
+                    ...reusedMeta,
+                    reusedFrom: ctx.examRef?.sourceJobId || reusedMeta.reusedFrom || null,
+                    examHash: crypto.createHash('sha256').update(JSON.stringify(ctx.fixedExam.questions)).digest('hex').slice(0, 16)
+                }
+            };
+            await writeExamFile(examsDir, 'exam.json', exam);
+            const outcome = await runBlindAndGrade(ctx, { blueprint, exam, examsDir });
+            const { ratio, passed, gaps, jev, answerMeta, indexReadiness } = outcome;
+            ctx.audit?.('forge.exam.graded', {
+                expertName: blueprint.name,
+                step: 'trial',
+                ratio,
+                passed,
+                gapCount: gaps.length,
+                jevSkipped: Boolean(jev.skipped),
+                fixedExamHash: exam.meta.examHash
+            });
+            const issueNote = Object.keys(answerMeta || {}).length > 0
+                ? `；作答异常 ${Object.keys(answerMeta).length} 题（${Object.entries(answerMeta).map(([id, meta]) => `${id}:${meta.issue}`).join('、')}）`
+                : '';
+            const indexNote = indexReadiness && indexReadiness.checked && indexReadiness.ready === false
+                ? `；⚠️ 开考时索引队列未清空（剩余 ${indexReadiness.pending} 项），检索可能缺最新知识`
+                : '';
+            return {
+                summary: `试岗完成（固定考卷 ${exam.meta.examHash.slice(0, 8)}）：总分 ${(ratio * 100).toFixed(1)}%（${passed ? '及格，待用户抽查' : '未及格，缺口 ' + gaps.length + ' 项'}）${issueNote}${indexNote}；Jev 对照${jev.skipped ? '跳过（' + jev.reason + '）' : '已留档'}`,
+                artifacts: ['exams/grade-report.md', 'exams/comparison.json'],
+                state: {
+                    passed,
+                    ratio,
+                    gaps,
+                    examMeta: exam.meta,
+                    indexReadiness,
+                    userGate: passed ? {
+                        kind: 'trial-report',
+                        reportPath: path.relative(path.join(baseDir, '..'), path.join(examsDir, 'grade-report.md')),
+                        hint: '试岗及格，请用户抽查验收报告（D3）'
+                    } : null
+                }
+            };
+        }
+
+        // 抽考范围（反馈 4）：subskillIds 过滤考纲条目（冒烟试岗/定向验证）；
+        // 门禁与元数据按有效条目集校验，实操题始终包含。
+        const scopedIds = Array.isArray(ctx.examSubskillIds) ? ctx.examSubskillIds : null;
+        const effectiveOutline = scopedIds
+            ? blueprint.examOutline.filter((entry) => scopedIds.includes(entry.subskillId))
+            : blueprint.examOutline;
+
+        for (const entry of effectiveOutline) {
             const payload = await completeJsonResilient({
                 llm, llmConfig,
                 prompt: renderExamPrompt(outlineLine(entry), CONCEPT_SCOPE_NOTE),
@@ -371,7 +438,7 @@ function createTrialStepRunner() {
         // 完整性门禁（P1.1）：考纲条目零覆盖或缺实操题 = 残卷，直接 fail——
         // 残卷评分与完整卷在外观上无法区分，曾误导进修决策（47.2%/56.0% 两轮
         // 无效成绩）。残卷仍落盘供取证（meta.incomplete），但不进入评分。
-        const outlinedEntries = blueprint.examOutline.map((entry) => ({
+        const outlinedEntries = effectiveOutline.map((entry) => ({
             subskillId: entry.subskillId,
             expected: (entry.conceptQuestions || 0) + (entry.appliedQuestions || 0)
         }));
@@ -386,6 +453,7 @@ function createTrialStepRunner() {
             practicalIncluded: mergedQuestions.some((question) => question.kind === 'practical'),
             degradedEntries: coverage.filter((entry) => entry.actual > 0 && entry.actual < entry.expected).map((entry) => entry.subskillId),
             salvagedGenerations,
+            ...(scopedIds ? { scoped: true } : {}),
             examHash: crypto.createHash('sha256').update(JSON.stringify(mergedQuestions)).digest('hex').slice(0, 16),
             generatedAt: new Date().toISOString()
         };
@@ -495,8 +563,14 @@ async function completeBlindAnswer({ llm, llmConfig, prompt, questionId, logger 
         return { text: content, issue: null };
     }
     const why = content ? '正文被截断（finish_reason=length）' : '正文为空（疑似推理段耗尽输出预算）';
-    logger?.(`trial: 考题 ${questionId} 作答${why}，带直接输出指令重试一次`);
-    choice = (await completeOnce(ANSWER_RETRY_MAX_TOKENS, DIRECT_OUTPUT_NOTE))?.data?.choices?.[0];
+    logger?.(`trial: 考题 ${questionId} 作答${why}，带直接输出指令与篇幅纪律重试一次`);
+    try {
+        choice = (await completeOnce(ANSWER_RETRY_MAX_TOKENS, DIRECT_OUTPUT_NOTE))?.data?.choices?.[0];
+    } catch (error) {
+        // 供应商可能拒收超过其输出上限的 max_tokens——回落到既有安全上限再试。
+        logger?.(`trial: 考题 ${questionId} 重试上限 ${ANSWER_RETRY_MAX_TOKENS} 被拒（${error.message}），回落 ${ANSWER_RETRY_FALLBACK_TOKENS}`);
+        choice = (await completeOnce(ANSWER_RETRY_FALLBACK_TOKENS, DIRECT_OUTPUT_NOTE))?.data?.choices?.[0];
+    }
     content = String(choice?.message?.content || '').trim();
     finishReason = choice?.finish_reason || null;
     if (content) {
@@ -529,11 +603,13 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         }
         const answers = {};
         const answerMeta = {};
+        const retrievals = {};
         for (const question of exam.questions) {
             const keywords = Array.isArray(question.searchKeywords) && question.searchKeywords.length > 0
                 ? question.searchKeywords
                 : [question.prompt.slice(0, 40)];
             const { cards } = await blindSearch(knowledgeStorePort, libraryName, keywords);
+            retrievals[question.id] = cards.map((card) => card.title);
             const knowledgeBlock = cards.length > 0
                 ? cards.map((card, index) => `[${index + 1}] ${card.title}\n${card.text}`).join('\n\n')
                 : '（知识库未命中——按知识边界作答，明确说明不确定，不编造）';
@@ -548,7 +624,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
                 '',
                 // 正文先行：先给结论/清单本体，依据与边界说明收尾——避免大段
                 // 前置免责声明稀释交付物（判卷 antiAiFlavor 实测扣分点）。
-                '要求：依据上面的知识库资料作答；直接以答案正文开头（结论/清单/方案本体在前）；依据的知识卡编号与不确定处放在正文末尾；资料不足时在正文内说明知识边界；给出处；不编造。'
+                '要求：依据上面的知识库资料作答；直接以答案正文开头（结论/清单/方案本体在前）；依据的知识卡编号与不确定处放在正文末尾；资料不足时在正文内说明知识边界；给出处；不编造。篇幅纪律：正文控制在约 1500 字内，表格与要点优先、论述从简——超出部分视为未作答。'
             ].join('\n');
             const { text, issue } = await completeBlindAnswer({
                 llm, llmConfig, prompt: answerPrompt, questionId: question.id, logger
@@ -560,6 +636,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         }
         await writeExamFile(examsDir, 'answers.json', {
             answers,
+            retrievals,
             ...(Object.keys(answerMeta).length > 0 ? { answerMeta } : {})
         });
 
@@ -568,7 +645,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         // 作答异常注记随题透传给判卷官：「截断/作答失败」与「没写完/不会」不同罪。
         const ANSWER_ISSUE_NOTES = {
             empty: '（注：本题为作答失败——模型两轮未输出正文，非考生知识问题；按未作答评分，评语请注明「作答失败」）',
-            truncated: '（注：本答卷因输出长度上限被截断——请就已写内容评分，评语注明「截断」）',
+            truncated: '（注：本答卷因输出长度上限被截断——请就已写内容评分，评语注明「截断」，并在评语末尾估算「若未截断，本题还可多得几分」——截断失分估算是验收归因依据）',
             'reasoning-only': '（注：本答卷取自模型推理段（正文未输出）——按内容质量正常评分，评语注明「推理段作答」）'
         };
         const examWithAnswers = exam.questions.map((question) => ({
@@ -670,11 +747,11 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         // 5. 报告落盘（JSON + 用户可读 markdown，含缺口清单）
         const report = { passed, ratio, passLine: PASS_RATIO, grading, gaps, libraryName };
         await writeExamFile(examsDir, 'grade-report.json', report);
-        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta, indexReadiness });
+        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta, indexReadiness, retrievals });
         assertNoSecrets(reportMarkdown, '验收报告');
         await fsp.writeFile(path.join(examsDir, 'grade-report.md'), reportMarkdown, 'utf8');
 
-        return { answers, grading, ratio, passed, gaps, jev, answerMeta, indexReadiness };
+        return { answers, grading, ratio, passed, gaps, jev, answerMeta, indexReadiness, retrievals };
 }
 
 /**

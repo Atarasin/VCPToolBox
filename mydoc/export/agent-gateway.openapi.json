@@ -1058,6 +1058,18 @@
                 },
                 "budgetCny": {
                   "type": "number"
+                },
+                "reuseExamFromJobId": {
+                  "type": "string"
+                },
+                "expectExamHash": {
+                  "type": "string"
+                },
+                "subskillIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               }
             }

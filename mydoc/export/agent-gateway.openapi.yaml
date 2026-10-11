@@ -631,6 +631,14 @@ paths:
                 type: string
               budgetCny:
                 type: number
+              reuseExamFromJobId:
+                type: string
+              expectExamHash:
+                type: string
+              subskillIds:
+                type: array
+                items:
+                  type: string
     responses:
       "200":
         description: Success

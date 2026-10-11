@@ -139,12 +139,17 @@ function buildForgeLearnRequest(body = {}) {
 }
 
 // gateway_forge_retrial → startExpertRetrialJob（已注册专家仅重跑 trial）
+// reuseExamFromJobId/expectExamHash：固定考卷重考（复用源任务考卷，消除重新
+// 出卷噪声）；subskillIds：抽考范围（冒烟试岗/定向验证）。
 function buildForgeRetrialRequest(body = {}) {
     return {
         expertName: body.expertName,
         ...(Number.isFinite(Number(body.budgetCny)) && Number(body.budgetCny) > 0
             ? { budgetCny: Number(body.budgetCny) }
-            : {})
+            : {}),
+        ...(body.reuseExamFromJobId ? { reuseExamFromJobId: String(body.reuseExamFromJobId) } : {}),
+        ...(body.expectExamHash ? { expectExamHash: String(body.expectExamHash) } : {}),
+        ...(Array.isArray(body.subskillIds) && body.subskillIds.length > 0 ? { subskillIds: body.subskillIds } : {})
     };
 }
 

@@ -1240,6 +1240,21 @@
         "budgetCny": {
           "type": "number",
           "description": "本次补试岗的费用预算上限（元）；省略用默认预算。"
+        },
+        "reuseExamFromJobId": {
+          "type": "string",
+          "description": "固定考卷重考：复用该任务编号的考卷（省出题费、跨轮可比）；与 expectExamHash 搭配防串卷。"
+        },
+        "expectExamHash": {
+          "type": "string",
+          "description": "期望的考卷哈希前缀（考卷元数据 16 位 sha256 的前缀）；与源考卷不匹配时拒绝开考。"
+        },
+        "subskillIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "抽考范围（冒烟试岗/定向验证）：只出这些子技能的题 + 实操题；省略则全量考纲。"
         }
       }
     },
@@ -1265,7 +1280,7 @@
       "tool": {
         "name": "gateway_forge_retrial",
         "title": "Gateway Forge Retrial",
-        "description": "Re-run the trial step only for a registered cast expert (no re-registration, no name conflict). Use when an expert is registered but has no trial score (e.g., a previous trial step failed). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
+        "description": "Re-run the trial step only for a registered cast expert (no re-registration, no name conflict). Supports fixed-exam retakes (reuseExamFromJobId + expectExamHash for comparable progress) and scoped smoke trials (subskillIds). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
         "inputSchema": {
           "type": "object",
           "additionalProperties": false,
@@ -1278,6 +1293,18 @@
             },
             "budgetCny": {
               "type": "number"
+            },
+            "reuseExamFromJobId": {
+              "type": "string"
+            },
+            "expectExamHash": {
+              "type": "string"
+            },
+            "subskillIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         }

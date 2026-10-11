@@ -467,7 +467,7 @@
     {
       "name": "gateway_forge_retrial",
       "title": "Gateway Forge Retrial",
-      "description": "Re-run the trial step only for a registered cast expert (no re-registration, no name conflict). Use when an expert is registered but has no trial score (e.g., a previous trial step failed). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
+      "description": "Re-run the trial step only for a registered cast expert (no re-registration, no name conflict). Supports fixed-exam retakes (reuseExamFromJobId + expectExamHash for comparable progress) and scoped smoke trials (subskillIds). Returns a deferred job — poll with gateway_job_get; on pass it pauses for user confirmation via gateway_forge_confirm.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -480,6 +480,18 @@
           },
           "budgetCny": {
             "type": "number"
+          },
+          "reuseExamFromJobId": {
+            "type": "string"
+          },
+          "expectExamHash": {
+            "type": "string"
+          },
+          "subskillIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

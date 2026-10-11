@@ -74,7 +74,7 @@ test('all managed operations preserve the historical AJV acceptance corpus', () 
             invalid: { question: null } },
         gateway_forge_learn: { valid: { expertName: 'UIDesigner', subskillIds: ['color-theory'], topic: '深色模式', since: '2026-01-01T00:00:00.000Z', unknown: true },
             invalid: { expertName: null } },
-        gateway_forge_retrial: { valid: { expertName: 'UIDesigner', budgetCny: '6', unknown: true },
+        gateway_forge_retrial: { valid: { expertName: 'UIDesigner', budgetCny: '6', reuseExamFromJobId: 'job_src', expectExamHash: '40faf196', subskillIds: ['color-theory'], unknown: true },
             invalid: { expertName: null } },
         gateway_forge_create: { valid: { requirement: '造一个 UI 设计专家', budgetCny: '5', blueprintJson: { name: 'X' }, unknown: true },
             invalid: { requirement: null } },

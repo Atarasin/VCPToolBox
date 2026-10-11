@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 
 const { JOB_STATUS } = require('../jobRuntimeService');
@@ -289,6 +290,21 @@ function createForgeRuntimeService(options = {}) {
             initialEntries: runRecord.cost?.entries
         });
         const steps = stepsForJobKind(runRecord);
+        // 固定考卷（反馈 2）：retrial 复用源任务考卷——driveJob 侧加载一次，
+        // 读取失败按「无固定卷」处理并由 trial 步的常规出题兜底（不静默换卷
+        // 评分：examRef 存在但读不到时显式失败，避免误当新卷）。
+        let fixedExam = null;
+        if (runRecord.examRef?.sourceJobId) {
+            try {
+                fixedExam = JSON.parse(await fs.promises.readFile(
+                    path.join(runStore.runDir(runRecord.examRef.sourceJobId), 'exams', 'exam.json'), 'utf8'));
+            } catch (error) {
+                const wrapped = new Error(`固定考卷不可读（源任务 ${runRecord.examRef.sourceJobId}）：${error.message}`);
+                wrapped.code = 'FORGE_EXAM_SOURCE_MISSING';
+                wrapped.status = 502;
+                throw wrapped;
+            }
+        }
         const completedSteps = await runStore.scanCompletedSteps(jobId);
         const markers = new Map();
         for (const stepId of completedSteps) {
@@ -327,6 +343,9 @@ function createForgeRuntimeService(options = {}) {
                     scope: runRecord.scope || null,
                     since: runRecord.since || null,
                     retestOf: runRecord.retestOf || null,
+                    examRef: runRecord.examRef || null,
+                    fixedExam,
+                    examSubskillIds: runRecord.examSubskillIds || null,
                     blueprintOverride: runRecord.blueprintOverride || null,
                     blueprintPath: runRecord.blueprintPath || null,
                     expertName: runRecord.expertName || null,
@@ -668,7 +687,11 @@ function createForgeRuntimeService(options = {}) {
         },
         // 补试岗入口：已注册专家（如 synthesize 完成但 trial 失败/缺成绩）只重跑
         // trial——重新 create 会撞重名（红线 3），此处不触碰注册面。
-        async startExpertRetrialJob({ expertName, budgetCny = null, authContext = null } = {}) {
+        // reuseExamFromJobId：固定考卷重考（复用源任务 exam.json，消除重新出卷
+        // 噪声）；expectExamHash：期望哈希前缀，不匹配拒绝；subskillIds：抽考
+        // 范围（冒烟试岗/定向验证，实操题始终包含）。
+        async startExpertRetrialJob({ expertName, budgetCny = null, reuseExamFromJobId = null,
+                                       expectExamHash = null, subskillIds = null, authContext = null } = {}) {
             const normalizedExpertName = normalizeString(expertName);
             if (!normalizedExpertName) {
                 const error = new Error('expertName 不能为空');
@@ -693,6 +716,48 @@ function createForgeRuntimeService(options = {}) {
                 wrapped.code = 'AGW_VALIDATION_ERROR';
                 throw wrapped;
             }
+
+            // 固定考卷：读取并校验源任务考卷（形状 + 哈希前缀防串卷/防篡改）
+            let examRef = null;
+            if (reuseExamFromJobId) {
+                const sourceExamPath = path.join(runStore.runDir(String(reuseExamFromJobId)), 'exams', 'exam.json');
+                let sourceExam;
+                try {
+                    sourceExam = JSON.parse(await fs.promises.readFile(sourceExamPath, 'utf8'));
+                } catch (error) {
+                    const wrapped = new Error(`源任务考卷不可读：${sourceExamPath}（${error.message}）`);
+                    wrapped.status = 404;
+                    wrapped.code = 'AGW_NOT_FOUND';
+                    throw wrapped;
+                }
+                if (!Array.isArray(sourceExam.questions) || sourceExam.questions.length === 0) {
+                    const wrapped = new Error('源任务考卷无效（无 questions）');
+                    wrapped.status = 400;
+                    wrapped.code = 'AGW_VALIDATION_ERROR';
+                    throw wrapped;
+                }
+                const actualHash = crypto.createHash('sha256').update(JSON.stringify(sourceExam.questions)).digest('hex').slice(0, 16);
+                if (expectExamHash && !actualHash.startsWith(String(expectExamHash))) {
+                    const wrapped = new Error(`考卷哈希不匹配：期望 ${expectExamHash}…，实际 ${actualHash}`);
+                    wrapped.status = 409;
+                    wrapped.code = 'AGW_VALIDATION_ERROR';
+                    wrapped.details = { expectExamHash, actualHash };
+                    throw wrapped;
+                }
+                examRef = { sourceJobId: String(reuseExamFromJobId), examHash: actualHash };
+            }
+
+            // 抽考范围：须命中考纲条目
+            if (Array.isArray(subskillIds)) {
+                const outlined = new Set(expertBlueprint.examOutline.map((entry) => entry.subskillId));
+                const hit = subskillIds.filter((id) => outlined.has(id));
+                if (hit.length === 0) {
+                    const error = new Error(`subskillIds 未命中任何考纲条目：${JSON.stringify(subskillIds)}`);
+                    error.status = 400;
+                    error.code = 'AGW_VALIDATION_ERROR';
+                    throw error;
+                }
+            }
             const job = jobRuntimeService.createAcceptedJob({
                 operation: FORGE_JOB_OPERATIONS.EXPERT_RETRIAL,
                 authContext,
@@ -713,6 +778,8 @@ function createForgeRuntimeService(options = {}) {
                 requirement: `retrial: ${normalizedExpertName}`,
                 blueprintPath,
                 blueprintApproved: true,
+                ...(examRef ? { examRef } : {}),
+                ...(Array.isArray(subskillIds) ? { examSubskillIds: subskillIds } : {}),
                 budgetCny: Number.isFinite(Number(budgetCny)) && Number(budgetCny) > 0 ? Number(budgetCny) : defaultBudgetCny,
                 runDir: path.relative(path.join(baseDir, '..'), runStore.runDir(job.jobId))
             });
