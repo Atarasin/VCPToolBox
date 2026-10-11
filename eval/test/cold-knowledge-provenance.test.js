@@ -244,3 +244,39 @@ test('strict provenance disables transparent embedding model fallback', t => {
     process.env.EmbeddingModelBackups = 'model-b,model-c';
     assert.deepEqual(_getEmbeddingModelCandidates(), ['model-a']);
 });
+
+// 2026-10-11 事故回归：corpus 增删不得触发 TDB_STORE_REBUILD_REQUIRED——
+// forge 蒸馏每次写库都改变 corpus，若指纹参与兼容性判定，写库后的首个重启
+// 即拒启 watcher，摄取静默离线（实测：进修 8 文件从未入索引，补考带旧库应考）。
+// embedding 模型变更仍须要求重建。
+test('corpus growth stays compatible across reopen; embedding change still requires rebuild', async t => {
+    const { manager, root, store } = temporaryManager(t);
+    await manager._prepareStoreIdentity();
+    assert.equal(manager.initializationState, 'empty'); // 首建库：写 manifest、无数据
+
+    // 库内容增长（模拟 forge 蒸馏写库 + 手工整理）→ 重开仍兼容
+    fs.writeFileSync(path.join(root, 'VCP知识', 'new-cold-file.md'), 'newly distilled cold knowledge');
+    const grown = new TDBKnowledgeManager({
+        enabled: true, rootPath: root, storePath: store, model: 'model-a', dimension: 3,
+        apiUrl: 'https://embedding.example.test', strictVectorMetadata: true
+    });
+    await grown._prepareStoreIdentity();
+    assert.equal(grown.initializationState, 'compatible', 'corpus 增长不应拒启 watcher');
+
+    // 库内容删除 → 同样兼容（fullScanOnStartup 负责对账）
+    fs.unlinkSync(path.join(root, 'VCP知识', 'new-cold-file.md'));
+    const shrunk = new TDBKnowledgeManager({
+        enabled: true, rootPath: root, storePath: store, model: 'model-a', dimension: 3,
+        apiUrl: 'https://embedding.example.test', strictVectorMetadata: true
+    });
+    await shrunk._prepareStoreIdentity();
+    assert.equal(shrunk.initializationState, 'compatible');
+
+    // embedding 模型变更 → 仍要求重建（重建语义保留）
+    const reembedded = new TDBKnowledgeManager({
+        enabled: true, rootPath: root, storePath: store, model: 'model-b', dimension: 3,
+        apiUrl: 'https://embedding.example.test', strictVectorMetadata: true
+    });
+    await assert.rejects(reembedded._prepareStoreIdentity(), { code: 'TDB_STORE_REBUILD_REQUIRED' });
+    assert.equal(reembedded.initializationState, 'rebuild_required');
+});

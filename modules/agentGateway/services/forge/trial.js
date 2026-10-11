@@ -42,7 +42,9 @@ const ANSWER_MAX_TOKENS = 6000;
 const ANSWER_RETRY_MAX_TOKENS = 8000;
 const DIRECT_OUTPUT_NOTE = '\n\n【输出要求】直接输出答案正文本身（结论/清单/方案本体在前）；不要输出推理过程、开场白或前置免责声明；依据的知识卡编号与不确定处放在正文末尾一行。';
 
-const FALLBACK_EXAMINE_TEMPLATE = `你是出题官。按考纲为{{displayName}}（{{name}}）出上岗考卷：每子技能 1 概念题+1 应用题，另 1 实操题（{{practicalPrompt}}，维度：{{gradingDimensions}}）。每题带 referencePoints 与 searchKeywords。只输出 JSON：{"questions":[{"id":"","subskillId":"","kind":"concept|applied|practical","prompt":"","gradingDimensions":["..."],"referencePoints":[],"searchKeywords":[]}]}`;
+const FALLBACK_EXAMINE_TEMPLATE = `你是出题官。按考纲为{{displayName}}（{{name}}）出上岗考卷。考纲：
+{{examOutline}}
+要求：每子技能 1 概念题+1 应用题，另 1 实操题（{{practicalPrompt}}，维度：{{gradingDimensions}}）。每题带 referencePoints 与 searchKeywords。只输出 JSON：{"questions":[{"id":"","subskillId":"","kind":"concept|applied|practical","prompt":"","gradingDimensions":["..."],"referencePoints":[],"searchKeywords":[]}]}`;
 
 const FALLBACK_GRADE_TEMPLATE = `你是判卷官。对{{displayName}}的答卷逐题五维打分（correctness/completeness/professionalism/antiAiFlavor/actionability 各 0-5，0.5 步进）+评语+引用知识卡。考卷与答卷：{{examWithAnswers}}。只输出 JSON：{"gradedQuestions":[{"id":"","scores":{},"comment":"","citedKnowledgeCards":[]}],"overallComment":""}`;
 
@@ -281,17 +283,21 @@ function createTrialStepRunner() {
             return `- ${entry.subskillId}（${subskill?.title || ''}）：${entry.conceptQuestions} 概念题 + ${entry.appliedQuestions} 应用题`;
         };
 
-        // 跨批合并：题干/类型非法的丢弃；id 缺失补默认值；重复 id 去重（保留首个）。
+        // 跨批合并：题干/类型非法的丢弃；id 按考纲条目命名空间化（模型在每条
+        // 目的输出里都会自复用 q1/q2 这类 id，直接按 id 去重会把整个子技能的
+        // 题目静默吞掉——2026-10-11 实测两次补考 13 题缩水成 5 题、覆盖子技能
+        // 随机漂移）；命名空间内重复仍去重（保留首个）。
         const mergedQuestions = [];
         const seenIds = new Set();
-        const collectQuestions = (payload) => {
+        const collectQuestions = (payload, scopeKey) => {
             const questions = Array.isArray(payload?.questions) ? payload.questions : [];
             for (const [index, question] of questions.entries()) {
                 if (!question || typeof question.prompt !== 'string' || !question.prompt.trim() || !question.kind) {
                     logger?.(`trial: 丢弃格式非法的题目：${JSON.stringify(question?.id || question)}`);
                     continue;
                 }
-                const id = String(question.id || `${question.subskillId || 'q'}-${index + 1}`);
+                const rawId = String(question.id || `q${index + 1}`);
+                const id = `${scopeKey}-${rawId}`;
                 if (seenIds.has(id)) {
                     continue;
                 }
@@ -317,7 +323,7 @@ function createTrialStepRunner() {
                 error.status = 502;
                 throw error;
             }
-            collectQuestions(payload);
+            collectQuestions(payload, entry.subskillId);
         }
         const practicalPayload = await completeJsonResilient({
             llm, llmConfig,
@@ -335,7 +341,7 @@ function createTrialStepRunner() {
             error.status = 502;
             throw error;
         }
-        collectQuestions(practicalPayload);
+        collectQuestions(practicalPayload, 'practical');
         if (mergedQuestions.length === 0) {
             const error = new Error('出题输出不可解析（合并后无有效题目）');
             error.code = 'FORGE_EXAM_OUTPUT_INVALID';

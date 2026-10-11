@@ -173,6 +173,16 @@ class TDBKnowledgeManager {
     _manifestComparable(value) {
         if (!value || typeof value !== 'object') return value;
         const { createdAt, ...rest } = value;
+        // 2026-10-11：corpus 指纹不参与兼容性判定。库内容增删是 watcher +
+        // fullScanOnStartup 的日常职责（forge 蒸馏每次写库都会改变 corpus；若
+        // corpus 指纹参与判定，则每次写库后的首个重启都会 TDB_STORE_REBUILD_REQUIRED
+        // 拒启 watcher，摄取静默离线——2026-10-11 实测：15:45 后所有重启离线，
+        // 进修的 8 个新文件从未入索引，补考带着旧库应考）。要求重建的仍然是
+        // embedding 模型/维度/端点与 chunker 版本、根路径的变更。
+        if (rest && rest.source && typeof rest.source === 'object') {
+            const { corpusFingerprint, ...sourceRest } = rest.source;
+            rest.source = sourceRest;
+        }
         return rest;
     }
 
@@ -217,7 +227,7 @@ class TDBKnowledgeManager {
         this.storeManifest = actual;
         this.storeManifestHash = embeddingProvenance.sha256(JSON.stringify(embeddingProvenance.stableValue(actual)));
         const same = JSON.stringify(embeddingProvenance.stableValue(this._manifestComparable(actual)))
-            === JSON.stringify(embeddingProvenance.stableValue(expected));
+            === JSON.stringify(embeddingProvenance.stableValue(this._manifestComparable(expected)));
         if (!same) {
             const error = codedError('TDB_STORE_REBUILD_REQUIRED', '冷知识库 store provenance 与当前配置不兼容', {
                 expected, actual, storeState: 'rebuild_required', storePath: this.config.storePath
