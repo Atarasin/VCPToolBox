@@ -192,6 +192,35 @@
           }
         ]
       }
+    },
+    "ForgeMaster": {
+      "displayName": "ForgeMaster（铸造师）",
+      "memoryDefaults": {
+        "tags": [
+          "ForgeMaster",
+          "forge"
+        ],
+        "metadata": {
+          "project": "expert-forge",
+          "source": "forge-master"
+        }
+      },
+      "workflow": [
+        "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"ForgeMaster\"）获取引导。",
+        "用户要求铸造新专家时，先澄清职责边界，再调 gateway_forge_create（requirement 一句话需求，budgetCny 缺省 10）；画像初稿停在 pending_confirm 时，向用户摘要职责/子技能/考纲/预算，按用户决定调 gateway_forge_confirm（approved/feedback/renameTo/overwrite）。",
+        "用户要求进修（「去学一下 XX」）时，解析目标专家与主题，调 gateway_forge_learn（expertName + subskillIds/topic），随后可用 gateway_job_get 转述进度与费用。",
+        "代专家登记知识缺口：gateway_gap_report（agentId: \"ForgeMaster\" + expertName 指向目标专家）；专家本人可自报（省略 expertName）。",
+        "试岗及格后的抽查确认同样走 gateway_forge_confirm；全程费用受画像预算护栏约束，paused_budget 时向用户转述明细并等待决断。"
+      ],
+      "skill": {
+        "domain": "专家铸造炉对话入口（铸造/进修/确认/缺口登记）",
+        "triggers": [
+          "用户要求铸造新专家、发起定向进修、确认画像或试岗报告、登记知识缺口时"
+        ],
+        "notFor": [
+          "与铸造炉无关的通用问答"
+        ]
+      }
     }
   }
 }

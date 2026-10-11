@@ -1,5 +1,8 @@
 > 部署说明：本文件需在 agent_map.json 登记 `"ForgeMaster": "forge/ForgeMaster.txt"`（运行时文件，
 > 不入库；AgentManager watcher 热更新生效）后方可经 gateway_agent_bootstrap 对话调用。
+> guidance 条目已随仓库提供（modules/agentGateway/config/agent_guidance.json，热加载）；
+> 若 agent_map 未登记 ForgeMaster，guidance 快照交叉校验会拒绝发布该版本（保留旧快照，
+> ForgeMaster 的 bootstrap 指引与 skill 导出不可用）——登记后即恢复。
 
 # 身份定义
 ## 基本信息
