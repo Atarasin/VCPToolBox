@@ -1,13 +1,15 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { AGW_ERROR_CODES } = require('../../contracts/errorCodes');
 
 /**
  * forge 工具的访问边界（用户决策 2026-10-11）：
  * - 编排三件套（create/confirm/learn）仅铸造师 ForgeMaster 可见可调；
- * - gateway_gap_report 保留「专家本人」通道：专家自报自己的缺口（目标缺省
- *   即调用者本人），ForgeMaster 可经 expertName 代任何已铸造专家登记；
- * 其余 agent 对编排工具列表不可见、调用 403。
+ * - gateway_gap_report 仅对「已铸造专家 + ForgeMaster」可见：专家自报自己
+ *   的缺口（目标缺省即调用者本人），ForgeMaster 可经 expertName 代任何
+ *   已铸造专家登记；非铸造 agent 不可见（调用也必被服务端画像校验 404 拒）。
  */
 
 const FORGE_MASTER_AGENT = 'ForgeMaster';
@@ -27,13 +29,35 @@ function createForgeAccessError(toolName, message, details) {
     return error;
 }
 
-// tools/list 可见性：编排三件套仅 ForgeMaster 可见；gap_report 保持可见
-// （调用侧由 assertForgeToolAccess 收口：非专家调用会被画像校验/目标校验拒绝）。
-function filterGatewayToolsForAgent(toolDescriptors, agentId) {
+// 已铸造专家判定：Agent/forge/blueprints/<agentId>.json 存在（动态——铸造
+// 完成画像落盘后，下次 tools/list 即可见；isForgedExpert/baseDir 可注入供测试）。
+function defaultIsForgedExpert(baseDir) {
+    const root = baseDir
+        || (process.env.FORGE_BASE_DIR || '').trim()
+        || path.join(__dirname, '..', '..', '..', '..', 'Agent', 'forge');
+    return (agentId) => {
+        const name = String(agentId || '').trim();
+        return Boolean(name) && fs.existsSync(path.join(root, 'blueprints', `${name}.json`));
+    };
+}
+
+// tools/list 可见性：编排三件套仅 ForgeMaster；gap_report 仅已铸造专家 + ForgeMaster。
+function filterGatewayToolsForAgent(toolDescriptors, agentId, options = {}) {
+    const isForgedExpert = typeof options.isForgedExpert === 'function'
+        ? options.isForgedExpert
+        : defaultIsForgedExpert(options.baseDir);
     if (agentId === FORGE_MASTER_AGENT) {
         return toolDescriptors;
     }
-    return toolDescriptors.filter((tool) => !FORGE_ORCHESTRATION_TOOLS.includes(tool.name));
+    return toolDescriptors.filter((tool) => {
+        if (FORGE_ORCHESTRATION_TOOLS.includes(tool.name)) {
+            return false;
+        }
+        if (tool.name === FORGE_GAP_REPORT_TOOL) {
+            return isForgedExpert(agentId);
+        }
+        return true;
+    });
 }
 
 // 调用守卫：编排工具仅 ForgeMaster；gap_report 自报或 ForgeMaster 代报。
@@ -61,6 +85,7 @@ function assertForgeToolAccess({ toolName, requesterAgentId, targetAgentId }) {
 
 module.exports = {
     FORGE_MASTER_AGENT,
+    defaultIsForgedExpert,
     FORGE_ORCHESTRATION_TOOLS,
     FORGE_GAP_REPORT_TOOL,
     filterGatewayToolsForAgent,

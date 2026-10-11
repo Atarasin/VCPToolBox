@@ -317,20 +317,31 @@ test('toolAccess：编排工具列表对非 ForgeMaster 隐藏，gap_report 保�
     const all = ['gateway_job_get', 'gateway_forge_create', 'gateway_forge_confirm', 'gateway_forge_learn', 'gateway_gap_report']
         .map((name) => ({ name }));
 
-    // 列表过滤
+    // 列表过滤（注入 baseDir 模拟铸造状态，避免依赖真实运行数据）
+    const os = require('node:os');
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-vis-'));
+    fs.mkdirSync(path.join(tmpRoot, 'blueprints'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, 'blueprints', 'UIDesigner.json'), '{}');
+    const options = { baseDir: tmpRoot };
+
     assert.deepEqual(
-        filterGatewayToolsForAgent(all, FORGE_MASTER_AGENT).map((t) => t.name),
+        filterGatewayToolsForAgent(all, FORGE_MASTER_AGENT, options).map((t) => t.name),
         all.map((t) => t.name),
         'ForgeMaster 全量可见'
     );
     assert.deepEqual(
-        filterGatewayToolsForAgent(all, 'Nexus').map((t) => t.name),
+        filterGatewayToolsForAgent(all, 'UIDesigner', options).map((t) => t.name),
         ['gateway_job_get', 'gateway_gap_report'],
-        '非 ForgeMaster 隐藏编排三件套，gap_report 保留（专家自报通道）'
+        '已铸造专家：仅 gap_report（自报通道），编排三件套不可见'
     );
     assert.deepEqual(
-        filterGatewayToolsForAgent(all, '').map((t) => t.name),
-        ['gateway_job_get', 'gateway_gap_report'],
+        filterGatewayToolsForAgent(all, 'Nexus', options).map((t) => t.name),
+        ['gateway_job_get'],
+        '非铸造 agent：0 个 forge 工具可见'
+    );
+    assert.deepEqual(
+        filterGatewayToolsForAgent(all, '', options).map((t) => t.name),
+        ['gateway_job_get'],
         '未认证发现请求同样不可见'
     );
 
@@ -366,13 +377,13 @@ test('backendProxy tools/list：非 ForgeMaster 隐藏编排三件套，ForgeMas
         discoveryDefaultAgentEnabled: true
     });
 
-    // midas（默认 agent）视角
+    // midas（默认 agent、非铸造）视角：0 个 forge 工具
     const midasList = await adapter.listTools({ requestContext: { requestId: 'req-midas' } });
     const midasTools = toolNames(midasList);
     assert.ok(!midasTools.includes('gateway_forge_create'), 'midas 不可见 forge_create');
     assert.ok(!midasTools.includes('gateway_forge_confirm'), 'midas 不可见 forge_confirm');
     assert.ok(!midasTools.includes('gateway_forge_learn'), 'midas 不可见 forge_learn');
-    assert.ok(midasTools.includes('gateway_gap_report'), 'gap_report 保留（专家自报通道）');
+    assert.ok(!midasTools.includes('gateway_gap_report'), 'midas 非铸造专家，gap_report 也不可见');
     assert.ok(midasTools.includes('gateway_job_get'), '常规工具不受影响');
 
     // 显式请求 ForgeMaster 视角（绑定凭据场景由 resolveDiscoveryScope 决议，此处直接传）
