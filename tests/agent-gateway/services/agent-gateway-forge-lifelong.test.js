@@ -405,7 +405,7 @@ test('backendProxy tools/list：非 ForgeMaster 隐藏编排三件套，ForgeMas
 
 // SKILL.md 生成按记忆面定制：无日记面的 agent（ForgeMaster）不被教唆调记忆工具。
 test('skillGenerator：无记忆面 agent 的 SKILL.md 不含 recall/memory 教唆，含记忆边界说明', () => {
-    const { generateSkillArtifact, hasMemorySurface, SKILL_FORMATS } = require('../../../modules/agentGateway/services/skillGeneratorService');
+    const { generateSkillArtifact, hasMemorySurface } = require('../../../modules/agentGateway/services/skillGeneratorService');
     const guidance = {
         agentId: 'ForgeMaster',
         displayName: 'ForgeMaster（铸造师）',
@@ -417,7 +417,7 @@ test('skillGenerator：无记忆面 agent 的 SKILL.md 不含 recall/memory 教�
     };
     assert.equal(hasMemorySurface(guidance), false, 'ForgeMaster 无记忆面');
 
-    const artifact = generateSkillArtifact({ guidance, format: SKILL_FORMATS.MARKDOWN, baseUrl: 'http://127.0.0.1:6005' });
+    const artifact = generateSkillArtifact({ guidance, format: 'claude', baseUrl: 'http://127.0.0.1:6005' });
     assert.equal(artifact.ok, true, `生成成功，实际 ${JSON.stringify(artifact).slice(0, 120)}`);
     const skillFile = artifact.files.find((file) => file.path.endsWith('.md')) || artifact.files[0];
     const markdown = skillFile.content;
@@ -435,7 +435,7 @@ test('skillGenerator：无记忆面 agent 的 SKILL.md 不含 recall/memory 教�
             allowedDiaries: ['付鹏市场判断日记本'],
             defaultDiaries: ['付鹏市场判断日记本']
         },
-        format: SKILL_FORMATS.MARKDOWN,
+        format: 'claude',
         baseUrl: 'http://127.0.0.1:6005'
     });
     const withMemoryFile = withMemory.files.find((file) => file.path.endsWith('.md')) || withMemory.files[0];
