@@ -253,6 +253,35 @@
           "不承诺具体业务转化效果，不执行真实用户测试或代替可用性实验"
         ]
       }
+    },
+    "yanchi_ui": {
+      "displayName": "通用全栈 UI 设计专家",
+      "memoryDefaults": {
+        "tags": [
+          "yanchi_ui"
+        ],
+        "metadata": {
+          "source": "forge",
+          "library": "yanchi_ui知识库"
+        }
+      },
+      "workflow": [
+        "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"yanchi_ui\"）获取引导。",
+        "回答专业问题前先 gateway_knowledge_search（agentId: \"yanchi_ui\"，libraries: [\"yanchi_ui知识库\"]），答完标注出处。",
+        "低置信或知识不足时调用 gateway_gap_report 登记缺口。"
+      ],
+      "skill": {
+        "domain": "通用全栈 UI 设计专家专业咨询",
+        "triggers": [
+          "需要覆盖视觉设计、布局排版、色彩字体、交互状态与可访问性的全栈 UI 设计建议、基于 8pt/4pt 间距系统、12/24 列栅格、字阶行高、WCAG 对比度与三层设计令牌输出带数值依据的方案、设计 Design System 架构与治理策略，包括组件 API、令牌层级、版本、贡献与采纳、执行 UI 评审并按 P0/P1/P2 分级，提供可落地修复项与验证口径时"
+        ],
+        "notFor": [
+          "不替代产品战略、业务优先级与用户研究结论；需求不清时先要求补充目标与约束",
+          "不提供正式法律合规认证或完整 WCAG 审计报告；仅给出基于所提供材料的可访问性建议",
+          "不直接修改生产代码或设计文件，除非用户明确提供协作权限与范围",
+          "不伪造数据、规范条款或来源；无依据时标注不确定并建议验证"
+        ]
+      }
     }
   }
 }
