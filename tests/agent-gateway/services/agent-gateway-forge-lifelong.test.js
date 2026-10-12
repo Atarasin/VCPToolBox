@@ -163,7 +163,7 @@ test('lifelong 调度：手动触发一次周期进修（M5.S2 验收），since
         trigger: 'manual', scope: null, sources: 0, distilledFiles: 0, jobId: 'job_prev'
     });
 
-    const launched = await scheduler.runScheduledLearning('scheduled-weekly');
+    const launched = await scheduler.runScheduledLearning('scheduled-daily');
     assert.equal(launched.length, 1);
     assert.equal(launched[0].expertName, 'UIDesigner');
     assert.ok(launched[0].since, 'since 取学习档案最后时间');
@@ -171,10 +171,13 @@ test('lifelong 调度：手动触发一次周期进修（M5.S2 验收），since
 
     const history = fs.readFileSync(path.join(forgeRoot, 'UIDesigner', 'learning-history.jsonl'), 'utf8').trim().split('\n');
     assert.equal(history.length, 2, '周期进修追加档案');
-    assert.equal(JSON.parse(history[1]).trigger, 'scheduled-weekly');
+    assert.equal(JSON.parse(history[1]).trigger, 'scheduled-daily');
 
-    // 规则解析：默认 weekly、disabled、cron 覆盖
-    assert.equal(resolveLifelongRule({}).mode, 'weekly');
+    // 规则解析：默认 daily（每天 04:00）、weekly/monthly 档位、disabled、cron 覆盖
+    assert.equal(resolveLifelongRule({}).mode, 'daily');
+    assert.equal(resolveLifelongRule({}).value, '0 4 * * *');
+    assert.equal(resolveLifelongRule({ FORGE_LIFELONG_SCHEDULE: 'weekly' }).value, '0 4 * * 1');
+    assert.equal(resolveLifelongRule({ FORGE_LIFELONG_SCHEDULE: 'monthly' }).value, '0 4 1 * *');
     assert.equal(resolveLifelongRule({ FORGE_LIFELONG_SCHEDULE: 'disabled' }).mode, 'disabled');
     assert.equal(resolveLifelongRule({ FORGE_LIFELONG_CRON: '0 5 * * 2' }).value, '0 5 * * 2');
 });
@@ -256,7 +259,7 @@ test('since 时间过滤：已有出处的来源不重采，BrowserSearch 带 ti
     const { jobId } = await forgeRuntimeService.startExpertLearnJob({
         expertName: 'UIDesigner',
         since: new Date(Date.now() - 14 * 86400000).toISOString(), // 两周前 → month 档
-        scope: { reason: 'scheduled-weekly' }
+        scope: { reason: 'scheduled-daily' }
     });
     await waitFor(() => jobRuntimeService.pollJob(jobId, null).data.job.terminal);
 

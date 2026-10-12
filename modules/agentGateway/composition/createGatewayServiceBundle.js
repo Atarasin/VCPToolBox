@@ -206,7 +206,7 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
         knowledgeRoot: process.env.FORGE_KNOWLEDGE_ROOT || undefined,
         // D7 方案 C：Jev 对照试点——绑定仓库 jevClient 单例（typesafe-ai Jev，
         // 未配置 JEV_API_KEY 时 decide 抛 JEV_NOT_CONFIGURED，由 trial 捕获记 skipped）。
-        // §3.8 触发 c：定期进修（默认每周一 04:00，FORGE_LIFELONG_SCHEDULE/CRON 可配）。
+        // §3.8 触发 c：定期进修（默认每天 04:00，FORGE_LIFELONG_SCHEDULE/CRON 可配）。
         jevPort: {
             decide: (state, questions) => require('../../jevClient').decide(state, questions)
         }
