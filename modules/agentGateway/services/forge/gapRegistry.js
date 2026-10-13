@@ -125,7 +125,20 @@ function createGapRegistry({ baseDir }) {
     };
 }
 
-function listExpertNames({ baseDir }) {
+/**
+ * 专家名单（有缺口档案或画像的目录）。baseDir 是唯一口径，必须显式传入
+ * 已解析的 forge 产物根目录（服务侧缺省 <repo>/Agent/forge）。
+ *
+ * 2026-10-13 空转缺陷：baseDir 缺失时这里曾静默返回空名单，导致定期进修
+ * 每个周期都「成功触发但 0 个专家」，日志里没有任何错误。故缺失一律抛错；
+ * 目录存在但为空/尚未铸造，才是合法的空名单。
+ */
+function listExpertNames({ baseDir } = {}) {
+    if (typeof baseDir !== 'string' || !baseDir.trim()) {
+        const error = new Error('listExpertNames 需要 baseDir（forge 产物根目录）');
+        error.code = 'FORGE_BASE_DIR_UNRESOLVED';
+        throw error;
+    }
     if (!fs.existsSync(baseDir)) {
         return [];
     }

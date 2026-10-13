@@ -206,6 +206,39 @@ test('lifelong 调度：手动触发一次周期进修（M5.S2 验收），since
     assert.equal(resolveLifelongRule({ FORGE_LIFELONG_CRON: '0 5 * * 2' }).value, '0 5 * * 2');
 });
 
+// 缺陷回归（2026-10-13）：定期进修空转——名单口径 baseDir 未解析时静默返回空名单，
+// 每个周期的批次都「成功触发但 0 个专家」且无任何报错。
+test('listExpertNames 口径守卫 + composition 接线：baseDir 缺失必须报错，名单不得回落到裸 env', () => {
+    const { listExpertNames } = require('../../../modules/agentGateway/services/forge/gapRegistry');
+    assert.throws(
+        () => listExpertNames({}),
+        (error) => error.code === 'FORGE_BASE_DIR_UNRESOLVED',
+        '缺 baseDir 必须抛错（不得静默空名单）'
+    );
+    assert.throws(
+        () => listExpertNames(),
+        (error) => error.code === 'FORGE_BASE_DIR_UNRESOLVED',
+        '无参调用同样抛错'
+    );
+    assert.deepEqual(
+        listExpertNames({ baseDir: path.join(os.tmpdir(), `forge-absent-${Date.now()}`) }),
+        [],
+        '目录不存在才是合法的空名单（尚未铸造过）'
+    );
+
+    // 接线回归：名单必须取服务解析后的 baseDir（含缺省 <repo>/Agent/forge 兜底）。
+    const bundleSource = fs.readFileSync('modules/agentGateway/composition/createGatewayServiceBundle.js', 'utf8');
+    assert.match(
+        bundleSource,
+        /listExpertNames\(\{\s*baseDir:\s*forgeRuntimeService\.baseDir\s*\}\)/,
+        '接线必须传 forgeRuntimeService.baseDir'
+    );
+    assert.ok(
+        !bundleSource.includes('listExpertNames({ baseDir: process.env'),
+        '名单接线不得回落到裸 env（未配置时 undefined → 名单恒为空）'
+    );
+});
+
 test('gateway_gap_report / gateway_forge_learn 契约注册（第 9/10 个 MCP 工具）', () => {
     const { MCP_GATEWAY_TOOL_NAMES, GATEWAY_OPERATIONS, gatewayToolSchemas } = require('../../../modules/agentGateway/contracts/operations');
     assert.equal(MCP_GATEWAY_TOOL_NAMES.GAP_REPORT, 'gateway_gap_report');

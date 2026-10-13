@@ -337,10 +337,14 @@ function getGatewayServiceBundle(pluginManager, options = {}) {
     const { createLifelongScheduler } = require('../services/forge/lifelongScheduler');
     const { listExpertNames } = require('../services/forge/gapRegistry');
     // 定期进修：服务端常驻进程内启动（M5.S2）；AdminPanel/测试环境惰性不启动。
+    // 名单口径必须与服务本体一致：用 forgeRuntimeService.baseDir（含
+    // FORGE_BASE_DIR 缺省 <repo>/Agent/forge 的兜底）——2026-10-13 空转缺陷：
+    // 此处曾直接读 process.env.FORGE_BASE_DIR，未配置时传 undefined，
+    // 名单恒为空、每个周期的批次精确地空转且无任何报错。
     const forgeLifelongScheduler = createLifelongScheduler({
         forgeRuntimeService,
         gapRegistry: forgeRuntimeService.gapRegistry,
-        listExpertNames: () => listExpertNames({ baseDir: process.env.FORGE_BASE_DIR || undefined }),
+        listExpertNames: () => listExpertNames({ baseDir: forgeRuntimeService.baseDir }),
         auditLogger
     });
     if ((process.env.FORGE_LIFELONG_AUTOSTART || '1') !== '0') {
