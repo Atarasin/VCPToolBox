@@ -366,9 +366,7 @@ Thumbs.db
 !.env.example
 .next/
 dist/
-# AdminPanel 构建产物按上游约定继续跟踪
-!AdminPanel-Vue/dist/
-!AdminPanel-Vue/dist/**
+# AdminPanel-Vue/dist 为构建产物，不再入库（2026-10-13）；本地与部署前执行 `cd AdminPanel-Vue && npm run build`。
 build/
 *.pyc
 .venv/

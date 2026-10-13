@@ -8,8 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-# dist 目录保留提交，让用户开箱即用（构建产物随仓库发布）
-# dist
+# dist 为构建产物，不随仓库提交（2026-10-13）；本地与部署前执行 npm run build
+dist
 dist-ssr
 *.local
 

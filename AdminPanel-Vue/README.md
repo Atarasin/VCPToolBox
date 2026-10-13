@@ -58,6 +58,8 @@ npm run build
 npm run build:no-type-check
 ```
 
+`dist` 为构建产物，自 2026-10-13 起不再随仓库提交：本地运行与部署面板（`adminServer.js` 挂载 `dist`）前需先执行一次构建；Docker 构建阶段会自动执行。
+
 ### 代码检查
 
 ```bash
