@@ -56,6 +56,35 @@ function createGapRegistry({ baseDir }) {
             const gaps = await readJsonArray(gapsFile(expertName));
             return gaps.filter((gap) => gap?.status === 'open');
         },
+        // 全量缺口（含已关闭）：AdminPanel 专家档案只读视图用（2026-10-13）。
+        async readGaps(expertName) {
+            return readJsonArray(gapsFile(expertName));
+        },
+        // 全量学习档案（时间正序，与文件追加顺序一致）；坏行跳过不掩盖其余记录。
+        async readLearningHistory(expertName) {
+            let raw;
+            try {
+                raw = await fsp.readFile(historyFile(expertName), 'utf8');
+            } catch (error) {
+                if (error.code === 'ENOENT') {
+                    return [];
+                }
+                throw error;
+            }
+            const entries = [];
+            for (const line of raw.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    continue;
+                }
+                try {
+                    entries.push(JSON.parse(trimmed));
+                } catch {
+                    // 半行/损坏行跳过——档案是只追加的运行数据。
+                }
+            }
+            return entries;
+        },
         // 进修完成后关闭相关 subskill 的 open 缺口（不删除历史条目）。
         async closeGaps(expertName, subskillIds) {
             const ids = new Set(subskillIds);

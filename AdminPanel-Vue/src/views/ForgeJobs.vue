@@ -3,7 +3,7 @@
     <Teleport to="#page-header-actions">
       <UiPageActions>
         <UiBadge variant="outline">只读观察</UiBadge>
-        <UiButton type="button" :disabled="loading" :loading="loading" @click="refresh">
+        <UiButton type="button" :disabled="loading" :loading="loading" @click="refreshActive">
           <template #leading>
             <span class="material-symbols-outlined">refresh</span>
           </template>
@@ -15,12 +15,28 @@
     <header class="forge-intro">
       <h2>专家铸造</h2>
       <p>
-        铸造任务的进度、费用与历史观察窗口（只读）。发起铸造、确认画像、重试与取消
-        均通过铸造师对话完成，本页面不提供任何操作入口。
+        铸造任务的进度、费用与历史观察窗口（只读），以及每个专家的知识缺口与进修档案。
+        发起铸造、确认画像、重试与取消均通过铸造师对话完成，本页面不提供任何操作入口。
       </p>
     </header>
 
-    <section class="forge-summary" aria-label="铸造任务摘要">
+    <nav class="forge-tabs" role="tablist" aria-label="专家铸造视图切换">
+      <button
+        v-for="tab in FORGE_TABS"
+        :key="tab.id"
+        type="button"
+        role="tab"
+        class="forge-tab"
+        :class="{ 'forge-tab--active': activeTab === tab.id }"
+        :aria-selected="activeTab === tab.id"
+        @click="switchTab(tab.id)"
+      >
+        {{ tab.label }}
+      </button>
+    </nav>
+
+    <template v-if="activeTab === 'jobs'">
+      <section class="forge-summary" aria-label="铸造任务摘要">
       <span class="summary-item">
         <strong>{{ jobs.length }}</strong>
         <small>全部任务</small>
@@ -105,19 +121,33 @@
         </tr>
       </tbody>
     </UiTableFrame>
+    </template>
+
+    <ForgeExpertsPanel v-else ref="expertsPanel" />
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import UiBadge from "@/components/ui/UiBadge.vue";
 import UiButton from "@/components/ui/UiButton.vue";
 import UiEmptyState from "@/components/ui/UiEmptyState.vue";
 import UiPageActions from "@/components/ui/UiPageActions.vue";
 import UiTableFrame from "@/components/ui/UiTableFrame.vue";
+import ForgeExpertsPanel from "@/components/forge/ForgeExpertsPanel.vue";
 import { forgeApi, type ForgeJobStatus, type ForgeJobSummary } from "@/api/forge";
 import { usePolling } from "@/composables/usePolling";
+
+type ForgeTabId = "jobs" | "experts";
+
+const FORGE_TABS: { id: ForgeTabId; label: string }[] = [
+  { id: "jobs", label: "铸造任务" },
+  { id: "experts", label: "专家档案" },
+];
+
+const activeTab = ref<ForgeTabId>("jobs");
+const expertsPanel = ref<InstanceType<typeof ForgeExpertsPanel> | null>(null);
 
 const jobs = ref<ForgeJobSummary[]>([]);
 const loading = ref(false);
@@ -135,11 +165,33 @@ async function refresh() {
   }
 }
 
+// 刷新按钮跟随当前页签：任务列表在页内刷新，专家档案委托给子面板。
+async function refreshActive() {
+  if (activeTab.value === "experts") {
+    await expertsPanel.value?.refresh();
+    return;
+  }
+  await refresh();
+}
+
+function switchTab(tab: ForgeTabId) {
+  activeTab.value = tab;
+}
+
 // 自动轮询进度（只读拉取；页面卸载时 usePolling 自行停止）。
 const polling = usePolling(loadJobs, {
   interval: 5000,
   immediate: false,
   onError: () => undefined,
+});
+
+// 只有任务页签需要轮询——专家档案是低频变化的运行数据，按需刷新即可。
+watch(activeTab, (tab) => {
+  if (tab === "jobs") {
+    polling.start();
+  } else {
+    polling.stop();
+  }
 });
 
 onMounted(async () => {
@@ -226,6 +278,32 @@ function formatTime(iso: string | null | undefined) {
 <style scoped>
 .forge-intro {
   margin-bottom: var(--space-4);
+}
+
+.forge-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.forge-tab {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.forge-tab:hover {
+  color: inherit;
+}
+
+.forge-tab--active {
+  color: var(--accent, #3b82f6);
+  border-bottom-color: var(--accent, #3b82f6);
 }
 
 .forge-intro p {

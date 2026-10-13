@@ -141,6 +141,30 @@ test('gap 登记缺口 → 手动进修（forge.expert.learn）→ 新卡入库 
     assert.equal(entry.sources, 1, '档案记录来源数');
     assert.equal(entry.distilledFiles, 1, '档案记录产出文件数');
     assert.ok(entry.jobId);
+
+    // 5. 专家档案只读投影（AdminPanel「专家铸造」页专家档案页签的数据面）
+    const experts = await env.forgeRuntimeService.listExperts();
+    assert.equal(experts.length, 1);
+    assert.equal(experts[0].expertName, 'UIDesigner');
+    assert.equal(experts[0].displayName, 'UI 设计专家');
+    assert.equal(experts[0].totalGaps, 1);
+    assert.equal(experts[0].openGaps, 0, '进修完成后未关闭缺口为 0');
+    assert.equal(experts[0].learningCount, 1);
+    assert.ok(experts[0].lastLearningAt, '最近学习时间取档案末条');
+
+    const record = await env.forgeRuntimeService.getExpertRecord('UIDesigner');
+    assert.equal(record.expertName, 'UIDesigner');
+    assert.equal(record.displayName, 'UI 设计专家');
+    assert.equal(record.gaps.length, 1, '全量缺口含已关闭条目');
+    assert.equal(record.gaps[0].status, 'closed');
+    assert.equal(record.learningHistory.length, 1);
+    assert.equal(record.learningHistory[0].trigger, 'manual');
+
+    await assert.rejects(
+        env.forgeRuntimeService.getExpertRecord('Ghost'),
+        (error) => error.status === 404,
+        '未知专家 404'
+    );
 });
 
 test('lifelong 调度：手动触发一次周期进修（M5.S2 验收），since 取学习档案', async () => {

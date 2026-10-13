@@ -9,9 +9,9 @@ const { createRunStore } = require('./runStore');
 const { createCostMeter } = require('./costMeter');
 const { createStepRegistry } = require('./steps');
 const { ForgeNameConflictError } = require('./nameConflict');
-const { blueprintLibraryName } = require('./blueprint');
+const { blueprintLibraryName, readBlueprint } = require('./blueprint');
 const { renameAtSynthesize } = require('./synthesize');
-const { createGapRegistry } = require('./gapRegistry');
+const { createGapRegistry, listExpertNames } = require('./gapRegistry');
 const { PASS_RATIO } = require('./trial');
 
 /**
@@ -1238,6 +1238,56 @@ function createForgeRuntimeService(options = {}) {
         },
         async listOpenGaps(expertName) {
             return gapRegistry.listOpenGaps(normalizeString(expertName));
+        },
+        // ── 专家档案（2026-10-13，AdminPanel 只读视图）──────────────────────
+        // 缺口与进修记录一直落在 Agent/forge/<name>/（gaps.json、
+        // learning-history.jsonl），此前只有铸造师对话侧能看到；这里给管理面
+        // 提供只读汇总与明细，不新增状态存储（与 §3.10 只读观察窗口同口径）。
+        async listExperts() {
+            const experts = [];
+            for (const name of listExpertNames({ baseDir })) {
+                let displayName = null;
+                try {
+                    const blueprint = await readBlueprint(path.join(baseDir, 'blueprints', `${name}.json`));
+                    displayName = blueprint?.displayName || null;
+                } catch {
+                    // 只有缺口登记、画像缺失（或损坏）的专家：显示名留空，不阻断列表。
+                }
+                const [gaps, history] = await Promise.all([
+                    gapRegistry.readGaps(name),
+                    gapRegistry.readLearningHistory(name)
+                ]);
+                experts.push({
+                    expertName: name,
+                    displayName,
+                    totalGaps: gaps.length,
+                    openGaps: gaps.filter((gap) => gap?.status === 'open').length,
+                    learningCount: history.length,
+                    lastLearningAt: history.length > 0 ? history[history.length - 1]?.ts || null : null
+                });
+            }
+            return experts;
+        },
+        async getExpertRecord(expertName) {
+            const name = normalizeString(expertName);
+            if (!name || !listExpertNames({ baseDir }).includes(name)) {
+                const error = new Error(`未知专家：${expertName || ''}（无缺口档案与画像）`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            let displayName = null;
+            try {
+                const blueprint = await readBlueprint(path.join(baseDir, 'blueprints', `${name}.json`));
+                displayName = blueprint?.displayName || null;
+            } catch {
+                // 同上：画像缺失不阻断明细读取。
+            }
+            const [gaps, learningHistory] = await Promise.all([
+                gapRegistry.readGaps(name),
+                gapRegistry.readLearningHistory(name)
+            ]);
+            return { expertName: name, displayName, gaps, learningHistory };
         },
         async listJobs({ authContext = null } = {}) {
             const result = jobRuntimeService.listJobs({ authContext, filters: { operationPrefix: 'forge.' } });

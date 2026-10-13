@@ -12,6 +12,8 @@ const { getGatewayServiceBundle } = require('../../modules/agentGateway/createGa
  * - 鉴权由 /admin_api 挂载层的既有 adminAuth 承担，本模块不重复实现；
  * - 数据与 gateway_job_get 同源（主进程 agentGateway bundle 的
  *   forgeRuntimeService + job 运行时事件），不新建状态存储；
+ * - 专家档案（/forge/experts*，2026-10-13）：缺口（gaps.json）与进修记录
+ *   （learning-history.jsonl）只读投影，供「专家铸造」页的专家档案页签用；
  * - 模块只在主进程加载，面板请求经独立管理进程兜底反代到达。
  */
 
@@ -70,6 +72,26 @@ module.exports = function (options) {
             res.json({ status: 'success', ...detail });
         } catch (error) {
             sendServiceError(res, error, '读取铸造任务详情失败');
+        }
+    });
+
+    // 专家档案列表：显示名、缺口统计（总数/未关闭）、进修次数与最近一次学习时间
+    router.get('/forge/experts', async (req, res) => {
+        try {
+            const experts = await resolveForgeService().listExperts();
+            res.json({ status: 'success', experts });
+        } catch (error) {
+            sendServiceError(res, error, '读取专家档案列表失败');
+        }
+    });
+
+    // 单专家档案：全量缺口记录（含已关闭）+ 全量进修记录（时间正序）
+    router.get('/forge/experts/:expertName', async (req, res) => {
+        try {
+            const record = await resolveForgeService().getExpertRecord(String(req.params.expertName || '').trim());
+            res.json({ status: 'success', ...record });
+        } catch (error) {
+            sendServiceError(res, error, '读取专家档案失败');
         }
     });
 

@@ -7,6 +7,8 @@ import { requestWithUi, type RequestUiOptions } from "./requestWithUi";
  *
  * 本模块只包含 GET 只读操作——面板不提供发起铸造、确认画像、重试、取消
  * 等任何写入口（发起与控制唯一走铸造师对话，D1）。
+ * 专家档案（/experts*）：缺口（gaps.json）与进修记录（learning-history.jsonl）
+ * 的只读投影，供「专家铸造」页的专家档案页签使用。
  */
 
 const API_BASE_URL = "/admin_api/forge";
@@ -107,6 +109,47 @@ export interface ForgeJobDetail {
   events: ForgeTimelineEvent[];
 }
 
+export interface ForgeGap {
+  id: string;
+  ts: string;
+  status: "open" | "closed";
+  subskillId: string | null;
+  question: string;
+  whyInsufficient: string | null;
+  closedAt?: string;
+}
+
+export interface ForgeLearningScope {
+  subskillIds?: string[];
+  topic?: string;
+  reason?: string;
+}
+
+export interface ForgeLearningEntry {
+  ts: string;
+  trigger: string | null;
+  scope: ForgeLearningScope | null;
+  sources: number;
+  distilledFiles: number;
+  jobId: string | null;
+}
+
+export interface ForgeExpertSummary {
+  expertName: string;
+  displayName: string | null;
+  totalGaps: number;
+  openGaps: number;
+  learningCount: number;
+  lastLearningAt: string | null;
+}
+
+export interface ForgeExpertRecord {
+  expertName: string;
+  displayName: string | null;
+  gaps: ForgeGap[];
+  learningHistory: ForgeLearningEntry[];
+}
+
 export const forgeApi = {
   async listJobs(
     uiOptions: RequestUiOptions = DEFAULT_READ_UI_OPTIONS
@@ -130,5 +173,29 @@ export const forgeApi = {
     );
     const { status: _status, ...detail } = response;
     return detail;
+  },
+
+  async listExperts(
+    uiOptions: RequestUiOptions = DEFAULT_READ_UI_OPTIONS
+  ): Promise<ForgeExpertSummary[]> {
+    const response = await requestWithUi<{ status: string; experts: ForgeExpertSummary[] }>(
+      { url: `${API_BASE_URL}/experts` },
+      uiOptions
+    );
+    return response.experts || [];
+  },
+
+  async getExpertRecord(
+    expertName: string,
+    uiOptions: RequestUiOptions = DEFAULT_READ_UI_OPTIONS
+  ): Promise<ForgeExpertRecord> {
+    const response = await requestWithUi<
+      ForgeExpertRecord & { status: string }
+    >(
+      { url: `${API_BASE_URL}/experts/${encodeURIComponent(expertName)}` },
+      uiOptions
+    );
+    const { status: _status, ...record } = response;
+    return record;
   },
 };
