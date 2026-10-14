@@ -18,6 +18,7 @@
         铸造任务的进度、费用与历史观察窗口（只读），以及每个专家的知识缺口与进修档案。
         发起铸造、确认画像、重试与取消均通过铸造师对话完成，本页面不提供任何操作入口。
       </p>
+      <small class="forge-build">界面构建：{{ appBuild }}</small>
     </header>
 
     <nav class="forge-tabs" role="tablist" aria-label="专家铸造视图切换">
@@ -140,6 +141,9 @@ import { forgeApi, type ForgeJobStatus, type ForgeJobSummary } from "@/api/forge
 import { usePolling } from "@/composables/usePolling";
 
 type ForgeTabId = "jobs" | "experts";
+
+// 构建标识（vite define 注入）：页面可见，便于分辨浏览器里跑的是哪一次构建。
+const appBuild = __APP_BUILD__;
 
 const FORGE_TABS: { id: ForgeTabId; label: string }[] = [
   { id: "jobs", label: "铸造任务" },
@@ -309,6 +313,14 @@ function formatTime(iso: string | null | undefined) {
 .forge-intro p {
   margin: var(--space-1) 0 0;
   color: var(--text-secondary);
+}
+
+.forge-build {
+  display: inline-block;
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  opacity: 0.75;
 }
 
 .forge-summary {

@@ -1,8 +1,24 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { existsSync, readFileSync } from "fs";
+import { execSync } from "child_process";
 import { resolve } from "path";
 import { visualizer } from "rollup-plugin-visualizer";
+
+// 构建标识（2026-10-14）：面板曾多次因浏览器挂着旧 bundle 而看不到新功能——
+// 把「界面构建时间 · 提交短哈希」注入前端并显示在专家铸造页，一眼可辨新旧。
+function resolveAppBuildId(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  let hash = "";
+  try {
+    hash = execSync("git rev-parse --short HEAD", { cwd: import.meta.dirname }).toString().trim();
+  } catch {
+    hash = "";
+  }
+  return hash ? `${stamp} · ${hash}` : stamp;
+}
 
 function readVcpServerPort(): string {
   const configPath = resolve(import.meta.dirname, "..", "config.env");
@@ -19,6 +35,9 @@ export default defineConfig(({ mode }) => {
     process.env.VCP_ADMIN_API_TARGET || `http://localhost:${readVcpServerPort()}`;
 
   return {
+    define: {
+      __APP_BUILD__: JSON.stringify(resolveAppBuildId()),
+    },
     plugins: [
       vue(),
       ...(shouldAnalyze
