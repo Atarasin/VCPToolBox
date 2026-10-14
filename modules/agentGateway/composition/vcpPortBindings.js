@@ -336,9 +336,16 @@ function bindVcpPorts(pluginManager, options = {}) {
         ),
         llmCompletion: createLlmCompletionPort({
             async complete(config, payload) {
+                // 单次调用超时：调用方可用 config.timeoutMs 覆盖（forge 大调用
+                // 缺省 180s，见 resolveForgeLlmConfig）；未指定时保持 60s
+                // （recall/AIMemo 等短调用，2026-10-14）。
+                const requestedTimeout = Number(config?.timeoutMs);
+                const timeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+                    ? Math.floor(requestedTimeout)
+                    : 60000;
                 return axios.post(`${config.url}v1/chat/completions`, payload, {
                     headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
-                    timeout: 60000
+                    timeout
                 });
             }
         }),

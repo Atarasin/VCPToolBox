@@ -11,8 +11,15 @@ const { createStepRegistry } = require('./steps');
 const { ForgeNameConflictError } = require('./nameConflict');
 const { blueprintLibraryName, readBlueprint } = require('./blueprint');
 const { renameAtSynthesize } = require('./synthesize');
-const { createGapRegistry, listExpertNames } = require('./gapRegistry');
+const {
+    createGapRegistry,
+    listExpertNames,
+    readExpertArchive,
+    writeExpertArchive,
+    removeExpertArchive
+} = require('./gapRegistry');
 const { PASS_RATIO } = require('./trial');
+const { isTransientLlmError, resolveLlmRetryPolicy, backoffDelay, sleep } = require('./llmRetry');
 
 /**
  * forge job 编排服务（§3.2）：
@@ -76,11 +83,22 @@ function resolveKnowledgeRoot(baseDir) {
     return path.resolve(baseDir, '..', '..', 'knowledge');
 }
 
+// 单次铸造 LLM 调用超时（2026-10-14）：60s 对大调用（蒸馏单批可达 5k+ token
+// 输出）过紧，撞线即 ECONNABORTED；默认抬到 180s，FORGE_LLM_TIMEOUT_MS 可配。
+const DEFAULT_FORGE_LLM_TIMEOUT_MS = 180000;
+
+function resolveForgeLlmTimeoutMs(env = process.env) {
+    const raw = Number(env.FORGE_LLM_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_FORGE_LLM_TIMEOUT_MS;
+}
+
 function resolveForgeLlmConfig(env = process.env) {
     const url = (env.FORGE_LLM_URL || env.AIMemoUrl || '').trim();
     const apiKey = (env.FORGE_LLM_API || env.AIMemoApi || '').trim();
     const model = (env.FORGE_LLM_MODEL || env.AIMemoModel || '').trim();
-    return url && apiKey && model ? { url, apiKey, model } : null;
+    return url && apiKey && model
+        ? { url, apiKey, model, timeoutMs: resolveForgeLlmTimeoutMs(env) }
+        : null;
 }
 
 function normalizeString(value) {
@@ -165,6 +183,7 @@ function createForgeRuntimeService(options = {}) {
         prices = null,
         defaultBudgetCny = DEFAULT_BUDGET_CNY,
         llmConfig = null,
+        llmRetryPolicy = null,
         stepRunners = {}
     } = options;
 
@@ -179,6 +198,8 @@ function createForgeRuntimeService(options = {}) {
 
     const runStore = createRunStore({ baseDir });
     const gapRegistry = createGapRegistry({ baseDir });
+    // 瞬时失败退避重试策略（2026-10-14）：env 缺省 2 次 / 2s 起，可注入覆盖（测试用）。
+    const effectiveLlmRetryPolicy = llmRetryPolicy || resolveLlmRetryPolicy(process.env);
     const effectiveKnowledgeRoot = knowledgeRoot || resolveKnowledgeRoot(baseDir);
     const stepRegistry = createStepRegistry({
         baseDir,
@@ -234,24 +255,46 @@ function createForgeRuntimeService(options = {}) {
                     error.status = 503;
                     throw error;
                 }
-                ensureActive(jobId, authContext);
-                const response = await llmCompletionPort.complete(config, payload);
-                meter.recordLlm({
-                    model: payload?.model || config?.model,
-                    promptTokens: response?.data?.usage?.prompt_tokens,
-                    completionTokens: response?.data?.usage?.completion_tokens,
-                    step: stepId
-                });
-                await persistCost(jobId, meter);
-                const check = meter.check();
-                if (check.level === 'warning' && !warned) {
-                    warned = true;
-                    log('forge.budget.warning', { jobId, step: stepId, ...check });
+                // 瞬时网络失败退避重试（2026-10-14）：此前一次超时/连接重置直接
+                // 终止整个 distill 步骤——04:00 无人值守的定期进修因此整批报废。
+                for (let attempt = 0; ; attempt += 1) {
+                    ensureActive(jobId, authContext);
+                    let response;
+                    try {
+                        response = await llmCompletionPort.complete(config, payload);
+                    } catch (error) {
+                        if (attempt >= effectiveLlmRetryPolicy.retries || !isTransientLlmError(error)) {
+                            throw error;
+                        }
+                        const delayMs = backoffDelay(effectiveLlmRetryPolicy.baseDelayMs, attempt + 1);
+                        log('forge.llm.retry', {
+                            jobId,
+                            step: stepId,
+                            attempt: attempt + 1,
+                            delayMs,
+                            code: error.code || null,
+                            message: error.message
+                        });
+                        await sleep(delayMs);
+                        continue;
+                    }
+                    meter.recordLlm({
+                        model: payload?.model || config?.model,
+                        promptTokens: response?.data?.usage?.prompt_tokens,
+                        completionTokens: response?.data?.usage?.completion_tokens,
+                        step: stepId
+                    });
+                    await persistCost(jobId, meter);
+                    const check = meter.check();
+                    if (check.level === 'warning' && !warned) {
+                        warned = true;
+                        log('forge.budget.warning', { jobId, step: stepId, ...check });
+                    }
+                    if (check.level === 'exceeded') {
+                        throw new BudgetExceededError(meter.getBreakdown());
+                    }
+                    return response;
                 }
-                if (check.level === 'exceeded') {
-                    throw new BudgetExceededError(meter.getBreakdown());
-                }
-                return response;
             }
         };
     }
@@ -393,6 +436,38 @@ function createForgeRuntimeService(options = {}) {
         };
     }
 
+    // §3.8 学习档案的失败分支（2026-10-14）：失败的进修也留一条 status=failed
+    // 记录（含失败步骤/原因/已花费用），面板专家档案页签据此显示「失败」，
+    // 否则失败在档案里完全不可见，会被长期误读为「定期进修没有触发」。
+    // 失败的进修不关闭缺口（闭环只认完成的进修）。
+    // 幂等：归档后写 run.json 的 learningArchive 标记，跨重启/多次实例化只写一次。
+    async function recordLearnFailureArchive(runRecord, jobId, { step = null, code = null, message = null, costBreakdown = null } = {}) {
+        if (runRecord?.jobKind !== 'expert.learn' || !runRecord.expertName) {
+            return false;
+        }
+        try {
+            const harvestMarker = await runStore.readStepMarker(jobId, 'harvest');
+            const sourceCount = (harvestMarker?.state?.manifests || []).reduce((sum, m) => sum + (m.materials || 0), 0);
+            await gapRegistry.appendLearningHistory(runRecord.expertName, {
+                trigger: runRecord.scope?.reason || 'manual',
+                scope: runRecord.scope || null,
+                status: 'failed',
+                error: { step, code, message },
+                sources: sourceCount,
+                distilledFiles: 0,
+                costCny: Number(costBreakdown?.costSoFarCny) || 0,
+                jobId
+            });
+            await runStore.updateRun(jobId, {
+                learningArchive: { status: 'failed', code: code || null, at: new Date().toISOString() }
+            }).catch(() => undefined);
+            return true;
+        } catch (error) {
+            log('forge.history.append_failed', { jobId, message: error.message });
+            return false;
+        }
+    }
+
     async function restoreJobsFromDisk() {
         if (typeof jobRuntimeService.restoreJob !== 'function') {
             return; // 旧注入的 job 运行时不支持恢复——优雅降级（保持旧行为）。
@@ -454,6 +529,18 @@ function createForgeRuntimeService(options = {}) {
                 },
                 createdAt: runRecord.createdAt
             });
+            // 重启中断的 learn job 也留档——但只归档 ③「跑到一半进程消失」的
+            // 新鲜中断：① 终态恢复的历史失败不在此重复归档（每次实例化都补写
+            // 会让档案随重启/测试次数线性膨胀，2026-10-14 曾刷出 249 条重复）；
+            // learningArchive 标记再做一层跨重启幂等兜底。
+            if (classification.extra?.error?.code === 'FORGE_RESTART_INTERRUPTED' && !runRecord.learningArchive) {
+                await recordLearnFailureArchive(runRecord, jobId, {
+                    step: classification.extra?.error?.step || null,
+                    code: classification.extra?.error?.code || 'FORGE_RESTART_INTERRUPTED',
+                    message: classification.extra?.error?.message || '进程重启时任务仍在执行',
+                    costBreakdown: runRecord.cost
+                });
+            }
         }
         const restoredCount = Object.values(byStatus).reduce((sum, count) => sum + count, 0);
         if (restoredCount > 0) {
@@ -691,6 +778,14 @@ function createForgeRuntimeService(options = {}) {
                 }
                 log('forge.job.failed', { jobId, step: step.id, code: error.code || 'INTERNAL', message: error.message });
                 await runStore.updateRun(jobId, { finalStatus: 'failed' }).catch(() => undefined);
+                // §3.8 失败也留档（2026-10-14）：此前失败只落 run.json/审计，
+                // 面板上看不到——整批超时失败会被长期误读为「没有触发」。
+                await recordLearnFailureArchive(runRecord, jobId, {
+                    step: step.id,
+                    code: error.code || 'INTERNAL',
+                    message: error.message,
+                    costBreakdown: meter.getBreakdown()
+                });
                 await updateForgeMetadata(jobId, buildForgeMetadata({
                     runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),
                     extra: { error: { step: step.id, code: error.code || 'INTERNAL', message: error.message } }
@@ -715,8 +810,10 @@ function createForgeRuntimeService(options = {}) {
                 await gapRegistry.appendLearningHistory(runRecord.expertName, {
                     trigger: runRecord.scope?.reason || 'manual',
                     scope: runRecord.scope || null,
+                    status: 'completed',
                     sources: sourceCount,
                     distilledFiles: distillMarker?.state?.writtenCount ?? 0,
+                    costCny: meter.getBreakdown().costSoFarCny,
                     jobId
                 });
                 // 进修完成 → 关闭相关 subskill 的 open 缺口（§3.8 触发 a 闭环）。
@@ -852,6 +949,14 @@ function createForgeRuntimeService(options = {}) {
                 const error = new Error(`未找到专家画像：Agent/forge/blueprints/${normalizedExpertName}.json（须先完成全量铸造）`);
                 error.status = 404;
                 error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            // 归档专家退役：不再接受新的进修（定期批次已在名单层排除，这里兜底手动发起）。
+            const expertArchive = readExpertArchive(baseDir, normalizedExpertName);
+            if (expertArchive) {
+                const error = new Error(`专家已归档（${expertArchive.archivedAt}）：不再接受新的进修；如确需继续学习，先解除归档`);
+                error.status = 409;
+                error.code = 'FORGE_EXPERT_ARCHIVED';
                 throw error;
             }
             const job = jobRuntimeService.createAcceptedJob({
@@ -1239,13 +1344,43 @@ function createForgeRuntimeService(options = {}) {
         async listOpenGaps(expertName) {
             return gapRegistry.listOpenGaps(normalizeString(expertName));
         },
+        // ── 专家归档（2026-10-14）──────────────────────────────────────────
+        // 归档 = 退役标记，不删除任何产物：定期进修的专家名单默认排除归档者
+        // （listExpertNames），新的 learn 一律 409 拒绝；缺口与学习档案仍可回看。
+        async archiveExpert(expertName, { reason = null, archivedBy = null } = {}) {
+            const name = normalizeString(expertName);
+            if (!name || !listExpertNames({ baseDir, includeArchived: true }).includes(name)) {
+                const error = new Error(`未知专家：${expertName || ''}（无缺口档案与画像）`);
+                error.status = 404;
+                error.code = 'AGW_NOT_FOUND';
+                throw error;
+            }
+            const marker = await writeExpertArchive(baseDir, name, { reason, archivedBy });
+            log('forge.expert.archived', { expertName: name, archivedAt: marker.archivedAt, reason: marker.reason || null });
+            return { expertName: name, archived: true, ...marker };
+        },
+        async unarchiveExpert(expertName) {
+            const name = normalizeString(expertName);
+            if (!name) {
+                const error = new Error('expertName 不能为空');
+                error.status = 400;
+                error.code = 'AGW_VALIDATION_ERROR';
+                throw error;
+            }
+            const removed = await removeExpertArchive(baseDir, name);
+            if (removed) {
+                log('forge.expert.unarchived', { expertName: name });
+            }
+            return { expertName: name, archived: false, removed };
+        },
         // ── 专家档案（2026-10-13，AdminPanel 只读视图）──────────────────────
         // 缺口与进修记录一直落在 Agent/forge/<name>/（gaps.json、
         // learning-history.jsonl），此前只有铸造师对话侧能看到；这里给管理面
         // 提供只读汇总与明细，不新增状态存储（与 §3.10 只读观察窗口同口径）。
         async listExperts() {
             const experts = [];
-            for (const name of listExpertNames({ baseDir })) {
+            // 只读展示面（AdminPanel）全量取，含已归档——归档专家仍可回看档案。
+            for (const name of listExpertNames({ baseDir, includeArchived: true })) {
                 let displayName = null;
                 try {
                     const blueprint = await readBlueprint(path.join(baseDir, 'blueprints', `${name}.json`));
@@ -1257,12 +1392,16 @@ function createForgeRuntimeService(options = {}) {
                     gapRegistry.readGaps(name),
                     gapRegistry.readLearningHistory(name)
                 ]);
+                const archive = readExpertArchive(baseDir, name);
                 experts.push({
                     expertName: name,
                     displayName,
+                    archived: Boolean(archive),
+                    archivedAt: archive?.archivedAt || null,
                     totalGaps: gaps.length,
                     openGaps: gaps.filter((gap) => gap?.status === 'open').length,
                     learningCount: history.length,
+                    failedCount: history.filter((entry) => entry?.status === 'failed').length,
                     lastLearningAt: history.length > 0 ? history[history.length - 1]?.ts || null : null
                 });
             }
@@ -1270,7 +1409,7 @@ function createForgeRuntimeService(options = {}) {
         },
         async getExpertRecord(expertName) {
             const name = normalizeString(expertName);
-            if (!name || !listExpertNames({ baseDir }).includes(name)) {
+            if (!name || !listExpertNames({ baseDir, includeArchived: true }).includes(name)) {
                 const error = new Error(`未知专家：${expertName || ''}（无缺口档案与画像）`);
                 error.status = 404;
                 error.code = 'AGW_NOT_FOUND';
@@ -1346,8 +1485,10 @@ module.exports = {
     FORGE_JOB_OPERATIONS,
     DEFAULT_BASE_DIR,
     DEFAULT_BUDGET_CNY,
+    DEFAULT_FORGE_LLM_TIMEOUT_MS,
     BudgetExceededError,
     JobCancelledError,
     resolveForgeLlmConfig,
+    resolveForgeLlmTimeoutMs,
     createForgeRuntimeService
 };

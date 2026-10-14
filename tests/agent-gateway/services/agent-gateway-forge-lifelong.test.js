@@ -33,20 +33,22 @@ const DISTILL_JSON = JSON.stringify({
     droppedSources: []
 });
 
-function buildEnv(baseDir) {
+function buildEnv(baseDir, options = {}) {
     const jobRuntimeService = createJobRuntimeService();
+    const defaultComplete = async (config, payload) => {
+        const content = payload.messages[0].content;
+        const output = (content.includes('知识蒸馏') || content.includes('材料清单'))
+            ? DISTILL_JSON
+            : 'answer';
+        return { data: { choices: [{ message: { content: output } }], usage: { prompt_tokens: 100, completion_tokens: 50 } } };
+    };
     const forgeRuntimeService = createForgeRuntimeService({
         jobRuntimeService,
         llmCompletionPort: {
             available: true,
-            complete: async (config, payload) => {
-                const content = payload.messages[0].content;
-                const output = (content.includes('知识蒸馏') || content.includes('材料清单'))
-                    ? DISTILL_JSON
-                    : 'answer';
-                return { data: { choices: [{ message: { content: output } }], usage: { prompt_tokens: 100, completion_tokens: 50 } } };
-            }
+            complete: options.llmComplete || defaultComplete
         },
+        ...(options.llmRetryPolicy ? { llmRetryPolicy: options.llmRetryPolicy } : {}),
         toolInvokerPort: {
             invoke: async () => ({ content: [{ type: 'text', text: '新材料\nhttps://fresh.example.com/new\n增量内容' }] })
         },
@@ -731,4 +733,216 @@ test('backendProxy tools/call：gateway_knowledge_search 经注册表标准 hand
     assert.equal(clientCalls.length, 1);
     assert.equal(clientCalls[0].agentId, 'Nexus');
     assert.equal(clientCalls[0].query, '色彩理论');
+});
+
+// ── 2026-10-14 缺陷回归：distill 单次 LLM 超时曾直接终止整个 job ──────────
+// （04:00 定期进修批次两个 learn job 均 ECONNABORTED 失败，且失败无任何档案痕迹）
+
+test('LLM 首次瞬时超时被退避重试救回：learn job 正常完成，档案为完成态', async () => {
+    const baseDir = createTempDir();
+    let calls = 0;
+    const env = buildEnv(baseDir, {
+        llmRetryPolicy: { retries: 2, baseDelayMs: 1 },
+        llmComplete: async () => {
+            calls += 1;
+            if (calls === 1) {
+                const error = new Error('timeout of 180000ms exceeded');
+                error.code = 'ECONNABORTED';
+                throw error;
+            }
+            return {
+                data: {
+                    choices: [{ message: { content: DISTILL_JSON } }],
+                    usage: { prompt_tokens: 100, completion_tokens: 50 }
+                }
+            };
+        }
+    });
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+
+    const { jobId } = await env.forgeRuntimeService.startExpertLearnJob({
+        expertName: 'UIDesigner',
+        scope: { reason: 'manual' }
+    });
+    await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.terminal);
+
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'completed', `一次超时后应重试救回：${JSON.stringify(job.error || null)}`);
+    assert.equal(calls, 2, '首次超时 + 重试成功 = 2 次物理调用');
+
+    const history = fs.readFileSync(path.join(baseDir, 'forge', 'UIDesigner', 'learning-history.jsonl'), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(history.length, 1);
+    assert.equal(history[0].status, 'completed');
+    assert.ok(history[0].costCny > 0, '完成档案记录费用');
+});
+
+test('LLM 持续超时：重试耗尽后 job 失败，但学习档案留 failed 条目（失败可见）且缺口不被误关', async () => {
+    const baseDir = createTempDir();
+    let calls = 0;
+    const env = buildEnv(baseDir, {
+        llmRetryPolicy: { retries: 1, baseDelayMs: 1 },
+        llmComplete: async () => {
+            calls += 1;
+            const error = new Error('timeout of 180000ms exceeded');
+            error.code = 'ECONNABORTED';
+            throw error;
+        }
+    });
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), blueprint());
+    await env.forgeRuntimeService.reportGap({
+        agentId: 'UIDesigner',
+        subskillId: 'color-theory',
+        question: '深色模式下的配色策略',
+        whyInsufficient: '库内无'
+    });
+
+    const { jobId } = await env.forgeRuntimeService.startExpertLearnJob({
+        expertName: 'UIDesigner',
+        scope: { subskillIds: ['color-theory'], reason: 'manual' }
+    });
+    await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.terminal);
+
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(calls, 2, '重试 1 次后放弃 = 2 次物理调用');
+
+    const history = fs.readFileSync(path.join(baseDir, 'forge', 'UIDesigner', 'learning-history.jsonl'), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(history.length, 1, '失败也留一条档案');
+    assert.equal(history[0].status, 'failed');
+    assert.equal(history[0].jobId, jobId);
+    assert.equal(history[0].error.step, 'distill');
+    assert.equal(history[0].error.code, 'ECONNABORTED');
+    assert.ok(history[0].error.message.includes('timeout'));
+
+    assert.equal(
+        (await env.forgeRuntimeService.listOpenGaps('UIDesigner')).length,
+        1,
+        '失败的进修不关闭缺口（闭环只认完成的进修）'
+    );
+
+    const experts = await env.forgeRuntimeService.listExperts();
+    assert.equal(experts.length, 1);
+    assert.equal(experts[0].failedCount, 1, '专家档案汇总可见失败次数');
+    assert.equal(experts[0].learningCount, 1);
+});
+
+// 缺陷回归（2026-10-14）：恢复期失败归档曾不幂等——每次服务实例化都给所有
+// 历史失败 run 补写一条档案（测试套件 41 次实例化刷出 249 条重复），
+// 面板与档案被垃圾淹没。规则：① 终态失败不补写；③ 中断只归档一次。
+test('重启恢复期的失败归档：终态失败不补写，中断 run 只归档一次（跨实例化幂等）', async () => {
+    const baseDir = createTempDir();
+    const forgeRoot = path.join(baseDir, 'forge');
+    await writeBlueprint(path.join(forgeRoot, 'blueprints', 'UIDesigner.json'), blueprint());
+
+    // ① 历史终态失败（此前的失败已经落过 finalStatus）：不补写
+    const terminalDir = path.join(forgeRoot, 'runs', 'job_terminal_failed');
+    fs.mkdirSync(terminalDir, { recursive: true });
+    fs.writeFileSync(path.join(terminalDir, 'run.json'), JSON.stringify({
+        jobId: 'job_terminal_failed',
+        jobKind: 'expert.learn',
+        expertName: 'UIDesigner',
+        scope: { reason: 'manual' },
+        finalStatus: 'failed',
+        cost: { costSoFarCny: 0.1 }
+    }));
+
+    // ③ 跑到一半进程消失（无 finalStatus）：归档一次
+    const interruptedDir = path.join(forgeRoot, 'runs', 'job_interrupted');
+    fs.mkdirSync(path.join(interruptedDir, 'steps'), { recursive: true });
+    fs.writeFileSync(path.join(interruptedDir, 'run.json'), JSON.stringify({
+        jobId: 'job_interrupted',
+        jobKind: 'expert.learn',
+        expertName: 'UIDesigner',
+        scope: { reason: 'scheduled-daily' },
+        cost: { costSoFarCny: 0.2 }
+    }));
+
+    const historyFile = path.join(forgeRoot, 'UIDesigner', 'learning-history.jsonl');
+    const readHistory = () => (fs.existsSync(historyFile)
+        ? fs.readFileSync(historyFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+        : []);
+
+    buildEnv(baseDir); // 第一次实例化 → 恢复并归档中断 run
+    await waitFor(() => readHistory().length === 1, 15000);
+    let history = readHistory();
+    assert.equal(history.length, 1, '终态失败不补写，只有中断 run 留档');
+    assert.equal(history[0].jobId, 'job_interrupted');
+    assert.equal(history[0].status, 'failed');
+    assert.equal(history[0].error.code, 'FORGE_RESTART_INTERRUPTED');
+    const runAfter = JSON.parse(fs.readFileSync(path.join(interruptedDir, 'run.json'), 'utf8'));
+    assert.ok(runAfter.learningArchive, '归档后写 learningArchive 标记');
+
+    buildEnv(baseDir); // 第二次实例化 → 标记兜底，不再重复归档
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    history = readHistory();
+    assert.equal(history.length, 1, '跨实例化幂等：不重复归档');
+});
+
+// 归档 / 退役（2026-10-14）：不再触发定期进修、不再接受新进修；档案仍可回看、可解除。
+test('专家归档：定期名单排除 / 新进修 409 / 档案可回看 / 工具边界 / 可解除', async () => {
+    const baseDir = createTempDir();
+    const env = buildEnv(baseDir);
+    const forgeRoot = path.join(baseDir, 'forge');
+    await writeBlueprint(path.join(forgeRoot, 'blueprints', 'UIDesigner.json'), blueprint());
+    // 名单枚举要求 <name>/ 目录存在（真实专家目录由缺口登记或进修档案创建）。
+    fs.mkdirSync(path.join(forgeRoot, 'UIDesigner'), { recursive: true });
+
+    const { listExpertNames } = require('../../../modules/agentGateway/services/forge/gapRegistry');
+    assert.deepEqual(listExpertNames({ baseDir: forgeRoot }), ['UIDesigner'], '归档前在名单内');
+
+    const archived = await env.forgeRuntimeService.archiveExpert('UIDesigner', { reason: '用户要求退役' });
+    assert.equal(archived.archived, true);
+    assert.ok(archived.archivedAt, '归档标记带时间');
+
+    assert.deepEqual(listExpertNames({ baseDir: forgeRoot }), [], '归档后定期进修名单排除（不再触发）');
+    assert.deepEqual(
+        listExpertNames({ baseDir: forgeRoot, includeArchived: true }),
+        ['UIDesigner'],
+        '只读展示面（AdminPanel）全量可见'
+    );
+
+    const experts = await env.forgeRuntimeService.listExperts();
+    assert.equal(experts[0].archived, true);
+    assert.ok(experts[0].archivedAt);
+    const record = await env.forgeRuntimeService.getExpertRecord('UIDesigner');
+    assert.equal(record.expertName, 'UIDesigner', '归档后档案仍可回看');
+
+    await assert.rejects(
+        env.forgeRuntimeService.startExpertLearnJob({ expertName: 'UIDesigner' }),
+        (error) => error.status === 409 && error.code === 'FORGE_EXPERT_ARCHIVED',
+        '归档专家拒绝新进修（手动发起兜底）'
+    );
+
+    // 工具边界：归档专家本人不再可见 gap_report（自报通道关闭）
+    const { filterGatewayToolsForAgent } = require('../../../modules/agentGateway/services/forge/toolAccess');
+    const visible = filterGatewayToolsForAgent(
+        [{ name: 'gateway_job_get' }, { name: 'gateway_gap_report' }],
+        'UIDesigner',
+        { baseDir: forgeRoot }
+    );
+    assert.deepEqual(visible.map((tool) => tool.name), ['gateway_job_get'], '归档专家不自报缺口');
+
+    // 定期调度：注入名单的默认口径（与生产接线同构）不再发起
+    const { createLifelongScheduler } = require('../../../modules/agentGateway/services/forge/lifelongScheduler');
+    const scheduler = createLifelongScheduler({
+        forgeRuntimeService: env.forgeRuntimeService,
+        gapRegistry: env.forgeRuntimeService.gapRegistry,
+        listExpertNames: () => listExpertNames({ baseDir: forgeRoot }),
+        env: { FORGE_LIFELONG_SCHEDULE: 'disabled', FORGE_LIFELONG_CRON: '' }
+    });
+    const launched = await scheduler.runScheduledLearning('scheduled-daily');
+    assert.equal(launched.length, 0, '归档专家不再触发定期进修');
+
+    // 解除归档：恢复名单与进修能力
+    const unarchived = await env.forgeRuntimeService.unarchiveExpert('UIDesigner');
+    assert.equal(unarchived.removed, true);
+    assert.deepEqual(listExpertNames({ baseDir: forgeRoot }), ['UIDesigner'], '解除归档后恢复在名单内');
+    const { jobId } = await env.forgeRuntimeService.startExpertLearnJob({
+        expertName: 'UIDesigner',
+        scope: { reason: 'manual' }
+    });
+    await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.terminal);
+    assert.equal(env.jobRuntimeService.pollJob(jobId, null).data.job.status, 'completed', '解除后可正常进修');
 });

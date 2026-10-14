@@ -13,13 +13,22 @@
           :key="expert.expertName"
           type="button"
           class="expert-item"
-          :class="{ 'expert-item--active': expert.expertName === selectedName }"
+          :class="{
+            'expert-item--active': expert.expertName === selectedName,
+            'expert-item--archived': expert.archived,
+          }"
           @click="selectExpert(expert.expertName)"
         >
           <span class="expert-item__name">{{ expert.displayName || expert.expertName }}</span>
           <span class="expert-item__meta">
+            <UiBadge v-if="expert.archived" variant="outline" :title="`归档于 ${formatTime(expert.archivedAt)}，不再触发定期进修`">
+              已归档
+            </UiBadge>
             <UiBadge :variant="expert.openGaps > 0 ? 'warning' : 'outline'">
               {{ expert.openGaps }} 未关闭缺口
+            </UiBadge>
+            <UiBadge v-if="expert.failedCount > 0" variant="danger">
+              {{ expert.failedCount }} 次失败
             </UiBadge>
             <small>
               进修 {{ expert.learningCount }} 次 · {{ formatTime(expert.lastLearningAt) }}
@@ -39,6 +48,13 @@
           <header class="detail-head">
             <h3>{{ record?.displayName || selectedName }}</h3>
             <span class="mono-cell muted-text">{{ selectedName }}</span>
+            <UiBadge
+              v-if="selectedExpert?.archived"
+              variant="outline"
+              :title="`归档于 ${formatTime(selectedExpert.archivedAt)}`"
+            >
+              已归档（不再触发定期进修）
+            </UiBadge>
           </header>
 
           <section class="detail-block">
@@ -95,9 +111,10 @@
               <thead>
                 <tr>
                   <th>时间</th>
+                  <th>状态</th>
                   <th>触发</th>
                   <th>范围</th>
-                  <th>来源 / 入库</th>
+                  <th>结果 / 失败原因</th>
                   <th>任务</th>
                 </tr>
               </thead>
@@ -105,10 +122,26 @@
                 <tr v-for="entry in learningRows" :key="`${entry.ts}-${entry.jobId || ''}`">
                   <td class="mono-cell">{{ formatTime(entry.ts) }}</td>
                   <td>
+                    <UiBadge :variant="entry.status === 'failed' ? 'danger' : 'success'">
+                      {{ entry.status === 'failed' ? '失败' : '完成' }}
+                    </UiBadge>
+                  </td>
+                  <td>
                     <UiBadge :variant="triggerVariant(entry.trigger)">{{ triggerLabel(entry.trigger) }}</UiBadge>
                   </td>
                   <td class="wrap-cell" :title="scopeTitle(entry.scope)">{{ scopeLabel(entry.scope) }}</td>
-                  <td>{{ entry.sources }} 来源 / {{ entry.distilledFiles }} 卡</td>
+                  <td class="wrap-cell">
+                    <template v-if="entry.status === 'failed'">
+                      <span class="danger-text mono-cell">{{ entry.error?.code || 'FAILED' }}</span>
+                      <p class="cell-sub" :title="entry.error?.message || ''">
+                        {{ entry.error?.step ? `[${entry.error.step}] ` : '' }}{{ entry.error?.message || '未知原因' }}
+                      </p>
+                    </template>
+                    <template v-else>
+                      <span>{{ entry.sources }} 来源 / {{ entry.distilledFiles }} 卡</span>
+                      <p v-if="entry.costCny != null" class="cell-sub">¥{{ Number(entry.costCny).toFixed(2) }}</p>
+                    </template>
+                  </td>
                   <td>
                     <RouterLink
                       v-if="entry.jobId"
@@ -204,6 +237,10 @@ const learningRows = computed(() => {
 });
 
 const openGapCount = computed(() => (record.value?.gaps || []).filter((gap) => gap.status === "open").length);
+
+const selectedExpert = computed(
+  () => experts.value.find((expert) => expert.expertName === selectedName.value) || null
+);
 
 const TRIGGER_LABELS: Record<string, string> = {
   manual: "手动",
@@ -311,6 +348,10 @@ function formatTime(iso: string | null | undefined) {
 .expert-item--active {
   border-color: var(--accent, #3b82f6);
   background: var(--surface-muted, rgba(127, 127, 127, 0.08));
+}
+
+.expert-item--archived .expert-item__name {
+  opacity: 0.65;
 }
 
 .expert-item__name {

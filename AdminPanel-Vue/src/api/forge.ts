@@ -129,17 +129,29 @@ export interface ForgeLearningEntry {
   ts: string;
   trigger: string | null;
   scope: ForgeLearningScope | null;
+  /** 缺省视为 completed（2026-10-14 之前的历史条目无此字段）。 */
+  status?: "completed" | "failed";
+  error?: {
+    step?: string | null;
+    code?: string | null;
+    message?: string | null;
+  } | null;
   sources: number;
   distilledFiles: number;
+  costCny?: number | null;
   jobId: string | null;
 }
 
 export interface ForgeExpertSummary {
   expertName: string;
   displayName: string | null;
+  /** 归档 = 退役：不再被定期进修触发、不再接受新进修；档案仍可回看。 */
+  archived: boolean;
+  archivedAt: string | null;
   totalGaps: number;
   openGaps: number;
   learningCount: number;
+  failedCount: number;
   lastLearningAt: string | null;
 }
 

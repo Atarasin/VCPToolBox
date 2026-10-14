@@ -31,15 +31,19 @@ function createForgeAccessError(toolName, message, details) {
     return error;
 }
 
-// 已铸造专家判定：Agent/forge/blueprints/<agentId>.json 存在（动态——铸造
-// 完成画像落盘后，下次 tools/list 即可见；isForgedExpert/baseDir 可注入供测试）。
+// 已铸造专家判定：Agent/forge/blueprints/<agentId>.json 存在且未归档（动态——
+// 铸造完成画像落盘后，下次 tools/list 即可见；归档后视为退役，gap_report 不再
+// 对本人开放；isForgedExpert/baseDir 可注入供测试）。
 function defaultIsForgedExpert(baseDir) {
     const root = baseDir
         || (process.env.FORGE_BASE_DIR || '').trim()
         || path.join(__dirname, '..', '..', '..', '..', 'Agent', 'forge');
     return (agentId) => {
         const name = String(agentId || '').trim();
-        return Boolean(name) && fs.existsSync(path.join(root, 'blueprints', `${name}.json`));
+        if (!name || !fs.existsSync(path.join(root, 'blueprints', `${name}.json`))) {
+            return false;
+        }
+        return !fs.existsSync(path.join(root, name, 'archived.json'));
     };
 }
 
