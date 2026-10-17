@@ -136,6 +136,9 @@
                       <p class="cell-sub" :title="entry.error?.message || ''">
                         {{ entry.error?.step ? `[${entry.error.step}] ` : '' }}{{ entry.error?.message || '未知原因' }}
                       </p>
+                      <p v-if="entry.distilledFiles > 0" class="cell-sub">
+                        已写盘 {{ entry.distilledFiles }} 个新文件<template v-if="entry.partial?.mergedCount"> / {{ entry.partial.mergedCount }} 次合并</template>（部分入库，产物保留）
+                      </p>
                     </template>
                     <template v-else>
                       <span>{{ entry.sources }} 来源 / {{ entry.distilledFiles }} 卡</span>

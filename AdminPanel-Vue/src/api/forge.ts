@@ -137,7 +137,10 @@ export interface ForgeLearningEntry {
     message?: string | null;
   } | null;
   sources: number;
+  /** 失败条目也可能 >0：失败步骤已完成的部分入库（2026-10-17 起带回）。 */
   distilledFiles: number;
+  /** 失败步骤的部分进度明细（仅部分入库的失败条目有）。 */
+  partial?: { writtenCount: number; mergedCount: number } | null;
   costCny?: number | null;
   jobId: string | null;
 }
