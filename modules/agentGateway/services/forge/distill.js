@@ -5,7 +5,8 @@ const path = require('path');
 
 const { readBlueprint, blueprintLibraryName } = require('./blueprint');
 const { createKnowledgeWriter } = require('./knowledgeWriter');
-const { extractJsonObject, salvageTruncatedPayload } = require('./jsonUtils');
+const { salvageTruncatedPayload } = require('./jsonUtils');
+const { completeJsonResilient, describeAttemptFailure, resolveThinkingMode } = require('./jsonCompletion');
 
 /**
  * 蒸馏（distill）步骤：原始材料 → 知识单元 → knowledge/<库名>/ 落盘 → 冒烟可检索验证。
@@ -20,9 +21,18 @@ const { extractJsonObject, salvageTruncatedPayload } = require('./jsonUtils');
  * 截断韧性（2026-10-11 事故：两单 distill 连续败于 max_tokens=8000 截断，
  * 模型对 10 份材料的单次蒸馏输出稳定超限）：
  * - 材料按批（默认 4 份/批）分次蒸馏，单次输出预算减半以上；
- * - 输出整体不可解析时先尝试「抢救完整知识单元」，再考虑同 prompt 重试；
- * - finish_reason=length 且批内多份材料时拆半重蒸（同 prompt 重试大概率
- *   再次截断）；彻底失败前把原始输出留档 distill-failed/ 供事后诊断。
+ * - 输出整体不可解析时先尝试「抢救完整知识单元」，再考虑重试；
+ * - 有正文但 finish_reason=length 且批内多份材料时拆半重蒸（批太大，拆小
+ *   比抬预算对症）；彻底失败前把原始输出留档 distill-failed/ 供事后诊断。
+ *
+ * 空正文韧性（2026-10-17 事故：定期进修 distill 三次尝试 reasoning_tokens
+ * 7467/6119/7247、正文 0 字符，整单报废）：
+ * - 蒸馏是纯抽取/结构化任务，缺省关思考（thinking.type=disabled，
+ *   FORGE_DISTILL_THINKING=enabled 可改回）——思考段曾把 8000 预算吃光；
+ * - 正文为空/被截断时经 jsonCompletion 的阶梯抬预算重试（8k → 16k），
+ *   正文为空且推理段有内容时从推理段抢救；
+ * - 全部尝试正文为空抛 FORGE_LLM_EMPTY_CONTENT（与「不可解析」分开报），
+ *   失败也把已写盘进度带回（部分入库的卡片不会被记成 0）。
  */
 
 const FALLBACK_DISTILL_TEMPLATE = `你是知识蒸馏引擎。从原始检索材料中蒸馏结构化知识单元（子技能：{{subskillTitle}}）。
@@ -42,7 +52,14 @@ const SMOKE_RETRY_INTERVAL_MS = 3000;
 const DEFAULT_BATCH_MATERIALS = 4;
 // 拆半递归上限：4 份 → 2 → 1，深度 3 足够；防异常配置下无限递归。
 const MAX_BATCH_HALVING_DEPTH = 3;
+const DISTILL_MAX_ATTEMPTS = 3;
 const DISTILL_MAX_TOKENS = 8000;
+// 抬预算重试：正文为空/单材料被截断时给同一批更多输出空间（关思考后 16k
+// 已是缺省 4k 产出的四倍余量）；供应商拒收则回落 12000。
+const DISTILL_RETRY_MAX_TOKENS = 16000;
+const DISTILL_RETRY_FALLBACK_TOKENS = 12000;
+// 重试指令：旧实现是「同 prompt 重试」，空正文/截断时补一句强指令提高成功率。
+const DISTILL_RETRY_NOTE = '\n\n【重试要求】上一次输出不可用（正文为空或被截断）。请直接输出 JSON 本体：不要输出推理过程、分析或解释文字；只输出一个完整可解析的 JSON 对象，不要代码围栏。';
 
 function chunkMaterials(materials, batchSize) {
     const size = Math.max(1, batchSize);
@@ -137,69 +154,111 @@ async function dumpDistillFailure(runDir, subskill, batch, attempts, promptPrevi
 }
 
 /**
- * 单批材料的蒸馏 LLM 调用与解析策略：
- * 整体解析 → 抢救完整单元 → （finish_reason=length 且批内多份材料）拆半重蒸
- * → 同 prompt 重试一次 → 留档并抛 FORGE_DISTILL_OUTPUT_INVALID。
- * 返回 { knowledgeUnits, droppedSources, salvaged }。
+ * 单批材料的蒸馏 LLM 调用与解析策略（2026-10-17 起走 jsonCompletion 阶梯）：
+ * 整体解析 → 抢救完整单元 → 从推理段抢救（正文为空时）→ 抬预算重试；
+ * finish_reason=length 且批内多份材料时立即拆半重蒸（该形态同 prompt 抬预算
+ * 只会重蒸同一批大材料，拆半更便宜）；彻底失败留档并抛
+ * FORGE_LLM_EMPTY_CONTENT（全空正文）或 FORGE_DISTILL_OUTPUT_INVALID。
+ * 返回 { knowledgeUnits, droppedSources, salvaged, salvagedFrom }。
  */
 async function distillMaterialBatch({ subskill, batch, template, llm, llmConfig, logger, runDir, existingCardTitles, depth = 0 }) {
     const prompt = renderTemplate(template, { subskill, materials: batch, existingCardTitles });
-    const completeOnce = async () => llm.complete(llmConfig, {
-        model: llmConfig.model,
-        messages: [{ role: 'user', content: prompt }],
+    const halvingEligible = batch.length > 1 && depth < MAX_BATCH_HALVING_DEPTH;
+    const result = await completeJsonResilient({
+        llm,
+        llmConfig,
+        prompt,
         temperature: 0.2,
-        max_tokens: DISTILL_MAX_TOKENS
+        label: `distill: subskill ${subskill.id}`,
+        logger,
+        maxTokens: DISTILL_MAX_TOKENS,
+        retryMaxTokens: DISTILL_RETRY_MAX_TOKENS,
+        retryFallbackTokens: DISTILL_RETRY_FALLBACK_TOKENS,
+        maxAttempts: DISTILL_MAX_ATTEMPTS,
+        retryNote: DISTILL_RETRY_NOTE,
+        thinking: resolveThinkingMode('FORGE_DISTILL_THINKING', 'disabled'),
+        validate: (payload) => Boolean(payload) && Array.isArray(payload.knowledgeUnits),
+        salvage: (text) => salvageTruncatedPayload(text),
+        // 有正文但被截断且可拆半：中止阶梯，交给拆半重蒸（保留 2026-10-11 的原始
+        // 判据——批太大，拆小比抬预算对症）；「正文为空」不走拆半：那是推理段/
+        // 输出预算的问题，抬预算才对症。
+        onAttempt: (attempt) => (attempt.finishReason === 'length' && !attempt.blank && halvingEligible ? 'stop' : undefined)
     });
-    const attempts = [];
-    const maxAttempts = 3;
-    for (let index = 1; index <= maxAttempts; index += 1) {
-        const response = await completeOnce();
-        const choice = response?.data?.choices?.[0];
-        const content = choice?.message?.content || '';
-        const finishReason = choice?.finish_reason || null;
 
-        const payload = extractJsonObject(content);
-        if (payload && Array.isArray(payload.knowledgeUnits)) {
-            return { knowledgeUnits: payload.knowledgeUnits, droppedSources: payload.droppedSources, salvaged: false };
+    if (result.payload) {
+        const units = result.payload.knowledgeUnits;
+        if (result.salvagedFrom) {
+            logger?.(`distill: subskill ${subskill.id} 从${result.salvagedFrom.startsWith('reasoning') ? '推理段' : '截断输出'}抢救出 ${units.length} 个完整知识单元`);
         }
+        return {
+            knowledgeUnits: units,
+            droppedSources: result.payload.droppedSources,
+            salvaged: Boolean(result.salvagedFrom),
+            salvagedFrom: result.salvagedFrom
+        };
+    }
 
-        // 整体不可解析：先抢救完整单元（截断只损失被切开的那个尾单元）。
-        const salvaged = salvageTruncatedPayload(content);
-        if (salvaged) {
-            logger?.(`distill: subskill ${subskill.id} 输出整体不可解析（finish_reason=${finishReason ?? 'unknown'}），抢救出 ${salvaged.knowledgeUnits.length} 个完整知识单元`);
-            return { knowledgeUnits: salvaged.knowledgeUnits, droppedSources: salvaged.droppedSources, salvaged: true };
+    if (result.halted && halvingEligible) {
+        const mid = Math.ceil(batch.length / 2);
+        logger?.(`distill: subskill ${subskill.id} 批输出被截断（finish_reason=length），拆半重蒸（${mid}+${batch.length - mid} 份）`);
+        const merged = { knowledgeUnits: [], droppedSources: [], salvaged: false, salvagedFrom: null };
+        for (const half of [batch.slice(0, mid), batch.slice(mid)]) {
+            const part = await distillMaterialBatch({
+                subskill, batch: half, template, llm, llmConfig, logger, runDir,
+                existingCardTitles, depth: depth + 1
+            });
+            merged.knowledgeUnits.push(...part.knowledgeUnits);
+            merged.droppedSources.push(...part.droppedSources);
+            merged.salvaged = merged.salvaged || part.salvaged;
+            merged.salvagedFrom = merged.salvagedFrom || part.salvagedFrom;
         }
+        return merged;
+    }
 
-        attempts.push({ index, finishReason, usage: response?.data?.usage ?? null, content });
+    await dumpDistillFailure(runDir, subskill, batch, result.attempts, prompt.slice(0, 2000));
+    const failure = describeAttemptFailure(result.attempts);
+    const emptyContent = result.failureReason === 'empty-content';
+    const error = new Error(
+        `subskill ${subskill.id} 蒸馏${failure.summary}（已尝试 ${result.attempts.length} 次：${attemptsBudgetNote(result.attempts)}；原始输出已留档 distill-failed/）`
+    );
+    error.code = emptyContent ? 'FORGE_LLM_EMPTY_CONTENT' : 'FORGE_DISTILL_OUTPUT_INVALID';
+    error.status = 502;
+    error.details = {
+        subskillId: subskill.id,
+        batchUrls: batch.map((material) => material.url),
+        finishReasons: failure.finishReasons,
+        reasoningTokens: failure.reasoningTokens,
+        blankAttempts: failure.blankCount
+    };
+    throw error;
+}
 
-        // 确认截断且批内多份材料：同 prompt 重试大概率再次截断，拆半各蒸一次。
-        if (finishReason === 'length' && batch.length > 1 && depth < MAX_BATCH_HALVING_DEPTH) {
-            const mid = Math.ceil(batch.length / 2);
-            logger?.(`distill: subskill ${subskill.id} 批输出被截断（finish_reason=length），拆半重蒸（${mid}+${batch.length - mid} 份）`);
-            const merged = { knowledgeUnits: [], droppedSources: [], salvaged: false };
-            for (const half of [batch.slice(0, mid), batch.slice(mid)]) {
-                const part = await distillMaterialBatch({
-                    subskill, batch: half, template, llm, llmConfig, logger, runDir,
-                    existingCardTitles, depth: depth + 1
-                });
-                merged.knowledgeUnits.push(...part.knowledgeUnits);
-                merged.droppedSources.push(...part.droppedSources);
-                merged.salvaged = merged.salvaged || part.salvaged;
-            }
-            return merged;
-        }
-
-        if (index < maxAttempts) {
-            logger?.(`distill: subskill ${subskill.id} 输出不可解析（finish_reason=${finishReason ?? 'unknown'}），重试（${index}/${maxAttempts - 1}）`);
+// 尝试预算轨迹（8k→16k 这类抬升在错误消息里可辨）。
+function attemptsBudgetNote(attempts) {
+    const budgets = [];
+    for (const attempt of attempts) {
+        if (budgets[budgets.length - 1] !== attempt.maxTokens) {
+            budgets.push(attempt.maxTokens);
         }
     }
-    await dumpDistillFailure(runDir, subskill, batch, attempts, prompt.slice(0, 2000));
-    const error = new Error(
-        `subskill ${subskill.id} 蒸馏输出不可解析（已重试 ${attempts.length - 1} 次；finish_reason=${attempts.map((a) => a.finishReason ?? 'unknown').join('/')}，原始输出已留档 distill-failed/）`
-    );
-    error.code = 'FORGE_DISTILL_OUTPUT_INVALID';
-    error.status = 502;
-    throw error;
+    return `预算 ${budgets.join('→')}，finish_reason=${attempts.map((a) => a.finishReason ?? 'unknown').join('/')}`;
+}
+
+// 质量过滤丢弃留档（§3.4）：成功与失败路径共用——失败时一并写，丢弃理由不丢。
+async function recordDroppedSources(runDir, libraryName, dropped, stamp) {
+    if (!Array.isArray(dropped) || dropped.length === 0) {
+        return;
+    }
+    try {
+        await fsp.mkdir(runDir, { recursive: true });
+        await fsp.writeFile(
+            path.join(runDir, 'distill-dropped.json'),
+            `${JSON.stringify({ libraryName, dropped, droppedAt: stamp }, null, 2)}\n`,
+            'utf8'
+        );
+    } catch {
+        // 留档尽力而为，不掩盖原始错误。
+    }
 }
 
 async function smokeSearchLibrary(knowledgeStorePort, { libraryName, query, logger, retries = SMOKE_RETRY_COUNT, intervalMs = SMOKE_RETRY_INTERVAL_MS }) {
@@ -219,9 +278,9 @@ async function smokeSearchLibrary(knowledgeStorePort, { libraryName, query, logg
     for (let attempt = 1; attempt <= retries; attempt += 1) {
         try {
             const hits = await knowledgeStorePort.search(query, { libraries: [libraryName], topK: 3 });
-            if (Array.isArray(hits) && hits.length > 0) {
-                return { skipped: false, verified: true, hits: hits.length, query };
-            }
+                if (Array.isArray(hits) && hits.length > 0) {
+                    return { skipped: false, verified: true, hits: hits.length, query };
+                }
         } catch (error) {
             logger?.(`smoke: 查询失败（第 ${attempt} 次）：${error.message}`);
         }
@@ -276,95 +335,107 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
         const targetSubskills = scopeIds
             ? blueprint.subskills.filter((subskill) => scopeIds.includes(subskill.id))
             : blueprint.subskills;
-        for (const subskill of targetSubskills) {
-            const materials = await readRawMaterials(runDir, subskill.id);
-            if (materials.length === 0) {
-                logger?.(`distill: subskill ${subskill.id} 无原始材料，跳过（增量学习 scope 外或采集为空）`);
-                continue;
+        try {
+            for (const subskill of targetSubskills) {
+                const materials = await readRawMaterials(runDir, subskill.id);
+                if (materials.length === 0) {
+                    logger?.(`distill: subskill ${subskill.id} 无原始材料，跳过（增量学习 scope 外或采集为空）`);
+                    continue;
+                }
+
+                // 材料分批：压低单次 LLM 输出体量，避免 max_tokens 截断
+                //（2026-10-11 两单连续败于 10 份材料单次蒸馏超限）。
+                for (const batch of chunkMaterials(materials, batchMaterials)) {
+                    // 批间刷新既有卡：跨批同义知识点仍走 mergeInto 合并而非新建。
+                    const existingCards = writer.listCards();
+                    const payload = await distillMaterialBatch({
+                        subskill,
+                        batch,
+                        template,
+                        llm,
+                        llmConfig,
+                        logger,
+                        runDir,
+                        existingCardTitles: existingCards.map((card) => card.title)
+                    });
+                    if (payload.salvaged) {
+                        salvagedBatches.push({ subskillId: subskill.id, units: payload.knowledgeUnits.length });
+                    }
+
+                    // 红线 4 白名单：sourceUrls 只认本批材料的 URL——LLM 幻觉出的
+                    // 「貌似可信」来源一律降级进 dropped，不混入知识卡。
+                    const materialUrlToFetchedAt = new Map(materials.map((material) => [material.url, material.fetchedAt]));
+                    const titleToCard = new Map(existingCards.map((card) => [card.title, card.file]));
+                    for (const unit of payload.knowledgeUnits) {
+                        if (!unit || !UNIT_TYPES.has(unit.type) || !unit.title || !unit.content) {
+                            logger?.(`distill: 丢弃格式非法的知识单元：${JSON.stringify(unit?.title || unit)}`);
+                            continue;
+                        }
+                        const declared = Array.isArray(unit.sourceUrls) ? unit.sourceUrls.filter(Boolean) : [];
+                        const fabricated = declared.filter((url) => !materialUrlToFetchedAt.has(url));
+                        for (const url of fabricated) {
+                            dropped.push({ url, reason: `LLM 声称的来源不在材料清单中（疑似编造），已剔除（红线 4）` });
+                        }
+                        const sourceUrls = declared.filter((url) => materialUrlToFetchedAt.has(url));
+                        if (sourceUrls.length === 0) {
+                            dropped.push({ url: '(no source)', reason: `知识单元「${unit.title}」无有效出处，不入库（红线 4）` });
+                            continue;
+                        }
+                        const normalized = { ...unit, sourceUrls };
+
+                        if (unit.mergeInto && titleToCard.has(unit.mergeInto)) {
+                            const mergeResult = await writer.mergeSources(titleToCard.get(unit.mergeInto), sourceUrls, {
+                                fetchedAtByUrl: materialUrlToFetchedAt,
+                                defaultFetchedAt: fetchedAt
+                            });
+                            merged.push({ into: unit.mergeInto, addedSources: mergeResult.addedCount });
+                            continue;
+                        }
+                        // D2 分流：methodology → 长文档；其余 → 知识卡。
+                        if (normalized.type === 'methodology') {
+                            const result = await writer.writeLongDoc(normalized, {
+                                fetchedAtByUrl: materialUrlToFetchedAt,
+                                defaultFetchedAt: fetchedAt
+                            });
+                            written.push(result);
+                        } else {
+                            const result = await writer.writeCard(normalized, {
+                                subskillId: subskill.id,
+                                fetchedAtByUrl: materialUrlToFetchedAt,
+                                defaultFetchedAt: fetchedAt
+                            });
+                            written.push(result);
+                        }
+                    }
+
+                    for (const drop of Array.isArray(payload.droppedSources) ? payload.droppedSources : []) {
+                        if (drop && drop.url) {
+                            dropped.push({ url: drop.url, reason: drop.reason || '质量过滤' });
+                        }
+                    }
+                }
             }
-
-            // 材料分批：压低单次 LLM 输出体量，避免 max_tokens 截断
-            //（2026-10-11 两单连续败于 10 份材料单次蒸馏超限）。
-            for (const batch of chunkMaterials(materials, batchMaterials)) {
-                // 批间刷新既有卡：跨批同义知识点仍走 mergeInto 合并而非新建。
-                const existingCards = writer.listCards();
-                const payload = await distillMaterialBatch({
-                    subskill,
-                    batch,
-                    template,
-                    llm,
-                    llmConfig,
-                    logger,
-                    runDir,
-                    existingCardTitles: existingCards.map((card) => card.title)
-                });
-                if (payload.salvaged) {
-                    salvagedBatches.push({ subskillId: subskill.id, units: payload.knowledgeUnits.length });
-                }
-
-                // 红线 4 白名单：sourceUrls 只认本批材料的 URL——LLM 幻觉出的
-                // 「貌似可信」来源一律降级进 dropped，不混入知识卡。
-                const materialUrlToFetchedAt = new Map(materials.map((material) => [material.url, material.fetchedAt]));
-                const titleToCard = new Map(existingCards.map((card) => [card.title, card.file]));
-                for (const unit of payload.knowledgeUnits) {
-                    if (!unit || !UNIT_TYPES.has(unit.type) || !unit.title || !unit.content) {
-                        logger?.(`distill: 丢弃格式非法的知识单元：${JSON.stringify(unit?.title || unit)}`);
-                        continue;
-                    }
-                    const declared = Array.isArray(unit.sourceUrls) ? unit.sourceUrls.filter(Boolean) : [];
-                    const fabricated = declared.filter((url) => !materialUrlToFetchedAt.has(url));
-                    for (const url of fabricated) {
-                        dropped.push({ url, reason: `LLM 声称的来源不在材料清单中（疑似编造），已剔除（红线 4）` });
-                    }
-                    const sourceUrls = declared.filter((url) => materialUrlToFetchedAt.has(url));
-                    if (sourceUrls.length === 0) {
-                        dropped.push({ url: '(no source)', reason: `知识单元「${unit.title}」无有效出处，不入库（红线 4）` });
-                        continue;
-                    }
-                    const normalized = { ...unit, sourceUrls };
-
-                    if (unit.mergeInto && titleToCard.has(unit.mergeInto)) {
-                        const mergeResult = await writer.mergeSources(titleToCard.get(unit.mergeInto), sourceUrls, {
-                            fetchedAtByUrl: materialUrlToFetchedAt,
-                            defaultFetchedAt: fetchedAt
-                        });
-                        merged.push({ into: unit.mergeInto, addedSources: mergeResult.addedCount });
-                        continue;
-                    }
-                    // D2 分流：methodology → 长文档；其余 → 知识卡。
-                    if (normalized.type === 'methodology') {
-                        const result = await writer.writeLongDoc(normalized, {
-                            fetchedAtByUrl: materialUrlToFetchedAt,
-                            defaultFetchedAt: fetchedAt
-                        });
-                        written.push(result);
-                    } else {
-                        const result = await writer.writeCard(normalized, {
-                            subskillId: subskill.id,
-                            fetchedAtByUrl: materialUrlToFetchedAt,
-                            defaultFetchedAt: fetchedAt
-                        });
-                        written.push(result);
-                    }
-                }
-
-                for (const drop of Array.isArray(payload.droppedSources) ? payload.droppedSources : []) {
-                    if (drop && drop.url) {
-                        dropped.push({ url: drop.url, reason: drop.reason || '质量过滤' });
-                    }
-                }
+        } catch (error) {
+            // 部分入库留痕（2026-10-17）：蒸馏边蒸边写盘，失败时前面已完成的子技能
+            // 卡片其实已经落盘，但步骤 marker 不落——此前学习档案一律记
+            // distilledFiles: 0，面板看起来整批白跑（实测失败单已写 11 个文件却记 0）。
+            // 把已写盘进度带回错误里（学习档案/面板据此显示部分入库），产物不动。
+            const partial = {
+                writtenCount: written.length,
+                mergedCount: merged.length,
+                droppedCount: dropped.length,
+                writtenFiles: written.map((item) => item.fileName)
+            };
+            error.details = { ...(error.details || {}), partial };
+            if (written.length > 0 || merged.length > 0) {
+                error.message = `${error.message}（该步骤已完成部分入库：${written.length} 个新文件 / ${merged.length} 次合并，已落盘产物保留）`;
             }
+            await recordDroppedSources(runDir, libraryName, dropped, fetchedAt);
+            throw error;
         }
 
         // 质量过滤丢弃留档（§3.4）。
-        if (dropped.length > 0) {
-            await fsp.mkdir(runDir, { recursive: true });
-            await fsp.writeFile(
-                path.join(runDir, 'distill-dropped.json'),
-                `${JSON.stringify({ libraryName, dropped, droppedAt: fetchedAt }, null, 2)}\n`,
-                'utf8'
-            );
-        }
+        await recordDroppedSources(runDir, libraryName, dropped, fetchedAt);
 
         // 入库验证（§3.4：写后 gateway_knowledge_search 冒烟查询新库；此处经
         // knowledgeStorePort 同源调用 TDB，权限层在 MCP 工具面，M3.S2 绑定）。

@@ -441,20 +441,27 @@ function createForgeRuntimeService(options = {}) {
     // 否则失败在档案里完全不可见，会被长期误读为「定期进修没有触发」。
     // 失败的进修不关闭缺口（闭环只认完成的进修）。
     // 幂等：归档后写 run.json 的 learningArchive 标记，跨重启/多次实例化只写一次。
-    async function recordLearnFailureArchive(runRecord, jobId, { step = null, code = null, message = null, costBreakdown = null } = {}) {
+    // partial（2026-10-17）：失败步骤带回的部分进度——distill 边蒸边写盘，失败时
+    // 前面已完成子技能的卡片其实已落盘，此前一律记 distilledFiles: 0，面板看起来
+    // 整批白跑（实测失败单已写 11 个文件却记 0）。
+    async function recordLearnFailureArchive(runRecord, jobId, { step = null, code = null, message = null, costBreakdown = null, partial = null } = {}) {
         if (runRecord?.jobKind !== 'expert.learn' || !runRecord.expertName) {
             return false;
         }
         try {
             const harvestMarker = await runStore.readStepMarker(jobId, 'harvest');
             const sourceCount = (harvestMarker?.state?.manifests || []).reduce((sum, m) => sum + (m.materials || 0), 0);
+            const writtenCount = Number(partial?.writtenCount) || 0;
             await gapRegistry.appendLearningHistory(runRecord.expertName, {
                 trigger: runRecord.scope?.reason || 'manual',
                 scope: runRecord.scope || null,
                 status: 'failed',
                 error: { step, code, message },
                 sources: sourceCount,
-                distilledFiles: 0,
+                distilledFiles: writtenCount,
+                ...(writtenCount > 0
+                    ? { partial: { writtenCount, mergedCount: Number(partial?.mergedCount) || 0 } }
+                    : {}),
                 costCny: Number(costBreakdown?.costSoFarCny) || 0,
                 jobId
             });
@@ -784,7 +791,10 @@ function createForgeRuntimeService(options = {}) {
                     step: step.id,
                     code: error.code || 'INTERNAL',
                     message: error.message,
-                    costBreakdown: meter.getBreakdown()
+                    costBreakdown: meter.getBreakdown(),
+                    // 失败步骤带回的部分进度（distill 已写盘的卡片数），档案/面板据此
+                    // 显示「部分入库」而不是 0（2026-10-17）。
+                    partial: error.details?.partial || null
                 });
                 await updateForgeMetadata(jobId, buildForgeMetadata({
                     runRecord, steps, completedSteps: markers, currentStep: null, costBreakdown: meter.getBreakdown(),

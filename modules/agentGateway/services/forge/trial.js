@@ -6,7 +6,12 @@ const path = require('path');
 const crypto = require('crypto');
 
 const { readBlueprint, blueprintLibraryName } = require('./blueprint');
-const { extractJsonObject, extractCompleteArrayObjects } = require('./jsonUtils');
+const { extractCompleteArrayObjects } = require('./jsonUtils');
+const {
+    completeJsonResilient: completeJsonLadder,
+    describeAttemptFailure,
+    resolveThinkingMode
+} = require('./jsonCompletion');
 const { scanTextForSecrets } = require('./secretScan');
 
 /**
@@ -27,15 +32,26 @@ const { scanTextForSecrets } = require('./secretScan');
  *   exams/comparison.json；jevPort 未配置记 skipped 原因（不阻断）。
  *
  * 解析韧性：出题/判卷共用 completeJsonResilient——整体解析 → 抢救完整数组
- * 元素 → 同 prompt 重试（共 3 次尝试）；彻底失败前原始输出留档
- * runDir/trial-failed/ 供事后诊断（与 distill-failed/ 同构）。
+ * 元素 → 推理段兜底（正文为空时）→ 抬预算重试（8k → 32k）；彻底失败前原始
+ * 输出留档 runDir/trial-failed/ 供事后诊断（与 distill-failed/ 同构）。
+ * 判卷另有分块拆小重判（2026-10-17）：块输出整体不可用时按题拆半重判，而不是
+ * 整单失败——覆盖轮（补判）继续兜底仍缺失的题。
  */
 
 const PASS_RATIO = 0.8;
 const GRADE_DIMENSIONS = ['correctness', 'completeness', 'professionalism', 'antiAiFlavor', 'actionability'];
 const TRIAL_MAX_ATTEMPTS = 3;
 const TRIAL_MAX_TOKENS = 8000;
+// 抬预算重试：判卷保留思考（五维评分需要它），思考吃满 8000 时正文为空
+//（2026-10-12 实测三次尝试 reasoning 7999/8000/8001、正文 0 字符）——
+// 重试给 4 倍预算；供应商拒收则回落 12000。
+const TRIAL_RETRY_MAX_TOKENS = 32000;
+const TRIAL_RETRY_FALLBACK_TOKENS = 12000;
+// 重试指令（抬预算那两次一并附上）：正文为本体，别让思考挤掉 JSON。
+const TRIAL_RETRY_NOTE = '\n\n【重试要求】上一次输出不可用（正文为空或被截断）。请直接输出 JSON 本体：不要输出推理过程、分析或解释文字；只输出一个完整可解析的 JSON 对象，不要代码围栏。';
 const GRADE_CHUNK_SIZE = 5;
+// 判卷块拆半上限：5 题 → 3+2 → 2+1+1+1（单题块无路可退，转覆盖轮/显式缺失）。
+const MAX_GRADE_CHUNK_SPLIT_DEPTH = 2;
 // 盲测作答弹性（2026-10-11 补考实测）：应用/实操题是长交付物，3000 会中途
 // 截断；推理型模型还可能把整个输出预算耗在推理段导致 message.content 为空
 //（两题 0 分「未作答」）——空正文/截断时带「直接输出正文」强指令加预算重试。
@@ -112,50 +128,60 @@ async function dumpTrialFailure(runDir, dumpBase, attempts, promptPreview) {
 }
 
 /**
- * 出题/判卷共用的弹性 JSON 补全：
- * 整体解析 → 按数组字段抢救完整元素（截断只损失被切开的尾元素）→ 同 prompt
- * 重试（默认共 3 次尝试）。全部失败时留档 trial-failed/ 并返回 null（调用方
- * 按语义抛 FORGE_*_OUTPUT_INVALID）。
+ * 出题/判卷共用的弹性 JSON 补全（jsonCompletion 阶梯的 trial 侧包装）：
+ * 整体解析 → 按数组字段抢救完整元素（截断只损失被切开的尾元素）→ 正文为空时
+ * 从推理段抢救 → 抬预算重试（8k → 32k）。全部失败时留档 trial-failed/ 并返回
+ * 富结果 { payload: null, failureReason, attempts }，调用方按语义抛
+ * FORGE_LLM_EMPTY_CONTENT / FORGE_*_OUTPUT_INVALID。
  */
 async function completeJsonResilient({
     llm, llmConfig, prompt, temperature, runDir, dumpBase, arrayField, validate, logger,
-    maxAttempts = TRIAL_MAX_ATTEMPTS, maxTokens = TRIAL_MAX_TOKENS
+    maxAttempts = TRIAL_MAX_ATTEMPTS, maxTokens = TRIAL_MAX_TOKENS,
+    label = null, thinking = null
 }) {
-    const attempts = [];
-    for (let index = 1; index <= maxAttempts; index += 1) {
-        const response = await llm.complete(llmConfig, {
-            model: llmConfig.model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature,
-            max_tokens: maxTokens
-        });
-        const choice = response?.data?.choices?.[0];
-        const content = choice?.message?.content || '';
-        const finishReason = choice?.finish_reason || null;
-
-        const payload = extractJsonObject(content);
-        if (validate(payload)) {
-            return payload;
-        }
-        if (arrayField) {
-            const items = extractCompleteArrayObjects(content, `"${arrayField}"`);
-            if (items.length > 0) {
-                const salvaged = arrayField === 'gradedQuestions'
-                    ? { gradedQuestions: items, overallComment: '' }
-                    : { [arrayField]: items };
-                if (validate(salvaged)) {
-                    logger?.(`trial: ${dumpBase} 输出整体不可解析（finish_reason=${finishReason ?? 'unknown'}），抢救出 ${items.length} 个完整元素`);
-                    return { ...salvaged, salvaged: true };
-                }
+    const salvage = arrayField
+        ? (text) => {
+            const items = extractCompleteArrayObjects(text, `"${arrayField}"`);
+            if (items.length === 0) {
+                return null;
             }
+            return arrayField === 'gradedQuestions'
+                ? { gradedQuestions: items, overallComment: '' }
+                : { [arrayField]: items };
         }
-        attempts.push({ index, finishReason, usage: response?.data?.usage ?? null, content });
-        if (index < maxAttempts) {
-            logger?.(`trial: ${dumpBase} 输出不可解析（finish_reason=${finishReason ?? 'unknown'}），重试（${index}/${maxAttempts - 1}）`);
-        }
+        : null;
+    const result = await completeJsonLadder({
+        llm,
+        llmConfig,
+        prompt,
+        temperature,
+        validate,
+        salvage,
+        logger,
+        label: label || `trial: ${dumpBase}`,
+        maxTokens,
+        retryMaxTokens: TRIAL_RETRY_MAX_TOKENS,
+        retryFallbackTokens: TRIAL_RETRY_FALLBACK_TOKENS,
+        maxAttempts,
+        retryNote: TRIAL_RETRY_NOTE,
+        thinking: thinking || resolveThinkingMode('FORGE_TRIAL_THINKING', 'enabled')
+    });
+    if (!result.payload) {
+        await dumpTrialFailure(runDir, dumpBase, result.attempts, prompt.slice(0, 2000));
     }
-    await dumpTrialFailure(runDir, dumpBase, attempts, prompt.slice(0, 2000));
-    return null;
+    return result;
+}
+
+// 出题/判卷失败的错误码与消息（正文为空与不可解析分开报，面板/日志一眼可辨）。
+function trialOutputFailure({ attempts, failureReason }, { what, dumpBase }) {
+    const failure = describeAttemptFailure(attempts);
+    const error = new Error(
+        `${what}${failure.summary}（已尝试 ${attempts.length} 次；finish_reason=${failure.finishReasons}；原始输出已留档 trial-failed/${dumpBase}）`
+    );
+    error.code = failureReason === 'empty-content' ? 'FORGE_LLM_EMPTY_CONTENT' : 'FORGE_EXAM_OUTPUT_INVALID';
+    error.status = 502;
+    error.details = { finishReasons: failure.finishReasons, reasoningTokens: failure.reasoningTokens, blankAttempts: failure.blankCount };
+    return error;
 }
 
 // ── 判卷共享构件（首考 / 回填重测 / 补判共用）──────────────────────────────
@@ -187,15 +213,72 @@ function buildGradeEntries({ exam, answers, answerMeta = {} }) {
 }
 
 /**
+ * 单块判卷（含拆半重判，2026-10-17）：块输出整体不可用时按题拆半重判，
+ * 而不是让整单失败；拆到单题仍不可用即认输，把该题交回覆盖轮/显式缺失。
+ * 返回 { gradedQuestions, overallComment, failures }（failures 记失败块与原因，
+ * 供终态错误消息点名「哪些题是判卷输出不可用而非漏判」）。
+ */
+async function gradeChunkResilient({
+    llm, llmConfig, gradeTemplate, blueprint, runDir, logger,
+    entries, dumpBase, depth = 0
+}) {
+    const gradePrompt = gradeTemplate
+        .replace(/\{\{displayName\}\}/g, blueprint.displayName)
+        .replace(/\{\{name\}\}/g, blueprint.name)
+        .replace(/\{\{examWithAnswers\}\}/g, JSON.stringify(entries, null, 2));
+    const result = await completeJsonResilient({
+        llm, llmConfig,
+        prompt: gradePrompt,
+        temperature: 0.2,
+        runDir,
+        dumpBase,
+        arrayField: 'gradedQuestions',
+        // 只要求是数组（允许空）：块输出漏题/空输出交给覆盖轮补判，
+        // 最终仍缺失才 FORGE_GRADE_MISSING（2026-10-12 缺陷 4）。
+        validate: (candidate) => Array.isArray(candidate?.gradedQuestions),
+        logger
+    });
+    if (result.payload) {
+        return { gradedQuestions: result.payload.gradedQuestions, overallComment: result.payload.overallComment || '', failures: [] };
+    }
+
+    const failure = { dumpBase, questions: entries.length, reason: result.failureReason };
+    if (entries.length > 1 && depth < MAX_GRADE_CHUNK_SPLIT_DEPTH) {
+        const mid = Math.ceil(entries.length / 2);
+        logger?.(`trial: ${dumpBase} 判卷输出不可用（${result.failureReason === 'empty-content' ? '正文为空' : '不可解析'}），拆半重判（${entries.length} 题 → ${mid}+${entries.length - mid}）`);
+        const merged = { gradedQuestions: [], overallComment: '', failures: [] };
+        const halves = [entries.slice(0, mid), entries.slice(mid)];
+        for (let offset = 0; offset < halves.length; offset += 1) {
+            const part = await gradeChunkResilient({
+                llm, llmConfig, gradeTemplate, blueprint, runDir, logger,
+                entries: halves[offset],
+                dumpBase: `${dumpBase}${String.fromCharCode(97 + offset)}`,
+                depth: depth + 1
+            });
+            merged.gradedQuestions.push(...part.gradedQuestions);
+            merged.overallComment = part.overallComment || merged.overallComment;
+            merged.failures.push(...part.failures);
+        }
+        return merged;
+    }
+
+    logger?.(`trial: ${dumpBase} 判卷输出不可用且无法再拆（${entries.length} 题，${result.failureReason === 'empty-content' ? '正文为空' : '不可解析'}），交回覆盖轮补判`);
+    return { gradedQuestions: [], overallComment: '', failures: [failure] };
+}
+
+/**
  * 覆盖式判卷（2026-10-12 缺陷 4）：分块判卷后核对块内覆盖——截断抢救/
  * 输出污染丢的题进入下一轮补判（只判缺失题），共 GRADE_COVERAGE_PASSES 轮；
  * 仍缺失即抛 FORGE_GRADE_MISSING 显式失败，绝不静默按 0 分计（答卷已存
  * exams/answers.json，可用 gateway_forge_regrade 仅补判缺失题）。
+ * 全部块判卷输出不可用时不空转补判轮：直接按原因抛
+ * FORGE_LLM_EMPTY_CONTENT / FORGE_GRADE_OUTPUT_INVALID（2026-10-17）。
  */
 async function gradeEntriesWithCoverage({ llm, llmConfig, baseDir, runDir, logger, blueprint, entries, dumpBasePrefix = 'grade' }) {
     const gradeTemplate = loadTemplate(baseDir, 'grade.md', FALLBACK_GRADE_TEMPLATE);
     const gradedQuestions = [];
     const seenGraded = new Set();
+    const failures = [];
     let overallComment = '';
     let pending = [...entries];
     for (let pass = 1; pass <= GRADE_COVERAGE_PASSES && pending.length > 0; pass += 1) {
@@ -204,38 +287,40 @@ async function gradeEntriesWithCoverage({ llm, llmConfig, baseDir, runDir, logge
             chunks.push(pending.slice(i, i + GRADE_CHUNK_SIZE));
         }
         const stillMissing = [];
+        let passFailedChunks = 0;
         for (let index = 0; index < chunks.length; index += 1) {
-            const gradePrompt = gradeTemplate
-                .replace(/\{\{displayName\}\}/g, blueprint.displayName)
-                .replace(/\{\{name\}\}/g, blueprint.name)
-                .replace(/\{\{examWithAnswers\}\}/g, JSON.stringify(chunks[index], null, 2));
-            const payload = await completeJsonResilient({
-                llm, llmConfig,
-                prompt: gradePrompt,
-                temperature: 0.2,
-                runDir,
-                dumpBase: `${dumpBasePrefix}-chunk-${index + 1}${pass > 1 ? `-retry${pass}` : ''}`,
-                arrayField: 'gradedQuestions',
-                // 只要求是数组（允许空）：块输出漏题/空输出交给覆盖轮补判，
-                // 最终仍缺失才 FORGE_GRADE_MISSING（2026-10-12 缺陷 4）。
-                validate: (candidate) => Array.isArray(candidate?.gradedQuestions),
-                logger
+            const chunkResult = await gradeChunkResilient({
+                llm, llmConfig, gradeTemplate, blueprint, runDir, logger,
+                entries: chunks[index],
+                dumpBase: `${dumpBasePrefix}-chunk-${index + 1}${pass > 1 ? `-retry${pass}` : ''}`
             });
-            if (!payload) {
-                const error = new Error(`判卷输出不可解析（${dumpBasePrefix} 第 ${index + 1}/${chunks.length} 块，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
-                error.code = 'FORGE_GRADE_OUTPUT_INVALID';
-                error.status = 502;
-                throw error;
+            if (chunkResult.gradedQuestions.length === 0 && chunkResult.failures.length > 0) {
+                passFailedChunks += 1;
+                failures.push(...chunkResult.failures);
             }
-            for (const graded of payload.gradedQuestions) {
+            for (const graded of chunkResult.gradedQuestions) {
                 if (graded && typeof graded.id === 'string' && graded.id && !seenGraded.has(graded.id)) {
                     seenGraded.add(graded.id);
                     gradedQuestions.push(graded);
                 }
             }
-            overallComment = payload.overallComment || overallComment;
-            const covered = new Set(payload.gradedQuestions.map((graded) => graded?.id));
+            overallComment = chunkResult.overallComment || overallComment;
+            const covered = new Set(chunkResult.gradedQuestions.map((graded) => graded?.id));
             stillMissing.push(...chunks[index].filter((entry) => !covered.has(entry.id)));
+        }
+        // 整卷零判出且失败块全为同一形态：补判轮只会重演（合同一模型、同一批题），
+        // 直接给出根因错误码，省一轮费用（追问到「不可解析」才保留原码）。
+        if (gradedQuestions.length === 0 && failures.length > 0 && passFailedChunks === chunks.length) {
+            const emptyContent = failures.every((failure) => failure.reason === 'empty-content');
+            const error = new Error(
+                emptyContent
+                    ? `判卷正文为空——${failures.length} 个块（含拆半后）均无正文输出，模型把输出预算耗在推理段；原始输出已留档 trial-failed/`
+                    : `判卷输出不可解析——${failures.length} 个块（含拆半后）均无法解析；原始输出已留档 trial-failed/`
+            );
+            error.code = emptyContent ? 'FORGE_LLM_EMPTY_CONTENT' : 'FORGE_GRADE_OUTPUT_INVALID';
+            error.status = 502;
+            error.details = { failedChunks: failures };
+            throw error;
         }
         pending = stillMissing;
         if (pending.length > 0 && pass < GRADE_COVERAGE_PASSES) {
@@ -243,10 +328,13 @@ async function gradeEntriesWithCoverage({ llm, llmConfig, baseDir, runDir, logge
         }
     }
     if (pending.length > 0) {
-        const error = new Error(`判卷缺失 ${pending.length} 题（${pending.map((entry) => entry.id).join('、')}）——补判 ${GRADE_COVERAGE_PASSES} 轮仍不完整，拒绝按 0 分计（答卷已存 exams/answers.json，可用 gateway_forge_regrade 仅补判缺失题）`);
+        const unusable = failures.length > 0
+            ? `；其中 ${failures.length} 次块判卷输出不可用（${[...new Set(failures.map((failure) => failure.reason === 'empty-content' ? '正文为空' : '不可解析'))].join('/')}）`
+            : '';
+        const error = new Error(`判卷缺失 ${pending.length} 题（${pending.map((entry) => entry.id).join('、')}）——补判 ${GRADE_COVERAGE_PASSES} 轮仍不完整，拒绝按 0 分计${unusable}（答卷已存 exams/answers.json，可用 gateway_forge_regrade 仅补判缺失题）`);
         error.code = 'FORGE_GRADE_MISSING';
         error.status = 502;
-        error.details = { missingIds: pending.map((entry) => entry.id) };
+        error.details = { missingIds: pending.map((entry) => entry.id), failedChunks: failures };
         throw error;
     }
     return { gradedQuestions, overallComment };
@@ -566,26 +654,27 @@ function createTrialStepRunner() {
             : blueprint.examOutline;
 
         for (const entry of effectiveOutline) {
-            const payload = await completeJsonResilient({
+            const examDumpBase = `exam-${entry.subskillId}`;
+            const examResult = await completeJsonResilient({
                 llm, llmConfig,
                 prompt: renderExamPrompt(outlineLine(entry), CONCEPT_SCOPE_NOTE),
                 temperature: 0.5,
                 runDir,
-                dumpBase: `exam-${entry.subskillId}`,
+                dumpBase: examDumpBase,
                 arrayField: 'questions',
                 validate: (candidate) => Array.isArray(candidate?.questions) && candidate.questions.length > 0,
                 logger
             });
-            if (!payload) {
-                const error = new Error(`出题输出不可解析（subskill ${entry.subskillId}，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
-                error.code = 'FORGE_EXAM_OUTPUT_INVALID';
-                error.status = 502;
-                throw error;
+            if (!examResult.payload) {
+                throw trialOutputFailure(examResult, {
+                    what: `出题（subskill ${entry.subskillId}）输出`,
+                    dumpBase: examDumpBase
+                });
             }
-            noteSalvage(payload);
-            collectQuestions(payload, entry.subskillId);
+            noteSalvage(examResult.payload);
+            collectQuestions(examResult.payload, entry.subskillId);
         }
-        const practicalPayload = await completeJsonResilient({
+        const practicalResult = await completeJsonResilient({
             llm, llmConfig,
             prompt: renderExamPrompt('（本次不出概念/应用题）', PRACTICAL_SCOPE_NOTE),
             temperature: 0.5,
@@ -595,14 +684,14 @@ function createTrialStepRunner() {
             validate: (candidate) => Array.isArray(candidate?.questions) && candidate.questions.length > 0,
             logger
         });
-        if (!practicalPayload) {
-            const error = new Error(`出题输出不可解析（实操题，已重试 ${TRIAL_MAX_ATTEMPTS - 1} 次；原始输出已留档 trial-failed/）`);
-            error.code = 'FORGE_EXAM_OUTPUT_INVALID';
-            error.status = 502;
-            throw error;
+        if (!practicalResult.payload) {
+            throw trialOutputFailure(practicalResult, {
+                what: '出题（实操题）输出',
+                dumpBase: 'exam-practical'
+            });
         }
-        noteSalvage(practicalPayload);
-        collectQuestions(practicalPayload, 'practical');
+        noteSalvage(practicalResult.payload);
+        collectQuestions(practicalResult.payload, 'practical');
 
         // 完整性门禁（P1.1）：考纲条目零覆盖或缺实操题 = 残卷，直接 fail——
         // 残卷评分与完整卷在外观上无法区分，曾误导进修决策（47.2%/56.0% 两轮

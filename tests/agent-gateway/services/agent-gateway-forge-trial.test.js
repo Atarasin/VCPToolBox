@@ -576,6 +576,46 @@ test('trial：判卷缺失题显式失败 FORGE_GRADE_MISSING——绝不静默�
     assert.ok(!fs.existsSync(path.join(examsDir, 'grade-report.json')), '不再产出按 0 分计的成绩单');
 });
 
+// 2026-10-17（缺陷 4 加固）：块判卷整体不可用时按题拆半重判——此前一块判不动
+// 就让整单失败（10-12 事故：判卷第 3/3 块正文为空，已花 ¥0.55 的整单报废）。
+test('trial：判卷整块输出不可用时拆半重判，成绩仍完整', async () => {
+    const baseDir = createTempDir();
+    const gradeOutput = (content) => {
+        const uniqueIds = new Set([...content.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1]).filter(Boolean));
+        // 5 题整块：正文为空（模型把输出预算耗在推理段）；拆到 ≤3 题才正常判卷。
+        return uniqueIds.size > 3 ? '' : gradeJson(0.9, content);
+    };
+    const { jrs, svc, llmCalls } = buildTrialParseEnv(baseDir, { gradeOutput });
+    const jobId = await driveInlineToTerminal(jrs, svc);
+    const job = jrs.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'pending_confirm', `拆半重判后应完成，实际 ${job.status}：${job.metadata.forge.error?.message}`);
+
+    const examsDir = path.join(baseDir, 'forge', 'runs', jobId, 'exams');
+    const report = JSON.parse(fs.readFileSync(path.join(examsDir, 'grade-report.json'), 'utf8'));
+    assert.equal(report.grading.gradedQuestions.length, 5, '拆半重判拼出完整成绩（5 题）');
+    // 整块的失败尝试已留档（5 题块：8k → 32k → 32k 三次尝试）
+    const failedDir = path.join(baseDir, 'forge', 'runs', jobId, 'trial-failed');
+    const dumps = fs.readdirSync(failedDir).filter((name) => name.startsWith('grade-chunk-1.attempt-')).sort();
+    assert.equal(dumps.length, 3, `整块失败留档三次尝试，实际 ${dumps.length}`);
+    const budgets = llmCalls.filter((call) => call.messages[0].content.includes('判卷官')).map((call) => call.max_tokens);
+    assert.ok(budgets.includes(32000), '判卷正文为空时抬预算重试（8k → 32k）');
+});
+
+test('trial：判卷全块正文为空 → FORGE_LLM_EMPTY_CONTENT（不空转补判轮）', async () => {
+    const baseDir = createTempDir();
+    const { jrs, svc } = buildTrialParseEnv(baseDir, { gradeOutput: () => '' });
+    const jobId = await driveInlineToTerminal(jrs, svc);
+    const job = jrs.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_LLM_EMPTY_CONTENT');
+    assert.equal(job.metadata.forge.error.step, 'trial');
+    assert.match(job.metadata.forge.error.message, /正文为空/);
+    assert.ok(!fs.existsSync(path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'grade-report.json')), '不产出成绩单');
+    // 答卷已留盘：补判/重考有原料
+    const saved = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', jobId, 'exams', 'answers.json'), 'utf8'));
+    assert.equal(Object.keys(saved.answers || {}).length, 5);
+});
+
 test('retrial：已注册专家仅重跑 trial——不采集不合成不触发重名冲突', async () => {
     const baseDir = createTempDir();
     const env = buildEnv(baseDir, { gradeRatio: 0.9 });

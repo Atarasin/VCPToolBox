@@ -111,7 +111,7 @@ async function waitFor(predicate, timeoutMs = 8000, intervalMs = 25) {
     return false;
 }
 
-function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, smokeRetries = null, smokeIntervalMs = null, materials = MATERIALS }) {
+function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, smokeRetries = null, smokeIntervalMs = null, materials = MATERIALS, llmComplete = null, blueprint = null }) {
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
     const toolInvoker = {
@@ -121,11 +121,16 @@ function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, 
     };
     const llmPort = {
         available: true,
-        complete: async (config, payload) => {
-            llmCalls.push(payload);
-            const next = llmOutputs.length > 1 ? llmOutputs.shift() : llmOutputs[0];
-            return llmResponse(next, finishReason);
-        }
+        complete: llmComplete
+            ? async (config, payload) => {
+                llmCalls.push(payload);
+                return llmComplete(config, payload);
+            }
+            : async (config, payload) => {
+                llmCalls.push(payload);
+                const next = llmOutputs.length > 1 ? llmOutputs.shift() : llmOutputs[0];
+                return llmResponse(next, finishReason);
+            }
     };
     const forgeRuntimeService = createForgeRuntimeService({
         jobRuntimeService,
@@ -138,13 +143,13 @@ function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, 
         ...(smokeRetries != null ? { smokeRetries } : {}),
         ...(smokeIntervalMs != null ? { smokeIntervalMs } : {})
     });
-    return { jobRuntimeService, forgeRuntimeService, llmCalls };
+    return { jobRuntimeService, forgeRuntimeService, llmCalls, blueprint: blueprint || buildUiDesignerBlueprint() };
 }
 
-async function runToDistillComplete(jobRuntimeService, forgeRuntimeService) {
+async function runToDistillComplete(jobRuntimeService, forgeRuntimeService, blueprintOverride = null) {
     const { jobId } = await forgeRuntimeService.startExpertCreateJob({
         requirement: '造一个 UI 设计专家',
-        blueprintOverride: buildUiDesignerBlueprint()
+        blueprintOverride: blueprintOverride || buildUiDesignerBlueprint()
     });
     await waitFor(() => jobRuntimeService.pollJob(jobId, null).data.job.status === JOB_STATUS.PENDING_CONFIRM);
     await forgeRuntimeService.confirmBlueprint(jobId, { approved: true });
@@ -356,7 +361,7 @@ test('distill：冒烟持续无结果降级为告警留痕，不阻断步骤（�
     assert.ok(fs.existsSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')), '知识文件已落盘');
 });
 
-test('distill：LLM 输出不可解析时同 prompt 重试一次（费用入护栏）', async () => {
+test('distill：LLM 输出不可解析时带重试指令重试一次（费用入护栏）', async () => {
     const baseDir = createTempDir();
     const llmCalls = [];
     const jobRuntimeService = require('node:assert');
@@ -403,8 +408,15 @@ test('distill：LLM 输出不可解析时同 prompt 重试一次（费用入护�
     await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
     const job = jrs.pollJob(jobId, null).data.job;
     assert.equal(job.metadata.forge.error.step, 'synthesize', '重试后 distill 应完成');
-    assert.equal(llmCalls.length, 2, '同 prompt 恰好调用两次');
-    assert.equal(llmCalls[0].messages[0].content, llmCalls[1].messages[0].content, '两次 prompt 一致');
+    assert.equal(llmCalls.length, 2, '恰好调用两次');
+    // 2026-10-17：重试不再原样重放——基 prompt 相同，重试附「直接输出 JSON」强指令。
+    const basePrompt = llmCalls[0].messages[0].content;
+    assert.ok(llmCalls[1].messages[0].content.startsWith(basePrompt), '重试 prompt 保留基 prompt');
+    assert.match(llmCalls[1].messages[0].content.slice(basePrompt.length), /【重试要求】/, '重试附强指令');
+    // 蒸馏缺省关思考（2026-10-17）：否则思考段会把输出预算吃光、正文为空。
+    assert.deepEqual(llmCalls[0].thinking, { type: 'disabled' }, '蒸馏请求关思考');
+    assert.equal(llmCalls[0].max_tokens, 8000, '首次预算 8000');
+    assert.equal(llmCalls[1].max_tokens, 8000, '纯抖动（非空非截断）不抬预算');
     const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
     assert.ok(marker.state && marker.state.libraryName === 'UIDesigner知识库', 'marker 携带机器可读 state');
     assert.equal(marker.state.smoke.verified, true);
@@ -442,6 +454,120 @@ test('distill：max_tokens 截断时抢救完整知识单元，被切断的尾�
     const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
     assert.equal(marker.state.salvagedBatches.length, 1);
     assert.match(marker.summary, /截断抢救/);
+});
+
+// 2026-10-17 事故回归：定期进修 distill 三次尝试 reasoning_tokens 7467/6119/7247、
+// 正文 0 字符（思考段把 8000 输出预算吃光），同 prompt 同上限重试等于确定性重演。
+test('distill：正文为空（推理段吃满预算）时抬预算重试并完成', async () => {
+    const baseDir = createTempDir();
+    const calls = [];
+    const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
+        baseDir,
+        llmOutputs: [DISTILL_OUTPUT],
+        knowledgeStorePort: { available: true, listLibraries: async () => ['UIDesigner知识库'], search: async () => [{ text: 'hit', score: 0.9 }] },
+        smokeRetries: 1,
+        smokeIntervalMs: 5,
+        llmComplete: async (config, payload) => {
+            calls.push(payload);
+            if (calls.length === 1) {
+                // 空正文 + 推理段只有叙述（无可抢救 JSON）：模型把预算耗在思考上。
+                return {
+                    data: {
+                        choices: [{ message: { content: '', reasoning_content: '我先分析这批材料的结构……' }, finish_reason: 'length' }],
+                        usage: { prompt_tokens: 1892, completion_tokens: 8000, completion_tokens_details: { reasoning_tokens: 7467 } }
+                    }
+                };
+            }
+            return llmResponse(DISTILL_OUTPUT);
+        }
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.metadata.forge.error.step, 'synthesize', '抬预算重试后 distill 应完成（不再整单报废）');
+    assert.deepEqual(calls.map((call) => call.max_tokens), [8000, 16000], '空正文触发抬预算');
+    assert.deepEqual(calls[0].thinking, { type: 'disabled' }, '蒸馏关思考（缺省）');
+    assert.ok(fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).length > 0, '知识卡已入库');
+});
+
+test('distill：全部尝试正文为空 → FORGE_LLM_EMPTY_CONTENT（与不可解析分开报）', async () => {
+    const baseDir = createTempDir();
+    const calls = [];
+    const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
+        baseDir,
+        llmOutputs: [DISTILL_OUTPUT],
+        knowledgeStorePort: null,
+        smokeRetries: 1,
+        smokeIntervalMs: 5,
+        llmComplete: async (config, payload) => {
+            calls.push(payload);
+            return {
+                data: {
+                    choices: [{ message: { content: '', reasoning_content: '（只有思考，没有正文）' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 1892, completion_tokens: 7000, completion_tokens_details: { reasoning_tokens: 6900 } }
+                }
+            };
+        }
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_LLM_EMPTY_CONTENT');
+    assert.equal(job.metadata.forge.error.step, 'distill');
+    assert.match(job.metadata.forge.error.message, /正文为空/);
+    assert.match(job.metadata.forge.error.message, /推理段 token/, '错误消息点名推理段 token 用量');
+    assert.deepEqual(calls.map((call) => call.max_tokens), [8000, 16000, 16000], '三次尝试：抬预算后不再回退');
+    const failedDir = path.join(baseDir, 'runs', jobId, 'distill-failed');
+    assert.equal(fs.readdirSync(failedDir).length, 3, '三次尝试的原始输出都留档');
+});
+
+test('distill：多子技能中途失败 → 已写盘部分入库并写进错误消息（不再记 0）', async () => {
+    const baseDir = createTempDir();
+    const twoSubskills = {
+        ...buildUiDesignerBlueprint(),
+        subskills: [
+            { id: 'color-theory', title: '配色理论', searchQueries: ['color theory UI design'] },
+            { id: 'layout-basics', title: '版式基础', searchQueries: ['layout basics UI'] }
+        ],
+        examOutline: [
+            { subskillId: 'color-theory', conceptQuestions: 1, appliedQuestions: 1 },
+            { subskillId: 'layout-basics', conceptQuestions: 1, appliedQuestions: 1 }
+        ]
+    };
+    const calls = [];
+    const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
+        baseDir,
+        llmOutputs: [DISTILL_OUTPUT],
+        knowledgeStorePort: null,
+        smokeRetries: 1,
+        smokeIntervalMs: 5,
+        blueprint: twoSubskills,
+        llmComplete: async (config, payload) => {
+            calls.push(payload);
+            const prompt = payload.messages[0].content;
+            // 第一个子技能正常蒸馏，第二个子技能的整批蒸馏恒定空正文。
+            if (prompt.includes('版式基础')) {
+                return {
+                    data: {
+                        choices: [{ message: { content: '', reasoning_content: '（只有思考）' }, finish_reason: 'stop' }],
+                        usage: { prompt_tokens: 1000, completion_tokens: 7000, completion_tokens_details: { reasoning_tokens: 6900 } }
+                    }
+                };
+            }
+            return llmResponse(DISTILL_OUTPUT);
+        }
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService, twoSubskills);
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_LLM_EMPTY_CONTENT');
+    const partialNote = job.metadata.forge.error.message.match(/已完成部分入库：(\d+) 个新文件/);
+    assert.ok(partialNote, `错误消息点名部分入库，实际：${job.metadata.forge.error.message}`);
+
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    assert.ok(fs.readdirSync(libDir).length > 0, '第一个子技能的卡片已落盘且保留');
+    assert.equal(Number(partialNote[1]), fs.readdirSync(libDir).length, '消息中的已写盘数与实际一致');
+    const run = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'run.json'), 'utf8'));
+    assert.equal(run.finalStatus, 'failed');
 });
 
 test('distill：确认截断且无可抢救单元时拆半重蒸，彻底失败留档原始输出', async () => {

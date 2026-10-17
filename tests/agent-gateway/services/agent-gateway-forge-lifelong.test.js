@@ -777,6 +777,66 @@ test('LLM 首次瞬时超时被退避重试救回：learn job 正常完成，档
     assert.ok(history[0].costCny > 0, '完成档案记录费用');
 });
 
+// 2026-10-17：蒸馏中途失败也要记「部分入库」——此前学习档案一律 distilledFiles: 0，
+// 面板看起来整批白跑（实测失败单已写 11 个文件却记 0）。
+test('learn：蒸馏中途失败 → 档案记部分入库（distilledFiles > 0 + partial）', async () => {
+    const baseDir = createTempDir();
+    const twoSubskills = {
+        ...blueprint(),
+        subskills: [
+            { id: 'color-theory', title: '配色理论', searchQueries: ['color theory UI design'] },
+            { id: 'layout-basics', title: '版式基础', searchQueries: ['layout basics UI'] }
+        ],
+        examOutline: [
+            { subskillId: 'color-theory', conceptQuestions: 1, appliedQuestions: 1 },
+            { subskillId: 'layout-basics', conceptQuestions: 1, appliedQuestions: 1 }
+        ]
+    };
+    await writeBlueprint(path.join(baseDir, 'forge', 'blueprints', 'UIDesigner.json'), twoSubskills);
+    const env = buildEnv(baseDir, {
+        llmComplete: async (config, payload) => {
+            const prompt = payload.messages[0].content;
+            // 第二个子技能整批恒定空正文（模型把输出预算耗在推理段）。
+            if (prompt.includes('版式基础')) {
+                return {
+                    data: {
+                        choices: [{ message: { content: '', reasoning_content: '（只有思考，没有正文）' }, finish_reason: 'stop' }],
+                        usage: { prompt_tokens: 100, completion_tokens: 7000, completion_tokens_details: { reasoning_tokens: 6900 } }
+                    }
+                };
+            }
+            return {
+                data: {
+                    choices: [{ message: { content: DISTILL_JSON } }],
+                    usage: { prompt_tokens: 100, completion_tokens: 50 }
+                }
+            };
+        }
+    });
+
+    const { jobId } = await env.forgeRuntimeService.startExpertLearnJob({
+        expertName: 'UIDesigner',
+        scope: { reason: 'manual' }
+    });
+    await waitFor(() => env.jobRuntimeService.pollJob(jobId, null).data.job.terminal, 20000);
+
+    const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.status, 'failed');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_LLM_EMPTY_CONTENT', '空正文单独成码');
+
+    const history = fs.readFileSync(path.join(baseDir, 'forge', 'UIDesigner', 'learning-history.jsonl'), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(history.length, 1);
+    assert.equal(history[0].status, 'failed');
+    assert.equal(history[0].error.step, 'distill');
+    assert.equal(history[0].distilledFiles, 1, '部分入库的卡片数要记进档案（不再是 0）');
+    assert.equal(history[0].partial.writtenCount, 1);
+    assert.equal(history[0].partial.mergedCount, 0);
+    // 档案数字与实际落盘一致
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    assert.equal(fs.readdirSync(libDir).length, history[0].distilledFiles);
+});
+
 test('LLM 持续超时：重试耗尽后 job 失败，但学习档案留 failed 条目（失败可见）且缺口不被误关', async () => {
     const baseDir = createTempDir();
     let calls = 0;
