@@ -225,35 +225,6 @@
         ]
       }
     },
-    "FullStackUIDesignExpert": {
-      "displayName": "全栈 UI 设计专家",
-      "memoryDefaults": {
-        "tags": [
-          "FullStackUIDesignExpert"
-        ],
-        "metadata": {
-          "source": "forge",
-          "library": "FullStackUIDesignExpert知识库"
-        }
-      },
-      "workflow": [
-        "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"FullStackUIDesignExpert\"）获取引导。",
-        "回答专业问题前先 gateway_knowledge_search（agentId: \"FullStackUIDesignExpert\"，libraries: [\"FullStackUIDesignExpert知识库\"]），答完标注出处。",
-        "低置信或知识不足时调用 gateway_gap_report 登记缺口。"
-      ],
-      "skill": {
-        "domain": "全栈 UI 设计专家专业咨询",
-        "triggers": [
-          "需要针对产品界面给出视觉、布局、排版、色彩、字体、基础交互与设计系统层面的具体设计建议、评审现有 UI 方案，输出问题分级、修改意见与落地优先级、制定或完善 UI 设计规范与 Design System 建议，提升一致性、可维护性与可扩展性、从可用性、可访问性、一致性、品牌表达与平台适配角度评估界面质量时"
-        ],
-        "notFor": [
-          "不替代用户研究、需求分析、产品策略与商业决策",
-          "不编写前端生产代码，不提供后端、数据、安全或工程架构方案",
-          "不进行法律合规、商标、版权或最终无障碍合规裁定",
-          "不承诺具体业务转化效果，不执行真实用户测试或代替可用性实验"
-        ]
-      }
-    },
     "yanchi_ui": {
       "displayName": "通用全栈 UI 设计专家",
       "memoryDefaults": {
@@ -268,6 +239,8 @@
       "workflow": [
         "新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: \"yanchi_ui\"）获取引导。",
         "回答专业问题前先 gateway_knowledge_search（agentId: \"yanchi_ui\"，libraries: [\"yanchi_ui知识库\"]），答完标注出处。",
+        "处理用户问题前先 gateway_recall_run（agentId: \"yanchi_ui\"）召回「yanchi_ui工作日志日记本」中的既往经历——同类问题的处理过程与结论、用户偏好与约束、踩过的坑。",
+        "完成有代表性的问题解决（或遇到值得记录的坑）后，用 gateway_memory_write 写入「yanchi_ui工作日志日记本」（问题背景/解决过程/取舍与结论/用户偏好，tags 用子技能 id 标注）；红线：专业知识点只进冷知识库（缺口走 gateway_gap_report），日志只记经历。",
         "低置信或知识不足时调用 gateway_gap_report 登记缺口。"
       ],
       "skill": {

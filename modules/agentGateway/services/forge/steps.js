@@ -262,6 +262,8 @@ function createStepRegistry({
     agentMapPath = null,
     knowledgePolicyPath = null,
     guidanceConfigPath = null,
+    memoryPolicyPath = null,
+    recallProfilesPath = null,
     stepRunners = {}
 }) {
     const defaults = {
@@ -273,11 +275,22 @@ function createStepRegistry({
             ...(smokeIntervalMs != null ? { smokeIntervalMs } : {}),
             ...(distillBatchMaterials != null ? { batchMaterials: distillBatchMaterials } : {})
         }),
-        synthesize: createSynthesizeStepRunner({
-            agentMapPath: agentMapPath || path.join(path.resolve(baseDir, '..', '..'), 'agent_map.json'),
-            knowledgePolicyPath: knowledgePolicyPath || path.join(__dirname, '..', '..', 'config', 'mcp_agent_knowledge_policy.json'),
-            guidanceConfigPath: guidanceConfigPath || path.join(__dirname, '..', '..', 'config', 'agent_guidance.json')
-        }),
+        // 配置同目录规则：记忆策略/召回档案/guidance 缺省跟随 knowledgePolicyPath
+        // 所在目录（生产=agentGateway/config/，测试传临时 policy.json 即整套隔离）。
+        // 不各自独立回落 __dirname 默认——否则漏传新路径的测试会把测试专家写进
+        // 生产配置（2026-10-20 实发：UIDesigner 条目污染 recall_profiles.json）。
+        synthesize: (() => {
+            const effectiveKnowledgePolicyPath = knowledgePolicyPath
+                || path.join(__dirname, '..', '..', 'config', 'mcp_agent_knowledge_policy.json');
+            const configDir = path.dirname(path.resolve(effectiveKnowledgePolicyPath));
+            return createSynthesizeStepRunner({
+                agentMapPath: agentMapPath || path.join(path.resolve(baseDir, '..', '..'), 'agent_map.json'),
+                knowledgePolicyPath: effectiveKnowledgePolicyPath,
+                guidanceConfigPath: guidanceConfigPath || path.join(configDir, 'agent_guidance.json'),
+                memoryPolicyPath: memoryPolicyPath || path.join(configDir, 'mcp_agent_memory_policy.json'),
+                recallProfilesPath: recallProfilesPath || path.join(configDir, 'recall_profiles.json')
+            });
+        })(),
         trial: createTrialStepRunner(),
         retest: createRetestStepRunner(),
         regrade: createRegradeStepRunner()

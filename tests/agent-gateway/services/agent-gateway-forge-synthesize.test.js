@@ -13,6 +13,115 @@ const {
 } = require('../../../modules/agentGateway/services/forge/synthesize');
 const { resolveKnowledgeLibraryAccess } = require('../../../modules/agentGateway/policy/knowledgeScopeGuard');
 const { validateAgentGuidanceConfig } = require('../../../modules/agentGateway/policy/agentGuidanceConfig');
+const { resolveConfiguredAgentMemoryPolicy } = require('../../../modules/agentGateway/policy/mcpAgentMemoryPolicy');
+const { isDiaryAllowed } = require('../../../modules/agentGateway/policy/diaryScopeGuard');
+const { RecallProfileResolver } = require('../../../modules/agentGateway/policy/recallProfileResolver');
+const {
+    registerMemoryPolicy,
+    registerRecallProfile,
+    expertDiaryName,
+    resolveDiaryMaid
+} = require('../../../modules/agentGateway/services/forge/synthesize');
+
+// ── 工作日志注册（§3.6 注册绑定四件套之三/四）────────────────────────────
+
+test('工作日志：日记名派生与 maid 解析（人格名优先，旧画像回落 agent 名）', () => {
+    assert.equal(expertDiaryName('yanchi_ui'), 'yanchi_ui工作日志日记本');
+    assert.equal(resolveDiaryMaid({ name: 'yanchi_ui', persona: { name: '砚尺' } }), '砚尺');
+    assert.equal(resolveDiaryMaid({ name: 'FullStackUIDesignExpert' }), 'FullStackUIDesignExpert');
+    assert.equal(resolveDiaryMaid({ name: 'X', persona: { name: '  ' } }), 'X', '空白人格名回落 agent 名');
+});
+
+test('工作日志：registerMemoryPolicy 新建条目，缺文件可自建结构', async () => {
+    const baseDir = createTempDir();
+    const memoryPolicyPath = path.join(baseDir, 'mcp_agent_memory_policy.json');
+    const result = await registerMemoryPolicy({ memoryPolicyPath, name: 'NewExpert', maid: '新专家', diaryName: expertDiaryName('NewExpert') });
+    assert.equal(result.registered, true);
+    const policy = JSON.parse(fs.readFileSync(memoryPolicyPath, 'utf8'));
+    assert.deepEqual(policy.agents.NewExpert, {
+        maid: '新专家',
+        allowedDiaries: ['NewExpert工作日志日记本'],
+        defaultDiaries: ['NewExpert工作日志日记本']
+    });
+});
+
+test('工作日志：registerMemoryPolicy 既有条目只增不减（人工调优优先，红线 3）', async () => {
+    const baseDir = createTempDir();
+    const memoryPolicyPath = path.join(baseDir, 'mcp_agent_memory_policy.json');
+    fs.writeFileSync(memoryPolicyPath, JSON.stringify({
+        agents: {
+            Tuned: { maid: '人工调优的署名', allowedDiaries: ['Tuned主日记本'], defaultDiaries: ['Tuned主日记本'] },
+            Partial: {}
+        }
+    }, null, 2));
+
+    // 人工调优条目：日志追加进白名单，maid/默认日记不剥夺
+    const tuned = await registerMemoryPolicy({ memoryPolicyPath, name: 'Tuned', maid: 'Tuned', diaryName: 'Tuned工作日志日记本' });
+    assert.equal(tuned.registered, false, '已存在条目按追加处理');
+    const policy = JSON.parse(fs.readFileSync(memoryPolicyPath, 'utf8'));
+    assert.equal(policy.agents.Tuned.maid, '人工调优的署名', 'maid 不覆盖');
+    assert.deepEqual(policy.agents.Tuned.allowedDiaries, ['Tuned主日记本', 'Tuned工作日志日记本'], '日志只增');
+    assert.deepEqual(policy.agents.Tuned.defaultDiaries, ['Tuned主日记本'], '默认日记不动');
+
+    // 空条目：补齐 maid/白名单/默认日记
+    await registerMemoryPolicy({ memoryPolicyPath, name: 'Partial', maid: 'Partial', diaryName: 'Partial工作日志日记本' });
+    const policy2 = JSON.parse(fs.readFileSync(memoryPolicyPath, 'utf8'));
+    assert.deepEqual(policy2.agents.Partial, {
+        maid: 'Partial',
+        allowedDiaries: ['Partial工作日志日记本'],
+        defaultDiaries: ['Partial工作日志日记本']
+    });
+
+    // 再跑一遍完全无变化（幂等）
+    const before = fs.readFileSync(memoryPolicyPath, 'utf8');
+    await registerMemoryPolicy({ memoryPolicyPath, name: 'Partial', maid: 'Partial', diaryName: 'Partial工作日志日记本' });
+    assert.equal(fs.readFileSync(memoryPolicyPath, 'utf8'), before, '幂等：无变化不写盘');
+});
+
+test('工作日志：registerRecallProfile 新建可解析、既有条目不覆盖', async () => {
+    const baseDir = createTempDir();
+    const recallProfilesPath = path.join(baseDir, 'recall_profiles.json');
+    fs.writeFileSync(recallProfilesPath, JSON.stringify({
+        recallMode: 'river',
+        agents: { Tuned: { defaultProfile: 'tuned-custom' } },
+        profiles: {}
+    }, null, 2));
+
+    const created = await registerRecallProfile({ recallProfilesPath, name: 'NewExpert', diaryName: 'NewExpert工作日志日记本' });
+    assert.equal(created.registered, true);
+    const kept = await registerRecallProfile({ recallProfilesPath, name: 'Tuned', diaryName: 'Tuned工作日志日记本' });
+    assert.equal(kept.registered, false, '人工调优条目不覆盖');
+
+    const config = JSON.parse(fs.readFileSync(recallProfilesPath, 'utf8'));
+    assert.equal(config.recallMode, 'river', '顶层 recallMode 保留');
+    assert.equal(config.agents.Tuned.defaultProfile, 'tuned-custom', '人工档案不动');
+    assert.equal(config.agents.NewExpert.defaultProfile, 'NewExpert-default');
+    assert.ok(config.profiles['NewExpert-default'].rules[0].targets.diaries.includes('NewExpert工作日志日记本'));
+
+    const resolver = new RecallProfileResolver({ configPath: recallProfilesPath });
+    const resolved = resolver.resolveForAgent('NewExpert');
+    assert.equal(resolved.resolved, true, '写入的档案可被解析器消费');
+});
+
+test('工作日志：maid 经生产策略解析器可解析（写链路 buildMemoryWriteMaid 的前置条件）', async () => {
+    const baseDir = createTempDir();
+    const memoryPolicyPath = path.join(baseDir, 'mcp_agent_memory_policy.json');
+    await registerMemoryPolicy({ memoryPolicyPath, name: 'MaidProbe', maid: '砚尺', diaryName: 'MaidProbe工作日志日记本' });
+    const previousPath = process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+    process.env.MCP_AGENT_MEMORY_POLICY_PATH = memoryPolicyPath;
+    try {
+        const resolved = resolveConfiguredAgentMemoryPolicy({ agentId: 'MaidProbe' });
+        assert.equal(resolved.maid, '砚尺');
+        assert.deepEqual(resolved.allowedDiaryNames, ['MaidProbe工作日志日记本']);
+        assert.equal(resolveConfiguredAgentMemoryPolicy({ agentId: 'UnknownAgent' }).maid, '', '未登记 agent 无 maid（写入即 500，门禁语义正确）');
+    } finally {
+        if (previousPath === undefined) {
+            delete process.env.MCP_AGENT_MEMORY_POLICY_PATH;
+        } else {
+            process.env.MCP_AGENT_MEMORY_POLICY_PATH = previousPath;
+        }
+    }
+});
 
 function createTempDir() {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'forge-synthesize-'));
@@ -59,11 +168,13 @@ const DISTILL_OUTPUT = JSON.stringify({
     droppedSources: []
 });
 
-function buildEnv(baseDir, { agentMap = {}, policy = null, guidance = null } = {}) {
+function buildEnv(baseDir, { agentMap = {}, policy = null, guidance = null, memoryPolicy = null, recallProfiles = null } = {}) {
     const paths = {
         agentMapPath: path.join(baseDir, 'agent_map.json'),
         knowledgePolicyPath: path.join(baseDir, 'mcp_agent_knowledge_policy.json'),
-        guidanceConfigPath: path.join(baseDir, 'agent_guidance.json')
+        guidanceConfigPath: path.join(baseDir, 'agent_guidance.json'),
+        memoryPolicyPath: path.join(baseDir, 'mcp_agent_memory_policy.json'),
+        recallProfilesPath: path.join(baseDir, 'recall_profiles.json')
     };
     fs.writeFileSync(paths.agentMapPath, JSON.stringify(agentMap, null, 2));
     fs.writeFileSync(paths.knowledgePolicyPath, JSON.stringify(policy || {
@@ -74,6 +185,14 @@ function buildEnv(baseDir, { agentMap = {}, policy = null, guidance = null } = {
         version: 1,
         shared: { workflow: ['共享指引'], memoryWritePolicy: { write: [], skip: [] } },
         agents: {}
+    }, null, 2));
+    fs.writeFileSync(paths.memoryPolicyPath, JSON.stringify(memoryPolicy || {
+        agents: { Nexus: { maid: 'Nexus', allowedDiaries: ['Nexus工程经验日记本'], defaultDiaries: ['Nexus工程经验日记本'] } }
+    }, null, 2));
+    fs.writeFileSync(paths.recallProfilesPath, JSON.stringify(recallProfiles || {
+        recallMode: 'river',
+        agents: {},
+        profiles: {}
     }, null, 2));
 
     const jobRuntimeService = createJobRuntimeService();
@@ -143,7 +262,11 @@ test('synthesize：人设合成含知识库纪律章节、agentId 规范与画�
     assert.match(persona, /libraries\[": ]*\["?UIDesigner知识库|"libraries": \["UIDesigner知识库"\]/, '知识库指引指向专属库');
     assert.match(persona, /落地页\/UI 界面设计评审/, '自我介绍含画像职责（scope 一致）');
     assert.match(persona, /不做前端代码实现/, '含画像边界');
-    assert.match(persona, /绝不写入.*记忆日记本/, '红线 1 写入人设');
+    assert.match(persona, /本事.{0,20}只存在于冷知识库.{0,40}绝不写入工作日志/s, '红线 1 写入人设（本事与经历两条线）');
+    assert.match(persona, /# 工作日志纪律（经历记忆）/, '工作日志纪律章节（§3.5）');
+    assert.match(persona, /UIDesigner工作日志日记本/, '日志名由 agent 名派生');
+    assert.match(persona, /gateway_recall_run/, '召回既往经历指引');
+    assert.match(persona, /gateway_memory_write/, '写入经历指引');
     assert.match(persona, /gateway_gap_report/, '缺口登记指引（§3.5）');
     // 红线 2：人设零密钥
     assert.ok(!/sk-[A-Za-z0-9]{20,}/.test(persona));
@@ -253,6 +376,27 @@ test('synthesize：知识库受限白名单（D5）与 guidance 写入，403 边
     assert.equal(entry.displayName, 'UI 设计专家');
     assert.ok(entry.workflow.some((line) => line.includes('gateway_knowledge_search') && line.includes('UIDesigner知识库')));
     assert.equal(guidance.shared.workflow[0], '共享指引', '共享段保留');
+
+    // 记忆策略（§3.6 工作日志）：新专家可写专属工作日志，既有条目不动
+    const memoryPolicy = JSON.parse(fs.readFileSync(paths.memoryPolicyPath, 'utf8'));
+    assert.deepEqual(memoryPolicy.agents.UIDesigner, {
+        maid: 'UIDesigner',
+        allowedDiaries: ['UIDesigner工作日志日记本'],
+        defaultDiaries: ['UIDesigner工作日志日记本']
+    });
+    assert.equal(memoryPolicy.agents.Nexus.maid, 'Nexus', '既有条目不动');
+    // 写门禁语义（与 diaryScopeGuard 同一判定函数）：本人日志可写、他人日志与其他 agent 均不可写
+    assert.ok(isDiaryAllowed({ allowedDiaryNames: memoryPolicy.agents.UIDesigner.allowedDiaries }, 'UIDesigner工作日志日记本'), '本人日志可写');
+    assert.ok(!isDiaryAllowed({ allowedDiaryNames: memoryPolicy.agents.UIDesigner.allowedDiaries }, 'Nexus工程经验日记本'), '他人日志不可写');
+    assert.ok(!isDiaryAllowed({ allowedDiaryNames: memoryPolicy.agents.Nexus.allowedDiaries }, 'UIDesigner工作日志日记本'), '其他 agent 写专家日志被拒');
+
+    // 召回档案（§3.6 工作日志）：gateway_recall_run 可解析（无档案即 RECALL_NO_PROFILE）
+    const resolver = new RecallProfileResolver({ configPath: paths.recallProfilesPath });
+    const resolved = resolver.resolveForAgent('UIDesigner');
+    assert.equal(resolved.resolved, true, '召回档案可解析');
+    assert.equal(resolved.profileName, 'UIDesigner-default');
+    assert.deepEqual(resolved.targets, ['UIDesigner工作日志日记本']);
+    assert.equal(resolver.resolveForAgent('Nexus').code, 'RECALL_NO_PROFILE', '未登记的 agent 无档案');
 });
 
 test('synthesize：冲突转 pending_confirm，改名后迁移画像与知识库目录且仅重跑 synthesize', async () => {

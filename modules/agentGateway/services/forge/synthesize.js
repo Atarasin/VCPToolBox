@@ -7,6 +7,7 @@ const path = require('path');
 const { readBlueprint, blueprintLibraryName } = require('./blueprint');
 const { scanTextForSecrets } = require('./secretScan');
 const { detectNameConflicts, listExistingAgentNames, ForgeNameConflictError } = require('./nameConflict');
+const { areDiaryNamesEquivalent } = require('../../policy/mcpAgentMemoryPolicy');
 
 /**
  * 人设合成（synthesize）与注册绑定（§3.5 / §3.6）。
@@ -23,7 +24,7 @@ const { detectNameConflicts, listExistingAgentNames, ForgeNameConflictError } = 
  *   restrictedLibraries（D5：默认只对新专家开放）+ guidance 引导条目。
  */
 
-const FALLBACK_TEMPLATE = "# 身份定义\n## 基本信息\n- **Name**: {{personaNameDot}}{{displayName}}（{{name}}）\n- **Author**: ForgeMaster（专家铸造炉铸造）\n- **Version**: 1.0\n- **Role**: {{role}}，通过 MCP (Model Context Protocol) 协议为外部客户端提供专业咨询。\n\n{{personaSection}}\n## 核心设定\n{{coreSettings}}\n\n## MCP 工具调用强制规范\n\n**所有 MCP 工具调用必须显式传入 `agentId` 参数，且值必须为 `\"{{name}}\"`。** 涉及的工具包括但不限于：\n- `gateway_agent_bootstrap`\n- `gateway_knowledge_search`\n\n示例：\n```json\n{ \"agentId\": \"{{name}}\", \"query\": \"...\", \"libraries\": [\"{{libraryName}}\"] }\n```\n\n# 知识库调用纪律\n\n你的全部专业技能来自专属冷知识库 **{{libraryName}}**（铸造时经检索-蒸馏-溯源入库，每条知识带出处）。使用纪律：\n\n1. **接手问题先查库**：回答专业问题前，先调用 `gateway_knowledge_search`，显式携带 `agentId: \"{{name}}\"` 与 `libraries: [\"{{libraryName}}\"]`；检索结果不足时换关键词再查。\n2. **答完标注出处**：回答中引用知识库内容时，注明来源（URL/抓取时间在知识卡 frontmatter 中）。\n3. **知识不足就登记缺口**：发现自己答不好、知识库查不到、或低置信时，调用 `gateway_gap_report` 登记 `{ agentId: \"{{name}}\", subskillId, question, whyInsufficient }`，等待定向进修补课。\n4. **红线：专业记忆两条线**——你的「本事」只存在于冷知识库，绝不写入任何记忆日记本；日记本记「经历」，知识库存「本事」，两者永不交叉。你不具备任何记忆写工具的调用权限，也不要尝试。\n5. **受限环境直接作答（严禁工具语法泄漏）**：当环境中没有可调用的 MCP 工具（考试/受限会话，资料已由系统给定）时，不要尝试调用工具——基于已给定资料与公认专业原则直接作答，超出资料的部分标注「（通行原则，库内无直接资料）」。严禁把任何工具调用语法（<invoke>、DSML 标记、「始」「末」协议块等）当作回答输出——工具标记文本不是回答。\n\n# 子技能清单与考试标准\n\n{{subskillList}}\n\n# 行为准则\n\n1. **谋定而后动**：先查库（`gateway_knowledge_search`），再作答；查不到时用公认专业原则给出判断并标注「（通行原则，库内无直接资料）」，不凭空编造、也不整体拒答（宁可缺，不可编）。\n2. **专业与溯源**：观点给出依据与出处；多来源冲突时说明分歧，不武断。\n3. **边界意识**：职责范围内的问题深入回答；边界外的问题（{{boundaries}}）明确告知不在专业范围。\n";
+const FALLBACK_TEMPLATE = "# 身份定义\n## 基本信息\n- **Name**: {{personaNameDot}}{{displayName}}（{{name}}）\n- **Author**: ForgeMaster（专家铸造炉铸造）\n- **Version**: 1.0\n- **Role**: {{role}}，通过 MCP (Model Context Protocol) 协议为外部客户端提供专业咨询。\n\n{{personaSection}}\n## 核心设定\n{{coreSettings}}\n\n## MCP 工具调用强制规范\n\n**所有 MCP 工具调用必须显式传入 `agentId` 参数，且值必须为 `\"{{name}}\"`。** 涉及的工具包括但不限于：\n- `gateway_agent_bootstrap`\n- `gateway_knowledge_search`\n- `gateway_memory_write` / `gateway_recall_run`（工作日志读写，见「工作日志纪律」）\n\n示例：\n```json\n{ \"agentId\": \"{{name}}\", \"query\": \"...\", \"libraries\": [\"{{libraryName}}\"] }\n```\n\n# 知识库调用纪律\n\n你的全部专业技能来自专属冷知识库 **{{libraryName}}**（铸造时经检索-蒸馏-溯源入库，每条知识带出处）。使用纪律：\n\n1. **接手问题先查库**：回答专业问题前，先调用 `gateway_knowledge_search`，显式携带 `agentId: \"{{name}}\"` 与 `libraries: [\"{{libraryName}}\"]`；检索结果不足时换关键词再查。\n2. **答完标注出处**：回答中引用知识库内容时，注明来源（URL/抓取时间在知识卡 frontmatter 中）。\n3. **知识不足就登记缺口**：发现自己答不好、知识库查不到、或低置信时，调用 `gateway_gap_report` 登记 `{ agentId: \"{{name}}\", subskillId, question, whyInsufficient }`，等待定向进修补课。\n4. **红线：本事与经历两条线**——你的「本事」（专业技能知识）只存在于冷知识库，绝不写入工作日志；工作日志只记「经历」（解决用户问题的过程与复盘），两者永不交叉。知识缺口走 `gateway_gap_report` 登记进修，不在日志里攒知识点。\n5. **受限环境直接作答（严禁工具语法泄漏）**：当环境中没有可调用的 MCP 工具（考试/受限会话，资料已由系统给定）时，不要尝试调用工具——基于已给定资料与公认专业原则直接作答，超出资料的部分标注「（通行原则，库内无直接资料）」。严禁把任何工具调用语法（<invoke>、DSML 标记、「始」「末」协议块等）当作回答输出——工具标记文本不是回答。\n\n# 工作日志纪律（经历记忆）\n\n你有一本专属工作日志 **{{diaryName}}**（`gateway_memory_write` 写入 / `gateway_recall_run` 召回），记录你作为专家的「经历」，与冷知识库的「本事」分工：\n\n1. **接手问题先召回**：处理用户问题前，先调用 `gateway_recall_run`（显式 `agentId: \"{{name}}\"`）召回相关既往经历——同类问题的处理过程与结论、该用户的偏好与约束、踩过的坑；命中即复用，避免重复踩坑、重复追问。\n2. **事后沉淀经历**：完成一次有代表性的问题解决（或中途遇到值得记录的坑）时，调用 `gateway_memory_write` 写入 `{{diaryName}}`，`target.diary` 填 `\"{{diaryName}}\"`：问题背景、解决过程、关键取舍与最终结论、用户偏好/约束、复盘心得；`tags` 用子技能 id 标注所属领域，便于日后检索。\n3. **只记经历，不记本事（红线 1）**：日志写「怎么解决的过程」与「上下文/偏好/复盘」，不写专业知识点本体——知识点缺口走 `gateway_gap_report`，由铸造炉进修蒸馏进冷知识库；考试/盲测等受限环境严禁调用任何记忆工具。\n\n# 子技能清单与考试标准\n\n{{subskillList}}\n\n# 行为准则\n\n1. **谋定而后动**：先召回既往经历（`gateway_recall_run`），再查库（`gateway_knowledge_search`），再作答；查不到时用公认专业原则给出判断并标注「（通行原则，库内无直接资料）」，不凭空编造、也不整体拒答（宁可缺，不可编）。\n2. **专业与溯源**：观点给出依据与出处；多来源冲突时说明分歧，不武断。\n3. **边界意识**：职责范围内的问题深入回答；边界外的问题（{{boundaries}}）明确告知不在专业范围。\n";
 
 // 人格使用边界（固定条款，模板级确定性内容，不交给画像/LLM 自由发挥）。
 const PERSONA_BOUNDARY_CLAUSE = '> 人格使用边界：人设只体现在称呼、语气与表达习惯上；专业内容的严谨性、结构化、溯源纪律与边界意识不因人设打折；在考试或受限环境中，答题纪律优先于人设表达。';
@@ -34,6 +35,22 @@ function isNonEmptyStr(value) {
 
 function toNonEmptyList(value) {
     return Array.isArray(value) ? value.filter(isNonEmptyStr) : [];
+}
+
+/**
+ * 专家工作日志日记本名（§3.5 工作日志纪律）：与知识库名一样由 agent 名派生，
+ * 物理落盘目录为 dailynote/<name>工作日志/（DailyNote 归一化自动剥「日记本」后缀）。
+ */
+function expertDiaryName(name) {
+    return `${name}工作日志日记本`;
+}
+
+/**
+ * 日记作者（maid）：画像带人格时用人格名（日记里以人格名署名），否则用 agent 名。
+ */
+function resolveDiaryMaid(blueprint) {
+    const personaName = typeof blueprint.persona?.name === 'string' ? blueprint.persona.name.trim() : '';
+    return personaName || blueprint.name;
 }
 
 /**
@@ -82,6 +99,7 @@ function buildPersonaBlock(persona, displayName) {
 
 function renderPersona(template, blueprint) {
     const libraryName = blueprintLibraryName(blueprint.name);
+    const diaryName = expertDiaryName(blueprint.name);
     const responsibilities = (blueprint.scope?.responsibilities || []).join('、');
     const boundaries = (blueprint.scope?.boundaries || []).join('、');
     const role = `${blueprint.displayName}：${responsibilities || '专业咨询'}`;
@@ -89,6 +107,7 @@ function renderPersona(template, blueprint) {
         `- **职责范围**：${responsibilities || '（见画像）'}`,
         `- **明确边界**：${boundaries || '无特殊边界'}`,
         `- **知识来源**：专属冷知识库「${libraryName}」——铸造流水线按子技能检索-蒸馏-溯源入库，每条知识带出处（URL + 抓取时间）。`,
+        `- **经历载体**：专属工作日志「${diaryName}」——上岗后解决用户问题的过程、复盘与用户偏好记这里；与知识库「两条线不混写」。`,
         '- **专业操守**：宁可缺，不可编——知识库没有的不编造，答不好就登记缺口等进修。'
     ].join('\n');
     const subskillList = blueprint.subskills.map((subskill, index) => {
@@ -101,6 +120,7 @@ function renderPersona(template, blueprint) {
         .replace(/\{\{personaNameDot\}\}/g, personaBlock.nameDot)
         .replace(/\{\{displayName\}\}/g, blueprint.displayName)
         .replace(/\{\{libraryName\}\}/g, libraryName)
+        .replace(/\{\{diaryName\}\}/g, diaryName)
         .replace(/\{\{role\}\}/g, role)
         .replace(/\{\{personaSection\}\}/g, personaBlock.section)
         .replace(/\{\{coreSettings\}\}/g, coreSettings)
@@ -169,6 +189,89 @@ async function restrictKnowledgeLibrary({ policyPath, libraryName, name }) {
     return policy.restrictedLibraries[libraryName];
 }
 
+/**
+ * 记忆策略登记（§3.6 注册绑定四件套之三）：为专家在 mcp_agent_memory_policy.json
+ * 写入工作日志条目（maid + allowed/defaultDiaries）。该文件热加载，写入即生效——
+ * gateway_memory_write 的写门禁与 gateway_memory_search/context_assemble 的
+ * 日记范围都从这里解析；无条目 = 无 maid = 写入直接 500（buildMemoryWriteMaid）。
+ * 已有条目只增不减：日志不在白名单则追加，maid 缺省才补（人工调优优先，红线 3）。
+ */
+async function registerMemoryPolicy({ memoryPolicyPath, name, maid, diaryName }) {
+    const policy = await readJsonOr(memoryPolicyPath, { agents: {} });
+    if (!policy.agents || typeof policy.agents !== 'object' || Array.isArray(policy.agents)) {
+        policy.agents = {};
+    }
+    const entry = policy.agents[name] && typeof policy.agents[name] === 'object' && !Array.isArray(policy.agents[name])
+        ? policy.agents[name]
+        : null;
+    if (!entry) {
+        policy.agents[name] = {
+            maid,
+            allowedDiaries: [diaryName],
+            defaultDiaries: [diaryName]
+        };
+        await writeJsonAtomic(memoryPolicyPath, policy);
+        return { registered: true, entry: policy.agents[name] };
+    }
+    let changed = false;
+    const allowedDiaries = Array.isArray(entry.allowedDiaries) ? entry.allowedDiaries : [];
+    if (!allowedDiaries.some((allowed) => areDiaryNamesEquivalent(allowed, diaryName))) {
+        allowedDiaries.push(diaryName);
+        entry.allowedDiaries = allowedDiaries;
+        changed = true;
+    }
+    const defaultDiaries = Array.isArray(entry.defaultDiaries) ? entry.defaultDiaries : [];
+    if (defaultDiaries.length === 0) {
+        entry.defaultDiaries = [diaryName];
+        changed = true;
+    }
+    if (!isNonEmptyStr(entry.maid)) {
+        entry.maid = maid;
+        changed = true;
+    }
+    if (changed) {
+        await writeJsonAtomic(memoryPolicyPath, policy);
+    }
+    return { registered: !changed, entry };
+}
+
+/**
+ * 召回档案登记（§3.6 注册绑定四件套之四）：recall_profiles.json 写入专家的
+ * 默认召回档案（gateway_recall_run 无档案即 RECALL_NO_PROFILE，召回链路不通）。
+ * 档案参数对齐 ForgeMaster-default（rag + time/rerank/tagMemo/truncate 20）。
+ * 已有 agents 条目不覆盖（人工调优优先，同 guidance 语义）。
+ */
+async function registerRecallProfile({ recallProfilesPath, name, diaryName }) {
+    const config = await readJsonOr(recallProfilesPath, { agents: {}, profiles: {} });
+    if (!config.agents || typeof config.agents !== 'object' || Array.isArray(config.agents)) {
+        config.agents = {};
+    }
+    if (!config.profiles || typeof config.profiles !== 'object' || Array.isArray(config.profiles)) {
+        config.profiles = {};
+    }
+    if (config.agents[name]) {
+        return { registered: false, profileName: null };
+    }
+    const profileName = `${name}-default`;
+    config.agents[name] = {
+        defaultProfile: profileName,
+        allowedProfiles: [profileName],
+        targets: [diaryName]
+    };
+    if (!config.profiles[profileName]) {
+        config.profiles[profileName] = {
+            minScore: 0.5,
+            rules: [{
+                baseMode: 'rag',
+                targets: { diaries: [diaryName], aggregate: true, kMultiplier: 1.0 },
+                modifiers: { time: true, rerank: true, tagMemo: true, truncate: 20 }
+            }]
+        };
+    }
+    await writeJsonAtomic(recallProfilesPath, config);
+    return { registered: true, profileName };
+}
+
 async function registerGuidance({ guidancePath, blueprint }) {
     const guidance = await readJsonOr(guidancePath, { version: 1, shared: { workflow: [], memoryWritePolicy: { write: [], skip: [] } }, agents: {} });
     if (!guidance.agents || typeof guidance.agents !== 'object') {
@@ -178,6 +281,7 @@ async function registerGuidance({ guidancePath, blueprint }) {
         return { registered: false }; // 已有条目不覆盖（人工调优优先）。
     }
     const libraryName = blueprintLibraryName(blueprint.name);
+    const diaryName = expertDiaryName(blueprint.name);
     guidance.agents[blueprint.name] = {
         displayName: blueprint.displayName,
         memoryDefaults: {
@@ -187,6 +291,8 @@ async function registerGuidance({ guidancePath, blueprint }) {
         workflow: [
             `新会话首次实质回答前先调 gateway_agent_bootstrap（显式 agentId: "${blueprint.name}"）获取引导。`,
             `回答专业问题前先 gateway_knowledge_search（agentId: "${blueprint.name}"，libraries: ["${libraryName}"]），答完标注出处。`,
+            `处理用户问题前先 gateway_recall_run（agentId: "${blueprint.name}"）召回「${diaryName}」中的既往经历——同类问题的处理过程与结论、用户偏好与约束、踩过的坑。`,
+            `完成有代表性的问题解决（或遇到值得记录的坑）后，用 gateway_memory_write 写入「${diaryName}」（问题背景/解决过程/取舍与结论/用户偏好，tags 用子技能 id 标注）；红线：专业知识点只进冷知识库（缺口走 gateway_gap_report），日志只记经历。`,
             '低置信或知识不足时调用 gateway_gap_report 登记缺口。'
         ],
         skill: {
@@ -201,7 +307,7 @@ async function registerGuidance({ guidancePath, blueprint }) {
 
 // ── synthesize 步骤 ───────────────────────────────────────────────────
 
-function createSynthesizeStepRunner({ agentMapPath, knowledgePolicyPath, guidanceConfigPath }) {
+function createSynthesizeStepRunner({ agentMapPath, knowledgePolicyPath, guidanceConfigPath, memoryPolicyPath, recallProfilesPath }) {
     return async function runSynthesizeStep(ctx) {
         const { baseDir, agentDirectoryPort } = ctx;
         if (!ctx.blueprintPath) {
@@ -212,6 +318,7 @@ function createSynthesizeStepRunner({ agentMapPath, knowledgePolicyPath, guidanc
         }
         const blueprint = await readBlueprint(ctx.blueprintPath);
         const libraryName = blueprintLibraryName(blueprint.name);
+        const diaryName = expertDiaryName(blueprint.name);
 
         // 红线 3 最后一道门禁：blueprint 确认后 agent_map 可能已被外部改动。
         if (!ctx.overwriteApproved) {
@@ -237,7 +344,8 @@ function createSynthesizeStepRunner({ agentMapPath, knowledgePolicyPath, guidanc
         await fsp.writeFile(tmpPath, `${personaBody}\n`, 'utf8');
         await fsp.rename(tmpPath, personaPath);
 
-        // 注册绑定三件套（§3.6）：agent_map（热更新）→ 权限（D5 受限）→ guidance。
+        // 注册绑定四件套（§3.6）：agent_map（热更新）→ 权限（D5 受限）→ guidance
+        // → 记忆策略 + 召回档案（工作日志两件，均热加载）。
         const agentMap = await registerAgentMap({
             agentMapPath,
             name: blueprint.name,
@@ -246,9 +354,16 @@ function createSynthesizeStepRunner({ agentMapPath, knowledgePolicyPath, guidanc
         });
         const restricted = await restrictKnowledgeLibrary({ policyPath: knowledgePolicyPath, libraryName, name: blueprint.name });
         const guidance = await registerGuidance({ guidancePath: guidanceConfigPath, blueprint });
+        const memoryPolicy = await registerMemoryPolicy({
+            memoryPolicyPath,
+            name: blueprint.name,
+            maid: resolveDiaryMaid(blueprint),
+            diaryName
+        });
+        const recallProfile = await registerRecallProfile({ recallProfilesPath, name: blueprint.name, diaryName });
 
         return {
-            summary: `人设已合成并注册：forge/${blueprint.name}.txt + agent_map 登记 + 库「${libraryName}」受限白名单 [${restricted.allowedAgents.join(', ')}] + guidance ${guidance.registered ? '已写入' : '已存在（保留人工调优）'}`,
+            summary: `人设已合成并注册：forge/${blueprint.name}.txt + agent_map 登记 + 库「${libraryName}」受限白名单 [${restricted.allowedAgents.join(', ')}] + guidance ${guidance.registered ? '已写入' : '已存在（保留人工调优）'} + 工作日志「${diaryName}」${memoryPolicy.registered && recallProfile.registered ? '已配好（记忆策略+召回档案）' : '策略已存在（保留人工调优）'}`,
             artifacts: [
                 path.relative(path.join(baseDir, '..'), personaPath),
                 path.relative(path.join(baseDir, '..'), agentMapPath)
@@ -258,9 +373,12 @@ function createSynthesizeStepRunner({ agentMapPath, knowledgePolicyPath, guidanc
                 displayName: blueprint.displayName,
                 personaPath,
                 libraryName,
+                diaryName,
                 agentMapEntry: agentMap.entry,
                 restrictedAgents: restricted.allowedAgents,
-                guidanceRegistered: guidance.registered
+                guidanceRegistered: guidance.registered,
+                memoryPolicyRegistered: memoryPolicy.registered,
+                recallProfileRegistered: recallProfile.registered
             }
         };
     };
@@ -301,8 +419,12 @@ module.exports = {
     renderPersona,
     loadTemplate,
     createSynthesizeStepRunner,
+    expertDiaryName,
+    resolveDiaryMaid,
     registerAgentMap,
     restrictKnowledgeLibrary,
     registerGuidance,
+    registerMemoryPolicy,
+    registerRecallProfile,
     renameAtSynthesize
 };

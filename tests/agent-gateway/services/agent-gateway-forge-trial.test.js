@@ -313,6 +313,8 @@ test('trial：盲测作答上下文只含专属库知识卡（红线 1 白名单
         assert.ok(content.includes('色轮与色彩三属性'), '上下文注入知识卡');
         assert.ok(content.includes('唯一的专业资料来源'), '明示只用知识库');
         assert.ok(!content.includes('gateway_memory'), '无记忆工具');
+        assert.ok(!content.includes('gateway_recall_run'), '无召回工具');
+        assert.ok(!content.includes('# 工作日志纪律'), '工作日志章节整章剥除（上岗后才适用的指令不进考场）');
     }
 });
 

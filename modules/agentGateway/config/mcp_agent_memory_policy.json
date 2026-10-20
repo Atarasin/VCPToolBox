@@ -62,6 +62,15 @@
       "defaultDiaries": [
         "ForgeMaster铸造经验日记本"
       ]
+    },
+    "yanchi_ui": {
+      "maid": "砚尺",
+      "allowedDiaries": [
+        "yanchi_ui工作日志日记本"
+      ],
+      "defaultDiaries": [
+        "yanchi_ui工作日志日记本"
+      ]
     }
   }
 }

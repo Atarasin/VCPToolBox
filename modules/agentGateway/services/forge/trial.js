@@ -853,6 +853,24 @@ async function completeBlindAnswer({ llm, llmConfig, prompt, questionId, logger 
 }
 
 /**
+ * 盲测环境剥除工作日志指令（红线 1：考试上下文零记忆工具）。
+ * 人设的「工作日志纪律」章节整章剥除；散见的记忆工具提及（MCP 工具清单行、
+ * 行为准则「先召回既往经历」）就地收敛——考试环境不该看到任何
+ * gateway_memory_* / gateway_recall_run 字样，从根上杜绝工具语法泄漏诱导。
+ */
+function stripWorkLogForExam(persona) {
+    return persona
+        // 整章：# 工作日志纪律（经历记忆）……直到下一个一级标题
+        .replace(/^# 工作日志纪律（经历记忆）\n[\s\S]*?(?=\n# )/m, '')
+        // MCP 工具清单中的日志读写行
+        .replace(/^[-*] `gateway_memory_write`[^\n]*\n?/m, '')
+        // 行为准则：先召回既往经历（gateway_recall_run），再查库 → 先查库
+        .replace(/先召回既往经历（`gateway_recall_run`），再查库/g, '先查库')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/**
  * 盲测 + 判卷 + 评分 + 报告落盘的共享实现（trial 首考与回填后 retest 复用）。
  * exam 由调用方给定（retest 传原考卷，实现「同一套考题重测」§3.7）。
  */
@@ -861,10 +879,10 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
     const libraryName = blueprintLibraryName(blueprint.name);
     // 索引就绪闸门（P1.3）：刚写盘的知识未被消化时盲测检索不到——等待或显式告警。
     const indexReadiness = await waitForIndexReadiness(knowledgeStorePort, { logger });
-    // 盲测（红线 1）：代查专属库 + 人设作答
+    // 盲测（红线 1）：代查专属库 + 人设作答（人设中的工作日志指令整段剥除）
     let persona = '';
         try {
-            persona = await fsp.readFile(path.join(baseDir, `${blueprint.name}.txt`), 'utf8');
+            persona = stripWorkLogForExam(await fsp.readFile(path.join(baseDir, `${blueprint.name}.txt`), 'utf8'));
         } catch {
             persona = `你是${blueprint.displayName}，只依据给定知识库资料作答。`;
         }
@@ -1155,6 +1173,7 @@ module.exports = {
     gradeEntriesWithCoverage,
     scoreGrading,
     runBlindAndGrade,
+    stripWorkLogForExam,
     jevCrossCheck,
     blindSearch,
     renderReportMarkdown

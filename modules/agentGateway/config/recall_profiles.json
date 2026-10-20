@@ -61,6 +61,15 @@
       "targets": [
         "ForgeMaster铸造经验日记本"
       ]
+    },
+    "yanchi_ui": {
+      "defaultProfile": "yanchi_ui-default",
+      "allowedProfiles": [
+        "yanchi_ui-default"
+      ],
+      "targets": [
+        "yanchi_ui工作日志日记本"
+      ]
     }
   },
   "profiles": {
@@ -75,7 +84,7 @@
               "Nexus架构设计日记本"
             ],
             "aggregate": true,
-            "kMultiplier": 1.0
+            "kMultiplier": 1
           },
           "modifiers": {
             "time": true,
@@ -99,7 +108,7 @@
               "迈达斯量化小论坛学习笔记日记本"
             ],
             "aggregate": true,
-            "kMultiplier": 1.0
+            "kMultiplier": 1
           },
           "modifiers": {
             "time": true,
@@ -124,7 +133,7 @@
               "Yui日记本",
               "Yui的知识日记本"
             ],
-            "kMultiplier": 1.0
+            "kMultiplier": 1
           },
           "modifiers": {
             "time": true,
@@ -146,7 +155,7 @@
               "付鹏市场判断日记本"
             ],
             "aggregate": true,
-            "kMultiplier": 1.0
+            "kMultiplier": 1
           },
           "modifiers": {
             "time": true,
@@ -167,7 +176,28 @@
               "ForgeMaster铸造经验日记本"
             ],
             "aggregate": true,
-            "kMultiplier": 1.0
+            "kMultiplier": 1
+          },
+          "modifiers": {
+            "time": true,
+            "rerank": true,
+            "tagMemo": true,
+            "truncate": 20
+          }
+        }
+      ]
+    },
+    "yanchi_ui-default": {
+      "minScore": 0.5,
+      "rules": [
+        {
+          "baseMode": "rag",
+          "targets": {
+            "diaries": [
+              "yanchi_ui工作日志日记本"
+            ],
+            "aggregate": true,
+            "kMultiplier": 1
           },
           "modifiers": {
             "time": true,

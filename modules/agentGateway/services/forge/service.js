@@ -179,6 +179,8 @@ function createForgeRuntimeService(options = {}) {
         agentMapPath = null,
         knowledgePolicyPath = null,
         guidanceConfigPath = null,
+        memoryPolicyPath = null,
+        recallProfilesPath = null,
         jevPort = null,
         prices = null,
         defaultBudgetCny = DEFAULT_BUDGET_CNY,
@@ -210,6 +212,8 @@ function createForgeRuntimeService(options = {}) {
         agentMapPath,
         knowledgePolicyPath,
         guidanceConfigPath,
+        memoryPolicyPath,
+        recallProfilesPath,
         stepRunners
     });
     const effectiveLlmConfig = llmConfig !== null ? llmConfig : resolveForgeLlmConfig();
