@@ -169,6 +169,13 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
             const requestBody = { model, input: disableBatching ? batchTexts[0] : batchTexts };
             if (Number.isFinite(dimensions)) {
                 requestBody.dimensions = dimensions;
+            } else {
+                // 默认发送配置维度；不支持 dimensions 参数的模型可通过环境变量关闭。
+                const sendDimensions = String(process.env.EMBEDDING_SEND_DIMENSIONS || 'true').trim().toLowerCase() !== 'false';
+                const dim = parseInt(process.env.VECTORDB_DIMENSION, 10);
+                if (sendDimensions && !isNaN(dim)) {
+                    requestBody.dimensions = dim;
+                }
             }
             const requestHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` };
 

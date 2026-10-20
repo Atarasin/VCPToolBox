@@ -330,8 +330,10 @@ helloagents/
 # Windows 缩略图缓存
 Thumbs.db
 
+# 源码研究
 # ===== 编译产物 =====
 rust-vexus-lite/target/
+rust-vexus-lite/crates/vcp-tdb-index/target/
 Plugin/DailyNoteSearcher/src/target/
 Plugin/CodeSearcher/src/target/
 Plugin/PaperReader/paperreader-rs/target/
@@ -398,3 +400,6 @@ Plugin/VCPQQBotServer/bot-node-sdk-main
 开发日志/
 # eval 装入插件配置前留下的备份
 Plugin/RAGDiaryPlugin/*.eval-backup
+
+# Local native artifact archives; retain outside disposable build caches.
+/.vcp-native-archive/
