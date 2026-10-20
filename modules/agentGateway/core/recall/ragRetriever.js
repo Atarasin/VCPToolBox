@@ -595,8 +595,8 @@ async function collectRagItems(params) {
                     ragRetrieverPort.searchDiary(targetDiary, finalQueryVector, {
                         k: semanticSearchK,
                         tagBoost: ragOptions.tagMemo ? effectiveTagBoost : 0,
-                        coreTags,
-                        geodesicRerank: ragOptions.tagMemoGeodesic === true
+                        coreTags
+                        // geodesicRerank 已随上游 TagMemo/DTSC 退役，不再向宿主转发。
                     })
                 );
                 return Array.isArray(results)

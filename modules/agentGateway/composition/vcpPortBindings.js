@@ -74,12 +74,23 @@ function createProtocolConfigSnapshot(pluginManager) {
 function createHealthSnapshot(pluginManager, knowledgeBaseManager) {
     return Object.freeze({
         pluginManagerReady: Boolean(pluginManager?.plugins && typeof pluginManager.getPlugin === 'function'),
-        knowledgeBaseReady: Boolean(knowledgeBaseManager && typeof knowledgeBaseManager.listDiaryNames === 'function')
+        // 新宿主（Rust 中央存储）暴露 listDistinctDiaries；旧宿主为 listDiaryNames。
+        knowledgeBaseReady: Boolean(knowledgeBaseManager
+            && (typeof knowledgeBaseManager.listDiaryNames === 'function'
+                || typeof knowledgeBaseManager.listDistinctDiaries === 'function'))
     });
 }
 
 function listDiariesFromHost(manager) {
     if (typeof manager?.listDiaryNames === 'function') return Promise.resolve(manager.listDiaryNames());
+    if (typeof manager?.listDistinctDiaries === 'function') {
+        // 新宿主 JS 侧不再持有 SQLite 句柄，日记清单走原生 API；失败降级为空清单
+        // 而不是让整条召回链路抛错（显式 diaryScopes 在空清单下仍可解析）。
+        return manager.listDistinctDiaries().catch((error) => {
+            console.warn(`[AgentGatewayRecall] listDistinctDiaries 失败，降级返回空清单: ${error?.message || error}`);
+            return [];
+        });
+    }
     if (!manager?.db?.prepare) return Promise.resolve([]);
     const rows = manager.db.prepare('SELECT DISTINCT diary_name FROM files ORDER BY diary_name COLLATE NOCASE').all();
     return Promise.resolve(rows.map((row) => normalizeString(row.diary_name)).filter(Boolean));
@@ -108,6 +119,37 @@ function getFileMetadataFromHost(manager, sourcePath) {
     } : null);
 }
 
+/**
+ * 新宿主（Rust 中央存储）没有 JS 侧 SQLite 句柄，也没有 getOpenClawFileMetadata；
+ * 文件元数据经原生 hydrateChunksByFilePaths 回填。原生行不含 updatedAt 与文件级
+ * tags：时间戳由调用方按路径推导（ragItemNormalizer 已有兜底），tags 走结果自带字段。
+ */
+async function getFileMetadataFromNative(manager, sourcePath) {
+    const normalized = normalizeString(sourcePath);
+    if (!normalized) return null;
+    const posix = normalized.replace(/\\/g, '/');
+    const variants = [...new Set([
+        posix,
+        posix.replace(/\//g, '\\'),
+        `/${posix}`,
+        `\\${posix.replace(/\//g, '\\')}`
+    ])];
+    try {
+        const rows = await manager.hydrateChunksByFilePaths(variants);
+        const row = Array.isArray(rows) ? rows[0] : null;
+        if (!row) return null;
+        return {
+            sourceDiary: normalizeString(row.diaryName),
+            sourcePath: normalizeString(row.sourceFile),
+            updatedAt: null,
+            tags: []
+        };
+    } catch (error) {
+        console.warn(`[AgentGatewayRecall] 原生文件元数据回填失败 (${normalized}): ${error?.message || error}`);
+        return null;
+    }
+}
+
 function createEmbeddingBinding(knowledgeBaseManager, ragPlugin, embeddingUtils) {
     if (typeof ragPlugin?.getSingleEmbeddingCached === 'function') {
         return (text) => ragPlugin.getSingleEmbeddingCached(text);
@@ -125,8 +167,10 @@ function createEmbeddingBinding(knowledgeBaseManager, ragPlugin, embeddingUtils)
 
 /**
  * D1·方案A：river 原生查询失败时显式降级到 KNN 搜索并留痕（审计 + 告警日志），
- * 不向外部客户端透传上游异常。降级路径与 searchDiary 绑定保持同一调用形状，
- * 含历史约定的 1.33 融合系数（红线：KNN 路径系数锁定）。
+ * 不向外部客户端透传上游异常。
+ * 新宿主的 manager.search 内部同样走 executeNativeRiverQuery，不再是可降级的独立
+ * KNN 路径；降级必须改走纯 ANN 的 searchKnn（不依赖 Memo 资产，不感知、不增强）。
+ * 旧宿主无 searchKnn 时保持历史 search 调用形状（含 1.33 融合系数红线）。
  */
 async function executeRiverQueryWithKnnFallback(manager, query, options = {}) {
     try {
@@ -152,18 +196,31 @@ async function executeRiverQueryWithKnnFallback(manager, query, options = {}) {
             return { results: [], degraded: { engine: 'knn', reason: 'river_query_failed', errorCode, errorMessage } };
         }
         const fallbackK = Math.max(1, Math.floor(Number(options.topK) || 8));
-        const tagBoost = Math.max(0, Number(options.sourceObservationConfig?.baseTagBoost) || 0);
-        const coreTags = Array.isArray(options.coreTags)
-            ? options.coreTags.map((tag) => normalizeString(tag)).filter(Boolean)
-            : [];
+        const useNativeKnn = typeof manager.searchKnn === 'function';
         const perDiaryResults = await Promise.all(diaryNames.map(async (diary) => {
-            const items = await manager.search(
-                diary, query?.vector, fallbackK, tagBoost, coreTags, 1.33, null
-            );
-            return (Array.isArray(items) ? items : []).map((item) => ({
-                ...item,
-                sourceDiary: normalizeString(item?.sourceDiary || item?.diaryName) || diary
-            }));
+            try {
+                const items = useNativeKnn
+                    ? await manager.searchKnn(diary, query?.vector, fallbackK)
+                    : await manager.search(
+                        diary, query?.vector, fallbackK,
+                        Math.max(0, Number(options.sourceObservationConfig?.baseTagBoost) || 0),
+                        Array.isArray(options.coreTags)
+                            ? options.coreTags.map((tag) => normalizeString(tag)).filter(Boolean)
+                            : [],
+                        1.33, null
+                    );
+                return (Array.isArray(items) ? items : []).map((item) => ({
+                    ...item,
+                    sourceDiary: normalizeString(item?.sourceDiary || item?.diaryName) || diary
+                }));
+            } catch (fallbackError) {
+                // 单本日记降级失败不应让整条召回中断；留痕后跳过该日记。
+                console.warn(
+                    `[AgentGatewayRecall] KNN 降级检索失败，跳过日记 "${diary}": ` +
+                    `${fallbackError?.message || fallbackError}`
+                );
+                return [];
+            }
         }));
         return {
             results: perDiaryResults.flat(),
@@ -178,11 +235,17 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
         embedQuery: createEmbeddingBinding(knowledgeBaseManager, ragPlugin, embeddingUtils),
         listDiaries: () => listDiariesFromHost(knowledgeBaseManager),
         // The host search API requires the historical 1.33 fusion coefficient.
+        // geodesicRerank 已随上游 TagMemo/DTSC 检索退役（宿主对该选项直接抛错），
+        // 此处不再转发；RiverMemo 统一管线内含重排。
         searchDiary: typeof knowledgeBaseManager?.search === 'function'
-            ? (diary, vector, options = {}) => knowledgeBaseManager.search(
-                diary, vector, options.k, options.tagBoost || 0, options.coreTags || [], 1.33,
-                options.geodesicRerank ? { geodesicRerank: true } : null
-            )
+            ? (diary, vector, options = {}) => {
+                if (options.geodesicRerank) {
+                    console.warn('[AgentGatewayRecall] tagMemo.geodesic 已随上游 TagMemo/DTSC 退役，忽略该选项（RiverMemo 统一管线内含重排）。');
+                }
+                return knowledgeBaseManager.search(
+                    diary, vector, options.k, options.tagBoost || 0, options.coreTags || [], 1.33
+                );
+            }
             : null,
         // 生产调用形状对齐 RAGDiaryPlugin 原生路径：query = { text, vector }；
         // options 含 diaryNames / preparedMemoObservation / topK / candidateK / coreTags /
@@ -241,9 +304,11 @@ function createRagBindings(knowledgeBaseManager, ragPlugin, embeddingUtils) {
         rerank: typeof ragPlugin?._rerankDocuments === 'function'
             ? (query, items, k, options) => ragPlugin._rerankDocuments(query, items, k, options)
             : null,
-        getFileMetadata: knowledgeBaseManager?.getOpenClawFileMetadata || knowledgeBaseManager?.db?.prepare
+        getFileMetadata: typeof knowledgeBaseManager?.getOpenClawFileMetadata === 'function' || knowledgeBaseManager?.db?.prepare
             ? (sourcePath) => getFileMetadataFromHost(knowledgeBaseManager, sourcePath)
-            : null,
+            : typeof knowledgeBaseManager?.hydrateChunksByFilePaths === 'function'
+                ? (sourcePath) => getFileMetadataFromNative(knowledgeBaseManager, sourcePath)
+                : null,
         getDiaryContent: typeof ragPlugin?.getDiaryContent === 'function'
             ? (diary) => ragPlugin.getDiaryContent(diary)
             : null,

@@ -344,6 +344,9 @@ function buildRagOptionsFromModifiers(modifiers, baseK = 5) {
                     options.tagMemoWeight = modifierValue.weight;
                 }
                 if (modifierValue.geodesic === true) {
+                    // 上游已退役测地线重排（宿主对 geodesicRerank 直接抛错）；选项仅为
+                    // 诊断留痕保留，绑定层不再转发到宿主。
+                    console.warn('[AgentGatewayRecall] modifiers.tagMemo.geodesic 已退役（RiverMemo 统一管线内含重排），该子选项将被忽略。');
                     options.tagMemoGeodesic = true;
                 }
             } else if (modifierKey === 'rerank' && modifierValue && typeof modifierValue === 'object' && !Array.isArray(modifierValue)) {
