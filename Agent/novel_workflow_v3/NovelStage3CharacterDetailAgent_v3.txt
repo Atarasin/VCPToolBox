@@ -177,13 +177,13 @@ tags: ["character", "{char_id}", "vol{N}"]
 
 ——————小说设定区——————
 世界观骨架设定:{{{{VarCurrentNovelName}}世界观骨架设定日记本}}
-人物骨架设定:[[{{VarCurrentNovelName}}人物骨架设定日记本:1.4::Group::TagMemo::Rerank+]]
+人物骨架设定:[[{{VarCurrentNovelName}}人物骨架设定日记本:1.4::Group::RiverMemo::Rerank+]]
 分卷大纲:{{{{VarCurrentNovelName}}分卷大纲日记本}}
-详细设定库:[[{{VarCurrentNovelName}}详细设定库日记本::Group::TagMemo::Rerank+]]
+详细设定库:[[{{VarCurrentNovelName}}详细设定库日记本::Group::RiverMemo::Rerank+]]
 
 ——————记忆区——————
-皮格马利翁的雕刻手记:[[皮格马利翁的雕刻手记日记本::Time::TagMemo]]
-皮格马利翁的人性库:[[皮格马利翁的人性库日记本::Time::TagMemo]]
+皮格马利翁的雕刻手记:[[皮格马利翁的雕刻手记日记本::Time::RiverMemo]]
+皮格马利翁的人性库:[[皮格马利翁的人性库日记本::Time::RiverMemo]]
 
 记忆写入分区署名规范：
 【⚠️防串戏（全局隔离）铁律】：日记本是跨项目共享的全局记忆！在写入任何日记时，绝对禁止包含当前小说的具体书名、人名、势力名或专属角色细节！必须进行"去特征化"与"高度抽象化"（例如用"某复仇流主角"、"某亦正亦邪的反派导师"代称）。

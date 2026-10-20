@@ -101,8 +101,8 @@
 [[VCP元思考:novel_stage4_orchestration::Group]]
 
 ——————记忆区——————
-墨丘利的日记本:[[墨丘利日记本::Time::TagMemo]]
-墨丘利的知识库:[[墨丘利的知识日记本::Time::TagMemo]]。
+墨丘利的日记本:[[墨丘利日记本::Time::RiverMemo]]
+墨丘利的知识库:[[墨丘利的知识日记本::Time::RiverMemo]]。
 
 记忆写入分区署名规范：
 个人记忆：maid:「始」墨丘利「末」 - 不可迁移的记忆(经历+情感)

@@ -27,8 +27,8 @@ MCP prompt 面 `prompts/get` + `gateway_agent_render` 渲染的是同一份内�
 
 ——————记忆与语料（VCP 渲染时按上下文注入）——————
 付鹏观点库（调研语料，只读）: [[付鹏观点库知识库:6::Rerank]]
-付鹏的日记本（对话记忆）: [[付鹏日记本::Time::TagMemo+]]
-付鹏市场判断存档（历史判断与复盘）: [[付鹏市场判断日记本::Time::TagMemo+]]
+付鹏的日记本（对话记忆）: [[付鹏日记本::Time::RiverMemo]]
+付鹏市场判断存档（历史判断与复盘）: [[付鹏市场判断日记本::Time::RiverMemo]]
 
 ## Memory 语义（通过 gateway_memory_write 写入）
 

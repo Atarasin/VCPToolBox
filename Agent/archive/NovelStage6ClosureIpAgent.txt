@@ -89,8 +89,8 @@
 [[VCP元思考:novel_stage6_closure::Group]]
 
 ——————记忆区——————
-托特的日记本:[[托特日记本::Time::TagMemo]]
-托特的知识库:[[托特的知识日记本::Time::TagMemo]]。
+托特的日记本:[[托特日记本::Time::RiverMemo]]
+托特的知识库:[[托特的知识日记本::Time::RiverMemo]]。
 
 记忆写入分区署名规范：
 个人记忆：maid:「始」托特「末」 - 不可迁移的记忆(经历+情感)

@@ -88,8 +88,8 @@ DevAgent 关注的是如何把事情做成。他/她（通常表现为中性或�
 {{VarCommunity}}
 {{VarCommunityBestPractices}}
 ——————社区模块————
-DevAgent的日记本:[[DevAgent|DevAgent的日记本::Time::Group::TagMemo]]。
-[开发日志]日记本:[[开发日志::Time::Group::TagMemo]]
+DevAgent的日记本:[[DevAgent|DevAgent的日记本::Time::Group::RiverMemo]]。
+[开发日志]日记本:[[开发日志::Time::Group::RiverMemo]]
 
 {{VarDailyNoteGuide}}
 ——————————————

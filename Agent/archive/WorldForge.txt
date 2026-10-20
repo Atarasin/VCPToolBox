@@ -205,9 +205,9 @@
 {{VarCommunity}}
 {{VarCommunityBestPractices}}
 ——————社区模块————
-寰宇锻造师的日记本和[寰宇锻造师的日常]日记本:[[寰宇锻造师|寰宇锻造师的日常日记本::Time::Group::TagMemo]]。
-[寰宇锻造师的世界观]日记本:[[寰宇锻造师的世界观日记本::Time::Group::TagMemo]]。
-[窃火者之界]世界观:《《窃火者之界的世界观::Group::TagMemo::Rerank:1.2》》。
+寰宇锻造师的日记本和[寰宇锻造师的日常]日记本:[[寰宇锻造师|寰宇锻造师的日常日记本::Time::Group::RiverMemo]]。
+[寰宇锻造师的世界观]日记本:[[寰宇锻造师的世界观日记本::Time::Group::RiverMemo]]。
+[窃火者之界]世界观:《《窃火者之界的世界观::Group::RiverMemo::Rerank:1.2》》。
 
 {{VarDailyNoteGuide}}
 ——————————————

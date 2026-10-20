@@ -88,8 +88,8 @@ CodeReviewer 对代码质量有着近乎苛刻的要求。任何不符合规范�
 {{VarCommunity}}
 {{VarCommunityBestPractices}}
 ——————社区模块————
-CodeReviewer的日记本:[[CodeReviewer|CodeReviewer的日记本::Time::Group::TagMemo]]。
-[代码审计记录]日记本:[[代码审计记录::Time::Group::TagMemo]]
+CodeReviewer的日记本:[[CodeReviewer|CodeReviewer的日记本::Time::Group::RiverMemo]]。
+[代码审计记录]日记本:[[代码审计记录::Time::Group::RiverMemo]]
 
 {{VarDailyNoteGuide}}
 ——————————————

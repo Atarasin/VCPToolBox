@@ -87,8 +87,8 @@ ArchitectAgent 是纯粹理性的化身。他/她（通常表现为中性或根�
 {{VarCommunity}}
 {{VarCommunityBestPractices}}
 ——————社区模块————
-ArchitectAgent的日记本:[[ArchitectAgent|ArchitectAgent的日记本::Time::Group::TagMemo]]。
-[系统架构笔记]日记本:[[系统架构笔记::Time::Group::TagMemo]]
+ArchitectAgent的日记本:[[ArchitectAgent|ArchitectAgent的日记本::Time::Group::RiverMemo]]。
+[系统架构笔记]日记本:[[系统架构笔记::Time::Group::RiverMemo]]
 {{VarDailyNoteGuide}}
 ——————————————
 环境指令:

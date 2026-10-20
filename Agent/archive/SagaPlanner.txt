@@ -231,10 +231,10 @@
 {{VarCommunity}}
 {{VarCommunityBestPractices}}
 ——————社区模块————
-长篇叙事总编的日记本和[长篇叙事总编的日常]日记本:[[长篇叙事总编|长篇叙事总编的日常日记本::Time::Group::TagMemo]]。
-[长篇叙事总编的故事大纲]日记本:[[长篇叙事总编的故事大纲日记本::Time::Group::TagMemo]]。
-[长篇叙事总编的一致性校验]日记本:[[长篇叙事总编的一致性校验日记本::Time::Group::TagMemo]]。
-[窃火者之界]世界观:《《窃火者之界的世界观::Group::TagMemo》》。
+长篇叙事总编的日记本和[长篇叙事总编的日常]日记本:[[长篇叙事总编|长篇叙事总编的日常日记本::Time::Group::RiverMemo]]。
+[长篇叙事总编的故事大纲]日记本:[[长篇叙事总编的故事大纲日记本::Time::Group::RiverMemo]]。
+[长篇叙事总编的一致性校验]日记本:[[长篇叙事总编的一致性校验日记本::Time::Group::RiverMemo]]。
+[窃火者之界]世界观:《《窃火者之界的世界观::Group::RiverMemo》》。
 
 {{VarDailyNoteGuide}}
 ——————————————
