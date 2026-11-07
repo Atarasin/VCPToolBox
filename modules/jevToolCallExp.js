@@ -10,6 +10,7 @@ const DEFAULT_DECISION_PROMPT_PATH = path.join(__dirname, '..', 'TVStxt', 'JevTo
 const IMAGE_URL_RE = /^(?:https?:\/\/|file:\/\/|data:image\/)/i;
 const BILIBILI_RESOURCE_RE = /(?:bilibili\.com\/video\/|b23\.tv\/|^BV[0-9A-Za-z]+(?:\?p=\d+)?$|^av\d+$)/i;
 const EXPLICIT_SIZE_RE = /\b(\d{3,4})\s*[x×:]\s*(\d{3,4})\b/i;
+const CURRENT_MUSIC_REQUEST_RE = /(?:获取|查看|读取|查询)\s*(?:(?:当前播放|正在播放|播放中|当前)(?:的)?\s*)?(?:(?:音乐|歌曲)(?:的)?(?:内容|详细信息|信息|歌词)|歌词)|\bgetCurrentLyrics\b/i;
 
 // 第三方插件裁决的官方短协议。可在 JevToolCallDecision.txt 中用
 // "## THIRD_PARTY_PROTOCOL" 段落覆盖，未提供时使用此默认值。
@@ -154,7 +155,13 @@ class JevToolCallExp {
         const uniqueUrls = uniqueStrings(imageUrls);
         const allowsUrlAsPrimary = (categoryKey === 'web_search' || thirdParty) && uniqueUrls.length > 0;
         const allowsThirdPartyEmptyPrimary = thirdParty && (backtickTools.length > 0 || semanticConstraints.length > 0);
-        if (primary.length === 0 && !allowsUrlAsPrimary && !allowsThirdPartyEmptyPrimary) {
+        const allowsCurrentMusicEmptyPrimary = categoryKey === 'daily_tools'
+            && this._isCurrentMusicRequest(raw)
+            && this._normalizeDailyToolSelection(
+                this._resolveRequestedTools({ raw, quotedTools }, this.config.categories[categoryKey]),
+                { raw, quotedTools }
+            ).every(key => key === 'music_controller');
+        if (primary.length === 0 && !allowsUrlAsPrimary && !allowsThirdPartyEmptyPrimary && !allowsCurrentMusicEmptyPrimary) {
             throw new Error('JEV 表达式缺少主要内容，请使用【主要内容】。打开网页时也可直接把 URL 放入 [URL]。');
         }
 
@@ -184,12 +191,23 @@ class JevToolCallExp {
         }
     }
 
+    _isCurrentMusicRequest(raw) {
+        // 只识别动作与约束，不让歌曲名、通讯正文或回忆内容中的词触发查询。
+        const actionText = raw
+            .replace(/【[\s\S]*?】/g, ' ')
+            .replace(/\{[^{}]*\}/g, ' ')
+            .replace(/`[^`]*`|'[^']*'|"[^"]*"|“[^”]*”/g, ' ');
+        return CURRENT_MUSIC_REQUEST_RE.test(actionText);
+    }
+
     _inferImplicitCategory(raw) {
         // 只允许高置信度日用动作省略目录。联网搜索、网页访问和图片生成
         // 仍要求显式目录，避免一句普通聊天被误执行成外部工具调用。
         const hasMarkedUrl = /\[(?:https?:\/\/|file:\/\/)[^\]]+\]/i.test(raw);
         const hasUrlFetchAction = /打开|读取|查看|访问|看图|截图|快照/i.test(raw);
         if (hasMarkedUrl && hasUrlFetchAction) return '联网搜索';
+
+        if (this._isCurrentMusicRequest(raw)) return '日用工具';
 
         const dailyActionPatterns = [
             /(?:请|帮我|麻烦)?\s*(?:计算|求解|算一下|科学计算)\s*【/i,
@@ -345,6 +363,7 @@ class JevToolCallExp {
         if (parsed.quotedTools.length > 0) return toolKeys;
 
         const raw = parsed.raw;
+        if (this._isCurrentMusicRequest(raw)) return ['music_controller'];
         const routes = [
             { re: /联络|联系|通讯|委托|问问.*(?:女仆|agent)/i, toolKey: 'agent_assistant' },
             { re: /闹钟|提醒我|叫醒我|定时提醒/i, toolKey: 'alarm' },
@@ -378,6 +397,35 @@ class JevToolCallExp {
         if (toolKey === 'vsearch') {
             args.SearchTopic = main;
             if (constraints.length > 0) args.Keywords = constraints.join(', ');
+            return args;
+        }
+
+        if (toolKey === 'yousearch') {
+            const effortAliases = {
+                lite: ['lite', '轻量', '快速', '快速查证'],
+                standard: ['standard', '标准', '标准研究'],
+                deep: ['deep', '深度', '深度研究']
+            };
+            const remaining = [];
+            let selectedEffort = null;
+            for (const constraint of constraints) {
+                const explicit = constraint.match(/^(?:档位|研究深度|research_effort)\s*[:：]\s*(.+)$/i);
+                const value = (explicit ? explicit[1] : constraint).trim().toLowerCase();
+                const effort = Object.keys(effortAliases).find(key => effortAliases[key].includes(value));
+                if (explicit && !effort) {
+                    throw new Error('YouSearch 档位仅支持 lite、standard、deep。');
+                }
+                if (effort) {
+                    if (selectedEffort && selectedEffort !== effort) {
+                        throw new Error('YouSearch 一次调用只能指定一个研究档位。');
+                    }
+                    selectedEffort = effort;
+                } else {
+                    remaining.push(constraint);
+                }
+            }
+            if (selectedEffort) args.research_effort = selectedEffort;
+            args.SearchTopic = [main, ...remaining].join('\n');
             return args;
         }
 
@@ -416,7 +464,7 @@ class JevToolCallExp {
 
         if (toolKey === 'bilibili_fetch') {
             args.url = main;
-            this._applyBilibiliConstraints(args, constraints);
+            this._applyBilibiliConstraints(args, constraints, parsed.raw);
             return args;
         }
 
@@ -519,32 +567,54 @@ class JevToolCallExp {
         return match ? match[1] : null;
     }
 
-    _applyBilibiliConstraints(args, constraints) {
-        const joined = constraints.join(' ');
+    _applyBilibiliConstraints(args, constraints, raw = '') {
+        // 任务负载中的标题/URL 不参与内容意图判断；自然句和 [] 约束共同生效。
+        const intent = (raw || constraints.join(' ')).replace(/【[\s\S]*?】/g, ' ');
+        const contentWords = '高能进度条|高能时间点|高能进度|高能点|弹幕热度|PBP|字幕|(?:热门)?评论|(?:热门)?弹幕|截图|快照';
+        const negative = new RegExp(
+            `(?:不要|无需|不用|不需要|不带|不|跳过|关闭|省略)(?:再|重复)?(?:获取|返回|附带|带上|包含)?\\s*((?:(?:${contentWords})(?:\\s*(?:、|和|及|与|以及|，|,)\\s*)?)+)`,
+            'gi'
+        );
+        const excluded = [];
+        const positive = intent.replace(negative, (match, words) => {
+            excluded.push(words);
+            return ' ';
+        });
+        const excludedText = excluded.join(' ');
+        const selection = positive.match(/(?:只|仅)(?:需(?:要)?|要|获取|返回|看|取|补(?:充)?|截)[\s\S]*/);
+        const requested = selection ? selection[0] : positive;
+        const wantsSnapshots = /截图|快照|snapshot/i.test(requested);
         const snapshots = [];
-        for (const constraint of constraints) {
-            if (!/截图|快照|snapshot/i.test(constraint)) continue;
-            const values = constraint.match(/\d+(?=\s*(?:秒|s\b|[,，]|$))/gi) || [];
-            snapshots.push(...values);
+        const timePattern = /(?:截图|快照|snapshots?)\s*(?:时间点|时间)?\s*(?:在)?\s*[:：]?\s*(\d+(?:\.\d+)?(?:\s*(?:秒|s\b)?\s*[,，、]\s*\d+(?:\.\d+)?)*\s*(?:秒|s\b)?)/gi;
+        for (const match of requested.matchAll(timePattern)) {
+            snapshots.push(...match[1].match(/\d+(?:\.\d+)?/g));
         }
-        if (snapshots.length > 0) {
-            args.snapshots = uniqueStrings(snapshots).join(',');
-            args.hd_snapshot = 'true';
-        } else {
-            const screenshotHint = parseBooleanHint(
-                joined,
-                ['截图', '快照', 'snapshot'],
-                ['不要截图', '无需截图', '不截图']
-            );
-            if (screenshotHint === true) args.hd_snapshot = 'true';
-            if (screenshotHint === false) args.hd_snapshot = 'false';
-        }
+        if (snapshots.length > 0) args.snapshots = uniqueStrings(snapshots).join(',');
+        if (wantsSnapshots) args.hd_snapshot = 'true';
+        if (/截图|快照|snapshot/i.test(excludedText)) args.hd_snapshot = 'false';
 
-        const danmaku = joined.match(/弹幕\s*(\d+)/);
-        const comments = joined.match(/评论\s*(\d+)/);
-        if (danmaku) args.danmaku_num = danmaku[1];
-        if (comments) args.comment_num = comments[1];
-        if (/不要字幕|无需字幕/.test(joined)) args.need_subs = 'false';
+        const defaults = { ...args };
+        // 截图与“只要…”采用按需选择；普通视频获取保留完整内容默认值。
+        if (wantsSnapshots || selection) {
+            args.need_subs = 'false';
+            args.need_pbp = 'false';
+            args.danmaku_num = '0';
+            args.comment_num = '0';
+        }
+        for (const [pattern, key, isCount] of [
+            [/字幕/, 'need_subs', false],
+            [/高能进度条|高能时间点|高能进度|高能点|弹幕热度|PBP/i, 'need_pbp', false],
+            [/弹幕(?!热度)/, 'danmaku_num', true],
+            [/评论/, 'comment_num', true]
+        ]) {
+            if (pattern.test(requested)) args[key] = isCount ? (defaults[key] || '20') : 'true';
+            if (pattern.test(excludedText)) args[key] = isCount ? '0' : 'false';
+        }
+        for (const [word, key] of [['弹幕', 'danmaku_num'], ['评论', 'comment_num']]) {
+            if (new RegExp(word).test(excludedText)) continue;
+            const count = requested.match(new RegExp(`${word}\\s*(\\d+)|(?:取|获取|返回)?\\s*(\\d+)\\s*条\\s*(?:热门)?${word}`));
+            if (count) args[key] = count[1] || count[2];
+        }
     }
 
     _resolveUrlFetchMode(constraints, tool, raw = '') {
@@ -650,6 +720,10 @@ class JevToolCallExp {
         }
 
         if (toolKey === 'music_controller') {
+            if (this._isCurrentMusicRequest(parsed.raw)) {
+                args.command = 'getCurrentLyrics';
+                return args;
+            }
             args.songname = main;
             for (const [stageMode, aliases] of Object.entries(tool.stageModes || {})) {
                 if (aliases.some(alias => joined.toLowerCase().includes(String(alias).toLowerCase()))) {

@@ -22,6 +22,7 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
+.audit
 **/dream_logs/
 data/
 
@@ -285,6 +286,7 @@ file/media-renderer/
 file/agnesvideogen/
 file/mimo-dubbing/
 Plugin/MimoDubbing/state/
+Plugin/LinuxShellExecutor/state/
 
 # 全局临时文件与运行时历史
 *.tmp
@@ -337,6 +339,8 @@ rust-vexus-lite/crates/vcp-tdb-index/target/
 Plugin/DailyNoteSearcher/src/target/
 Plugin/CodeSearcher/src/target/
 Plugin/PaperReader/paperreader-rs/target/
+AdminPanel-Vue/dist
+
 
 # ==== 分布式开发 ====
 VCPDistributedServer

@@ -222,11 +222,51 @@ test('B站普通关键词自动走搜索，BV号自动走获取', async () => {
     );
     assert.equal(fetchCall.name, 'BilibiliFetch');
     assert.equal(fetchCall.args.url, 'BV1CC4y1a7ee');
-    assert.equal(fetchCall.args.need_subs, 'true');
-    assert.equal(fetchCall.args.danmaku_num, '20');
-    assert.equal(fetchCall.args.comment_num, '20');
+    assert.equal(fetchCall.args.need_subs, 'false');
+    assert.equal(fetchCall.args.need_pbp, 'false');
+    assert.equal(fetchCall.args.danmaku_num, '0');
+    assert.equal(fetchCall.args.comment_num, '0');
     assert.equal(fetchCall.args.snapshots, '30,120');
     assert.equal(fetchCall.args.hd_snapshot, 'true');
+});
+
+// 保护自然语言到真实插件参数的公开契约：截图轻量返回，组合请求按需取数。
+test('B站内容选择覆盖截图、组合内容、排除项和连续调用', async (t) => {
+    const { planner, decisions } = makePlanner({ configured: true });
+    const full = { need_subs: 'true', need_pbp: 'true', danmaku_num: '20', comment_num: '20' };
+    const lean = { need_subs: 'false', need_pbp: 'false', danmaku_num: '0', comment_num: '0' };
+    const cases = [
+        ['普通获取', '获取视频【BV1mEnb6LEnC】的内容。', full],
+        ['复现达里奥会话', '获取视频【https://www.bilibili.com/video/BV1mEnb6LEnC/】的画面，并在[截图 95,148,598,678,688 秒]指定的时间点截取高清画面。', { ...lean, snapshots: '95,148,598,678,688', hd_snapshot: 'true' }],
+        ['复现边检员会话', '获取视频【https://www.bilibili.com/video/BV1yDn368En2/】的画面，并在[截图 12,55,100,145,195,245,295,340 秒]指定的时间点截取高清画面。', { ...lean, snapshots: '12,55,100,145,195,245,295,340', hd_snapshot: 'true' }],
+        ['首轮内容和截图一起取', '获取视频【BV1mEnb6LEnC】的字幕、评论、弹幕和高能进度条，并在[截图 30,120 秒]截取画面。', { ...full, snapshots: '30,120', hd_snapshot: 'true' }],
+        ['截图加字幕', '获取视频【BV1mEnb6LEnC】的字幕和[截图 30 秒]。', { ...lean, need_subs: 'true', snapshots: '30', hd_snapshot: 'true' }],
+        ['截图加默认数量评论', '获取视频【BV1mEnb6LEnC】的[截图 30 秒]和热门评论。', { ...lean, comment_num: '20', snapshots: '30', hd_snapshot: 'true' }],
+        ['截图加指定数量评论', '获取视频【BV1mEnb6LEnC】的[截图 30 秒]和 5 条热门评论。', { ...lean, comment_num: '5', snapshots: '30', hd_snapshot: 'true' }],
+        ['括号中的数量约束', '获取视频【BV1mEnb6LEnC】的[截图 30 秒][评论 5 条][弹幕 10 条]。', { ...lean, comment_num: '5', danmaku_num: '10', snapshots: '30', hd_snapshot: 'true' }],
+        ['单独获取高能时间点', '获取视频【BV1mEnb6LEnC】的[截图 30 秒]和弹幕热度。', { ...lean, need_pbp: 'true', snapshots: '30', hd_snapshot: 'true' }],
+        ['只要字幕', '只要视频【BV1mEnb6LEnC】的字幕。', { ...lean, need_subs: 'true' }],
+        ['只要评论', '只获取视频【BV1mEnb6LEnC】的 5 条评论。', { ...lean, comment_num: '5' }],
+        ['多个排除项', '获取视频【BV1mEnb6LEnC】的[截图 30 秒]和高能进度条，[不要字幕、评论和弹幕]。', { ...lean, need_pbp: 'true', snapshots: '30', hd_snapshot: 'true' }],
+        ['普通获取的排除项', '获取视频【BV1mEnb6LEnC】的内容，[无需字幕][不需要评论和弹幕]。', { ...full, need_subs: 'false', comment_num: '0', danmaku_num: '0' }],
+        ['字幕已获取时只补截图', '视频【BV1mEnb6LEnC】的字幕已经有了，只补[截图 30 秒]。', { ...lean, snapshots: '30', hd_snapshot: 'true' }],
+        ['小数和重复时间点', '获取视频【BV1mEnb6LEnC】的[截图 1.5，2.75，1.5 秒]。', { ...lean, snapshots: '1.5,2.75', hd_snapshot: 'true' }],
+        ['取消截图', '获取视频【BV1mEnb6LEnC】的内容，[不要截图]。', { ...full, hd_snapshot: 'false' }],
+        ['旧版简短取消指令', '获取视频【BV1mEnb6LEnC】的内容，[不截图]。', { ...full, hd_snapshot: 'false' }],
+        ['截图时间点标签', '获取视频【BV1mEnb6LEnC】的[截图时间点 30,120 秒]。', { ...lean, snapshots: '30,120', hd_snapshot: 'true' }],
+        ['数量为零', '获取视频【BV1mEnb6LEnC】的[截图 30 秒][评论 0][弹幕 0]。', { ...lean, snapshots: '30', hd_snapshot: 'true' }],
+        ['截图后重新普通获取', '获取视频【av12345】的内容。', full]
+    ];
+    for (const [label, request, expected] of cases) {
+        await t.test(label, async () => {
+            const [call] = await planner.plan(`请使用 {联网搜索} 中的 \`B站获取\`，${request}`);
+            assert.equal(call.name, 'BilibiliFetch');
+            const { url, ...selected } = call.args;
+            assert.ok(url);
+            assert.deepEqual(selected, expected);
+        });
+    }
+    assert.equal(decisions.length, 0);
 });
 
 test('图片生成默认使用 NanoBanana2，无图片为 generate', async () => {
@@ -407,6 +447,47 @@ test('点歌默认常规播放，八种中英文演出模式确定性映射', as
     );
     assert.equal(english.args.stageMode, 'luminous');
     assert.equal(decisions.length, 0);
+});
+
+test('获取音乐内容原生映射到分布式 MusicController，无需主要内容或模型裁决', async () => {
+    const { planner, decisions } = makePlanner({ configured: true });
+    const expressions = [
+        '获取音乐内容。',
+        '请获取当前歌曲的歌词。',
+        '{日用工具} 查看正在播放的音乐信息。',
+        '{音乐播放} 查询歌词。',
+        '{日用工具} `MusicController` 获取音乐内容。',
+        '{日用工具} `MusicController` [getCurrentLyrics]',
+        '{日用工具} 获取音乐内容【当前歌曲】[星诞]'
+    ];
+    for (const expression of expressions) {
+        const calls = await planner.plan(expression, { maid: 'Nova' });
+        assert.equal(calls.length, 1, expression);
+        assert.equal(calls[0].name, 'MusicController', expression);
+        assert.deepEqual(calls[0].args, {
+            command: 'getCurrentLyrics',
+            maid: 'Nova'
+        }, expression);
+        assert.equal(calls[0].jev.thirdParty, undefined);
+    }
+    assert.equal(decisions.length, 0);
+});
+
+test('音乐内容查询不会误识别主要负载，也不会放宽其他工具的必填内容', async () => {
+    const { planner } = makePlanner();
+    const [song] = await planner.plan('播放【获取音乐内容】');
+    assert.deepEqual(song.args, { command: 'playSong', songname: '获取音乐内容' });
+
+    const [memo] = await planner.plan('主动回忆【获取当前歌曲的歌词】');
+    assert.equal(memo.name, 'LightMemo');
+    assert.equal(memo.args.query, '获取当前歌曲的歌词');
+
+    await assert.rejects(planner.plan('{日用工具} 播放'), /缺少主要内容/);
+    await assert.rejects(planner.plan('{日用工具} `SciCalculator` 获取音乐内容'), /缺少主要内容/);
+    await assert.rejects(planner.plan('{联网搜索} 获取音乐内容'), /缺少主要内容/);
+
+    const [explicitMemo] = await planner.plan('{日用工具} `LightMemo` 获取音乐内容【音乐知识】');
+    assert.equal(explicitMemo.name, 'LightMemo');
 });
 
 test('大量并发规划保持调用参数隔离且全部使用确定性模板', async () => {

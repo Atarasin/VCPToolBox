@@ -1,32 +1,20 @@
 const express = require('express');
 const fs = require('fs').promises;
 const path = require('path');
+const { fileURLToPath } = require('url');
+const { safeFilePath, assertSafePath } = require('../../modules/safeFilePath');
 
 module.exports = function(options) {
     const router = express.Router();
-    const { pluginManager, vectorDBManager } = options;
+    const { pluginManager, vectorDBManager, dailyNoteRootPath } = options;
     const PROJECT_BASE_PATH = path.join(__dirname, '..', '..');
     const DREAM_LOGS_DIR = path.join(PROJECT_BASE_PATH, 'Plugin', 'AgentDream', 'dream_logs');
-    const DAILY_NOTE_ROOT = process.env.KNOWLEDGEBASE_ROOT_PATH || path.join(PROJECT_BASE_PATH, 'dailynote');
+    const DAILY_NOTE_ROOT = dailyNoteRootPath
+        || process.env.KNOWLEDGEBASE_ROOT_PATH
+        || path.join(PROJECT_BASE_PATH, 'dailynote');
     // 归档文件夹。与 DailyNoteManager 的 organize 命令保持一致，且被 KnowledgeBaseManager
     // 的 ignorePrefixes 排除在索引之外 —— 归档后不再参与 RAG 召回，但文件仍在磁盘上可恢复。
     const ARCHIVE_FOLDER = '已整理';
-
-    // 辅助: file:/// URL 转本地路径
-    function _urlToFilePath(fileUrl) {
-        if (fileUrl.startsWith('file:///')) {
-            // Windows 下可能是 file:///C:/... 或者是 file:///H:/...
-            // 处理路径分隔符
-            let p = fileUrl.replace('file:///', '');
-            if (process.platform === 'win32') {
-                p = p.replace(/\//g, path.sep);
-            } else {
-                p = '/' + p;
-            }
-            return p;
-        }
-        return fileUrl;
-    }
 
     function _createHttpError(status, message, details) {
         const error = new Error(message);
@@ -35,29 +23,33 @@ module.exports = function(options) {
         return error;
     }
 
-    function _isPathWithinBase(targetPath, basePath) {
-        const resolvedTarget = path.resolve(targetPath);
-        const resolvedBase = path.resolve(basePath);
-        return resolvedTarget === resolvedBase ||
-            resolvedTarget.startsWith(resolvedBase + path.sep);
-    }
-
     // 解析梦操作里的日记路径，并强制校验其落在日记根目录内。
     // 路径来自 AI 在梦中生成的文本，必须视为不可信输入。
-    function _resolveDiaryPath(fileUrl) {
+    // 安全校验走共享 safeFilePath 模块（含符号链接拒绝），不再使用本文件私有的前缀比较。
+    async function _resolveDiaryPath(fileUrl) {
         if (!fileUrl || typeof fileUrl !== 'string') {
             throw _createHttpError(400, '日记路径为空。');
         }
-        let p = _urlToFilePath(fileUrl.trim());
+        let p;
+        const trimmed = fileUrl.trim();
+        if (trimmed.startsWith('file:')) {
+            try {
+                p = fileURLToPath(trimmed);
+            } catch {
+                throw _createHttpError(400, `日记 URL 无法解析 → ${fileUrl}`);
+            }
+        } else {
+            p = trimmed;
+        }
         // 兼容相对路径（如 迈达斯/2026-08-02-01_28_59.txt）
         if (!path.isAbsolute(p)) {
             p = path.join(DAILY_NOTE_ROOT, p.replace(/\//g, path.sep));
         }
-        const resolved = path.resolve(p);
-        if (!_isPathWithinBase(resolved, DAILY_NOTE_ROOT)) {
+        try {
+            return await assertSafePath(DAILY_NOTE_ROOT, p);
+        } catch {
             throw _createHttpError(400, `安全检查失败：目标不在日记目录内 → ${fileUrl}`);
         }
-        return resolved;
     }
 
     // 拆分 "[文件夹]署名" 形式的 maid 字段。
@@ -110,9 +102,7 @@ module.exports = function(options) {
     // 梦操作的内容由 AI 生成，合并后的新日记可能丢失或篡改原文细节，必须保留可回滚的余地。
     async function _archiveDiary(diaryPath) {
         const archiveDir = path.join(DAILY_NOTE_ROOT, ARCHIVE_FOLDER);
-        if (!_isPathWithinBase(archiveDir, DAILY_NOTE_ROOT)) {
-            throw new Error('归档文件夹路径无效。');
-        }
+        await assertSafePath(DAILY_NOTE_ROOT, archiveDir, { allowRoot: false });
         await fs.mkdir(archiveDir, { recursive: true });
 
         await fs.access(diaryPath); // 不存在则抛错，由调用方处理
@@ -149,7 +139,7 @@ module.exports = function(options) {
     }
 
     async function _processDreamOperation(filename, opId, action) {
-        if (!filename || !filename.endsWith('.json')) {
+        if (typeof filename !== 'string' || !filename.endsWith('.json')) {
             throw _createHttpError(400, 'Invalid filename.');
         }
 
@@ -157,7 +147,7 @@ module.exports = function(options) {
             throw _createHttpError(400, 'Invalid action.');
         }
 
-        const filePath = path.join(DREAM_LOGS_DIR, filename);
+        const filePath = await safeFilePath(DREAM_LOGS_DIR, filename, { singleSegment: true });
         const content = await fs.readFile(filePath, 'utf-8');
         const dreamLog = JSON.parse(content);
         const operations = dreamLog.operations || [];
@@ -176,6 +166,14 @@ module.exports = function(options) {
             await fs.writeFile(filePath, JSON.stringify(dreamLog, null, 2), 'utf-8');
             return { status: 'success', message: `操作 ${opId} 已拒绝。`, operation };
         }
+
+        // 在创建替代日记之前先校验全部源目标路径：路径非法时不应先产生新日记。
+        const sourcePaths = operation.type === 'merge'
+            ? await Promise.all((operation.sourceDiaries || []).map(_resolveDiaryPath))
+            : [];
+        const deletePath = operation.type === 'delete'
+            ? await _resolveDiaryPath(operation.targetDiary || '')
+            : null;
 
         let result = {};
 
@@ -201,9 +199,9 @@ module.exports = function(options) {
                 }
 
                 const archiveResults = [];
-                for (const diaryUrl of (operation.sourceDiaries || [])) {
+                for (const [index, diaryUrl] of (operation.sourceDiaries || []).entries()) {
                     try {
-                        const diaryPath = _resolveDiaryPath(diaryUrl);
+                        const diaryPath = sourcePaths[index];
                         const destPath = await _archiveDiary(diaryPath);
                         archiveResults.push({
                             path: diaryUrl,
@@ -220,8 +218,7 @@ module.exports = function(options) {
 
             case 'delete': {
                 try {
-                    const targetPath = _resolveDiaryPath(operation.targetDiary || '');
-                    const destPath = await _archiveDiary(targetPath);
+                    const destPath = await _archiveDiary(deletePath);
                     result.archived = true;
                     result.archivedTo = path.relative(DAILY_NOTE_ROOT, destPath);
                 } catch (e) {
@@ -280,20 +277,20 @@ module.exports = function(options) {
             const logs = [];
             for (const filename of jsonFiles) {
                 try {
-                    const filePath = path.join(DREAM_LOGS_DIR, filename);
+                    const filePath = await safeFilePath(DREAM_LOGS_DIR, filename, { singleSegment: true });
                     const content = await fs.readFile(filePath, 'utf-8');
                     const data = JSON.parse(content);
                     const ops = data.operations || [];
-                    
+
                     logs.push({
                         filename: filename,
                         agentName: data.agentName || '未知',
                         timestamp: data.timestamp || '',
                         operationCount: ops.length,
                         pendingCount: ops.filter(o => o.status === 'pending_review').length,
-                        operationSummary: ops.map(o => ({ 
-                            type: o.type, 
-                            status: o.status 
+                        operationSummary: ops.map(o => ({
+                            type: o.type,
+                            status: o.status
                         }))
                     });
                 } catch (e) {
@@ -320,12 +317,12 @@ module.exports = function(options) {
         try {
             const filename = req.params.filename;
             if (!filename.endsWith('.json')) return res.status(400).json({ error: 'Invalid filename' });
-            const logPath = path.join(DREAM_LOGS_DIR, filename);
+            const logPath = await safeFilePath(DREAM_LOGS_DIR, filename, { singleSegment: true });
             const content = await fs.readFile(logPath, 'utf-8');
             res.json(JSON.parse(content));
         } catch (error) {
             console.error('[AdminAPI] Error reading dream log:', error);
-            res.status(500).json({ error: 'Failed to read dream log', details: error.message });
+            res.status(error.status || 500).json({ error: 'Failed to read dream log', details: error.message });
         }
     });
 
