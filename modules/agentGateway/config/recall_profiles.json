@@ -70,6 +70,16 @@
       "targets": [
         "yanchi_ui工作日志日记本"
       ]
+    },
+    "MCPQuill": {
+      "defaultProfile": "Quill-default",
+      "allowedProfiles": [
+        "Quill-default"
+      ],
+      "targets": [
+        "Quill文档工程日记本",
+        "Quill交付偏好日记本"
+      ]
     }
   },
   "profiles": {
@@ -195,6 +205,28 @@
           "targets": {
             "diaries": [
               "yanchi_ui工作日志日记本"
+            ],
+            "aggregate": true,
+            "kMultiplier": 1
+          },
+          "modifiers": {
+            "time": true,
+            "rerank": true,
+            "tagMemo": true,
+            "truncate": 20
+          }
+        }
+      ]
+    },
+    "Quill-default": {
+      "minScore": 0.5,
+      "rules": [
+        {
+          "baseMode": "rag",
+          "targets": {
+            "diaries": [
+              "Quill文档工程日记本",
+              "Quill交付偏好日记本"
             ],
             "aggregate": true,
             "kMultiplier": 1

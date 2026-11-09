@@ -71,6 +71,17 @@
       "defaultDiaries": [
         "yanchi_ui工作日志日记本"
       ]
+    },
+    "MCPQuill": {
+      "maid": "Quill",
+      "allowedDiaries": [
+        "Quill项目-*",
+        "Quill文档工程日记本",
+        "Quill交付偏好日记本"
+      ],
+      "defaultDiaries": [
+        "Quill文档工程日记本"
+      ]
     }
   }
 }

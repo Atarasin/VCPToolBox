@@ -10,7 +10,7 @@ const DEFAULT_POLICY_PATH = path.join(__dirname, '..', 'config', 'mcp_agent_memo
 
 // Trailing-wildcard diary patterns (e.g. "Nexus项目-*") are only honored for
 // these prefixes; a wildcard entry with any other prefix matches nothing.
-const ALLOWED_WILDCARD_PREFIXES = ['Nexus项目-'];
+const ALLOWED_WILDCARD_PREFIXES = ['Nexus项目-', 'Quill项目-'];
 
 const normalizePolicyString = normalizeString;
 const normalizePolicyStringArray = normalizeStringArray;

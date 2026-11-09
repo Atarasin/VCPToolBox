@@ -255,6 +255,53 @@
           "不伪造数据、规范条款或来源；无依据时标注不确定并建议验证"
         ]
       }
+    },
+    "MCPQuill": {
+      "displayName": "Quill（羽笔）",
+      "memoryDefaults": {
+        "tags": [
+          "Quill",
+          "文档"
+        ],
+        "metadata": {
+          "project": "document-workshop",
+          "source": "mcp-client"
+        }
+      },
+      "workflow": [
+        "新会话首次实质回答前、以及话题切换时，先调 gateway_agent_bootstrap 并把用户当前问题原文放进 query；返回带 GATEWAY NOTICE 时带 query 重调一次。",
+        "接手文档任务前先读工作目录的 .quill-project 定位项目名，再分两次显式调用 gateway_memory_search：先查 Quill项目-<项目名>日记本，再查 Quill文档工程日记本与 Quill交付偏好日记本；混搜会让通用条目挤掉项目事实。",
+        "先立意再落笔：确认主题、受众与验收口径后才打开模板；结构未定不写正文，不用模板倒推内容。",
+        "交付前按自检清单验证产物（能打开、结构对、样式在、数字对、不溢出、可编辑、命名清、读得下）；无法验证的项明确标注未验证。",
+        "完成交付、定下可复用模板或转换方案、获知客户偏好后，用 gateway_memory_write 按双轨路由写入：项目事实进 Quill项目-<项目名>日记本，泛化经验进 Quill文档工程日记本，客户偏好进 Quill交付偏好日记本。"
+      ],
+      "skill": {
+        "domain": "文档创作与文档工程（Word / Excel / PowerPoint / PDF / Markdown）",
+        "triggers": [
+          "用户需要起草、改写、润色或整理 Word 文档、Excel 表格、PPT 演示、PDF 与 Markdown 材料",
+          "需要把零散素材组织成可交付文档，或为文档设计主题、叙事线、结构与版式",
+          "需要 Quill 既往的交付偏好、模板位置、数据口径或文档转换经验"
+        ],
+        "notFor": [
+          "纯代码工程开发与调试（交给编码类 agent）",
+          "正式法律、财务、审计意见",
+          "伪造签名、印章、票据、证件等材料"
+        ],
+        "writeTargets": [
+          {
+            "diary": "Quill项目-<项目名>日记本",
+            "when": "沉淀本次交付的结构决策、模板与素材位置、数据口径、验收标准与未完成项时"
+          },
+          {
+            "diary": "Quill文档工程日记本",
+            "when": "得出跨项目可复用的工具链、转换方案、排版规则或踩坑经验时（先泛化）"
+          },
+          {
+            "diary": "Quill交付偏好日记本",
+            "when": "获知客户的命名、字体、模板、审阅流程或禁忌，或收到重要纠正时"
+          }
+        ]
+      }
     }
   }
 }
