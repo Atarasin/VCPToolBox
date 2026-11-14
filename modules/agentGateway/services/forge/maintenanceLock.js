@@ -190,8 +190,10 @@ function createExpertLeaseManager(options = {}) {
             // 幂等：同 owner 再次 acquire（如 resume）→ 续期即可。
             // 记录 pid 若非本进程且已死（旧进程崩溃后同 jobId 续跑），
             // 改写为当前 pid——否则第三方按 pid-dead 接管会拿走运行中任务的写权。
+            // pid=0（detached）是刻意的"无进程绑定"，不是死进程，不改写。
             const recordedPid = Number(state.lease.pid);
             const stalePid = Number.isInteger(recordedPid)
+                && recordedPid > 0
                 && recordedPid !== process.pid
                 && isPidAlive(recordedPid) === false;
             const refreshedLease = {

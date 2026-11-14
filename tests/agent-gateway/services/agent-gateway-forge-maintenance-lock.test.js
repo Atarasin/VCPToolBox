@@ -174,10 +174,17 @@ test('maintenanceLock：detached 租约（pid=0）不依赖进程存活，仅靠
         (error) => error.code === 'FORGE_EXPERT_WRITE_PAUSED'
     );
 
-    // 过期后可被接管。
-    const leaseJson = JSON.parse(fs.readFileSync(handle.path, 'utf-8'));
-    leaseJson.expiresAt = Date.now() - 1000;
-    writeLease(baseDir, 'e1', leaseJson);
+    // 同 owner 重复 lock（CLI 复制粘贴重跑场景）：pid=0 不得被误判为死 pid 改写，
+    // 仍保持 detached 语义（复审发现的低危洞回归测试）。
+    const again = managerB.acquire({ expertName: 'e1', ownerJobId: 'cli_window', mode: 'rebuild', detached: true });
+    const leaseAfter = JSON.parse(fs.readFileSync(again.path, 'utf-8'));
+    assert.equal(leaseAfter.pid, 0);
+    assert.equal(leaseAfter.superseded, null);
+
+    // 过期后可被接管（重新持约→改过期）。
+    const raw = JSON.parse(fs.readFileSync(again.path, 'utf-8'));
+    raw.expiresAt = Date.now() - 1000;
+    writeLease(baseDir, 'e1', raw);
     const takeover = managerB.acquire({ expertName: 'e1', ownerJobId: 'job_new', mode: 'rebuild' });
     assert.equal(JSON.parse(fs.readFileSync(takeover.path, 'utf-8')).superseded.reason, 'expired');
     takeover.release();
