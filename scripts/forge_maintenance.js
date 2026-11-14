@@ -55,6 +55,18 @@ function parseArgs(argv) {
     return flags;
 }
 
+// require 期日志（TextChunker 配置行、TDBKnowledge 模块加载行）会污染
+// --json 输出——加载共享模块时统一静默，CLI 自身输出保持纯净。
+function requireQuiet(modulePath) {
+    const original = console.log;
+    console.log = () => {};
+    try {
+        return require(modulePath);
+    } finally {
+        console.log = original;
+    }
+}
+
 const sha256File = async (file) => {
     const hash = crypto.createHash('sha256');
     await new Promise((resolve, reject) => {
@@ -332,6 +344,14 @@ function tdbConfig(root, overrides = {}) {
     };
 }
 
+// 原生模块（VexusWatcher 等 Rust binding）直接写 process.stdout，console
+// 拦截无效——在 manager 生命周期内临时替换 stdout.write。
+function silenceNativeStdout() {
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    return () => { process.stdout.write = originalWrite; };
+}
+
 // ── 三层一致性审计（§3.2.2） ─────────────────────────────────────────────
 
 async function cmdAudit(flags) {
@@ -340,8 +360,8 @@ async function cmdAudit(flags) {
         ...(flags.knowledge ? { rootPath: path.resolve(String(flags.knowledge)) } : {}),
         ...(flags.store ? { storePath: path.resolve(String(flags.store)) } : {})
     });
-    const { TDBKnowledgeManager } = require(path.join(REPO_ROOT, 'TDBKnowledge'));
-    const { chunkText } = require(path.join(REPO_ROOT, 'TextChunker'));
+    const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
+    const { chunkText } = requireQuiet(path.join(REPO_ROOT, 'TextChunker'));
     const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
     let TriviumDB = null;
     try {
@@ -564,7 +584,7 @@ async function cmdEstimateRebuild(flags) {
     const timeoutMs = Number(flags['timeout-ms']) || 25 * 60 * 1000;
     const pollMs = Math.max(200, Number(flags['poll-ms']) || 3000);
     const config = tdbConfig(root, { storePath: tempStore, fullScanOnStartup: true });
-    const { TDBKnowledgeManager } = require(path.join(REPO_ROOT, 'TDBKnowledge'));
+    const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
 
     await fsp.mkdir(tempStore, { recursive: true });
     const manager = new TDBKnowledgeManager(config);
@@ -576,6 +596,7 @@ async function cmdEstimateRebuild(flags) {
     console.log = (...args) => silenced.push(['log', args.join(' ')]);
     console.warn = (...args) => silenced.push(['warn', args.join(' ')]);
     console.error = (...args) => silenced.push(['error', args.join(' ')]);
+    const restoreNative = silenceNativeStdout();
     let report;
     try {
         await manager.initialize();
@@ -620,6 +641,7 @@ async function cmdEstimateRebuild(flags) {
         console.log = originalLog;
         console.warn = originalWarn;
         console.error = originalError;
+        restoreNative();
         await manager.shutdown().catch(() => undefined);
     }
     return { exitCode: report.ok ? 0 : 1, report };
@@ -634,13 +656,17 @@ async function cmdSmoke(flags) {
         ...(flags.store ? { storePath: path.resolve(String(flags.store)) } : {}),
         fullScanOnStartup: false
     });
-    const { TDBKnowledgeManager } = require(path.join(REPO_ROOT, 'TDBKnowledge'));
-    const { chunkText } = require(path.join(REPO_ROOT, 'TextChunker'));
+    const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
+    const { chunkText } = requireQuiet(path.join(REPO_ROOT, 'TextChunker'));
     const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
 
     const manager = new TDBKnowledgeManager(config);
-    await manager.initialize();
+    // 运行期日志（watcher/queue 启动行 + 原生模块直写）不进 --json stdout。
+    const originalLog = console.log;
+    console.log = () => {};
+    const restoreNative = silenceNativeStdout();
     try {
+    await manager.initialize();
         if (!manager.initialized || manager.initializationState !== 'compatible') {
             throw new Error(`store 未处于 compatible 状态：${JSON.stringify(manager.getInitializationStatus())}`);
         }
@@ -674,6 +700,8 @@ async function cmdSmoke(flags) {
         return { exitCode: allOk ? 0 : 1, report: { ok: allOk, libraries: results } };
     } finally {
         await manager.shutdown().catch(() => undefined);
+        console.log = originalLog;
+        restoreNative();
     }
 }
 
@@ -709,6 +737,12 @@ async function main() {
             if (report.lease) process.stderr.write(`  当前租约：${JSON.stringify(report.lease)}\n`);
         }
         process.exit(1);
+    }
+    if (flags.out) {
+        // 原生模块（VexusWatcher）直接写 fd1，JS 层无法拦截——机器消费走 --out
+        // 文件，保证读到纯 JSON。
+        fs.writeFileSync(String(flags.out), `${JSON.stringify(outcome.report, null, 2)}\n`, 'utf-8');
+        process.stderr.write(`report → ${flags.out}\n`);
     }
     if (flags.json) {
         process.stdout.write(`${JSON.stringify(outcome.report, null, 2)}\n`);

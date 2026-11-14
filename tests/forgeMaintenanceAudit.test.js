@@ -20,6 +20,15 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 // 先 patch，再让 CLI 触发 TDBKnowledge 的惰性 require（其模块级解构会拿到 stub）。
 const STUB_DIM = 64;
 const embeddingUtils = require(path.join(REPO_ROOT, 'EmbeddingUtils'));
+// TextChunker 在 require 时按 cwd 执行 dotenv（./config.env）——测试若从仓库根
+// 运行，真实生产配置会把 TDB_KNOWLEDGE_DIMENSION 等注入 process.env，压过
+// fixture 的 64 维（cwd 相关的既有行为）。此处显式清除，保证 tdbConfig
+// 只读 fixture 的 config.env。
+delete process.env.TDB_KNOWLEDGE_DIMENSION;
+delete process.env.VECTORDB_DIMENSION;
+delete process.env.TDB_KNOWLEDGE_MODEL;
+delete process.env.API_URL;
+delete process.env.API_Key;
 embeddingUtils.getEmbeddingsBatch = async (texts) => {
     await new Promise((resolve) => setTimeout(resolve, 5)); // 模拟网络节拍
     return texts.map((text) => {
