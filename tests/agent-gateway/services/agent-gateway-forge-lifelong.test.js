@@ -27,7 +27,11 @@ function blueprint() {
 
 const DISTILL_JSON = JSON.stringify({
     knowledgeUnits: [{
-        type: 'concept', title: '新知识卡', oneLiner: 'o', content: 'c', tags: [],
+        type: 'concept',
+        title: '新知识卡',
+        oneLiner: '深色模式下的配色策略。',
+        content: '深色模式配色以配色理论为基础：先降低大面积背景明度，再提升前景与背景对比度，语义色沿用色板体系并按对比度阈值校验。',
+        tags: [],
         sourceUrls: ['https://fresh.example.com/new'], mergeInto: null
     }],
     droppedSources: []
@@ -50,12 +54,23 @@ function buildEnv(baseDir, options = {}) {
         },
         ...(options.llmRetryPolicy ? { llmRetryPolicy: options.llmRetryPolicy } : {}),
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: '新材料\nhttps://fresh.example.com/new\n增量内容' }] })
+            // M4 主题门禁：材料需与子技能词廓相关（配色理论/color theory）。
+            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory dark mode palette guide\nhttps://fresh.example.com/new\n配色理论增量：深色模式下的配色策略与色彩实践。' }] })
         },
+        // M4 索引就绪端口替身：探针按已写文件命中（sourceFile），状态 compatible。
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: '新知识卡', text: 'x', score: 0.9 }]
+            search: async () => {
+                try {
+                    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+                    return fs.readdirSync(libDir).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),

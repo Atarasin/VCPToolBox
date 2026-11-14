@@ -60,7 +60,7 @@ const DISTILL_JSON = JSON.stringify({
         type: 'concept',
         title: '色轮与色彩三属性',
         oneLiner: '色相/饱和度/明度。',
-        content: '色轮组织颜色……',
+        content: '色轮以色相环形式组织颜色，是配色理论的基础：色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。',
         tags: ['配色'],
         sourceUrls: ['https://a.com/x'],
         mergeInto: null
@@ -378,12 +378,21 @@ test('trial：判卷输出不可解析时重试一次（logger 回归用例）',
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+            // M4 主题门禁：材料需与子技能词廓（配色理论/color）相关。
+            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette guide A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nC\nhttps://c.io/z\n配色理论要点三。' }] })
         },
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: 't', text: 'x', score: 1 }]
+            search: async () => {
+                try {
+                    return fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),
@@ -434,7 +443,7 @@ test('retest：回填重测不重新出题（出题官调用次数为 0）', asy
     const baseDir = createTempDir();
     const env = buildEnv(baseDir, { gradeRatio: 0.5, gradeRatios: [0.5, 0.9] });
     const jobId = await driveToTrial(env);
-    const examinerCallsBefore = env.llmCalls.filter((p) => p.messages[0].content.includes('出题官') || p.messages[0].content.includes('考纲')).length;
+    const examinerCallsBefore = env.llmCalls.filter((p) => p.messages[0].content.includes('你是出题官')).length;
     assert.ok(examinerCallsBefore >= 1, '首考出题至少一次');
 
     const learnJobId = await waitForLearnJob(env);
@@ -449,7 +458,7 @@ test('retest：回填重测不重新出题（出题官调用次数为 0）', asy
         return polled?.success && polled.data.job.terminal;
     }, 15000);
 
-    const examinerCallsAfter = env.llmCalls.filter((p) => p.messages[0].content.includes('出题官') || p.messages[0].content.includes('考纲')).length;
+    const examinerCallsAfter = env.llmCalls.filter((p) => p.messages[0].content.includes('你是出题官')).length;
     assert.equal(examinerCallsAfter, examinerCallsBefore, '回填重测全程零出题调用（同一套考题）');
     // 同一套考题：重测作答题目数与首考一致（retest 复用原卷，不重新出题）
     const learnAnswers = JSON.parse(fs.readFileSync(path.join(baseDir, 'forge', 'runs', learnJobId, 'exams', 'answers.json'), 'utf8'));
@@ -493,12 +502,20 @@ function buildTrialParseEnv(baseDir, { examOutput, examFinishReason = null, grad
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nColor wheel C\nhttps://c.io/z\n配色理论要点三。' }] })
         },
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: 't', text: 'x', score: 1 }]
+            search: async () => {
+                try {
+                    return fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),
@@ -712,12 +729,20 @@ test('trial：盲测作答弹性——空正文重试/推理段兜底/作答失�
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nColor wheel C\nhttps://c.io/z\n配色理论要点三。' }] })
         },
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: 't', text: 'x', score: 1 }]
+            search: async () => {
+                try {
+                    return fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),
@@ -805,12 +830,20 @@ test('trial：两轮空正文但推理段可用 → 以推理段兜底作答并�
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3' }] })
+            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nColor wheel C\nhttps://c.io/z\n配色理论要点三。' }] })
         },
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: 't', text: 'x', score: 1 }]
+            search: async () => {
+                try {
+                    return fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),
@@ -1167,7 +1200,15 @@ test('trial：DSML 工具调用泄漏——首答泄漏触发重答恢复；持�
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: 't', text: 'x', score: 1 }]
+            search: async () => {
+                try {
+                    return fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),

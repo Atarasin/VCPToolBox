@@ -7,6 +7,8 @@ const { readBlueprint, blueprintLibraryName } = require('./blueprint');
 const { createKnowledgeWriter } = require('./knowledgeWriter');
 const { salvageTruncatedPayload } = require('./jsonUtils');
 const { completeJsonResilient, describeAttemptFailure, resolveThinkingMode } = require('./jsonCompletion');
+const qualityGate = require('./qualityGate');
+const { createDispositionLedger, moveKnowledgeFile, STATES } = require('./knowledgeStates');
 
 /**
  * 蒸馏（distill）步骤：原始材料 → 知识单元 → knowledge/<库名>/ 落盘 → 冒烟可检索验证。
@@ -97,12 +99,24 @@ async function readRawMaterials(runDir, subskillId) {
                 } catch {
                     // 正文缺失时用 meta 的 title/snippet 兜底。
                 }
+                // 全文证据（M4 T25）：有 evidencePath 则加载归档全文；
+                // 无全文的材料保留发现价值，但规范/事实主张在门禁处不可证。
+                let fullText = null;
+                if (meta.evidencePath) {
+                    try {
+                        fullText = await fsp.readFile(path.join(runDir, meta.evidencePath), 'utf8');
+                    } catch {
+                        // 证据文件损坏：按无全文处理，门禁自会拦截。
+                    }
+                }
                 materials.push({
                     url: meta.url,
                     title: meta.title,
                     fetchedAt: meta.fetchedAt,
                     plugin: meta.plugin,
-                    content: body || meta.title || ''
+                    content: body || meta.title || '',
+                    snippetOnly: !fullText,
+                    fullText: fullText || null
                 });
             } catch {
                 // 单份元数据损坏跳过，不阻断整批。
@@ -329,6 +343,47 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
         const merged = [];
         const dropped = [];
         const salvagedBatches = [];
+        // M4 质量门禁产物（§3.8.4 质量报告的原料）。
+        const qualityVerdicts = [];
+        const qualityClaims = [];
+        const needsReviewUnits = [];
+        const quarantineUnits = [];
+        const mergeProposals = [];
+
+        // 单元写入库外复核区（§2.2 needs_review：runs/<jobId>/review/<library>/）。
+        // 复核区文件保留完整卡形制（frontmatter + sources），用户可直接采纳移入。
+        const writeUnitToZone = async (zoneDir, unit, subskillId, fetchedAtByUrl, defaultFetchedAt) => {
+            await fsp.mkdir(zoneDir, { recursive: true });
+            const base = `${subskillId}_${String(unit.title || 'unit').slice(0, 40).replace(/[\\/:*?"<>|\s]+/g, '-')}`;
+            let fileName = `R_${base}.md`;
+            let counter = 2;
+            while (fsSyncExists(path.join(zoneDir, fileName))) {
+                fileName = `R_${base}-${counter}.md`;
+                counter += 1;
+            }
+            const sources = (unit.sourceUrls || []).map((url) => `  - url: ${url}\n    fetchedAt: ${(fetchedAtByUrl && fetchedAtByUrl.get(url)) || defaultFetchedAt}`).join('\n');
+            const body = [
+                '---',
+                `title: ${String(unit.title).replace(/\n/g, ' ')}`,
+                `type: ${unit.type}`,
+                `subskill: ${subskillId}`,
+                'sources:',
+                sources,
+                '---',
+                '',
+                String(unit.content)
+            ].join('\n');
+            await fsp.writeFile(path.join(zoneDir, fileName), `${body}\n`, 'utf8');
+            return fileName;
+        };
+        const fsSyncExists = (target) => {
+            try {
+                require('fs').accessSync(target);
+                return true;
+            } catch {
+                return false;
+            }
+        };
 
         // 增量学习：与 harvest 同 scope 过滤（材料为空的子技能本就跳过，此处显式对齐）。
         const scopeIds = Array.isArray(ctx.scope?.subskillIds) ? ctx.scope.subskillIds : null;
@@ -343,9 +398,29 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                     continue;
                 }
 
+                // 材料级主题门禁（§3.5.2：材料读取后、分批蒸馏前）：
+                // out_of_scope 材料直接出局（记录判定），adjacent/uncertain 标记——
+                // 只引用不确定材料的单元降级复核。
+                const gatedMaterials = [];
+                const materialTopicByurl = new Map();
+                for (const material of materials) {
+                    const verdict = qualityGate.assessMaterial({ blueprint, subskill, material });
+                    materialTopicByurl.set(material.url, verdict.topic.verdict);
+                    qualityVerdicts.push({ subjectType: 'material', subjectId: material.url, status: verdict.status, topic: verdict.topic.verdict, reason: verdict.topic.reason });
+                    if (verdict.status === 'quarantine') {
+                        dropped.push({ url: material.url, reason: `材料级主题门禁：${verdict.topic.reason}` });
+                        continue;
+                    }
+                    gatedMaterials.push({ ...material, topicUncertain: verdict.status === 'needs_review' });
+                }
+                if (gatedMaterials.length === 0) {
+                    logger?.(`distill: subskill ${subskill.id} 全部材料被主题门禁拦截，跳过`);
+                    continue;
+                }
+
                 // 材料分批：压低单次 LLM 输出体量，避免 max_tokens 截断
                 //（2026-10-11 两单连续败于 10 份材料单次蒸馏超限）。
-                for (const batch of chunkMaterials(materials, batchMaterials)) {
+                for (const batch of chunkMaterials(gatedMaterials, batchMaterials)) {
                     // 批间刷新既有卡：跨批同义知识点仍走 mergeInto 合并而非新建。
                     const existingCards = writer.listCards();
                     const payload = await distillMaterialBatch({
@@ -366,6 +441,8 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                     // 「貌似可信」来源一律降级进 dropped，不混入知识卡。
                     const materialUrlToFetchedAt = new Map(materials.map((material) => [material.url, material.fetchedAt]));
                     const titleToCard = new Map(existingCards.map((card) => [card.title, card.file]));
+                    // 本批格式合法、过了来源白名单的单元 → 先主张核验再单元门禁。
+                    const candidateUnits = [];
                     for (const unit of payload.knowledgeUnits) {
                         if (!unit || !UNIT_TYPES.has(unit.type) || !unit.title || !unit.content) {
                             logger?.(`distill: 丢弃格式非法的知识单元：${JSON.stringify(unit?.title || unit)}`);
@@ -381,25 +458,136 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                             dropped.push({ url: '(no source)', reason: `知识单元「${unit.title}」无有效出处，不入库（红线 4）` });
                             continue;
                         }
-                        const normalized = { ...unit, sourceUrls };
+                        candidateUnits.push({ ...unit, sourceUrls, sourceMaterials: batch.filter((m) => sourceUrls.includes(m.url)) });
+                    }
 
-                        if (unit.mergeInto && titleToCard.has(unit.mergeInto)) {
-                            const mergeResult = await writer.mergeSources(titleToCard.get(unit.mergeInto), sourceUrls, {
-                                fetchedAtByUrl: materialUrlToFetchedAt,
-                                defaultFetchedAt: fetchedAt
+                    // 主张核验（§3.5.3）：LLM 提取 → URL/引文确定性匹配 → 独立判定。
+                    // 证据只认归档全文（snippetOnly 来源不构成证据，红线 3）。
+                    const evidenceBySourceUrl = {};
+                    for (const material of batch) {
+                        if (material.fullText) evidenceBySourceUrl[material.url] = material.fullText;
+                    }
+                    const fullTextUrls = Object.keys(evidenceBySourceUrl);
+                    let claimsByTitle = new Map();
+                    let claimIssues = [];
+                    if (candidateUnits.length > 0 && fullTextUrls.length > 0) {
+                        try {
+                            const verified = await qualityGate.verifyClaims({
+                                units: candidateUnits,
+                                evidenceBySourceUrl,
+                                materialUrls: fullTextUrls,
+                                llm,
+                                llmConfig,
+                                logger
                             });
-                            merged.push({ into: unit.mergeInto, addedSources: mergeResult.addedCount });
+                            claimsByTitle = verified.byUnitTitle;
+                            claimIssues = verified.issues;
+                            for (const claim of verified.allClaims) {
+                                qualityClaims.push(claim);
+                            }
+                        } catch (error) {
+                            // 主张核验是硬门禁：核验失败（LLM 不可用/输出不可解析）
+                            // 不得静默放行——本批全部转复核。
+                            logger?.(`distill: 主张核验失败（${error.message}），本批 ${candidateUnits.length} 个单元全部转待复核`);
+                            claimIssues = [{ code: 'CLAIM_VERIFY_FAILED', message: `主张核验失败：${error.message}`, blocking: false }];
+                            for (const unit of candidateUnits) {
+                                needsReviewUnits.push({ subskillId: subskill.id, title: unit.title, reason: '主张核验基础设施失败' });
+                            }
+                            candidateUnits.length = 0;
+                        }
+                    }
+
+                    for (const unit of candidateUnits) {
+                        const unitClaims = claimsByTitle.get(unit.title) || [];
+                        const unitClaimIssues = claimIssues.filter((issue) => !issue.blocking || issue.code !== 'CLAIM_VERIFY_FAILED');
+                        const uncertainMaterialOnly = unit.sourceMaterials.length > 0
+                            && unit.sourceMaterials.every((material) => material.topicUncertain);
+                        const verdict = qualityGate.assessUnit({
+                            blueprint,
+                            subskill,
+                            unit,
+                            claims: unitClaims,
+                            claimIssues: unitClaimIssues,
+                            materialVerdicts: (unit.sourceUrls || []).map((url) => materialTopicByurl.get(url)).filter(Boolean)
+                        });
+                        qualityVerdicts.push({
+                            subjectType: 'knowledgeUnit',
+                            subjectId: unit.title,
+                            status: verdict.status,
+                            topic: verdict.topic.verdict,
+                            reason: verdict.topic.reason,
+                            issues: verdict.issues.map((issue) => `${issue.code}: ${issue.message}`)
+                        });
+
+                        if (verdict.status === 'quarantine') {
+                            quarantineUnits.push({
+                                subskillId: subskill.id,
+                                title: unit.title,
+                                reason: verdict.topic.reason
+                            });
+                            continue;
+                        }
+                        if (verdict.status === 'needs_review' || uncertainMaterialOnly) {
+                            // §3.5.2：uncertain（含"来源材料主题不确定"）→ needs_review，
+                            // 不是 quarantine——只有 out_of_scope 才隔离。
+                            needsReviewUnits.push({
+                                subskillId: subskill.id,
+                                title: unit.title,
+                                reason: uncertainMaterialOnly
+                                    ? `来源材料主题不确定（${verdict.topic.reason}）`
+                                    : (verdict.issues.map((issue) => issue.code).join(',') || verdict.topic.reason)
+                            });
+                            // 写入复核区（§2.2：候选与活跃知识分离），待用户复核采纳。
+                            await writeUnitToZone(path.join(runDir, 'review', libraryName), unit, subskill.id, materialUrlToFetchedAt, fetchedAt);
+                            continue;
+                        }
+
+                        // 合并分类（§3.3.3/T29）：mergeInto 命中既有卡时判定合并类别。
+                        if (unit.mergeInto && titleToCard.has(unit.mergeInto)) {
+                            const targetFile = titleToCard.get(unit.mergeInto);
+                            let targetContent = '';
+                            try {
+                                const rawCard = await fsp.readFile(path.join(libraryDir, targetFile), 'utf8');
+                                // 分类只比正文（剥 frontmatter——来源块新旧天然不同）。
+                                const fmEnd = rawCard.indexOf('\n---\n');
+                                targetContent = fmEnd >= 0 ? rawCard.slice(fmEnd + 5) : rawCard;
+                            } catch { /* 读不到按内容型处理 */ }
+                            const targetSubskill = /^K_([A-Za-z0-9-]+)_/.exec(targetFile)?.[1] || null;
+                            const crossSubskill = targetSubskill && targetSubskill !== subskill.id;
+                            const mergeClass = crossSubskill
+                                ? 'cross-subskill'
+                                : qualityGate.classifyMerge({ unit, targetCard: { content: targetContent } });
+                            if (mergeClass === 'source-only') {
+                                const mergeResult = await writer.mergeSources(targetFile, unit.sourceUrls, {
+                                    fetchedAtByUrl: materialUrlToFetchedAt,
+                                    defaultFetchedAt: fetchedAt
+                                });
+                                merged.push({ into: unit.mergeInto, targetFile, addedSources: mergeResult.addedCount, classification: 'source-only' });
+                            } else {
+                                // 内容修订/冲突/跨子技能：一律复核建议，绝不自动覆盖（红线 6）。
+                                mergeProposals.push({
+                                    subskillId: subskill.id,
+                                    title: unit.title,
+                                    target: unit.mergeInto,
+                                    targetFile,
+                                    classification: mergeClass,
+                                    reason: mergeClass === 'conflict'
+                                        ? '数值/规范级主张分歧（§3.3.3）'
+                                        : mergeClass === 'cross-subskill' ? '跨子技能合并（§3.5.2）' : '正文存在实质差异'
+                                });
+                                await writeUnitToZone(path.join(runDir, 'review', libraryName), unit, subskill.id, materialUrlToFetchedAt, fetchedAt);
+                            }
                             continue;
                         }
                         // D2 分流：methodology → 长文档；其余 → 知识卡。
-                        if (normalized.type === 'methodology') {
-                            const result = await writer.writeLongDoc(normalized, {
+                        if (unit.type === 'methodology') {
+                            const result = await writer.writeLongDoc(unit, {
                                 fetchedAtByUrl: materialUrlToFetchedAt,
                                 defaultFetchedAt: fetchedAt
                             });
                             written.push(result);
                         } else {
-                            const result = await writer.writeCard(normalized, {
+                            const result = await writer.writeCard(unit, {
                                 subskillId: subskill.id,
                                 fetchedAtByUrl: materialUrlToFetchedAt,
                                 defaultFetchedAt: fetchedAt
@@ -437,25 +625,94 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
         // 质量过滤丢弃留档（§3.4）。
         await recordDroppedSources(runDir, libraryName, dropped, fetchedAt);
 
-        // 入库验证（§3.4：写后 gateway_knowledge_search 冒烟查询新库；此处经
-        // knowledgeStorePort 同源调用 TDB，权限层在 MCP 工具面，M3.S2 绑定）。
-        const smokeQuery = blueprint.subskills[0]?.searchQueries?.[0] || blueprint.name;
-        const smoke = await smokeSearchLibrary(ctx.knowledgeStorePort, {
-            libraryName,
-            query: smokeQuery,
-            logger,
-            retries: smokeRetries,
-            intervalMs: smokeIntervalMs
-        });
+        // 索引就绪门禁（§3.6.1，M4 T30）：从「首子技能任意命中」升级为合取条件——
+        // initialized && compatible && 队列收敛 && 每个预期文件正向探针命中 &&
+        // 内容型合并的新正文探针命中。任一不满足 = fail closed（§3.6.1）。
+        // 就绪探针覆盖：新写文件 + 纯重复合并的目标卡（合并改写了卡文件，
+        // watcher 会重新摄取——目标卡应仍可检索）。
+        const expectedFiles = [
+            ...written.map((item) => `${libraryName}/${item.fileName}`),
+            ...merged.filter((m) => m.targetFile).map((m) => `${libraryName}/${m.targetFile}`)
+        ];
+        const ledger = createDispositionLedger(path.join(ctx.baseDir, blueprint.name, 'disposition-ledger.jsonl'));
+        let indexReady = null;
+        if (expectedFiles.length > 0) {
+            indexReady = await qualityGate.assertIndexReady({
+                knowledgeStorePort: ctx.knowledgeStorePort,
+                expectedFiles,
+                probes: [],
+                timeoutMs: smokeRetries * smokeIntervalMs,
+                pollIntervalMs: Math.min(smokeIntervalMs, 5000),
+                logger
+            });
+            if (!indexReady.ok) {
+                // §3.6.1：distill 不落步骤成功 marker——已短暂进入 publishing 的
+                // 文件必须 demote 到复核区，并等待 unlink 收敛。
+                const demoted = [];
+                for (const item of written) {
+                    const activeAbs = path.join(libraryDir, item.fileName);
+                    if (!fsSyncExists(activeAbs)) continue;
+                    const reviewPath = path.join(runDir, 'review', libraryName, item.fileName);
+                    await moveKnowledgeFile({
+                        ledger,
+                        from: activeAbs,
+                        to: reviewPath,
+                        reason: `索引就绪门禁失败：${indexReady.reasons[0]}`,
+                        fromState: STATES.PUBLISHING,
+                        toState: STATES.NEEDS_REVIEW,
+                        knowledgeRoot
+                    }).catch(() => undefined); // 移动失败不掩盖门禁结论
+                    demoted.push(item.fileName);
+                }
+                const failure = new Error(
+                    `索引就绪门禁失败（fail closed）：${indexReady.reasons.join('；')}——`
+                    + `${demoted.length} 个已写文件 demote 到复核区，本步骤不落成功 marker（可修复后 resume）`
+                );
+                failure.code = 'FORGE_INDEX_NOT_READY';
+                failure.status = 503;
+                failure.details = {
+                    indexReady,
+                    demotedFiles: demoted,
+                    partial: { writtenCount: written.length, demotedCount: demoted.length, reviewCount: needsReviewUnits.length }
+                };
+                throw failure;
+            }
+        }
 
-        const smokeNote = smoke.skipped
-            ? '（冒烟跳过：TDB 未启用）'
-            : (smoke.verified ? `（冒烟命中 ${smoke.hits} 条）` : '（冒烟未命中：索引延迟，TDB 队列自动重试）');
+        // 质量报告（§3.8.4）：材料数/主题分布/主张支持率/合并分类/发布状态。
+        const claimSupport = qualityClaims.reduce((acc, claim) => {
+            acc[claim.support] = (acc[claim.support] || 0) + 1;
+            return acc;
+        }, {});
+        const qualityReport = {
+            ruleVersion: qualityGate.QUALITY_RULE_VERSION,
+            generatedAt: new Date().toISOString(),
+            libraryName,
+            verdicts: {
+                total: qualityVerdicts.length,
+                byStatus: qualityVerdicts.reduce((acc, v) => { acc[v.status] = (acc[v.status] || 0) + 1; return acc; }, {}),
+                detail: qualityVerdicts
+            },
+            claims: { total: qualityClaims.length, bySupport: claimSupport },
+            merges: {
+                sourceOnly: merged.length,
+                proposals: mergeProposals
+            },
+            needsReviewUnits,
+            quarantineUnits,
+            indexReady,
+            droppedCount: dropped.length,
+            waterAdvance: indexReady?.ok === true && needsReviewUnits.length === 0 && quarantineUnits.length === 0 && written.length > 0
+        };
+        try {
+            await fsp.writeFile(path.join(runDir, 'quality-report.json'), `${JSON.stringify(qualityReport, null, 2)}\n`, 'utf8');
+        } catch { /* 报告留档尽力而为 */ }
+
         const salvageNote = salvagedBatches.length > 0
             ? `（含 ${salvagedBatches.length} 批截断抢救：${salvagedBatches.map((b) => `${b.subskillId}×${b.units}`).join(', ')}）`
             : '';
         return {
-            summary: `蒸馏完成：${written.length} 个新文件 / ${merged.length} 次合并 / 丢弃 ${dropped.length} 源${salvageNote}${smokeNote}`,
+            summary: `蒸馏完成：${written.length} 个新文件 / ${merged.length} 次合并 / 复核 ${needsReviewUnits.length} / 隔离 ${quarantineUnits.length} / 丢弃 ${dropped.length} 源${salvageNote}${indexReady ? `（索引就绪：${indexReady.ok ? '通过' : '未通过'}）` : '（零产物，无索引门禁）'}`,
             artifacts: written.map((item) => `knowledge/${libraryName}/${item.fileName}`),
             state: {
                 libraryName,
@@ -463,7 +720,15 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                 mergedCount: merged.length,
                 droppedCount: dropped.length,
                 salvagedBatches,
-                smoke
+                needsReviewCount: needsReviewUnits.length,
+                quarantineCount: quarantineUnits.length,
+                needsReviewUnits,
+                quarantineUnits,
+                mergeProposals,
+                claims: { total: qualityClaims.length, bySupport: claimSupport },
+                indexReady,
+                qualityReport: 'quality-report.json',
+                waterAdvance: qualityReport.waterAdvance
             }
         };
     };

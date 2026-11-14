@@ -111,6 +111,26 @@ async function waitFor(predicate, timeoutMs = 8000, intervalMs = 25) {
     return false;
 }
 
+// M4 T30/T31：索引就绪端口的测试替身——search 命中"已写文件"（sourceFile 对齐
+// assertIndexReady 的正向探针），状态 compatible、队列空。
+function readyPort(baseDir, { hits } = {}) {
+    return {
+        available: true,
+        listLibraries: async () => ['UIDesigner知识库'],
+        search: async () => {
+            if (hits !== undefined) return hits;
+            try {
+                const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+                return fs.readdirSync(libDir).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+            } catch {
+                return [];
+            }
+        },
+        getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+        pendingIngestCount: () => 0
+    };
+}
+
 function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, smokeRetries = null, smokeIntervalMs = null, materials = MATERIALS, llmComplete = null, blueprint = null }) {
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
@@ -139,6 +159,9 @@ function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, 
         knowledgeStorePort,
         baseDir,
         knowledgeRoot: path.join(baseDir, 'knowledge'),
+        // M4 fail-closed：不显式给端口时用"就绪"替身（探针按已写文件命中）；
+        // 显式传 null/坏端口即测 fail-closed 路径。
+        knowledgeStorePort: knowledgeStorePort === undefined ? readyPort(baseDir) : knowledgeStorePort,
         llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
         ...(smokeRetries != null ? { smokeRetries } : {}),
         ...(smokeIntervalMs != null ? { smokeIntervalMs } : {})
@@ -162,13 +185,12 @@ async function runToDistillComplete(jobRuntimeService, forgeRuntimeService, blue
 test('distill：分流落盘、出处 frontmatter、质量过滤留档、冒烟验证通过', async () => {
     const baseDir = createTempDir();
     const smokeCalls = [];
-    const knowledgeStorePort = {
-        available: true,
-        listLibraries: async () => ['UIDesigner知识库'],
-        search: async (query, options) => {
-            smokeCalls.push({ query, options });
-            return [{ text: '色轮与色彩三属性……', score: 0.87, library: 'UIDesigner知识库' }];
-        }
+    // 目录扫描替身：探针运行时文件已写盘，readdir 即真实命中集。
+    const knowledgeStorePort = readyPort(baseDir);
+    const originalSearch = knowledgeStorePort.search;
+    knowledgeStorePort.search = async (query, options) => {
+        smokeCalls.push({ query, options });
+        return originalSearch(query, options);
     };
     const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
         baseDir,
@@ -228,16 +250,16 @@ test('distill：分流落盘、出处 frontmatter、质量过滤留档、冒烟�
     const cardFetchedAt = cardRaw.match(/fetchedAt: (\S+)\s*\n|fetchedAt: ([^\n}]+)/)?.[0] || '';
     assert.ok(cardFetchedAt.includes(cardMeta.fetchedAt.slice(0, 19)), `卡片时间应回填材料抓取时刻：${cardFetchedAt} vs ${cardMeta.fetchedAt}`);
 
-    // 冒烟查询
+    // 索引就绪探针（T30）：全部预期文件正向命中后才允许落成功 marker
     assert.equal(smokeCalls.length >= 1, true);
     assert.deepEqual(smokeCalls[0].options.libraries, ['UIDesigner知识库']);
-    assert.equal(smokeCalls[0].query, 'color theory UI design');
 });
 
-test('distill：mergeInto 既有卡做来源并集，正文不动（红线 3）', async () => {
-    const baseDir = createTempDir();
-    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
-    fs.mkdirSync(libDir, { recursive: true });
+// M4 T29（§3.3.3）：合并先分类——纯重复（正文一致）自动并来源；
+// 内容变化 → 复核建议 + 单元落复核区，绝不静默覆盖（红线 6）。
+const OLD_CARD_BODY = '旧卡正文不可被修改，讲述色轮基础与配色理论的关系，正文保持原样即可支撑检索。';
+
+function writeOldCard(libDir) {
     const existingCard = `---
 title: "既有卡：色轮基础"
 oneLiner: "旧卡摘要"
@@ -248,49 +270,76 @@ sources:
 tags: [旧]
 ---
 
-旧卡正文不可被修改。
+${OLD_CARD_BODY}
 `;
     fs.writeFileSync(path.join(libDir, 'K_color-theory_jyoukyuu.md'), existingCard);
+}
 
-    const output = JSON.stringify({
+function mergeUnitOutput(content) {
+    return JSON.stringify({
         knowledgeUnits: [{
             type: 'concept',
             title: '色轮（同义新说法）',
             oneLiner: '同义知识点',
-            content: '不应成为新卡',
+            content,
             tags: [],
             sourceUrls: ['https://www.interaction-design.org/literature/topics/color-theory'],
             mergeInto: '既有卡：色轮基础'
         }],
         droppedSources: []
     });
-    const knowledgeStorePort = {
-        available: true,
-        listLibraries: async () => ['UIDesigner知识库'],
-        search: async () => [{ text: 'hit', score: 0.9 }]
-    };
+}
+
+test('distill：mergeInto 纯重复（正文一致）自动并来源，正文不动（红线 3）', async () => {
+    const baseDir = createTempDir();
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    fs.mkdirSync(libDir, { recursive: true });
+    writeOldCard(libDir);
+
     const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
         baseDir,
-        llmOutputs: [output],
-        knowledgeStorePort
+        llmOutputs: [mergeUnitOutput(OLD_CARD_BODY)]
     });
     const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
 
     const files = fs.readdirSync(libDir);
     assert.equal(files.filter((f) => f.startsWith('K_')).length, 1, '不应新增知识卡');
     const mergedRaw = fs.readFileSync(path.join(libDir, 'K_color-theory_jyoukyuu.md'), 'utf8');
-    assert.match(mergedRaw, /旧卡正文不可被修改。/, '正文不动');
+    assert.match(mergedRaw, /旧卡正文不可被修改/, '正文不动');
     assert.match(mergedRaw, /old-source\.example\.com/);
     assert.match(mergedRaw, /interaction-design\.org/);
-    // 多行 YAML 格式（设计 §3.4）：- url 行计数来源数
     const sourceCount = (mergedRaw.match(/  - url: /g) || []).length;
     assert.equal(sourceCount, 2, '来源并集');
-    // S2：既有来源的原始 fetchedAt 不被合并时刻改写
     assert.match(mergedRaw, /fetchedAt: 2026-10-01T00:00:00\.000Z/, '旧来源时间戳保留');
 
     const runDir = path.join(baseDir, 'runs', jobId);
     const marker = JSON.parse(fs.readFileSync(path.join(runDir, 'steps', 'distill.json'), 'utf8'));
     assert.match(marker.summary, /1 次合并/);
+    assert.equal(marker.state.mergeProposals.length, 0);
+});
+
+test('distill：mergeInto 内容变化生成复核建议，不自动覆盖（红线 6）', async () => {
+    const baseDir = createTempDir();
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    fs.mkdirSync(libDir, { recursive: true });
+    writeOldCard(libDir);
+
+    const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
+        baseDir,
+        llmOutputs: [mergeUnitOutput('与旧卡不同的新表述：色轮应按感知均匀色彩空间组织，并给出新的配色理论推导路径。' + '补充细节。'.repeat(20))]
+    });
+    const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
+
+    const mergedRaw = fs.readFileSync(path.join(libDir, 'K_color-theory_jyoukyuu.md'), 'utf8');
+    assert.doesNotMatch(mergedRaw, /感知均匀/, '旧卡正文不被新内容覆盖');
+    assert.doesNotMatch(mergedRaw, /interaction-design\.org/, '来源也不并入（未确认纯重复）');
+
+    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
+    assert.equal(marker.state.mergeProposals.length, 1);
+    assert.equal(marker.state.mergeProposals[0].classification, 'content-revision');
+    // 单元本身落复核区，供用户对照采纳。
+    const reviewDir = path.join(baseDir, 'runs', jobId, 'review', 'UIDesigner知识库');
+    assert.ok(fs.readdirSync(reviewDir).some((f) => f.includes('R_')), '复核区应有待审单元');
 });
 
 test('distill：知识内容含密钥被阻断落盘（红线 2）', async () => {
@@ -300,7 +349,7 @@ test('distill：知识内容含密钥被阻断落盘（红线 2）', async () =>
             type: 'concept',
             title: '带密钥的单元',
             oneLiner: 'x',
-            content: '配置示例：sk-abcdefghijklmnopqrstuvwx',
+            content: '配置示例与部署说明如下，密钥形如 sk-abcdefghijklmnopqrstuvwx，其余正文撑到完整性与主题门禁阈值之上，避免被薄内容门禁先行拦截。',
             tags: [],
             sourceUrls: ['https://www.interaction-design.org/literature/topics/color-theory'],
             mergeInto: null
@@ -321,7 +370,8 @@ test('distill：知识内容含密钥被阻断落盘（红线 2）', async () =>
     assert.ok(!fs.existsSync(libDir) || fs.readdirSync(libDir).length === 0, '不应有任何文件落盘');
 });
 
-test('distill：TDB 未启用时冒烟跳过（warning 不阻断）', async () => {
+// M4 T31（§3.8.2 fail-open 反转）：索引不可用/未知 → distill 不得完成。
+test('distill：TDB 未启用（端口不可用）fail closed——不落成功 marker，已写文件 demote（§3.6.1）', async () => {
     const baseDir = createTempDir();
     const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
         baseDir,
@@ -329,12 +379,19 @@ test('distill：TDB 未启用时冒烟跳过（warning 不阻断）', async () =
         knowledgeStorePort: null
     });
     const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
-    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
-    assert.match(marker.summary, /冒烟跳过：TDB 未启用/);
-    assert.ok(fs.existsSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')));
+    const job = jobRuntimeService.pollJob(jobId, null).data.job;
+    assert.equal(job.metadata.forge.error.step, 'distill', '失败点必须是 distill');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_INDEX_NOT_READY');
+    // 不落成功 marker
+    assert.ok(!fs.existsSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json')), 'distill marker 不得落盘');
+    // 已写文件 demote 到复核区（活动库零污染），源库目录应为空/不存在
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    assert.ok(!fs.existsSync(libDir) || fs.readdirSync(libDir).length === 0, '活动库不应残留未验证文件');
+    const reviewDir = path.join(baseDir, 'runs', jobId, 'review', 'UIDesigner知识库');
+    assert.ok(fs.existsSync(reviewDir) && fs.readdirSync(reviewDir).length > 0, '已写文件应 demote 到复核区');
 });
 
-test('distill：冒烟持续无结果降级为告警留痕，不阻断步骤（索引是 watcher 异步职责）', async () => {
+test('distill：探针持续未命中 fail closed（不再降级为告警放行）', async () => {
     const baseDir = createTempDir();
     let searches = 0;
     const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
@@ -345,20 +402,21 @@ test('distill：冒烟持续无结果降级为告警留痕，不阻断步骤（�
             listLibraries: async () => ['UIDesigner知识库'],
             search: async () => {
                 searches += 1;
-                return [];
-            }
+                return []; // 永不命中
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         smokeRetries: 2,
         smokeIntervalMs: 10
     });
     const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
     const job = jobRuntimeService.pollJob(jobId, null).data.job;
-    // distill 完成-marker 落盘；job 失败点应是 synthesize 桩而非 distill
-    assert.equal(job.metadata.forge.error.step, 'synthesize');
-    const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
-    assert.match(marker.summary, /冒烟未命中：索引延迟/);
-    assert.equal(searches, 2, '短重试配置生效');
-    assert.ok(fs.existsSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')), '知识文件已落盘');
+    assert.equal(job.metadata.forge.error.code, 'FORGE_INDEX_NOT_READY');
+    assert.ok(searches >= 2, '超时窗口内多次探针');
+    assert.ok(!fs.existsSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json')), '未就绪不落 marker');
+    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+    assert.ok(!fs.existsSync(libDir) || fs.readdirSync(libDir).length === 0, '活动库零污染');
 });
 
 test('distill：LLM 输出不可解析时带重试指令重试一次（费用入护栏）', async () => {
@@ -388,11 +446,7 @@ test('distill：LLM 输出不可解析时带重试指令重试一次（费用入
         jobRuntimeService: jrs,
         llmCompletionPort: llmPort,
         toolInvokerPort: toolInvoker,
-        knowledgeStorePort: {
-            available: true,
-            listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ text: 'hit', score: 0.9 }]
-        },
+        knowledgeStorePort: readyPort(baseDir),
         baseDir,
         knowledgeRoot: path.join(baseDir, 'knowledge'),
         llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
@@ -419,7 +473,7 @@ test('distill：LLM 输出不可解析时带重试指令重试一次（费用入
     assert.equal(llmCalls[1].max_tokens, 8000, '纯抖动（非空非截断）不抬预算');
     const marker = JSON.parse(fs.readFileSync(path.join(baseDir, 'runs', jobId, 'steps', 'distill.json'), 'utf8'));
     assert.ok(marker.state && marker.state.libraryName === 'UIDesigner知识库', 'marker 携带机器可读 state');
-    assert.equal(marker.state.smoke.verified, true);
+    assert.equal(marker.state.indexReady.ok, true);
 });
 
 // 2026-10-11 事故回归：两单 distill 连续败于 max_tokens=8000 截断
@@ -434,11 +488,7 @@ test('distill：max_tokens 截断时抢救完整知识单元，被切断的尾�
         baseDir,
         llmOutputs: [truncated],
         finishReason: 'length',
-        knowledgeStorePort: {
-            available: true,
-            listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ text: 'hit', score: 0.9 }]
-        },
+        knowledgeStorePort: readyPort(baseDir),
         smokeRetries: 1,
         smokeIntervalMs: 5
     });
@@ -464,7 +514,7 @@ test('distill：正文为空（推理段吃满预算）时抬预算重试并完�
     const { jobRuntimeService, forgeRuntimeService } = buildPipeline({
         baseDir,
         llmOutputs: [DISTILL_OUTPUT],
-        knowledgeStorePort: { available: true, listLibraries: async () => ['UIDesigner知识库'], search: async () => [{ text: 'hit', score: 0.9 }] },
+        knowledgeStorePort: readyPort(baseDir),
         smokeRetries: 1,
         smokeIntervalMs: 5,
         llmComplete: async (config, payload) => {
@@ -607,8 +657,9 @@ test('distill：确认截断且无可抢救单元时拆半重蒸，彻底失败�
 test('distill：材料分批蒸馏，跨批 mergeInto 合并且批间刷新既有卡', async () => {
     const baseDir = createTempDir();
     // 异域材料：红线 6 同域节流为 ≥2s/份，同域 5 份会把测试拖进 8s+ 超时。
+    // 主题相关材料（M4 主题门禁：空话题材料会如实判 uncertain 转复核）。
     const fiveMaterials = [1, 2, 3, 4, 5].map((i) => ({
-        title: `Material ${i}`, url: `https://site${i}.example.org/m${i}`, snippet: `材料 ${i} 内容。`
+        title: `Color theory and UI palette guide ${i}`, url: `https://site${i}.example.org/m${i}`, snippet: `配色理论与 UI 色板实践第 ${i} 部分。`
     }));
     const batch1Output = JSON.stringify({
         knowledgeUnits: [{
@@ -618,10 +669,11 @@ test('distill：材料分批蒸馏，跨批 mergeInto 合并且批间刷新既�
         }],
         droppedSources: []
     });
+    // M4 T29：跨批 mergeInto 走合并分类——纯重复（正文与批次一一致）自动并来源。
     const batch2Output = JSON.stringify({
         knowledgeUnits: [{
             type: 'concept', title: '批次二同义单元', oneLiner: 'x',
-            content: '应合并而非新建', tags: [],
+            content: '批次一内容', tags: [],
             sourceUrls: ['https://site5.example.org/m5'], mergeInto: '批次一知识卡'
         }],
         droppedSources: []
@@ -630,11 +682,7 @@ test('distill：材料分批蒸馏，跨批 mergeInto 合并且批间刷新既�
         baseDir,
         llmOutputs: [batch1Output, batch2Output],
         materials: fiveMaterials,
-        knowledgeStorePort: {
-            available: true,
-            listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ text: 'hit', score: 0.9 }]
-        },
+        knowledgeStorePort: readyPort(baseDir),
         smokeRetries: 1,
         smokeIntervalMs: 5
     });

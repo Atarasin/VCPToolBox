@@ -51,9 +51,14 @@ const FORGE_JOB_OPERATIONS = Object.freeze({
 const DEFAULT_BASE_DIR = path.join(__dirname, '..', '..', '..', '..', 'Agent', 'forge');
 const DEFAULT_BUDGET_CNY = 10;
 
-// 红线 1：铸造流程的 toolInvoker 只允许检索类插件（§3.3 fallback 顺序即此三者）。
-// M2 harvest 接入后如需扩展，在此白名单显式追加。
-const FORGE_ALLOWED_TOOLS = new Set(['AnySearch', 'FlashDeepSearch', 'BrowserSearch']);
+// 红线 1：铸造流程的 toolInvoker 只允许检索/取证类插件。
+// D7（第 3 轮评审实测双链）：发现链 ParallelSearch → AnySearch → TavilySearch →
+// BrowserSearch；全文链 UrlFetch → ParallelSearch(web_fetch) → AnySearch(extract)
+// → ChromeBridge。FlashDeepSearch 已禁用，彻底移除（不留在白名单）。
+const FORGE_ALLOWED_TOOLS = new Set([
+    'ParallelSearch', 'AnySearch', 'TavilySearch', 'BrowserSearch',
+    'UrlFetch', 'ChromeBridge'
+]);
 
 const RESUMABLE_JOB_STATUSES = new Set([
     JOB_STATUS.FAILED,
@@ -836,25 +841,48 @@ function createForgeRuntimeService(options = {}) {
         }
 
         // §3.8 学习档案：learn job 完成时追加（读过什么/学过什么/为什么学）。
+        // §3.6.3（M4 T31）：只有「应有质量产物已 active + 索引验证通过」才关闭
+        // gap、推进学习水位；needs_review / quarantine / 零合格产物均不关不推
+        //（D4：合格卡可发布，批次存在未解决项不得记为完全成功）。
         if (runRecord.jobKind === 'expert.learn' && runRecord.expertName) {
             try {
                 const harvestMarker = markers.get('harvest');
                 const distillMarker = markers.get('distill');
                 const sourceCount = (harvestMarker?.state?.manifests || []).reduce((sum, m) => sum + (m.materials || 0), 0);
+                const indexReadyOk = distillMarker?.state?.indexReady?.ok === true;
+                const reviewCount = distillMarker?.state?.needsReviewCount ?? 0;
+                const quarantineCount = distillMarker?.state?.quarantineCount ?? 0;
+                const writtenCount = distillMarker?.state?.writtenCount ?? 0;
+                const waterAdvance = indexReadyOk && reviewCount === 0 && quarantineCount === 0 && writtenCount > 0;
                 await gapRegistry.appendLearningHistory(runRecord.expertName, {
                     trigger: runRecord.scope?.reason || 'manual',
                     scope: runRecord.scope || null,
-                    status: 'completed',
+                    status: waterAdvance ? 'completed' : 'completed_needs_review',
+                    waterAdvance,
                     sources: sourceCount,
-                    distilledFiles: distillMarker?.state?.writtenCount ?? 0,
+                    distilledFiles: writtenCount,
+                    reviewItems: reviewCount,
+                    quarantineItems: quarantineCount,
                     costCny: meter.getBreakdown().costSoFarCny,
                     jobId
                 });
-                // 进修完成 → 关闭相关 subskill 的 open 缺口（§3.8 触发 a 闭环）。
-                const scopeIds = Array.isArray(runRecord.scope?.subskillIds) ? runRecord.scope.subskillIds : null;
-                const closed = await gapRegistry.closeGaps(runRecord.expertName, scopeIds || []);
-                if (closed > 0) {
-                    log('forge.gap.closed', { jobId, expertName: runRecord.expertName, closed });
+                if (!waterAdvance) {
+                    log('forge.learn.water_held', {
+                        jobId,
+                        expertName: runRecord.expertName,
+                        indexReadyOk,
+                        reviewCount,
+                        quarantineCount,
+                        writtenCount,
+                        reason: '质量失败不关闭学习缺口、不推进水位（§3.6.3）'
+                    });
+                } else {
+                    // 进修真正成功 → 关闭相关 subskill 的 open 缺口（§3.8 触发 a 闭环）。
+                    const scopeIds = Array.isArray(runRecord.scope?.subskillIds) ? runRecord.scope.subskillIds : null;
+                    const closed = await gapRegistry.closeGaps(runRecord.expertName, scopeIds || []);
+                    if (closed > 0) {
+                        log('forge.gap.closed', { jobId, expertName: runRecord.expertName, closed });
+                    }
                 }
             } catch (error) {
                 log('forge.history.append_failed', { jobId, message: error.message });
