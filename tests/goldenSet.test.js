@@ -163,14 +163,14 @@ test('goldenSet：随库分发的砚尺基线集本身合法', () => {
     const parsed = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden/yanchi_ui.json'), 'utf-8'));
     const queries = goldenSet.loadGoldenSet(parsed);
     const kinds = queries.reduce((acc, q) => { acc[q.kind] = (acc[q.kind] || 0) + 1; return acc; }, {});
-    assert.equal(queries.length, 60);
+    assert.equal(queries.length, 59);
     assert.equal(kinds.required, 21);
-    assert.equal(kinds.incremental, 34); // 23 新增 + 11 变更
-    assert.equal(kinds.negative, 3);
+    assert.equal(kinds.incremental, 32); // 23 新增/11 变更中的 2 篇经 M3 隔离退役
+    assert.equal(kinds.negative, 4);
     assert.equal(kinds.preview, 2);
     // 23/11 探针覆盖设计指定的文件集。
     const incrementalFiles = new Set(queries.filter((q) => q.kind === 'incremental').flatMap((q) => q.requiredSourceFiles));
-    assert.equal(incrementalFiles.size, 34);
+    assert.equal(incrementalFiles.size, 32);
 });
 
 
