@@ -199,9 +199,9 @@ prompt:「始」…图片描述原文…「末」
 #### M1.S1 manifest 与配置骨架
 
 依赖：无
-- [ ] T1 编写 plugin-manifest.json（§3.1：hybridservice/direct、2 条 invocationCommands、configSchema 5 键）
-- [ ] T2 落地 config.env（真实 token，不入库）与 config.env.example（§3.2）
-- [ ] 验收：VCP 启动日志显示插件加载成功，AdminPanel 插件列表出现 VizDevelop 且无报错
+- [x] T1 编写 plugin-manifest.json（§3.1：hybridservice/direct、2 条 invocationCommands、configSchema 5 键）
+- [x] T2 落地 config.env（真实 token，不入库）与 config.env.example（§3.2）
+- [x] 验收：VCP 启动日志显示插件加载成功，AdminPanel 插件列表出现 VizDevelop 且无报错
 
 #### M1.S2 MCP 客户端核心
 
