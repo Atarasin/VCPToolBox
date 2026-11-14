@@ -231,47 +231,53 @@
       "newPath": "yanchi_ui知识库/K_visual-hierarchy_视觉层级的两大基础变量-明度与对比.md",
       "reason": "确定性术语错误（§1.1-4）：Value 误译为\"质量\"。NN/g 原文 \"the contrast in value and saturation\" 中 value=明度（色值深浅）；\"视觉分量\"对应概念是 visual weight（视觉重量）",
       "evidenceRefs": [
-        "evidence/nngroup-visual-hierarchy.md"
+        "docs/m3-evidence/nngroup-visual-hierarchy.md"
       ],
-      "newContent": "---\ntitle: 视觉层级的两大基础变量：明度与对比\noneLiner: 视觉层级的基础变量是明度（Value）与对比（Contrast）：明度差大、对比强的元素优先获得注意。\ntype: concept\nsubskill: visual-hierarchy\nsources:\n  - url: https://www.webguide.nat.gov.tw/article/210/show\n    fetchedAt: 2026-10-15T20:00:10.674Z\n  - url: https://www.nngroup.com/articles/visual-hierarchy-ux-definition\n    fetchedAt: 2026-10-15T20:00:10.674Z\ntags: [视觉层级, 对比度, 明度, 视觉重量, 注意力引导]\n---\n\n## 术语勘误（2026-11-15 修订）\n本卡早期版本将 **Value 误译为\"质量\"**并解释为\"视觉分量\"，是术语错误：\n- 视觉层级文献（NN/g）的原文是 \"the contrast in **value** and saturation between the element and the context\"——**value 指颜色的明度（深浅程度）**，与饱和度并列；\n- 表达\"元素显眼程度\"的通用术语是 **视觉重量（visual weight）**，由大小、明度、对比、密度、位置等共同决定，不是\"质量\"。\n\n## 定义\n视觉层级（Visual Hierarchy）最基本的两个手段是**明度（Value）**与**对比（Contrast）**：与上下文明度差大、对比强烈的元素会优先吸引注意，从而协助观看者区分\"焦点\"与\"资料\"的重要程度（政府网页指南）。清晰的层级可以通过**明度与对比的变化**来建立（NN/g）。\n\n## 可执行要点\n1. **先定焦点**：确定页面上最需要被先看到的元素。\n2. **拉开明度**：让焦点元素在明度（深浅）上与上下文拉开差距，增加其视觉重量。\n3. **拉强对比**：让焦点元素与周围元素在色彩、明暗上形成对比（NN/g：决定层级的不是色相本身，而是元素与上下文之间明度与饱和度的对比）。\n4. **压低次要信息**：降低次要内容的明度对比，形成可辨识的强弱梯度，而不是所有元素同等强度。\n\n## 边界\n明度与对比是**制造层级差异的手段**，其目的是表达重要性次序；脱离\"排序\"目的单独调色或调明度，并不自动构成视觉层级。\n\n> 修订依据：NN/g《Visual Hierarchy》定义原文（归档于 Agent/forge/runs/m3-legacy-triage/evidence/）。原文以\"质量\"表述的各处已全部更正为\"明度/视觉重量\"。\n"
+      "newContent": "---\ntitle: 视觉层级的两大基础变量：明度与对比\noneLiner: 视觉层级的基础变量是明度（Value）与对比（Contrast）：明度差大、对比强的元素优先获得注意。\ntype: concept\nsubskill: visual-hierarchy\nsources:\n  - url: https://www.webguide.nat.gov.tw/article/210/show\n    fetchedAt: 2026-10-15T20:00:10.674Z\n  - url: https://www.nngroup.com/articles/visual-hierarchy-ux-definition\n    fetchedAt: 2026-10-15T20:00:10.674Z\ntags: [视觉层级, 对比度, 明度, 视觉重量, 注意力引导]\n---\n\n## 术语勘误（2026-11-15 修订）\n本卡早期版本将 **Value 误译为\"质量\"**并解释为\"视觉分量\"，是术语错误：\n- 视觉层级文献（NN/g）的原文是 \"the contrast in **value** and saturation between the element and the context\"——**value 指颜色的明度（深浅程度）**，与饱和度并列；\n- 表达\"元素显眼程度\"的通用术语是 **视觉重量（visual weight）**，由大小、明度、对比、密度、位置等共同决定，不是\"质量\"。\n\n## 定义\n视觉层级（Visual Hierarchy）最基本的两个手段是**明度（Value）**与**对比（Contrast）**：与上下文明度差大、对比强烈的元素会优先吸引注意，从而协助观看者区分\"焦点\"与\"资料\"的重要程度（政府网页指南）。清晰的层级可以通过**明度与对比的变化**来建立（NN/g）。\n\n## 可执行要点\n1. **先定焦点**：确定页面上最需要被先看到的元素。\n2. **拉开明度**：让焦点元素在明度（深浅）上与上下文拉开差距，增加其视觉重量。\n3. **拉强对比**：让焦点元素与周围元素在色彩、明暗上形成对比（NN/g：决定层级的不是色相本身，而是元素与上下文之间明度与饱和度的对比）。\n4. **压低次要信息**：降低次要内容的明度对比，形成可辨识的强弱梯度，而不是所有元素同等强度。\n\n## 边界\n明度与对比是**制造层级差异的手段**，其目的是表达重要性次序；脱离\"排序\"目的单独调色或调明度，并不自动构成视觉层级。\n\n> 修订依据：NN/g《Visual Hierarchy》定义原文（归档于 docs/m3-evidence/）。原文以\"质量\"表述的各处已全部更正为\"明度/视觉重量\"。\n",
+      "oldContentHash": "sha256:d99ebd59eba5ceb9b2781a41314a3314cd925acd26fbc80142367ac386cdd5b3"
     },
     {
       "path": "yanchi_ui知识库/K_interaction-accessibility_wcag-键盘可操作性要求-仅用键盘完成全部功能.md",
       "newPath": "yanchi_ui知识库/K_interaction-accessibility_wcag-2-1-1-拖放与指针交互的键盘等价要求.md",
       "reason": "确定性事实错误（§1.1-2）：原卡声称\"没有例外——包括拖放\"，与 SC 2.1.1 规范原文冲突：规范存在路径依赖例外，且\"拖动物体到目标位置（路径无关时）\"明确不属于例外、必须提供键盘等价方式（W3C Understanding Example 2）。与既有正确卡 wcag-2-1-1-键盘可操作性 互补，本卡改写为拖放专题",
       "evidenceRefs": [
-        "evidence/w3c-understanding-2-1-1-keyboard.md"
+        "docs/m3-evidence/w3c-understanding-2-1-1-keyboard.md"
       ],
-      "newContent": "---\ntitle: WCAG 2.1.1 拖放与指针交互的键盘等价要求\noneLiner: 拖动物体到目标位置这类端点型操作不属于路径依赖例外，必须提供键盘等价方式。\ntype: rule\nsubskill: interaction-accessibility\nsources:\n  - url: https://www.w3.org/WAI/WCAG22/Understanding/keyboard.html\n    fetchedAt: 2026-11-15T00:00:00.000Z\n  - url: https://tetralogical.com/blog/2023/11/27/keyboard-accessibility-myths-wcag\n    fetchedAt: 2026-10-17T20:00:32.821Z\ntags: [无障碍, 键盘可访问性, WCAG, 拖放]\n---\n\n## 勘误（2026-11-15 修订）\n本卡早期版本声称\"所有功能必须仅通过键盘完成操作，**没有例外——包括拖放**\"。经 W3C Understanding SC 2.1.1 官方文档核验，该表述有两处错误：\n1. SC 2.1.1 **存在路径依赖例外**（见下）；\n2. **拖放恰恰不在例外内**：W3C 明确指出 \"dragging objects to a location (when the path to that location is not relevant) do **not** require path dependent input\"——把对象拖到某处是端点型操作，必须可用键盘完成。\n\n## 规范原文（SC 2.1.1 Keyboard，Level A）\n> All functionality of the content is operable through a keyboard interface without requiring specific timings for individual keystrokes, **except where the underlying function requires input that depends on the path of the user's movement and not just the endpoints.**\n> 注 1：例外针对底层功能而非输入技术（如手写输入是路径依赖的，但底层功能\"输入文本\"不是）。\n> 注 2：不禁止也不应阻止在键盘操作之外提供鼠标等其他输入方式。\n\n## 拖放的正确处理\n- **端点型拖放（绝大多数 UI 场景）**：移动对象到目标位置的路径不重要 → 必须提供键盘等价方式。W3C 官方示例：使用拖放的应用同时支持\"剪切/粘贴\"或表单控件来移动对象（Understanding Example 2）。\n- **真正的例外**：自由手绘、水彩笔触等依赖移动路径本身的输入。\n- 补充：WCAG 2.2 的 SC 2.5.7 Dragging Movements（AA）进一步要求拖拽操作必须可由单点操作（不拖动）完成。\n\n## 检查项\n- 逐个列出产品中的拖放/指针交互，判断底层功能是否端点型（绝大多数是）。\n- 为端点型拖放提供键盘或替代控件路径（如上下移动按钮、剪切粘贴、输入坐标）。\n- 用纯键盘走通全部核心流程验证（不含自由手绘类功能）。\n\n> 修订依据：W3C Understanding SC 2.1.1 全文（归档于 Agent/forge/runs/m3-legacy-triage/evidence/w3c-understanding-2-1-1-keyboard.md）。\n"
+      "newContent": "---\ntitle: WCAG 2.1.1 拖放与指针交互的键盘等价要求\noneLiner: 拖动物体到目标位置这类端点型操作不属于路径依赖例外，必须提供键盘等价方式。\ntype: rule\nsubskill: interaction-accessibility\nsources:\n  - url: https://accessible.org/wcag\n    fetchedAt: 2026-10-18T20:00:24.689Z\n  - url: https://www.w3.org/WAI/WCAG22/Understanding/keyboard.html\n    fetchedAt: 2026-11-15T04:56:00.000Z\ntags: [无障碍, 键盘可访问性, WCAG, 拖放]\n---\n\n## 勘误（2026-11-15 修订）\n本卡早期版本声称\"所有功能必须仅通过键盘完成操作，**没有例外——包括拖放**\"。经 W3C Understanding SC 2.1.1 官方文档核验，该表述有两处错误：\n1. SC 2.1.1 **存在路径依赖例外**（见下）；\n2. **拖放恰恰不在例外内**：W3C 明确指出 \"dragging objects to a location (when the path to that location is not relevant) do **not** require path dependent input\"——把对象拖到某处是端点型操作，必须可用键盘完成。\n\n## 规范原文（SC 2.1.1 Keyboard，Level A）\n> All functionality of the content is operable through a keyboard interface without requiring specific timings for individual keystrokes, **except where the underlying function requires input that depends on the path of the user's movement and not just the endpoints.**\n> 注 1：例外针对底层功能而非输入技术（如手写输入是路径依赖的，但底层功能\"输入文本\"不是）。\n> 注 2：不禁止也不应阻止在键盘操作之外提供鼠标等其他输入方式。\n\n## 拖放的正确处理\n- **端点型拖放（绝大多数 UI 场景）**：移动对象到目标位置的路径不重要 → 必须提供键盘等价方式。W3C 官方示例：使用拖放的应用同时支持\"剪切/粘贴\"或表单控件来移动对象（Understanding Example 2）。\n- **真正的例外**：自由手绘、水彩笔触等依赖移动路径本身的输入。\n- 补充：WCAG 2.2 的 SC 2.5.7 Dragging Movements（AA）进一步要求拖拽操作必须可由单点操作（不拖动）完成。\n\n## 检查项\n- 逐个列出产品中的拖放/指针交互，判断底层功能是否端点型（绝大多数是）。\n- 为端点型拖放提供键盘或替代控件路径（如上下移动按钮、剪切粘贴、输入坐标）。\n- 用纯键盘走通全部核心流程验证（不含自由手绘类功能）。\n\n> 修订依据：W3C Understanding SC 2.1.1 全文（归档于 docs/m3-evidence/w3c-understanding-2-1-1-keyboard.md）。\n",
+      "oldContentHash": "sha256:d26585f3724c96eebf529427f577322b69cf740ae26287de97765fdf828e9ee8"
     },
     {
       "path": "yanchi_ui知识库/K_color-type-tokens_大号文本的-3-1-对比度阈值.md",
       "reason": "确定性规范错误（§1.1-1）：大文本的判定条件是字号（≥18pt 或 ≥14pt 粗体，CJK 等效），不是\"标题（heading）\"角色；原卡以\"标题或更大号文本\"为判据会同时漏判大字号正文、误判小字号标题",
       "evidenceRefs": [
-        "evidence/w3c-understanding-1-4-3-contrast-minimum.md"
+        "docs/m3-evidence/w3c-understanding-1-4-3-contrast-minimum.md"
       ],
-      "newContent": "---\ntitle: 大号文本的 3:1 对比度阈值（判定条件：字号而非标题角色）\noneLiner: ≥18pt 或 ≥14pt 粗体（约 24px/18.5px，含 CJK 等效字号）的文本适用 3:1；更小文本一律 4.5:1。\ntype: concept\nsubskill: color-type-tokens\nsources:\n  - url: https://developer.mozilla.org/en-US/docs/Web/Accessibility/Guides/Understanding_WCAG/Perceivable/Color_contrast\n    fetchedAt: 2026-10-15T20:00:17.585Z\n  - url: https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html\n    fetchedAt: 2026-11-15T00:00:00.000Z\n  - url: https://accesslevelup.com/wcag-color-contrast\n    fetchedAt: 2026-10-15T20:00:17.585Z\ntags: [色彩对比度, WCAG, 无障碍, 大号文本, 设计令牌]\n---\n\n## 勘误（2026-11-15 修订）\n本卡早期版本把 3:1 档的适用条件写成\"**标题（heading）或更大号的文本**\"。经 W3C Understanding SC 1.4.3 官方文档核验，判定条件是**字号**，与是否为标题无关：小字号的标题不能享受 3:1；达到大字号要求的正文可以。\n\n## 规范原文\n- SC 1.4.3（AA）：普通文本对比度至少 **4.5:1**；\"Large-scale text and images of large-scale text have a contrast ratio of at least **3:1**\"。\n- **large scale（大字号）的规范定义**：\"with at least **18 point** or **14 point bold** or font size that would yield equivalent size for Chinese, Japanese and Korean (CJK) fonts\"。\n- 换算注记（官方）：1pt = 1.333px，14pt ≈ **18.5px**、18pt ≈ **24px**；对多数正文常用字体约合 **1.2em / 1.5em**（即正文字号的 120%/150%）。\n\n## 判定规则\n1. 先看字号：非粗体 ≥18pt，或粗体 ≥14pt（CJK 字体取等效大字号）→ 属于大字号文本，按 **3:1** 校验。\n2. 不满足字号条件的任何文本——**包括标题**——按 **4.5:1** 校验。\n3. 极细或字形特殊的字体更难读，官方建议此类字体需要更高的对比度才稳妥。\n\n## 边界与易错点\n- \"标题=大文本\"是常见误判：h1/h2 若字号未达标，不适用 3:1。\n- 3:1 同时出现在\"大号文本\"（SC 1.4.3）与\"UI 组件/图形\"（SC 1.4.11 Non-text Contrast）两类要求中，适用对象不同，不可互相替代。\n- 计算出的对比度是阈值判定，不四舍五入（4.499:1 不满足 4.5:1）。\n- 图像中的大字号文字应按 120%/150% 正文比例制作。\n\n## 实践含义\n制定设计令牌/色板时，按字号维度设定两档对比目标：正文色对 ≥4.5:1；≥18pt（或 ≥14pt 粗体）场景的色对 ≥3:1；UI 组件边界另按 1.4.11 的 3:1 单独校验。\n\n> 修订依据：W3C Understanding SC 1.4.3 Contrast (Minimum) 全文（归档于 Agent/forge/runs/m3-legacy-triage/evidence/w3c-understanding-1-4-3-contrast-minimum.md）。\n"
+      "newContent": "---\ntitle: 大号文本的 3:1 对比度阈值（判定条件：字号而非标题角色）\noneLiner: ≥18pt 或 ≥14pt 粗体（约 24px/18.5px，含 CJK 等效字号）的文本适用 3:1；更小文本一律 4.5:1。\ntype: concept\nsubskill: color-type-tokens\nsources:\n  - url: https://developer.mozilla.org/en-US/docs/Web/Accessibility/Guides/Understanding_WCAG/Perceivable/Color_contrast\n    fetchedAt: 2026-10-15T20:00:17.585Z\n  - url: https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html\n    fetchedAt: 2026-11-15T00:00:00.000Z\n  - url: https://accesslevelup.com/wcag-color-contrast\n    fetchedAt: 2026-10-15T20:00:17.585Z\ntags: [色彩对比度, WCAG, 无障碍, 大号文本, 设计令牌]\n---\n\n## 勘误（2026-11-15 修订）\n本卡早期版本把 3:1 档的适用条件写成\"**标题（heading）或更大号的文本**\"。经 W3C Understanding SC 1.4.3 官方文档核验，判定条件是**字号**，与是否为标题无关：小字号的标题不能享受 3:1；达到大字号要求的正文可以。\n\n## 规范原文\n- SC 1.4.3（AA）：普通文本对比度至少 **4.5:1**；\"Large-scale text and images of large-scale text have a contrast ratio of at least **3:1**\"。\n- **large scale（大字号）的规范定义**：\"with at least **18 point** or **14 point bold** or font size that would yield equivalent size for Chinese, Japanese and Korean (CJK) fonts\"。\n- 换算注记（官方）：1pt = 1.333px，14pt ≈ **18.5px**、18pt ≈ **24px**；对多数正文常用字体约合 **1.2em / 1.5em**（即正文字号的 120%/150%）。\n\n## 判定规则\n1. 先看字号：非粗体 ≥18pt，或粗体 ≥14pt（CJK 字体取等效大字号）→ 属于大字号文本，按 **3:1** 校验。\n2. 不满足字号条件的任何文本——**包括标题**——按 **4.5:1** 校验。\n3. 极细或字形特殊的字体更难读，官方建议此类字体需要更高的对比度才稳妥。\n\n## 边界与易错点\n- \"标题=大文本\"是常见误判：h1/h2 若字号未达标，不适用 3:1。\n- 3:1 同时出现在\"大号文本\"（SC 1.4.3）与\"UI 组件/图形\"（SC 1.4.11 Non-text Contrast）两类要求中，适用对象不同，不可互相替代。\n- 计算出的对比度是阈值判定，不四舍五入（4.499:1 不满足 4.5:1）。\n- 图像中的大字号文字应按 120%/150% 正文比例制作。\n\n## 实践含义\n制定设计令牌/色板时，按字号维度设定两档对比目标：正文色对 ≥4.5:1；≥18pt（或 ≥14pt 粗体）场景的色对 ≥3:1；UI 组件边界另按 1.4.11 的 3:1 单独校验。\n\n> 修订依据：W3C Understanding SC 1.4.3 Contrast (Minimum) 全文（归档于 docs/m3-evidence/w3c-understanding-1-4-3-contrast-minimum.md）。\n",
+      "oldContentHash": "sha256:8863424d61208696fa8bfd0359069348000ef5d6322796c3a889c9ee17bc090b"
     },
     {
       "path": "yanchi_ui知识库/K_layout-grid-typography_24列栅格系统适用场景与灵活性.md",
       "reason": "确定性数学错误（§1.1-3）：原卡以\"五等分\"为例说明 24 列的优势，但 24=2³×3 不含因子 5，24 列无法五等分（24/5=4.8 非整数列）；五等分需要 10/20/25 列栅格或打破整数列跨度",
       "evidenceRefs": [],
-      "newContent": "---\ntitle: 24 列栅格系统适用场景与整除边界\noneLiner: 24 列支持 2/3/4/6/8/12 整除组合；12 与 24 都不含因子 5，五等分需改用 10/20/25 列或接受非整数列方案。\ntype: concept\nsubskill: layout-grid-typography\nsources:\n  - url: https://arco.design/docs/spec/grid\n    fetchedAt: 2026-10-14T20:00:11.585Z\n  - url: https://www.uisdc.com/grid-system-basics\n    fetchedAt: 2026-10-14T20:00:11.585Z\n  - url: https://www.woshipm.com/pd/5358918.html\n    fetchedAt: 2026-10-14T20:00:11.585Z\ntags: [栅格系统, 24等分, 整除性, 中后台设计]\n---\n\n## 勘误（2026-11-15 修订）\n本卡早期版本以\"五等分\"作为 24 列栅格优于 12 列的示例。这是数学错误：**24 = 2³×3，不含因子 5**，24 列无法五等分（24/5 = 4.8，不是整数列跨度）；12 列同样不能（12/5 = 2.4）。原文其余整除组合（2/3/4/6/8/12）均正确。\n\n## 定义\n24 列栅格系统是在页面宽度内划分 24 个等宽列、配合水槽与边距进行布局的栅格方案（Arco Design 同时提供 12 与 24 等分两档）。\n\n## 与 12 列栅格的取舍\n- 12 列（因子 1,2,3,4,6,12）：适合常规的二分、三分、四分组合的中后台页面。\n- 24 列（因子 1,2,3,4,6,8,12,24）：在 12 列可表达的比例之上，额外支持八等分与更细的非对称组合（如 1:5、5:7、7:17 等 24 份内的整数分割），信息密度高、场景复杂时更灵活。\n\n## 五等分的正确处理\n- 12 列与 24 列**都不能**五等分；需要五等分时应改用 **10 / 20 / 25 列**等含因子 5 的栅格；\n- 若必须停留在 12/24 列体系内，只能接受非整数列跨度的近似方案（如 24 列中每份 4.8 列），此时内容区与水槽不再严格对齐，属于显式的取舍决策，不应默认使用。\n\n## 使用要点\n- 列跨度以整数列表示，跨列组合需保证内容区与水槽对齐。\n- 列数增加不改变水槽与边距的基准规则，间距体系保持一致。\n- 选择 12 还是 24 列，以版面中不等分布局的出现频率为依据，而非默认取更细的栅格。\n"
+      "newContent": "---\ntitle: 24 列栅格系统适用场景与整除边界\noneLiner: 24 列支持 2/3/4/6/8/12 整除组合；12 与 24 都不含因子 5，五等分需改用 10/20/25 列或接受非整数列方案。\ntype: concept\nsubskill: layout-grid-typography\nsources:\n  - url: https://www.bigzhong.com/articles/1436\n    fetchedAt: 2026-11-08T20:00:16.434Z\ntags: [栅格系统, 24等分, 整除性, 中后台设计]\n---\n\n## 勘误（2026-11-15 修订）\n本卡早期版本以\"五等分\"作为 24 列栅格优于 12 列的示例。这是数学错误：**24 = 2³×3，不含因子 5**，24 列无法五等分（24/5 = 4.8，不是整数列跨度）；12 列同样不能（12/5 = 2.4）。原文其余整除组合（2/3/4/6/8/12）均正确。\n\n## 定义\n24 列栅格系统是在页面宽度内划分 24 个等宽列、配合水槽与边距进行布局的栅格方案。\n\n## 与 12 列栅格的取舍\n- 12 列（因子 1,2,3,4,6,12）：适合常规的二分、三分、四分组合的中后台页面。\n- 24 列（因子 1,2,3,4,6,8,12,24）：在 12 列可表达的比例之上，额外支持八等分与更细的非对称组合（如 1:5、5:7、7:17 等 24 份内的整数分割），信息密度高、场景复杂时更灵活。\n\n## 五等分的正确处理\n- 12 列与 24 列**都不能**五等分；需要五等分时应改用 **10 / 20 / 25 列**等含因子 5 的栅格；\n- 若必须停留在 12/24 列体系内，只能接受非整数列跨度的近似方案（如 24 列中每份 4.8 列），此时内容区与水槽不再严格对齐，属于显式的取舍决策，不应默认使用。\n\n## 使用要点\n- 列跨度以整数列表示，跨列组合需保证内容区与水槽对齐。\n- 列数增加不改变水槽与边距的基准规则，间距体系保持一致。\n- 选择 12 还是 24 列，以版面中不等分布局的出现频率为依据，而非默认取更细的栅格。\n",
+      "oldContentHash": "sha256:895684c1f766f412e9542f4a20f1490609c31d38da272237a881102495e1385b"
     },
     {
       "path": "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-新增九项成功准则.md",
       "reason": "标题承诺兑现（§3.5.4）：原卡只给数量不给清单；补全 9 项准则编号与名称（W3C new-in-22 官方清单）",
       "evidenceRefs": [
-        "evidence/w3c-new-in-22.md"
+        "docs/m3-evidence/w3c-new-in-22.md"
       ],
-      "newContent": "---\ntitle: WCAG 2.2 新增九项成功准则\noneLiner: WCAG 2.2 相对 2.1 新增 9 项成功准则（2 项 A、4 项 AA、3 项 AAA），并移除已废弃的 4.1.1 Parsing。\ntype: concept\nsubskill: interaction-accessibility\nsources:\n  - url: https://www.w3.org/WAI/standards-guidelines/wcag/new-in-22/\n    fetchedAt: 2026-11-15T00:00:00.000Z\n  - url: https://accessibility.arizona.edu/policies-governance/wcag-22-highlights\n    fetchedAt: 2026-10-14T20:00:21.004Z\ntags: [WCAG, WCAG 2.2, 无障碍, 成功准则]\n---\n\n## 定义\nWCAG 2.2 在 2.1 基础上**新增 9 项成功准则**，专门针对此前覆盖不足的三类缺口：认知障碍、运动障碍与低视力；同时**移除**了 2.0/2.1 沿用的 4.1.1 Parsing（已废弃）。\n\n## 新增九项清单（官方）\n**Level A（2 项）：**\n1. 3.2.6 Consistent Help（一致的帮助入口）\n2. 3.3.7 Redundant Entry（避免重复输入）\n\n**Level AA（4 项）：**\n3. 2.4.11 Focus Not Obscured (Minimum)（焦点不被遮挡·最低）\n4. 2.5.7 Dragging Movements（拖拽操作需可单点完成）\n5. 2.5.8 Target Size (Minimum)（目标尺寸·最低 24×24 CSS px）\n6. 3.3.8 Accessible Authentication (Minimum)（可访问认证·最低）\n\n**Level AAA（3 项）：**\n7. 2.4.12 Focus Not Obscured (Enhanced)（焦点不被遮挡·增强）\n8. 2.4.13 Focus Appearance（焦点外观）\n9. 3.3.9 Accessible Authentication (Enhanced)（可访问认证·增强）\n\n## 关键事实\n- 新增 9 项中影响 Level AA 合规的共 6 项（2 项 A + 4 项 AA——A 级要求包含于 AA 合规）。\n- 2.0/2.1 的其余准则原样带入 2.2，唯一例外是 4.1.1 Parsing 被移除。\n\n## 边界\n本卡列出增量范围与清单；逐条判定标准以官方文档为准（Understanding WCAG 2.2 各 SC 页面）。\n\n> 修订依据：W3C《What's New in WCAG 2.2》官方清单（归档于 Agent/forge/runs/m3-legacy-triage/evidence/w3c-new-in-22.md）；2026-11-15 补全九项清单兑现标题承诺。\n"
+      "newContent": "---\ntitle: WCAG 2.2 新增九项成功准则\noneLiner: WCAG 2.2 相对 2.1 新增 9 项成功准则（2 项 A、4 项 AA、3 项 AAA），并移除已废弃的 4.1.1 Parsing。\ntype: concept\nsubskill: interaction-accessibility\nsources:\n  - url: https://testparty.ai/blog/wcag-22-new-success-criteria\n    fetchedAt: 2026-10-18T20:00:24.689Z\n  - url: https://www.w3.org/WAI/standards-guidelines/wcag/new-in-22/\n    fetchedAt: 2026-11-15T05:10:00.000Z\ntags: [WCAG, WCAG 2.2, 无障碍, 成功准则]\n---\n\n## 定义\nWCAG 2.2 在 2.1 基础上**新增 9 项成功准则**，专门针对此前覆盖不足的三类缺口：认知障碍、运动障碍与低视力；同时**移除**了 2.0/2.1 沿用的 4.1.1 Parsing（已废弃）。\n\n## 新增九项清单（官方）\n**Level A（2 项）：**\n1. 3.2.6 Consistent Help（一致的帮助入口）\n2. 3.3.7 Redundant Entry（避免重复输入）\n\n**Level AA（4 项）：**\n3. 2.4.11 Focus Not Obscured (Minimum)（焦点不被遮挡·最低）\n4. 2.5.7 Dragging Movements（拖拽操作需可单点完成）\n5. 2.5.8 Target Size (Minimum)（目标尺寸·最低 24×24 CSS px）\n6. 3.3.8 Accessible Authentication (Minimum)（可访问认证·最低）\n\n**Level AAA（3 项）：**\n7. 2.4.12 Focus Not Obscured (Enhanced)（焦点不被遮挡·增强）\n8. 2.4.13 Focus Appearance（焦点外观）\n9. 3.3.9 Accessible Authentication (Enhanced)（可访问认证·增强）\n\n## 关键事实\n- 新增 9 项中影响 Level AA 合规的共 6 项（2 项 A + 4 项 AA——A 级要求包含于 AA 合规）。\n- 2.0/2.1 的其余准则原样带入 2.2，唯一例外是 4.1.1 Parsing 被移除。\n\n## 边界\n本卡列出增量范围与清单；逐条判定标准以官方文档为准（Understanding WCAG 2.2 各 SC 页面）。\n\n> 修订依据：W3C《What's New in WCAG 2.2》官方清单（归档于 docs/m3-evidence/w3c-new-in-22.md）；2026-11-15 补全九项清单兑现标题承诺。\n",
+      "oldContentHash": "sha256:e9f28ed16dce06733b76d2132d59eca6d96a8727eb6361e5a1181b3261d146bf"
     },
     {
       "path": "yanchi_ui知识库/K_visual-hierarchy_玻璃拟态-ui-的七项检查要点.md",
       "newPath": "yanchi_ui知识库/K_visual-hierarchy_玻璃拟态-ui-的检查要点-材料已证四项.md",
       "reason": "标题承诺兑现（§3.5.4 不完整资料处置）：来源材料仅明确列出四项检查（正文已如实注明），标题的\"七项\"无法兑现——改题与正文一致，不臆补",
       "evidenceRefs": [],
-      "newContent": "---\ntitle: 玻璃拟态 UI 的检查要点（材料已证四项）\noneLiner: 来源材料明确列出的玻璃拟态可用性检查共四项：用户流程、视觉层次、可访问性与性能；其余检查项材料以省略号带过，不臆补。\ntype: checklist\nsubskill: visual-hierarchy\nsources:\n  - url: https://www.facebook.com/groups/mobiledesignindia/posts/28841115598884147\n    fetchedAt: 2026-10-25T20:00:06.471Z\ntags: [玻璃拟态, Glassmorphism, 可用性检查, 视觉层级]\n---\n\n## 适用场景\n采用玻璃拟态（Glassmorphism）风格、需要在不牺牲可用性的前提下营造纵深感的界面。\n\n## 检查清单（材料明确列出的四项）\n- [ ] **用户流程（User flows）**：玻璃效果不得妨碍任务路径的顺畅。\n- [ ] **视觉层次（Visual hierarchy）**：半透明层叠不能模糊信息主次。\n- [ ] **可访问性（Accessibility）**：玻璃背景上的文字与控件需保持可读、可辨。\n- [ ] **性能（Performance）**：模糊与透明效果会带来渲染开销，需验证性能表现。\n\n## 边界\n来源材料原文列举 7 项但仅展开上述四项并以\"等（…and more）\"省略——其余三项内容未知，本卡不臆补；如需完整七项，应回到原始材料补证后扩写。\n\n> 修订记录（2026-11-15）：原标题\"七项检查要点\"超出材料实际支撑（仅四项已证），按 §3.5.4 改题为\"材料已证四项\"。\n"
+      "newContent": "---\ntitle: 玻璃拟态 UI 的检查要点（材料已证四项）\noneLiner: 来源材料明确列出的玻璃拟态可用性检查共四项：用户流程、视觉层次、可访问性与性能；其余检查项材料以省略号带过，不臆补。\ntype: checklist\nsubskill: visual-hierarchy\nsources:\n  - url: https://www.facebook.com/groups/mobiledesignindia/posts/28841115598884147\n    fetchedAt: 2026-10-25T20:00:06.471Z\ntags: [玻璃拟态, Glassmorphism, 可用性检查, 视觉层级]\n---\n\n## 适用场景\n采用玻璃拟态（Glassmorphism）风格、需要在不牺牲可用性的前提下营造纵深感的界面。\n\n## 检查清单（材料明确列出的四项）\n- [ ] **用户流程（User flows）**：玻璃效果不得妨碍任务路径的顺畅。\n- [ ] **视觉层次（Visual hierarchy）**：半透明层叠不能模糊信息主次。\n- [ ] **可访问性（Accessibility）**：玻璃背景上的文字与控件需保持可读、可辨。\n- [ ] **性能（Performance）**：模糊与透明效果会带来渲染开销，需验证性能表现。\n\n## 边界\n来源材料原文列举 7 项但仅展开上述四项并以\"等（…and more）\"省略——其余三项内容未知，本卡不臆补；如需完整七项，应回到原始材料补证后扩写。\n\n> 修订记录（2026-11-15）：原标题\"七项检查要点\"超出材料实际支撑（仅四项已证），按 §3.5.4 改题为\"材料已证四项\"。\n",
+      "oldContentHash": "sha256:fc6f39abb512a8cac25d9caa83811b7886df395b835041886b8548233ca00e70"
     }
   ],
   "mergeProposals": [
@@ -283,5 +289,141 @@
       "reason": "同题异文（标题仅差连字符），正文与来源均不同（1187B vs 663B，三源 vs 单源）",
       "proposal": "内容型合并：以 24-栅格系统的构成公式（更完整、三来源）为主卡，吸收 24栅格系统的构成公式 的独有表述与 woshipm 来源，合并后 sources 取并集；diff 与旧正文保留在台账。不自动执行（红线 6：内容型合并需用户复核）。"
     }
-  ]
+  ],
+  "inScope": [
+    "yanchi_ui知识库/01_用大小-颜色-对比与位置建立视觉层级顺序.md",
+    "yanchi_ui知识库/02_文字层次的四个核心方法.md",
+    "yanchi_ui知识库/03_figma中用8点栅格搭建响应式网格.md",
+    "yanchi_ui知识库/08_视觉层级的创建-运用大小与位置.md",
+    "yanchi_ui知识库/09_信息层级构建的四大设计原则.md",
+    "yanchi_ui知识库/10_栅格间隔推荐公式-16-8n-px.md",
+    "yanchi_ui知识库/11_利用栅格系统构建响应式设计.md",
+    "yanchi_ui知识库/14_跨渠道品牌一致性的落地方法.md",
+    "yanchi_ui知识库/15_网站视觉一致性的三个着手面向.md",
+    "yanchi_ui知识库/16_ai-生图场景下的品牌视觉一致性保障流程.md",
+    "yanchi_ui知识库/17_多业务线品牌运营设计一致性的协同流程.md",
+    "yanchi_ui知识库/18_硬栅格与软栅格两种8pt落地方式.md",
+    "yanchi_ui知识库/19_设计令牌在设计与代码间同步的实践.md",
+    "yanchi_ui知识库/21_实现视觉层级的三大设计原则-大小-粗细与对比.md",
+    "yanchi_ui知识库/22_figma-8-点栅格系统搭建方法.md",
+    "yanchi_ui知识库/24_设计系统与规范-令牌-组件库与治理流程.md",
+    "yanchi_ui知识库/25_设计评审流程的组织实践调研框架.md",
+    "yanchi_ui知识库/26_完整设计评审流程与评审内容.md",
+    "yanchi_ui知识库/27_高效设计评审的流程与准备实践.md",
+    "yanchi_ui知识库/29_先排信息优先级再设计视觉层级结构.md",
+    "yanchi_ui知识库/30_对比-分组-对齐-重复四原则构建信息层级.md",
+    "yanchi_ui知识库/31_用对比-亲密性-重复-对齐构建信息层级.md",
+    "yanchi_ui知识库/33_为既有组件补充交互状态的工作流.md",
+    "yanchi_ui知识库/34_为既有组件补充交互状态的方法.md",
+    "yanchi_ui知识库/37_移动端-ui-的引导式设计方法.md",
+    "yanchi_ui知识库/38_用sass构建12列栅格系统的方法.md",
+    "yanchi_ui知识库/39_设计令牌从规范到代码的落地流程.md",
+    "yanchi_ui知识库/40_dtcg-令牌构建流水线-一键输出多目标格式.md",
+    "yanchi_ui知识库/41_企业级组件库的可治理建设要素.md",
+    "yanchi_ui知识库/K_color-type-tokens_dtcg-三层设计令牌架构-primitive-semantic-compone.md",
+    "yanchi_ui知识库/K_color-type-tokens_ui-组件的-3-1-对比度要求.md",
+    "yanchi_ui知识库/K_color-type-tokens_wcag-aa-与-aaa-对比度阈值-4-5-1-与-7-1.md",
+    "yanchi_ui知识库/K_color-type-tokens_wcag-aaa-级对比度要求-7-1-与-4-5-1.md",
+    "yanchi_ui知识库/K_color-type-tokens_wcag-文本色彩对比度要求.md",
+    "yanchi_ui知识库/K_color-type-tokens_z-index-层叠顺序令牌.md",
+    "yanchi_ui知识库/K_color-type-tokens_交互状态色导致对比度跌破-4-5-1.md",
+    "yanchi_ui知识库/K_color-type-tokens_复合令牌与原子-css-输出.md",
+    "yanchi_ui知识库/K_color-type-tokens_设计令牌作为设计与开发的共同工作思维.md",
+    "yanchi_ui知识库/K_color-type-tokens_设计令牌是-ui-元素的构建基块.md",
+    "yanchi_ui知识库/K_color-type-tokens_设计令牌的三层色彩结构-全局-别名-组件.md",
+    "yanchi_ui知识库/K_color-type-tokens_设计令牌的定义与作用.md",
+    "yanchi_ui知识库/K_design-system-governance_d2c-工具无法理解企业内部组件库.md",
+    "yanchi_ui知识库/K_design-system-governance_governance-by-design-将治理嵌入运行架构.md",
+    "yanchi_ui知识库/K_design-system-governance_企业设计系统治理模型的结构框架.md",
+    "yanchi_ui知识库/K_design-system-governance_把组件库当作设计系统的认知偏差.md",
+    "yanchi_ui知识库/K_design-system-governance_治理流程是设计系统长期健康的关键.md",
+    "yanchi_ui知识库/K_design-system-governance_治理系统设计是首要的设计问题.md",
+    "yanchi_ui知识库/K_design-system-governance_组件复用率提升的本质是治理问题.md",
+    "yanchi_ui知识库/K_design-system-governance_设计系统架构服务-一致界面的结构基础.md",
+    "yanchi_ui知识库/K_design-system-governance_设计系统治理是设计系统的核心议题.md",
+    "yanchi_ui知识库/K_design-system-governance_设计系统治理流程-从组件资产到团队基础设施.md",
+    "yanchi_ui知识库/K_design-system-governance_设计系统治理的定义与构成要素.md",
+    "yanchi_ui知识库/K_design-system-governance_设计系统漂移-缺乏治理导致的一致性与采用度流失.md",
+    "yanchi_ui知识库/K_interaction-accessibility_hover-与-focus-状态的触发条件差异.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-2-1-1-键盘可操作性.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-aa-交互可访问性检查要点.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-aa-级无障碍承诺的声明方式.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-与-aa-级无障碍基准.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-拖放操作的键盘替代要求.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-键盘焦点可见性要求.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-一致性要求5-非干扰原则.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-作为全球无障碍基准的定位.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-可操作性原则与辅助技术兼容.md",
+    "yanchi_ui知识库/K_interaction-accessibility_wcag-键盘导航要求的持续更新属性.md",
+    "yanchi_ui知识库/K_interaction-accessibility_交互状态的全集定义.md",
+    "yanchi_ui知识库/K_interaction-accessibility_交互组件状态设计检查清单.md",
+    "yanchi_ui知识库/K_interaction-accessibility_切换按钮的双状态模型.md",
+    "yanchi_ui知识库/K_interaction-accessibility_可访问性声明与实际键盘可访问性不符.md",
+    "yanchi_ui知识库/K_interaction-accessibility_按钮状态的-css-伪类实现.md",
+    "yanchi_ui知识库/K_interaction-accessibility_按钮的五种交互状态.md",
+    "yanchi_ui知识库/K_interaction-accessibility_禁用状态的视觉传达与无障碍实现.md",
+    "yanchi_ui知识库/K_interaction-accessibility_网站键盘可操作性与焦点可见性检查项.md",
+    "yanchi_ui知识库/K_interaction-accessibility_网站键盘可访问性声明检查项.md",
+    "yanchi_ui知识库/K_layout-grid-typography_12列栅格与8px水槽的断点一致性.md",
+    "yanchi_ui知识库/K_layout-grid-typography_12列栅格与多断点网页样式设计案例.md",
+    "yanchi_ui知识库/K_layout-grid-typography_12列栅格是material-design响应式布局的基础.md",
+    "yanchi_ui知识库/K_layout-grid-typography_12等分与24等分栅格系统适用场景.md",
+    "yanchi_ui知识库/K_layout-grid-typography_24-栅格系统的构成公式.md",
+    "yanchi_ui知识库/K_layout-grid-typography_24列栅格的列跨度表示法.md",
+    "yanchi_ui知识库/K_layout-grid-typography_24栅格系统的构成公式.md",
+    "yanchi_ui知识库/K_layout-grid-typography_8pt-栅格与间距系统.md",
+    "yanchi_ui知识库/K_layout-grid-typography_8点栅格系统.md",
+    "yanchi_ui知识库/K_layout-grid-typography_8点栅格间距系统.md",
+    "yanchi_ui知识库/K_layout-grid-typography_b端后台中栅格系统与间距的依存关系.md",
+    "yanchi_ui知识库/K_layout-grid-typography_line-height-行高属性.md",
+    "yanchi_ui知识库/K_layout-grid-typography_material-design-排版的字体样式与层级.md",
+    "yanchi_ui知识库/K_layout-grid-typography_ui栅格学习主题范围-从基础到标准栅格.md",
+    "yanchi_ui知识库/K_layout-grid-typography_列栅格与12列栅格.md",
+    "yanchi_ui知识库/K_layout-grid-typography_响应式12列栅格的断点适配.md",
+    "yanchi_ui知识库/K_layout-grid-typography_字号与行高的配对取值模式.md",
+    "yanchi_ui知识库/K_layout-grid-typography_字阶-type-scale-系统.md",
+    "yanchi_ui知识库/K_layout-grid-typography_强行让列宽凑成8的倍数.md",
+    "yanchi_ui知识库/K_layout-grid-typography_按断点切换列数的响应式栅格.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格列宽与水槽的取整取值.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格系统与响应式布局及开发协作的关系.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格系统对一致性与设计决策效率的价值.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格系统对多终端适配与视觉一致性的作用.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格系统的作用与边界.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格系统的水槽与边距.md",
+    "yanchi_ui知识库/K_layout-grid-typography_栅格间隔-gutter-与-justify-对齐.md",
+    "yanchi_ui知识库/K_layout-grid-typography_行高与栅格的联动计算.md",
+    "yanchi_ui知识库/K_ui-review-priority_p-级与-sev-级编号并非一一对应.md",
+    "yanchi_ui知识库/K_ui-review-priority_p0-p4-优先级代码的通用定义.md",
+    "yanchi_ui知识库/K_ui-review-priority_p0-p4-优先级分级体系.md",
+    "yanchi_ui知识库/K_ui-review-priority_p0-p5-优先级分级体系及其局限.md",
+    "yanchi_ui知识库/K_ui-review-priority_p1-p5-严重级别记法-p1-最高-p5-最低.md",
+    "yanchi_ui知识库/K_ui-review-priority_ui-设计评审会议的会前准备与议程组织.md",
+    "yanchi_ui知识库/K_ui-review-priority_优先级与严重级别是两套独立维度.md",
+    "yanchi_ui知识库/K_ui-review-priority_屏幕共享式评审在分布式协作中的局限.md",
+    "yanchi_ui知识库/K_ui-review-priority_直接套用外部-p-级定义导致分级误判.md",
+    "yanchi_ui知识库/K_ui-review-priority_设计评审的定义与目的.md",
+    "yanchi_ui知识库/K_visual-hierarchy_优秀-ui-设计不止于美观-间距-栅格-字体排印-视觉层级与一致性.md",
+    "yanchi_ui知识库/K_visual-hierarchy_分层视觉设计-用空间关系与对比营造深度.md",
+    "yanchi_ui知识库/K_visual-hierarchy_品牌一致性的作用-增强认知度与建立信任.md",
+    "yanchi_ui知识库/K_visual-hierarchy_品牌视觉一致性的定义与构成.md",
+    "yanchi_ui知识库/K_visual-hierarchy_布局与构图对品牌感知的影响.md",
+    "yanchi_ui知识库/K_visual-hierarchy_影响-ux-的五条视觉设计原则.md",
+    "yanchi_ui知识库/K_visual-hierarchy_混淆扁平化-拟物化-写实与metro-ui的层级关系.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层次-定义与作用.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层次的设计工具箱-色彩-对比-字体排印与间距.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层级与交互体验的联合优化.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层级与布局结构是版式设计的核心原则.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层级作为布局策略-分组与层次划分.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层级是视觉设计各分支的共同基础.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉层级的关键要素-对比-对齐-比例与间距.md",
+    "yanchi_ui知识库/K_visual-hierarchy_视觉设计原则-指导元素放置-大小与样式.md"
+  ],
+  "coverage": {
+    "total": 185,
+    "quarantine": 46,
+    "review": 7,
+    "revised": 6,
+    "inScopeUntouched": 126,
+    "note": "185 篇全部有处置记录：隔离/待复核/修订/范围内保留四类（§6.2）"
+  }
 }

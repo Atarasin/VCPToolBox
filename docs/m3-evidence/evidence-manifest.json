@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-15T05:15:00.000Z",
+  "documents": [
+    {
+      "file": "docs/m3-evidence/w3c-understanding-1-4-3-contrast-minimum.md",
+      "url": "https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html",
+      "fetchedAt": "2026-11-15T04:55:00.000Z",
+      "contentHash": "sha256:eae41cf8629d384ee7e24e61ad5a526251201e8c14693485385a9df466eb74d2",
+      "quotes": [
+        "Large-scale text and images of large-scale text have a contrast ratio of at least 3:1",
+        "with at least 18 point or 14 point bold or font size that would yield equivalent size for Chinese, Japanese and Korean (CJK) fonts",
+        "The ratio between sizes in points and CSS pixels is 1pt = 1.333px, therefore 14pt and 18pt are equivalent to approximately 18.5px and 24px",
+        "roughly equivalent to 1.2 and 1.5 em or to 120% or 150% of the default size for body text"
+      ]
+    },
+    {
+      "file": "docs/m3-evidence/w3c-understanding-2-1-1-keyboard.md",
+      "url": "https://www.w3.org/WAI/WCAG22/Understanding/keyboard.html",
+      "fetchedAt": "2026-11-15T04:56:00.000Z",
+      "contentHash": "sha256:fa101541c789540ec2b672bdd07524976e3bb01af800f4b9240b22bd53767f95",
+      "quotes": [
+        "All functionality of the content is operable through a keyboard interface without requiring specific timings for individual keystrokes, except where the underlying function requires input that depends on the path of the user's movement and not just the endpoints.",
+        "Free hand drawing, or watercolor painting require path dependent input.",
+        "Drawing straight lines, regular geometric shapes, re-sizing windows and dragging objects to a location (when the path to that location is not relevant) do not require path dependent input.",
+        "Example 2: A drag and Drop Feature — An application that uses drag and drop also supports \"cut\" and \"paste\" or form controls to move objects."
+      ]
+    },
+    {
+      "file": "docs/m3-evidence/w3c-new-in-22.md",
+      "url": "https://www.w3.org/WAI/standards-guidelines/wcag/new-in-22/",
+      "fetchedAt": "2026-11-15T05:10:00.000Z",
+      "contentHash": "sha256:b5b313219d6ab53b2442a1a6cbb7070407127d970bad18f94cf24b04064a8aeb",
+      "quotes": [
+        "Level A: 3.2.6 Consistent Help; 3.3.7 Redundant Entry",
+        "Level AA: 2.4.11 Focus Not Obscured (Minimum); 2.5.7 Dragging Movements; 2.5.8 Target Size (Minimum); 3.3.8 Accessible Authentication (Minimum)",
+        "Level AAA: 2.4.12 Focus Not Obscured (Enhanced); 2.4.13 Focus Appearance; 3.3.9 Accessible Authentication (Enhanced)",
+        "4.1.1 Parsing is obsolete and removed from WCAG 2.2"
+      ]
+    },
+    {
+      "file": "docs/m3-evidence/nngroup-visual-hierarchy.md",
+      "url": "https://www.nngroup.com/articles/visual-hierarchy-ux-definition/",
+      "fetchedAt": "2026-11-15T05:12:00.000Z",
+      "contentHash": "sha256:2efc3693ed67e6270e1a1aed78930414563d660b7e2c8cb34032da3e7eefb65f",
+      "quotes": [
+        "It's not the actual color of an element that creates the hierarchy, but rather the contrast in value and saturation between the element and the context in which it appears",
+        "Use no more than 3 sizes — small, medium, and large."
+      ]
+    }
+  ]
+}

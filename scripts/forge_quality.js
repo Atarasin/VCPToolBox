@@ -363,23 +363,51 @@ async function cmdDisposition(flags) {
     if (!expertName) throw new Error('plan 需要 expertName');
     const apply = Boolean(flags.apply);
 
-    // 金标保护：quarantine/review 的路径不得被金标 required/incremental/preview 引用。
-    const goldenPath = path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden/yanchi_ui.json');
+    // 金标保护：quarantine/review/修订改名的路径不得被金标 required/incremental/preview 引用。
+    const goldenPath = String(flags.golden || path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden', `${expertName}.json`));
     const golden = JSON.parse(await fsp.readFile(goldenPath, 'utf-8'));
     const goldenRefs = new Set(golden.queries
         .filter((q) => q.kind !== 'negative')
         .flatMap((q) => q.requiredSourceFiles || []));
-    const moving = [...(plan.quarantine || []), ...(plan.review || [])].map((entry) => entry.path);
+    const moving = [
+        ...(plan.quarantine || []), ...(plan.review || []),
+        ...(plan.revise || []).filter((entry) => entry.newPath && entry.newPath !== entry.path)
+    ].map((entry) => entry.path);
     const goldenConflict = moving.filter((rel) => goldenRefs.has(rel));
     if (goldenConflict.length) {
         throw new Error(`处置与金标探针冲突（required/incremental/preview 引用了将被移出的文件）：${goldenConflict.join(', ')}`);
     }
 
-    // 路径存在性校验。
-    const missing = [...(plan.quarantine || []), ...(plan.review || []), ...(plan.revise || [])]
-        .filter((entry) => !fs.existsSync(path.join(knowledgeRoot, entry.path)));
-    if (missing.length) {
-        throw new Error(`计划引用了不存在的文件：${missing.map((entry) => entry.path).join(', ')}`);
+    // 路径存在性校验（幂等：已在隔离/复核区的文件跳过，不重复报错）。
+    const zoneAlready = (rel) => {
+        const library = path.basename(path.dirname(rel));
+        const name = path.basename(rel);
+        return fs.existsSync(path.join(forgeRoot, expertName, 'quarantine', library, name))
+            || fs.existsSync(path.join(forgeRoot, expertName, 'review', library, name));
+    };
+    const missing = [...(plan.quarantine || []), ...(plan.review || [])]
+        .filter((entry) => !fs.existsSync(path.join(knowledgeRoot, entry.path)) && !zoneAlready(entry.path));
+    const missingRevise = (plan.revise || [])
+        .filter((entry) => !fs.existsSync(path.join(knowledgeRoot, entry.path))
+            && !fs.existsSync(path.join(knowledgeRoot, entry.newPath || entry.path)));
+    const missingMerge = (plan.mergeProposals || [])
+        .flatMap((entry) => entry.paths.map((rel) => ({ path: rel, entry })))
+        .filter(({ path: rel }) => !fs.existsSync(path.join(knowledgeRoot, rel)) && !zoneAlready(rel));
+    const allMissing = [...missing, ...missingRevise, ...missingMerge.map((m) => m.entry).filter(() => false).map(() => ({ path: '' }))];
+    if (missing.length + missingRevise.length) {
+        throw new Error(`计划引用了不存在的文件：${[...missing, ...missingRevise].map((entry) => entry.path).join(', ')}`);
+    }
+    if (missingMerge.length) {
+        throw new Error(`合并候选引用了不存在的文件：${missingMerge.map((m) => m.path).join(', ')}`);
+    }
+    void allMissing;
+
+    // 证据归档存在性（红线 3：修订声称的证据必须真实在盘）。
+    const missingEvidence = (plan.revise || [])
+        .flatMap((entry) => (entry.evidenceRefs || []).map((ref) => ({ ref, path: entry.path })))
+        .filter(({ ref }) => !fs.existsSync(path.join(root, ref)));
+    if (missingEvidence.length) {
+        throw new Error(`修订引用的证据归档不存在：${missingEvidence.map((e) => `${e.path} → ${e.ref}`).join('; ')}`);
     }
 
     const ledger = createDispositionLedger(path.join(forgeRoot, expertName, 'disposition-ledger.jsonl'));
@@ -458,10 +486,20 @@ async function cmdDisposition(flags) {
             const newHash = `sha256:${crypto.createHash('sha256').update(entry.newContent).digest('hex')}`;
             // 修订（含可选改名）是 active-legacy → active 的内容替换，
             // 物理位置不变（仍在 knowledge/ 内）——不走 moveKnowledgeFile 状态迁移；
-            // 旧内容哈希入台账，可从备份回退。
+            // 旧内容哈希入台账，可从备份回退。写入前做漂移比对与覆盖守卫。
             const targetAbs = entry.newPath && entry.newPath !== entry.path
                 ? path.join(knowledgeRoot, entry.newPath)
                 : abs;
+            if (targetAbs !== abs && fs.existsSync(targetAbs)) {
+                const error = new Error(`修订目标已存在，拒绝覆盖：${entry.newPath}`);
+                error.code = 'FORGE_KNOWLEDGE_MOVE_TARGET_EXISTS';
+                throw error;
+            }
+            if (entry.oldContentHash && oldHash !== entry.oldContentHash) {
+                const error = new Error(`修订源文件已漂移（计划基于 ${entry.oldContentHash.slice(0, 19)}…，磁盘为 ${oldHash.slice(0, 19)}…）：${entry.path}`);
+                error.code = 'FORGE_DISPOSITION_SOURCE_DRIFTED';
+                throw error;
+            }
             await fsp.writeFile(targetAbs, entry.newContent, 'utf-8');
             if (targetAbs !== abs) await fsp.rm(abs);
             await ledger.append({
@@ -479,9 +517,24 @@ async function cmdDisposition(flags) {
             });
         }
 
-        // 等索引消化（生产 watcher 的 unlink/add 队列）。
+        // 等索引消化（生产 watcher 的 unlink/add 队列）；永久 failed 视为未收敛
+        //（§3.2.2 审计口径：队列不得有 failed）。
+        const pollWithFailed = () => {
+            const busy = pollUnlink();
+            if (busy === null) return null;
+            try {
+                const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
+                const db = new Database(path.join(knowledgeRoot, '..', 'VectorStoreTDB', 'tdb_knowledge_meta.sqlite'), { readonly: true });
+                const failed = Number(db.prepare("SELECT COUNT(*) AS n FROM ingest_queue WHERE status = 'failed'").get()?.n) || 0;
+                db.close();
+                summary.failedQueueJobs = failed;
+                return failed > 0 ? failed + busy : busy;
+            } catch {
+                return null;
+            }
+        };
         const quiet = await (require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/knowledgeStates')))
-            .waitForUnlinkConvergence({ pollUnlink, timeoutMs: Number(flags['settle-timeout-ms']) || 5 * 60 * 1000, pollIntervalMs: 3000 });
+            .waitForUnlinkConvergence({ pollUnlink: pollWithFailed, timeoutMs: Number(flags['settle-timeout-ms']) || 5 * 60 * 1000, pollIntervalMs: 3000 });
         summary.indexConverged = quiet;
         return { exitCode: quiet ? 0 : 1, report: { ok: quiet, ...summary } };
     } finally {

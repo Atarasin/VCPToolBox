@@ -25,6 +25,9 @@ async function makeFixture() {
     await fsp.writeFile(path.join(lib, 'K_b_api治理.md'), '---\ntitle: API 治理\nsources:\n  - url: https://w/2\n---\n\nAPI 治理内容。', 'utf-8');
     await fsp.writeFile(path.join(lib, 'K_c_相邻理论.md'), '---\ntitle: 相邻理论\nsources:\n  - url: https://w/3\n---\n\n相邻内容。', 'utf-8');
     await fsp.writeFile(path.join(lib, '70_架构治理.md'), '# 架构治理\n\n> 来源：https://w/4\n\n架构内容。', 'utf-8');
+    // 合并候选对（真实存在，不参与其他处置）。
+    await fsp.writeFile(path.join(lib, 'K_m_同题甲.md'), '---\ntitle: 同题\n---\n甲内容。', 'utf-8');
+    await fsp.writeFile(path.join(lib, 'K_m_同题乙.md'), '---\ntitle: 同题\n---\n乙内容。', 'utf-8');
     // 让 pollUnlink 找到空队列 → 收敛。
     const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
     const storeDir = path.join(root, 'VectorStoreTDB');
@@ -53,32 +56,34 @@ function planFor(root, { goldenGuardHit = false } = {}) {
             evidenceRefs: [],
             newContent: '---\ntitle: 对比度要求（修订）\nsources:\n  - url: https://w/1\n---\n\n修订后的正文。'
         }],
-        mergeProposals: [{ paths: ['UI库/x.md', 'UI库/y.md'], reason: '内容型合并候选', proposal: '等待复核' }]
+        mergeProposals: [{ paths: ['UI库/K_m_同题甲.md', 'UI库/K_m_同题乙.md'], reason: '内容型合并候选', proposal: '等待复核' }]
     };
 }
 
-test('disposition：金标护栏拒绝引用被隔离文件的探针', async () => {
+test('disposition：金标护栏拒绝引用被隔离文件/改名旧路径的探针', async () => {
     const { root } = await makeFixture();
     try {
-        // 临时往金标里塞一条引用待隔离文件的 required 探针。
-        const goldenPath = path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden/yanchi_ui.json');
-        const original = await fsp.readFile(goldenPath, 'utf-8');
-        const golden = JSON.parse(original);
+        // 用 --golden 注入临时金标（不写仓库受跟踪文件，§3.8.1）。
+        const goldenTemp = path.join(root, 'golden-temp.json');
+        const golden = { queries: [] };
+        // 引用待隔离文件 → 拒绝。
         golden.queries.push({
-            id: 'test-guard-probe', library: 'UI库', query: 'x', topK: 5, expand: false, kind: 'required',
+            id: 'test-guard-quarantine', library: 'UI库', query: 'x', topK: 5, expand: false, kind: 'required',
             requiredSourceFiles: ['UI库/K_b_api治理.md']
         });
-        await fsp.writeFile(goldenPath, JSON.stringify(golden), 'utf-8');
-        try {
-            const planPath = path.join(root, 'plan.json');
-            await fsp.writeFile(planPath, JSON.stringify(planFor(root)), 'utf-8');
-            await assert.rejects(
-                cli.cmdDisposition({ plan: planPath, root }),
-                (error) => /金标探针冲突/.test(error.message)
-            );
-        } finally {
-            await fsp.writeFile(goldenPath, original, 'utf-8');
-        }
+        // 引用修订改名旧路径 → 同样拒绝（F3）。
+        golden.queries.push({
+            id: 'test-guard-rename', library: 'UI库', query: 'y', topK: 5, expand: false, kind: 'required',
+            requiredSourceFiles: ['UI库/K_a_对比度.md']
+        });
+        await fsp.writeFile(goldenTemp, JSON.stringify(golden), 'utf-8');
+        const planPath = path.join(root, 'plan.json');
+        await fsp.writeFile(planPath, JSON.stringify(planFor(root)), 'utf-8');
+        await assert.rejects(
+            cli.cmdDisposition({ plan: planPath, root, golden: goldenTemp }),
+            (error) => /金标探针冲突/.test(error.message) && /K_b_api治理|K_a_对比度/.test(error.message)
+        );
+        assert.equal(fs.existsSync(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden/yanchi_ui.json')), true);
     } finally {
         await fsp.rm(root, { recursive: true, force: true });
     }
@@ -90,15 +95,20 @@ test('disposition：dry-run 零修改；apply 执行隔离/复核/修订并留�
         const planPath = path.join(root, 'plan.json');
         await fsp.writeFile(planPath, JSON.stringify(planFor(root)), 'utf-8');
 
+        // 临时金标注入（空集不触发护栏；dry-run 与 apply 共用）。
+        const goldenTemp = path.join(root, 'golden-apply.json');
+        await fsp.writeFile(goldenTemp, JSON.stringify({ queries: [] }), 'utf-8');
+
         // dry-run：零修改。
-        const dry = await cli.cmdDisposition({ plan: planPath, root, 'forge-root': forgeRoot });
+        const dry = await cli.cmdDisposition({ plan: planPath, root, 'forge-root': forgeRoot, golden: goldenTemp });
         assert.equal(dry.exitCode, 0);
         assert.equal(dry.report.quarantine, 2);
         assert.ok(fs.existsSync(path.join(lib, 'K_b_api治理.md')), 'dry-run 不得动文件');
 
         // apply。
         const applied = await cli.cmdDisposition({
-            plan: planPath, root, 'forge-root': forgeRoot, apply: true, 'settle-timeout-ms': '30000'
+            plan: planPath, root, 'forge-root': forgeRoot, apply: true,
+            golden: goldenTemp, 'settle-timeout-ms': '30000'
         });
         assert.equal(applied.exitCode, 0, JSON.stringify(applied.report));
         assert.equal(applied.report.indexConverged, true);
