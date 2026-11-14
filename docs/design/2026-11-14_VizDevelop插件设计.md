@@ -226,19 +226,19 @@ prompt:「始」…图片描述原文…「末」
 #### M2.S1 免费图像命令
 
 依赖：M1.S3
-- [ ] T1 create_image_input：纯 base64 校验（拒绝 data: 前缀）（§3.4）
-- [ ] T2 get_image_operation：只读查询透传（§3.4）
-- [ ] 验收：上传测试图片返回 inputId；凭 operationId 查询到真实状态
+- [x] T1 create_image_input：纯 base64 校验（拒绝 data: 前缀）（§3.4）
+- [x] T2 get_image_operation：只读查询透传（§3.4）
+- [x] 验收：上传测试图片返回 inputId；凭 operationId 查询到真实状态
 
 #### M2.S2 付费图像 submit/query
 
 依赖：M2.S1
-- [ ] T3 generate_image / edit_image：submit 即发即回（fire-and-forget + catch 兜底日志），返回 operationId 与轮询指引（§3.4、§3.7）
-- [ ] T4 VIZ_DEVELOP_ENABLE_IMAGE 开关拦截；付费纪律写入 invocationCommands description（§3.1、§3.5）
-- [ ] 验收：submit 立即返回；断连场景下 get_image_operation 可查回状态；开关关闭时命令被拦截并提示开启方法
+- [x] T3 generate_image / edit_image：submit 即发即回（fire-and-forget + catch 兜底日志），返回 operationId 与轮询指引（§3.4、§3.7）
+- [x] T4 VIZ_DEVELOP_ENABLE_IMAGE 开关拦截；付费纪律写入 invocationCommands description（§3.1、§3.5）
+- [x] 验收：submit 立即返回；断连场景下 get_image_operation 可查回状态；开关关闭时命令被拦截并提示开启方法
 
 里程碑门禁：
-- [ ] 无 operationId / 无 display / 非法 operationId 三种请求均被插件层拒绝且不发起网络请求
+- [x] 无 operationId / 无 display / 非法 operationId 三种请求均被插件层拒绝且不发起网络请求
 
 ### M3：文档完善与工具分发
 
