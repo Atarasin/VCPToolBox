@@ -244,7 +244,7 @@ if (require.main === module) {
                 : await client.callTool(toolName, JSON.parse(argsJson), Number(timeoutMs));
             console.log(JSON.stringify(result, null, 2));
         } catch (error) {
-            const message = require('.').safeStringify(error.message, env.VIZ_DEVELOP_AUTH_TOKEN);
+            const message = safeStringify(error.message, env.VIZ_DEVELOP_AUTH_TOKEN);
             console.error(JSON.stringify({ category: error.category, error: message }, null, 2));
             process.exit(1);
         }
