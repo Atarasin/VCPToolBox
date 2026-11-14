@@ -1147,6 +1147,23 @@ app.post('/v1/interrupt', (req, res) => {
     }
 
     const context = activeRequests.get(id);
+    if (Object.prototype.hasOwnProperty.call(req.body, 'action')) {
+        const { action } = req.body;
+        if (!['prepare_handoff', 'cancel_handoff'].includes(action)) {
+            return res.status(400).json({ success: false, code: 'INVALID_ACTION' });
+        }
+        if (!context || context.res?.writableEnded || context.res?.destroyed) {
+            return res.status(404).json({ success: false, code: 'REQUEST_NOT_FOUND' });
+        }
+        if (context.aborted || context.abortController?.signal.aborted || !context.handoffGate) {
+            return res.status(409).json({ success: false, code: 'REQUEST_STOPPED' });
+        }
+        const receipt = context.handoffGate.control(req.body);
+        if (receipt.success && !receipt.duplicate && action === 'prepare_handoff') {
+            console.log(`[Handoff] READY received: requestId=${id}, handoffId=${req.body.handoffId}, revision=${req.body.revision}. 已登记预约，当前工具继续执行。`);
+        }
+        return res.status(receipt.success ? 200 : 409).json(receipt);
+    }
     if (context) {
         console.log(`[Interrupt] Received stop signal for ID: ${id}`);
 
@@ -1154,6 +1171,7 @@ app.post('/v1/interrupt', (req, res) => {
         // 1. 设置中止标志，防止 chatCompletionHandler 继续写入
         if (!context.aborted) {
             context.aborted = true; // 标记为已中止
+            context.abortReason = 'explicit_interrupt';
 
             // 2. 立即触发 abort 信号（中断正在进行的 fetch 请求）
             if (context.abortController && !context.abortController.signal.aborted) {
@@ -1237,17 +1255,17 @@ app.post('/v1/interrupt', (req, res) => {
 
         // 最后从 activeRequests 中移除，防止内存泄漏
         setTimeout(() => {
-            if (activeRequests.has(id)) {
+            if (activeRequests.get(id) === context) {
                 activeRequests.delete(id);
                 console.log(`[Interrupt] Cleaned up request ${id} from activeRequests`);
             }
         }, 1000); // 延迟1秒删除，确保所有异步操作完成
 
-        // 向中断请求的发起者返回成功响应
-        res.status(200).json({ status: 'success', message: `Interrupt signal sent for request ${id}.` });
+        // 向中断请求的发起者返回成功响应（同时携带 success 布尔值与 status 字段兼容单聊/群聊调用方）
+        res.status(200).json({ success: true, status: 'success', message: `Interrupt signal sent for request ${id}.` });
     } else {
         console.log(`[Interrupt] Received stop signal for non-existent or completed ID: ${id}`);
-        res.status(404).json({ status: 'error', message: `Request ${id} not found or already completed.` });
+        res.status(404).json({ success: false, status: 'error', code: 'REQUEST_NOT_FOUND', message: `Request ${id} not found or already completed.` });
     }
 });
 

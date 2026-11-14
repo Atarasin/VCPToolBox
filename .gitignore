@@ -407,3 +407,5 @@ Plugin/RAGDiaryPlugin/*.eval-backup
 
 # Local native artifact archives; retain outside disposable build caches.
 /.vcp-native-archive/
+# Local SoVITS voice catalog (copied from VChat, not source)
+Plugin/MimoDubbing/presets.json

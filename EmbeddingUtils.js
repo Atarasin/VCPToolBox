@@ -79,6 +79,61 @@ function _parseRetryAfterMs(value, now = Date.now()) {
     return Math.max(0, retryAt - now);
 }
 
+const DEFAULT_INFLIGHT_TIMEOUT_MS = parseInt(process.env.EMBEDDING_INFLIGHT_TIMEOUT_MS, 10) || 30000;
+
+function _sleepAbortable(ms, signal, reasonMessage = 'Embedding wait aborted') {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            const abortErr = new Error(reasonMessage);
+            abortErr.name = 'AbortError';
+            reject(abortErr);
+            return;
+        }
+        const onAbort = () => {
+            clearTimeout(timer);
+            const abortErr = new Error(reasonMessage);
+            abortErr.name = 'AbortError';
+            reject(abortErr);
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener?.('abort', onAbort);
+            resolve();
+        }, ms);
+        if (signal) {
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+    });
+}
+
+function _awaitWithCallerDetach(promise, signal, reasonMessage = 'Embedding caller detached on abort') {
+    if (!signal) return promise;
+    return new Promise((resolve, reject) => {
+        if (signal.aborted) {
+            promise.catch(() => {});
+            const abortErr = new Error(reasonMessage);
+            abortErr.name = 'AbortError';
+            reject(abortErr);
+            return;
+        }
+        const onAbort = () => {
+            promise.catch(() => {});
+            const abortErr = new Error(reasonMessage);
+            abortErr.name = 'AbortError';
+            reject(abortErr);
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(
+            val => {
+                signal.removeEventListener('abort', onAbort);
+                resolve(val);
+            },
+            err => {
+                signal.removeEventListener('abort', onAbort);
+                reject(err);
+            }
+        );
+    });
+}
 const EMBEDDING_AUDIT_LOG_ENABLED = String(process.env.EMBEDDING_AUDIT_LOG_ENABLED || 'false').toLowerCase() === 'true';
 const EMBEDDING_AUDIT_LOG_DIR = path.join(__dirname, 'DebugLog');
 const EMBEDDING_AUDIT_LOG_FILE = path.join(EMBEDDING_AUDIT_LOG_DIR, 'embeddinglog');
@@ -155,13 +210,26 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
     const random = config.random || Math.random;
     const modelCandidates = _getEmbeddingModelCandidates(config);
     const baseDelay = 1000;
-    const requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) ? config.requestTimeoutMs : REQUEST_TIMEOUT_MS;
+    // 每请求在途超时：优先本地 requestTimeoutMs 契约（eval 注入），未配置时回退上游 inflight 链。
+    const inflightTimeoutMs = Number.isFinite(config?.inflightTimeoutMs) && config.inflightTimeoutMs > 0
+        ? config.inflightTimeoutMs
+        : DEFAULT_INFLIGHT_TIMEOUT_MS;
+    const requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) ? config.requestTimeoutMs : inflightTimeoutMs;
     const rateLimitRetries = Number.isFinite(config.rateLimitRetries) ? config.rateLimitRetries : RATE_LIMIT_RETRIES;
     const rateLimitBaseMs = Number.isFinite(config.rateLimitBaseMs) ? config.rateLimitBaseMs : RATE_LIMIT_BASE_MS;
     const rateLimitMaxMs = Number.isFinite(config.rateLimitMaxMs) ? config.rateLimitMaxMs : RATE_LIMIT_MAX_MS;
     let lastError = null;
 
+    const throwIfEmbeddingAborted = () => {
+        if (config?.signal?.aborted) {
+            const abortErr = new Error('Embedding request aborted');
+            abortErr.name = 'AbortError';
+            throw abortErr;
+        }
+    };
+
     for (let attempt = 1; attempt <= modelCandidates.length; attempt++) {
+        throwIfEmbeddingAborted();
         const model = modelCandidates[attempt - 1];
         for (let rateLimitAttempt = 0; rateLimitAttempt <= rateLimitRetries; rateLimitAttempt++) {
           try {
@@ -179,18 +247,22 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
             }
             const requestHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` };
 
+            // 排队时间不应消耗 HTTP 超时预算，signal 必须在拿到全局请求槽后创建。
+            // 已发上网卡的单批请求不绑调用方取消信号，允许后台自然收割结果写回缓存；仅由独立超时防止TCP死连接
             const response = await scheduleRequest(() => fetchImpl(requestUrl, {
                     method: 'POST',
                     headers: requestHeaders,
                     body: JSON.stringify(requestBody),
-                    // 排队时间不应消耗 HTTP 超时预算，signal 必须在拿到全局请求槽后创建。
-                    signal: AbortSignal.timeout(Math.max(1, requestTimeoutMs))
+                    signal: (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function')
+                        ? AbortSignal.timeout(Math.max(1, requestTimeoutMs))
+                        : undefined
                 }));
 
             const responseBodyText = await response.text();
 
             if (!response.ok) {
                 if (response.status === 429) {
+                    throwIfEmbeddingAborted();
                     const retryAfterMs = _parseRetryAfterMs(response.headers?.get?.('retry-after'));
                     const exponentialMs = rateLimitBaseMs * (2 ** rateLimitAttempt);
                     const jitterMs = Math.floor(Math.min(1000, exponentialMs * 0.1) * random());
@@ -209,7 +281,9 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
                         `[Embedding] Batch ${batchNumber} model "${model}" rate limited (429). ` +
                         `Retrying same model in ${waitTime}ms (${rateLimitAttempt + 1}/${rateLimitRetries}).`
                     );
-                    await sleep(waitTime);
+                    await (config?.signal
+                        ? _sleepAbortable(waitTime, config?.signal, 'Embedding 429 backoff aborted')
+                        : sleep(waitTime));
                     continue;
                 }
                 throw new Error(`API Error ${response.status}: ${responseBodyText.substring(0, 500)}`);
@@ -271,6 +345,9 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
             return sortedData.map(item => item.embedding);
 
           } catch (e) {
+            if (config?.signal?.aborted) {
+                throwIfEmbeddingAborted();
+            }
             if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
                 const timeoutError = new Error(`Embedding request timed out after ${requestTimeoutMs}ms`);
                 timeoutError.code = 'EMBEDDING_REQUEST_TIMEOUT';
@@ -282,7 +359,9 @@ async function _sendBatch(batchTexts, config, batchNumber, disableBatching, dime
             lastError = e;
             console.warn(`[Embedding] Batch ${batchNumber}, Model "${model}" failed (${attempt}/${modelCandidates.length}): ${e.message}`);
             if (attempt === modelCandidates.length) throw e;
-            await sleep(baseDelay * attempt);
+            await (config?.signal
+                ? _sleepAbortable(baseDelay * attempt, config?.signal, 'Embedding retry wait aborted')
+                : sleep(baseDelay * attempt));
             break;
           }
         }
@@ -299,7 +378,6 @@ async function getEmbeddingsBatch(texts, config) {
     const disableBatching = DISABLE_BATCHING;
     const dimensions = Number.isFinite(EMBEDDING_DIMENSIONS) ? EMBEDDING_DIMENSIONS : NaN;
     const maxBatchItems = disableBatching ? 1 : (Number.isFinite(MAX_BATCH_ITEMS) ? MAX_BATCH_ITEMS : DEFAULT_MAX_BATCH_ITEMS);
-    const concurrency = disableBatching ? 1 : DEFAULT_CONCURRENCY;
 
     // 1. ⚡️ 第一步：纯 CPU 操作，先把所有文本切分成 Batches
     //    同时记录每个文本在原始数组中的索引，以便后续对齐
@@ -338,6 +416,13 @@ async function getEmbeddingsBatch(texts, config) {
         batches.push({ texts: currentBatchTexts, originalIndices: currentBatchIndices });
     }
 
+    // 并发度收敛：禁批模式串行；否则优先调用方显式配置，回退默认并发。
+    const concurrency = disableBatching ? 1 : (
+        Number.isInteger(config?.concurrency) && config.concurrency > 0
+            ? Math.min(config.concurrency, batches.length)
+            : Math.min(DEFAULT_CONCURRENCY, batches.length)
+    );
+
     if (oversizeIndices.size > 0) {
         console.warn(`[Embedding] ⚠️ ${oversizeIndices.size} texts skipped due to token limit.`);
     }
@@ -350,18 +435,48 @@ async function getEmbeddingsBatch(texts, config) {
     // 定义 Worker：只要队列里还有任务，就不断抢任务做
     const worker = async (workerId) => {
         while (true) {
+            if (config?.signal?.aborted) {
+                const abortErr = new Error('Embedding batch worker aborted');
+                abortErr.name = 'AbortError';
+                throw abortErr;
+            }
             // 🔒 获取任务索引 (原子操作模拟)
             const batchIndex = cursor++;
             if (batchIndex >= batches.length) break; // 没任务了，下班
 
             const batch = batches[batchIndex];
             try {
-                // 执行请求 (Batch ID 从 1 开始显示)
+                // 在途批次静默收割并即时回调增量写库，调用侧若已中止则0ms先行脱钩
+                const sendPromise = _sendBatch(batch.texts, config, batchIndex + 1, disableBatching, dimensions).then(vectors => {
+                    if (Array.isArray(vectors) && typeof config?.onBatchComplete === 'function') {
+                        try {
+                            config.onBatchComplete({
+                                texts: batch.texts,
+                                vectors,
+                                originalIndices: batch.originalIndices,
+                                batchIndex
+                            });
+                        } catch (hookErr) {
+                            console.warn(`[Embedding] onBatchComplete hook error: ${hookErr.message}`);
+                        }
+                    }
+                    return vectors;
+                });
+                const vectors = await _awaitWithCallerDetach(
+                    sendPromise,
+                    config?.signal,
+                    'Embedding batch caller detached on abort'
+                );
                 batchResults[batchIndex] = {
-                    vectors: await _sendBatch(batch.texts, config, batchIndex + 1, disableBatching, dimensions),
+                    vectors,
                     originalIndices: batch.originalIndices
                 };
             } catch (e) {
+                if (config?.signal?.aborted || (e?.name === 'AbortError' && config?.signal)) {
+                    const abortErr = new Error('Embedding batch aborted');
+                    abortErr.name = 'AbortError';
+                    throw abortErr;
+                }
                 // 🛡️ 不再让单个 batch 失败导致整个 Promise.all 崩溃
                 // 而是记录失败，对应位置将填 null
                 console.error(`[Embedding] ❌ Batch ${batchIndex + 1} failed permanently: ${e.message}`);
@@ -374,7 +489,7 @@ async function getEmbeddingsBatch(texts, config) {
         }
     };
 
-    // 启动 N 个 Worker
+    // 启动 N 个 Worker（按批次总数与可配并发度收敛）
     const workers = [];
     for (let i = 0; i < concurrency; i++) {
         workers.push(worker(i));
