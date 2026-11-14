@@ -1,0 +1,744 @@
+{
+  "schemaVersion": 1,
+  "expert": "yanchi_ui",
+  "createdAt": "2026-11-15T00:00:00.000Z",
+  "note": "M2 基线集：每子技能概念/应用/边界 + 偏题负例（隔离前 informational）+ 23 新增/11 变更探针 + 跨库样本 + preview 无来源头探针。负例在 M3 隔离完成后以 --strict-negatives 阻断。",
+  "queries": [
+    {
+      "id": "visual-hierarchy-concept",
+      "library": "yanchi_ui知识库",
+      "subskill": "concept",
+      "query": "如何用大小、颜色、对比与位置建立视觉层级顺序？",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/01_用大小-颜色-对比与位置建立视觉层级顺序.md"
+      ]
+    },
+    {
+      "id": "visual-hierarchy-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "application",
+      "query": "文字层次的四个核心方法是什么？",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/02_文字层次的四个核心方法.md"
+      ]
+    },
+    {
+      "id": "visual-hierarchy-boundary",
+      "library": "yanchi_ui知识库",
+      "subskill": "boundary",
+      "query": "品牌视觉一致性的定义与构成要素",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_visual-hierarchy_品牌视觉一致性的定义与构成.md"
+      ]
+    },
+    {
+      "id": "layout-grid-concept",
+      "library": "yanchi_ui知识库",
+      "subskill": "concept",
+      "query": "12 等分与 24 等分栅格系统分别适用什么场景？",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_12等分与24等分栅格系统适用场景.md"
+      ],
+      "requiredText": [
+        "24"
+      ]
+    },
+    {
+      "id": "layout-grid-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "application",
+      "query": "figma 中怎么用 8 点栅格搭建响应式网格",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/03_figma中用8点栅格搭建响应式网格.md"
+      ]
+    },
+    {
+      "id": "layout-grid-boundary",
+      "library": "yanchi_ui知识库",
+      "subskill": "boundary",
+      "query": "12 列栅格的断点与水槽如何保持一致性",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_12列栅格与8px水槽的断点一致性.md"
+      ]
+    },
+    {
+      "id": "color-tokens-concept",
+      "library": "yanchi_ui知识库",
+      "subskill": "concept",
+      "query": "DTCG 设计令牌的三层架构 Primitive Semantic Component",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_dtcg-三层设计令牌架构-primitive-semantic-compone.md"
+      ],
+      "requiredText": [
+        "Primitive"
+      ]
+    },
+    {
+      "id": "color-tokens-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "application",
+      "query": "WCAG AA 与 AAA 级对比度阈值 4.5:1 与 7:1",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_wcag-aa-与-aaa-对比度阈值-4-5-1-与-7-1.md"
+      ],
+      "requiredText": [
+        "7"
+      ]
+    },
+    {
+      "id": "color-tokens-boundary",
+      "library": "yanchi_ui知识库",
+      "subskill": "boundary",
+      "query": "UI 组件的 3:1 对比度要求适用于哪些场景",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_ui-组件的-3-1-对比度要求.md"
+      ],
+      "requiredText": [
+        "3"
+      ]
+    },
+    {
+      "id": "interaction-a11y-concept",
+      "library": "yanchi_ui知识库",
+      "subskill": "concept",
+      "query": "WCAG 2.1.1 键盘可操作性要求什么",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_interaction-accessibility_wcag-2-1-1-键盘可操作性.md"
+      ]
+    },
+    {
+      "id": "interaction-a11y-boundary",
+      "library": "yanchi_ui知识库",
+      "subskill": "boundary",
+      "query": "键盘操作是否允许路径依赖输入例外",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_interaction-accessibility_wcag-2-1-1-键盘可操作性.md"
+      ],
+      "requiredText": [
+        "例外"
+      ]
+    },
+    {
+      "id": "interaction-a11y-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "application",
+      "query": "hover 与 focus 状态的触发条件差异",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_interaction-accessibility_hover-与-focus-状态的触发条件差异.md"
+      ]
+    },
+    {
+      "id": "ds-governance-concept",
+      "library": "yanchi_ui知识库",
+      "subskill": "concept",
+      "query": "企业设计系统治理模型的结构框架包含什么",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_企业设计系统治理模型的结构框架.md"
+      ]
+    },
+    {
+      "id": "ds-governance-boundary",
+      "library": "yanchi_ui知识库",
+      "subskill": "boundary",
+      "query": "把组件库当作设计系统有什么认知偏差",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_把组件库当作设计系统的认知偏差.md"
+      ]
+    },
+    {
+      "id": "ui-review-concept",
+      "library": "yanchi_ui知识库",
+      "subskill": "concept",
+      "query": "P0 到 P4 优先级代码的通用定义",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_ui-review-priority_p0-p4-优先级代码的通用定义.md"
+      ]
+    },
+    {
+      "id": "ui-review-boundary",
+      "library": "yanchi_ui知识库",
+      "subskill": "boundary",
+      "query": "P0-P5 优先级分级体系及其局限",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_ui-review-priority_p0-p5-优先级分级体系及其局限.md"
+      ]
+    },
+    {
+      "id": "ui-review-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "application",
+      "query": "按优先级决定重大事件的提名方式",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/06_按优先级决定重大事件的提名方式.md"
+      ]
+    },
+    {
+      "id": "negative-api-governance-sneak",
+      "library": "yanchi_ui知识库",
+      "subskill": "governance-sneak",
+      "query": "设计系统治理的组织结构与采纳策略",
+      "topK": 5,
+      "expand": false,
+      "kind": "negative",
+      "forbiddenSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_api-治理的定义与目标.md",
+        "yanchi_ui知识库/K_design-system-governance_api-网关的流量治理与安全职责.md"
+      ]
+    },
+    {
+      "id": "negative-azure-checklist-sneak",
+      "library": "yanchi_ui知识库",
+      "subskill": "checklist-sneak",
+      "query": "UI 设计评审的 P0 阻断项有哪些",
+      "topK": 5,
+      "expand": false,
+      "kind": "negative",
+      "forbiddenSourceFiles": [
+        "yanchi_ui知识库/K_ui-review-priority_azure-可靠性设计评审清单.md"
+      ]
+    },
+    {
+      "id": "negative-agent-platform-sneak",
+      "library": "yanchi_ui知识库",
+      "subskill": "platform-sneak",
+      "query": "组件贡献流程与版本治理",
+      "topK": 5,
+      "expand": false,
+      "kind": "negative",
+      "forbiddenSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_agent-platform-治理模板-智能体与基础设施的一体化部署.md"
+      ]
+    },
+    {
+      "id": "preview-k-card-no-sources",
+      "library": "yanchi_ui知识库",
+      "subskill": "card-no-sources",
+      "query": "WCAG 文本色彩对比度要求",
+      "topK": 5,
+      "expand": false,
+      "kind": "preview",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_wcag-文本色彩对比度要求.md"
+      ]
+    },
+    {
+      "id": "preview-longdoc-no-source-header",
+      "library": "yanchi_ui知识库",
+      "subskill": "no-source-header",
+      "query": "视觉层级顺序的建立方法",
+      "topK": 5,
+      "expand": false,
+      "kind": "preview",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/01_用大小-颜色-对比与位置建立视觉层级顺序.md"
+      ]
+    },
+    {
+      "id": "crosslib-vcp-ency",
+      "library": "VCP百科全书",
+      "subskill": "ency",
+      "query": "VCP 系统总览与核心设计哲学",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "VCP百科全书/01_VCP系统总览与核心哲学.txt"
+      ]
+    },
+    {
+      "id": "crosslib-vcp-knowledge",
+      "library": "VCP知识",
+      "subskill": "knowledge",
+      "query": "VCPChat 的音频引擎与 TTS 语音",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "VCP知识/32_VCPChat_音频引擎与TTS语音.txt"
+      ]
+    },
+    {
+      "id": "crosslib-fupeng",
+      "library": "付鹏观点库",
+      "subskill": "fupeng",
+      "query": "付鹏 著作与长内容的导语与来源说明",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "付鹏观点库/01著作与长内容-00-导语与来源说明.md"
+      ]
+    },
+    {
+      "id": "incremental-new-01",
+      "library": "yanchi_ui知识库",
+      "subskill": null,
+      "query": "移动端 ui 的引导式设计方法",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/37_移动端-ui-的引导式设计方法.md"
+      ]
+    },
+    {
+      "id": "incremental-new-02",
+      "library": "yanchi_ui知识库",
+      "subskill": null,
+      "query": "用sass构建12列栅格系统的方法",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/38_用sass构建12列栅格系统的方法.md"
+      ]
+    },
+    {
+      "id": "incremental-new-03",
+      "library": "yanchi_ui知识库",
+      "subskill": null,
+      "query": "设计令牌从规范到代码的落地流程",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/39_设计令牌从规范到代码的落地流程.md"
+      ]
+    },
+    {
+      "id": "incremental-new-04",
+      "library": "yanchi_ui知识库",
+      "subskill": null,
+      "query": "dtcg 令牌构建流水线 一键输出多目标格式",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/40_dtcg-令牌构建流水线-一键输出多目标格式.md"
+      ]
+    },
+    {
+      "id": "incremental-new-05",
+      "library": "yanchi_ui知识库",
+      "subskill": null,
+      "query": "企业级组件库的可治理建设要素",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/41_企业级组件库的可治理建设要素.md"
+      ]
+    },
+    {
+      "id": "incremental-new-06",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "dtcg 三层设计令牌架构 primitive semantic compone",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_dtcg-三层设计令牌架构-primitive-semantic-compone.md"
+      ]
+    },
+    {
+      "id": "incremental-new-07",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "z index 层叠顺序令牌",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_z-index-层叠顺序令牌.md"
+      ]
+    },
+    {
+      "id": "incremental-new-08",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "复合令牌与原子 css 输出",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_复合令牌与原子-css-输出.md"
+      ]
+    },
+    {
+      "id": "incremental-new-09",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "企业架构视角下的复杂系统治理",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_企业架构视角下的复杂系统治理.md"
+      ]
+    },
+    {
+      "id": "incremental-new-10",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "把组件库当作设计系统的认知偏差",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_把组件库当作设计系统的认知偏差.md"
+      ]
+    },
+    {
+      "id": "incremental-new-11",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "设计系统治理流程 从组件资产到团队基础设施",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_设计系统治理流程-从组件资产到团队基础设施.md"
+      ]
+    },
+    {
+      "id": "incremental-new-12",
+      "library": "yanchi_ui知识库",
+      "subskill": "interaction-accessibility",
+      "query": "wcag 2 2 aa 级无障碍承诺的声明方式",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_interaction-accessibility_wcag-2-2-aa-级无障碍承诺的声明方式.md"
+      ]
+    },
+    {
+      "id": "incremental-new-13",
+      "library": "yanchi_ui知识库",
+      "subskill": "interaction-accessibility",
+      "query": "wcag 作为全球无障碍基准的定位",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_interaction-accessibility_wcag-作为全球无障碍基准的定位.md"
+      ]
+    },
+    {
+      "id": "incremental-new-14",
+      "library": "yanchi_ui知识库",
+      "subskill": "interaction-accessibility",
+      "query": "wcag 键盘导航要求的持续更新属性",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_interaction-accessibility_wcag-键盘导航要求的持续更新属性.md"
+      ]
+    },
+    {
+      "id": "incremental-new-15",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "12列栅格与多断点网页样式设计案例",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_12列栅格与多断点网页样式设计案例.md"
+      ]
+    },
+    {
+      "id": "incremental-new-16",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "24列栅格系统适用场景与灵活性",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_24列栅格系统适用场景与灵活性.md"
+      ]
+    },
+    {
+      "id": "incremental-new-17",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "b端后台中栅格系统与间距的依存关系",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_b端后台中栅格系统与间距的依存关系.md"
+      ]
+    },
+    {
+      "id": "incremental-new-18",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "栅格系统与响应式布局及开发协作的关系",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_栅格系统与响应式布局及开发协作的关系.md"
+      ]
+    },
+    {
+      "id": "incremental-new-19",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "栅格系统对一致性与设计决策效率的价值",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_栅格系统对一致性与设计决策效率的价值.md"
+      ]
+    },
+    {
+      "id": "incremental-new-20",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "栅格系统对多终端适配与视觉一致性的作用",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_栅格系统对多终端适配与视觉一致性的作用.md"
+      ]
+    },
+    {
+      "id": "incremental-new-21",
+      "library": "yanchi_ui知识库",
+      "subskill": "ui-review-priority",
+      "query": "p0 p5 优先级分级体系及其局限",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_ui-review-priority_p0-p5-优先级分级体系及其局限.md"
+      ]
+    },
+    {
+      "id": "incremental-new-22",
+      "library": "yanchi_ui知识库",
+      "subskill": "visual-hierarchy",
+      "query": "混淆扁平化 拟物化 写实与metro ui的层级关系",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_visual-hierarchy_混淆扁平化-拟物化-写实与metro-ui的层级关系.md"
+      ]
+    },
+    {
+      "id": "incremental-new-23",
+      "library": "yanchi_ui知识库",
+      "subskill": "visual-hierarchy",
+      "query": "视觉层级与交互体验的联合优化",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_visual-hierarchy_视觉层级与交互体验的联合优化.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-01",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "wcag 文本色彩对比度要求",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_wcag-文本色彩对比度要求.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-02",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "设计令牌作为设计与开发的共同工作思维",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_设计令牌作为设计与开发的共同工作思维.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-03",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "设计令牌是 ui 元素的构建基块",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_设计令牌是-ui-元素的构建基块.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-04",
+      "library": "yanchi_ui知识库",
+      "subskill": "color-type-tokens",
+      "query": "设计令牌的定义与作用",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_color-type-tokens_设计令牌的定义与作用.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-05",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "api 治理的定义与目标",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_api-治理的定义与目标.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-06",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "12列栅格与8px水槽的断点一致性",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_12列栅格与8px水槽的断点一致性.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-07",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "24 栅格系统的构成公式",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_24-栅格系统的构成公式.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-08",
+      "library": "yanchi_ui知识库",
+      "subskill": "layout-grid-typography",
+      "query": "24列栅格的列跨度表示法",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_layout-grid-typography_24列栅格的列跨度表示法.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-09",
+      "library": "yanchi_ui知识库",
+      "subskill": "ui-review-priority",
+      "query": "直接套用外部 p 级定义导致分级误判",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_ui-review-priority_直接套用外部-p-级定义导致分级误判.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-10",
+      "library": "yanchi_ui知识库",
+      "subskill": "visual-hierarchy",
+      "query": "视觉层次 定义与作用",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_visual-hierarchy_视觉层次-定义与作用.md"
+      ]
+    },
+    {
+      "id": "incremental-changed-11",
+      "library": "yanchi_ui知识库",
+      "subskill": "visual-hierarchy",
+      "query": "视觉层次的设计工具箱 色彩 对比 字体排印与间距",
+      "topK": 5,
+      "expand": false,
+      "kind": "incremental",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_visual-hierarchy_视觉层次的设计工具箱-色彩-对比-字体排印与间距.md"
+      ]
+    },
+    {
+      "id": "ds-governance-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "为什么 D2C 工具无法直接理解企业内部组件库",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_d2c-工具无法理解企业内部组件库.md"
+      ]
+    }
+  ]
+}
