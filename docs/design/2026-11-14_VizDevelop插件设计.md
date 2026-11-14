@@ -213,8 +213,8 @@ prompt:「始」…图片描述原文…「末」
 #### M1.S3 只读命令接线
 
 依赖：M1.S2
-- [ ] T5 命令分发器 + health / list_image_models 两个只读命令（§3.4）
-- [ ] 验收：VCP 对话中经「始」「末」协议调用 VizDevelop list_image_models 成功返回模型目录
+- [x] T5 命令分发器 + health / list_image_models 两个只读命令（§3.4）
+- [x] 验收：VCP 对话中经「始」「末」协议调用 VizDevelop list_image_models 成功返回模型目录
 
 里程碑门禁：
 - [ ] 停掉显影服务后重启 VCP：插件加载不报错，命令返回清晰错误与 health 指引
