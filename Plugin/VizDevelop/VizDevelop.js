@@ -31,17 +31,22 @@ const DEFAULTS = {
     VIZ_DEVELOP_MCP_URL: 'http://127.0.0.1:8787/mcp',
     VIZ_DEVELOP_ENABLE_IMAGE: true,
     VIZ_DEVELOP_TIMEOUT_FAST_MS: 30000,
-    VIZ_DEVELOP_TIMEOUT_SLOW_MS: 660000
+    VIZ_DEVELOP_TIMEOUT_SLOW_MS: 660000,
+    VIZ_DEVELOP_SUBMIT_WAIT_MS: 35000
 };
+
+/** submit 同步等待上限：Plugin.js 对 direct 调用有 60s 硬超时（communication.timeout），
+ *  等待预算必须留出轮询与整形时间，钳制在 45s。 */
+const SUBMIT_WAIT_CAP_MS = 45000;
 
 /** initialize 只存配置、不发任何网络请求：显影宕机或令牌缺失都不影响插件加载（§3.6 / R5）。 */
 async function initialize(config = {}, _dependencies = {}) {
     cfg = { ...DEFAULTS, ...config };
     // 类型规范化（与 configSchema 一致）：Plugin.js 链路已转换，CLI/裸 dotenv 场景兜底。
     cfg.VIZ_DEVELOP_ENABLE_IMAGE = String(cfg.VIZ_DEVELOP_ENABLE_IMAGE).toLowerCase() === 'true';
-    for (const key of ['VIZ_DEVELOP_TIMEOUT_FAST_MS', 'VIZ_DEVELOP_TIMEOUT_SLOW_MS']) {
+    for (const key of ['VIZ_DEVELOP_TIMEOUT_FAST_MS', 'VIZ_DEVELOP_TIMEOUT_SLOW_MS', 'VIZ_DEVELOP_SUBMIT_WAIT_MS']) {
         const num = Number(cfg[key]);
-        cfg[key] = Number.isFinite(num) && num > 0 ? num : DEFAULTS[key];
+        cfg[key] = Number.isFinite(num) && num >= 0 ? Math.min(num, key === 'VIZ_DEVELOP_SUBMIT_WAIT_MS' ? SUBMIT_WAIT_CAP_MS : Number.MAX_SAFE_INTEGER) : DEFAULTS[key];
     }
     client = cfg.VIZ_DEVELOP_AUTH_TOKEN
         ? createMcpClient({ url: cfg.VIZ_DEVELOP_MCP_URL, token: cfg.VIZ_DEVELOP_AUTH_TOKEN })
@@ -161,7 +166,8 @@ async function cmdGetImageOperation(data, timeoutMs) {
     if (String(r.status).toLowerCase() === 'unknown') {
         // R2 纪律：unknown 状态绝不换 ID 重发（费用可能已发生），必须人工核对。
         lines.push(`\n⚠️ 该 operationId 在服务端状态为 unknown：请原样告知用户人工核对，禁止换新 operationId 重发。`);
-    } else if (['queued', 'running', 'pending', 'executing', 'dispatching'].includes(String(r.status).toLowerCase())) {
+    } else if (String(r.outcome || '').toLowerCase() === 'pending'
+        || ['queued', 'running', 'pending', 'executing', 'received', 'dispatched', 'dispatching'].includes(String(r.status).toLowerCase())) {
         lines.push(`\n提示：任务未完成，可每 1~2 分钟重新查询（command:get_image_operation + operationId）。`);
     }
     lines.push(`\n<details>完整记录（原样透传）：\n\`\`\`json\n${JSON.stringify(r, null, 2)}\n\`\`\`\n</details>`);
@@ -231,31 +237,81 @@ function buildMcpArgs(data, base) {
     return args;
 }
 
-/** submit 即发即回：fire-and-forget 发起 tools/call，立即返回 operationId 回执与轮询指引。 */
-function submitFireAndForget(mcpToolName, args, operationId, label) {
-    Promise.resolve(client.callTool(mcpToolName, args, cfg.VIZ_DEVELOP_TIMEOUT_SLOW_MS))
-        .then(r => console.log(`[VizDevelop] submit 受理完成（${operationId}）：outcome=${r?.outcome} reused=${r?.reused} attempts=${r?.stats?.upstreamAttempts}`))
-        .catch(err => console.log(`[VizDevelop] submit 后台失败（${operationId}，已脱敏，零自动重试）：${safeStringify(err.message, cfg.VIZ_DEVELOP_AUTH_TOKEN)}`));
-    return `🚀 显影${label}任务已提交（付费操作，受理与生成在服务端继续，本回执不等待生图结果）\n\n` + [
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** 提交回执（等待预算耗尽 / 等待关闭时返回）：教 agent 在 VCP 对话环境里的三条回流路径。 */
+function buildSubmitReceipt(operationId, label, waitedMs) {
+    const head = waitedMs > 0
+        ? `⏳ 显影${label}任务已提交，同步等待 ${Math.round(waitedMs / 1000)}s 未到终态，生成在服务端继续`
+        : `🚀 显影${label}任务已提交（受理与生成在服务端继续，本回执不等待生图结果）`;
+    return `${head}\n\n` + [
         `- operationId: ${operationId}（幂等键；任何重试必须复用此 ID，新 ID = 新付费意图）`,
-        `- 轮询：每 1~2 分钟调用 command:get_image_operation + operationId:${operationId} 查询结果`,
+        `- 拿结果（按优先级）：`,
+        `  1. 立即再查：command:get_image_operation + operationId:${operationId}（免费，快模型此时可能已完成）`,
+        `  2. 自唤醒轮询：调用 VCPSleep 睡 1~2 分钟后醒来再查；或给查询命令加 timely_contact:'YYYY-MM-DD-HH:mm' 定时触发（定时结果稍后用 TimedTaskQuery 凭 task_id 取回）`,
+        `  3. 告知用户图片生成中，下次对话时凭 operationId 查询`,
         '- 纪律：零自动重试；若查询返回 unknown 状态，禁止换新 operationId 重发，须原样告知用户人工核对'
     ].join('\n');
 }
 
-/** generate_image（submit，§3.4 命令 5）。slow 档（后台受理预算）。 */
-function cmdGenerateImage(data) {
+/**
+ * submit 混合模式：fire-and-forget 发起付费调用后，同步短等待轮询账本状态——
+ * 到终态（published/failed/unknown 等）当轮直接返回完整结果（快模型多数 10~30s 完成）；
+ * 预算耗尽返回回执与回流指引。等待期轮询自身故障不升级为命令错误（提交已受理，
+ * 不能因查询抖动丢掉回执），仅在连续故障时提前退回回执路径。
+ */
+async function submitHybrid(mcpToolName, args, operationId, label) {
+    const waitBudgetMs = Number(cfg.VIZ_DEVELOP_SUBMIT_WAIT_MS) || 0;
+    const startedAt = Date.now();
+    // 发起付费调用：不 await——无论等待结果如何，受理与生成都在服务端账本继续。
+    Promise.resolve(client.callTool(mcpToolName, args, cfg.VIZ_DEVELOP_TIMEOUT_SLOW_MS))
+        .then(r => console.log(`[VizDevelop] submit 受理完成（${operationId}）：outcome=${r?.outcome} reused=${r?.reused} attempts=${r?.stats?.upstreamAttempts}`))
+        .catch(err => console.log(`[VizDevelop] submit 后台失败（${operationId}，已脱敏，零自动重试）：${safeStringify(err.message, cfg.VIZ_DEVELOP_AUTH_TOKEN)}`));
+
+    if (waitBudgetMs > 0) {
+        const deadline = startedAt + waitBudgetMs;
+        let pollFailures = 0;
+        await sleep(2500); // 服务端登记账本需要数秒，先等一小段再开始轮询
+        while (Date.now() < deadline) {
+            let terminal = false;
+            try {
+                const r = await client.callTool('viz_get_image_operation', { operationId }, 10000);
+                pollFailures = 0;
+                // 终态判定按 outcome（服务端 status 词汇会漂移：received/dispatched/…均为进行态）：
+                // outcome 非 pending 即终态（published / failed / unknown…）；status 终态词兜底。
+                const outcome = String(r?.outcome || '').toLowerCase();
+                const status = String(r?.status || '').toLowerCase();
+                terminal = (outcome !== '' && outcome !== 'pending')
+                    || ['published', 'failed', 'unknown'].includes(status);
+            } catch (error) {
+                // 刚提交时账本可能尚未可见（OPERATION_UNKNOWN 不存在），不算故障，继续等
+                const notYetVisible = error instanceof VizMcpError && error.category === 'tool'
+                    && /OPERATION_UNKNOWN|不存在/.test(safeStringify(error.detail, cfg.VIZ_DEVELOP_AUTH_TOKEN) || error.message);
+                if (!notYetVisible && ++pollFailures >= 2) break;
+            }
+            if (terminal) {
+                // 终态：复用查询命令的整形（含 unknown 警告与图片 URL 透传），当轮交付。
+                return cmdGetImageOperation({ operationId }, cfg.VIZ_DEVELOP_TIMEOUT_FAST_MS);
+            }
+            await sleep(Math.min(4000, Math.max(300, deadline - Date.now())));
+        }
+    }
+    return buildSubmitReceipt(operationId, label, waitBudgetMs > 0 ? Date.now() - startedAt : 0);
+}
+
+/** generate_image（submit 混合模式，§3.4 命令 5）。slow 档（后台受理预算）。 */
+async function cmdGenerateImage(data) {
     const guard = guardPaidCommand(data);
     const args = buildMcpArgs(data, {
         operationId: guard.operationId,
         display: { title: guard.title, description: guard.description },
         prompt: guard.prompt
     });
-    return submitFireAndForget('viz_generate_image', args, guard.operationId, '图像生成');
+    return submitHybrid('viz_generate_image', args, guard.operationId, '图像生成');
 }
 
-/** edit_image（submit，§3.4 命令 6）：源图二选一，mask/markup 至多一个。 */
-function cmdEditImage(data) {
+/** edit_image（submit 混合模式，§3.4 命令 6）：源图二选一，mask/markup 至多一个。 */
+async function cmdEditImage(data) {
     const guard = guardPaidCommand(data);
     const imageInputId = String(data.image_input_id || '').trim();
     const artifactToken = String(data.image_artifact_token || '').trim();
@@ -279,7 +335,7 @@ function cmdEditImage(data) {
     if (maskInputId) args.mask = { inputId: maskInputId };
     if (markupInputId) args.markup = { inputId: markupInputId };
     if (data.input_fidelity !== undefined && data.input_fidelity !== '') args.inputFidelity = String(data.input_fidelity);
-    return submitFireAndForget('viz_edit_image', args, guard.operationId, '图像编辑');
+    return submitHybrid('viz_edit_image', args, guard.operationId, '图像编辑');
 }
 
 // 命令表：command → { handler, 时档 }。submit 命令的 slow 档为后台受理预算。

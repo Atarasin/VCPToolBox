@@ -15,7 +15,7 @@
 | `generate_image` | viz_generate_image | **付费** | submit + 轮询 |
 | `edit_image` | viz_edit_image | **付费** | submit + 轮询 |
 
-付费命令为 fire-and-forget submit：立即返回 operationId 回执，之后每 1~2 分钟用 `get_image_operation` 轮询。产物图片走显影公网 URL **原样透传**（不镜像、不落盘，token 即访问控制）。
+付费命令为 submit 混合模式：发起后**同步等待约 35 秒**（`VIZ_DEVELOP_SUBMIT_WAIT_MS`，可配 0~45000）——快模型（约 10~30s 完成）多数**当轮直接返回最终结果与图片 URL**；未到终态则返回 operationId 回执与回流指引（立即再查 / VCPSleep 自唤醒轮询 / `timely_contact` 定时查询 + `TimedTaskQuery` 取回 / 请用户稍后追问）。产物图片走显影公网 URL **原样透传**（不镜像、不落盘，token 即访问控制）。
 
 ### 调用示例
 
@@ -59,6 +59,7 @@ operationId:「始」img-海报初稿-v1「末」
 | `VIZ_DEVELOP_ENABLE_IMAGE` | `true` | 付费 generate/edit 总开关；`false` 时仅保留查询与目录命令 |
 | `VIZ_DEVELOP_TIMEOUT_FAST_MS` | `30000` | 秒级命令超时 |
 | `VIZ_DEVELOP_TIMEOUT_SLOW_MS` | `660000` | submit 受理超时上限（不等待生图结果） |
+| `VIZ_DEVELOP_SUBMIT_WAIT_MS` | `35000` | submit 后同步等待终态时长（上限 45000；到终态当轮返回结果，超时返回回执；0=立即回执） |
 
 插件对显影的故障采取优雅降级：服务宕机/断网时命令返回清晰错误与 `health` 检查指引，插件加载不受影响（`initialize` 只存配置、不发网络请求）。
 

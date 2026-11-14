@@ -39,13 +39,18 @@
       "type": "integer",
       "default": 660000,
       "description": "submit 受理超时上限"
+    },
+    "VIZ_DEVELOP_SUBMIT_WAIT_MS": {
+      "type": "integer",
+      "default": 35000,
+      "description": "submit 后同步等待终态的时长（毫秒，上限 45000）；到终态当轮返回结果，超时返回回执；0=立即回执"
     }
   },
   "capabilities": {
     "invocationCommands": [
       {
         "commandIdentifier": "VizDevelop",
-        "description": "显影（viz-develop）图像生成与编辑网关（付费操作）。覆盖两个 submit 命令：generate_image 文生图、edit_image 编辑已有图片。调用纪律：\n- 生成/编辑前必须有用户明确要求，未经要求不得调用（付费操作）。\n- operationId 必填，是幂等键，格式 ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$（如 img-海报初稿-v1）。传输层重试必须复用同一 ID，新 ID = 新付费意图。\n- display_title（≤60 字符）与 display_description（≤240 字符）必填：公开信息，说明图片是什么、为何生成、准备用在哪里；禁止填写密钥或隐私。\n- prompt 原文透传，服务端不 trim 不改写。\n- submit 立即返回 operationId 回执，不等待生图完成；之后每 1~2 分钟用 command:get_image_operation 轮询结果。\n- 零自动重试：任何失败、限流（QUOTA_EXCEEDED）、超时均不重发；查询到 unknown 状态绝不换 ID 重发，必须原样告知用户人工核对。\n- 模型选择默认优先：省略 model 走服务默认模型；不确定可用模型时先用 VizDevelop_Query 的 list_image_models 现查，不凭记忆猜模型名。\n- edit_image 需要源图二选一：image_input_id（create_image_input 上传所得 inputId）或 image_artifact_token（已发布产物 token）；可选 mask_input_id / markup_input_id（至多一个）与 input_fidelity。\n- 其余参数（model / size / n / outputFormat / quality / background 等）原样透传给显影服务。",
+        "description": "显影（viz-develop）图像生成与编辑网关（付费操作）。覆盖两个 submit 命令：generate_image 文生图、edit_image 编辑已有图片。调用纪律：\n- 生成/编辑前必须有用户明确要求，未经要求不得调用（付费操作）。\n- operationId 必填，是幂等键，格式 ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$（如 img-海报初稿-v1）。传输层重试必须复用同一 ID，新 ID = 新付费意图。\n- display_title（≤60 字符）与 display_description（≤240 字符）必填：公开信息，说明图片是什么、为何生成、准备用在哪里；禁止填写密钥或隐私。\n- prompt 原文透传，服务端不 trim 不改写。\n- submit 后插件同步等待约 35 秒（可配）：快模型多数当轮直接返回最终结果与图片 URL；未到终态则返回 operationId 回执，之后用 command:get_image_operation 轮询（可配合 VCPSleep 睡眠自唤醒；或给查询加 timely_contact:'YYYY-MM-DD-HH:mm' 定时触发，定时结果用 TimedTaskQuery 凭 task_id 取回）。\n- 零自动重试：任何失败、限流（QUOTA_EXCEEDED）、超时均不重发；查询到 unknown 状态绝不换 ID 重发，必须原样告知用户人工核对。\n- 模型选择默认优先：省略 model 走服务默认模型；不确定可用模型时先用 VizDevelop_Query 的 list_image_models 现查，不凭记忆猜模型名。\n- edit_image 需要源图二选一：image_input_id（create_image_input 上传所得 inputId）或 image_artifact_token（已发布产物 token）；可选 mask_input_id / markup_input_id（至多一个）与 input_fidelity。\n- 其余参数（model / size / n / outputFormat / quality / background 等）原样透传给显影服务。",
         "example": "生成图片（submit 后轮询）：\n```text\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VizDevelop「末」,\ncommand:「始」generate_image「末」,\noperationId:「始」img-海报初稿-v1「末」,\ndisplay_title:「始」项目海报初稿「末」,\ndisplay_description:「始」用户要求的项目宣传海报，用于评审选稿「末」,\nprompt:「始」…图片描述原文…「末」\n<<<[END_TOOL_REQUEST]>>>\n```\n\n编辑已有图片（源图二选一）：\n```text\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」VizDevelop「末」,\ncommand:「始」edit_image「末」,\noperationId:「始」img-海报改稿-v1「末」,\ndisplay_title:「始」项目海报改稿「末」,\ndisplay_description:「始」按用户反馈修改海报配色，用于第二轮评审「末」,\nimage_input_id:「始」create_image_input 返回的 inputId「末」,\nprompt:「始」…编辑指令原文…「末」\n<<<[END_TOOL_REQUEST]>>>\n```"
       },
       {

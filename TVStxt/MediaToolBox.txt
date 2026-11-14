@@ -4,7 +4,7 @@
 [===vcp_fold:0.3===]
 
 ## 1. 显影图像生成/编辑 (VizDevelop) ——首选生图通道——
-接入显影（viz-develop）图像服务：文生图、图片编辑、源图上传与任务查询。当前首选且唯一启用的生图工具，文生图与图片编辑均走此通道。生成/编辑为付费操作，必须有用户明确要求；提交后立即返回回执，之后每 1~2 分钟轮询；产物为公网图片 URL（原样透传，不落盘）。
+接入显影（viz-develop）图像服务：文生图、图片编辑、源图上传与任务查询。当前首选且唯一启用的生图工具，文生图与图片编辑均走此通道。生成/编辑为付费操作，必须有用户明确要求；提交后同步等待约 35 秒，快模型多数当轮直接出图；未完成则凭 operationId 轮询（可用 VCPSleep 睡 1~2 分钟自唤醒，或 timely_contact 定时查询后用 TimedTaskQuery 取回）；产物为公网图片 URL（原样透传，不落盘）。
 注：ZImageTurboGen / DoubaoGen / NanoBananaGen2 / GPTImageGen 等旧生图插件已停用，请勿调用。
 tool_name:「始」VizDevelop「末」,
 command:「始」generate_image「末」,
