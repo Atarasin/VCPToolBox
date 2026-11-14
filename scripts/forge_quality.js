@@ -333,6 +333,164 @@ async function cmdGolden(flags) {
 }
 
 
+// ── 存量处置执行器（§3.3.1/§2.2，M3.S1 T17-T19） ────────────────────────
+
+const { createDispositionLedger, moveKnowledgeFile, STATES, assertOutsideKnowledge } = require(
+    path.join(REPO_ROOT, 'modules/agentGateway/services/forge/knowledgeStates')
+);
+
+/**
+ * plan 形制：
+ * {
+ *   "expertName": "yanchi_ui",
+ *   "reason": "...",
+ *   "quarantine": [{ "path": "yanchi_ui知识库/x.md", "reason": "偏题：API 治理" }, ...],
+ *   "review":     [{ "path": "...", "reason": "相邻：通用治理理论" }, ...],
+ *   "revise":     [{ "path": "...", "newPath": "可选改名", "newContent": "整份新内容",
+ *                    "reason": "...", "evidenceRefs": ["evidence/xxx.md"] }, ...],
+ *   "mergeProposals": [{ "paths": [...], "reason": "内容型合并候选", "proposal": "..." }]
+ * }
+ * dry-run（默认）：校验路径/金标引用不受影响/摘要；--apply 才落盘。
+ */
+async function cmdDisposition(flags) {
+    const root = path.resolve(String(flags.root || REPO_ROOT));
+    const planPath = String(flags.plan || '');
+    if (!planPath || !fs.existsSync(planPath)) throw new Error('--plan <file> 须指向处置计划 JSON');
+    const plan = JSON.parse(await fsp.readFile(planPath, 'utf-8'));
+    const knowledgeRoot = path.resolve(String(flags.knowledge || path.join(root, 'knowledge')));
+    const forgeRoot = path.resolve(String(flags['forge-root'] || path.join(root, 'Agent', 'forge')));
+    const expertName = String(plan.expertName || '');
+    if (!expertName) throw new Error('plan 需要 expertName');
+    const apply = Boolean(flags.apply);
+
+    // 金标保护：quarantine/review 的路径不得被金标 required/incremental/preview 引用。
+    const goldenPath = path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden/yanchi_ui.json');
+    const golden = JSON.parse(await fsp.readFile(goldenPath, 'utf-8'));
+    const goldenRefs = new Set(golden.queries
+        .filter((q) => q.kind !== 'negative')
+        .flatMap((q) => q.requiredSourceFiles || []));
+    const moving = [...(plan.quarantine || []), ...(plan.review || [])].map((entry) => entry.path);
+    const goldenConflict = moving.filter((rel) => goldenRefs.has(rel));
+    if (goldenConflict.length) {
+        throw new Error(`处置与金标探针冲突（required/incremental/preview 引用了将被移出的文件）：${goldenConflict.join(', ')}`);
+    }
+
+    // 路径存在性校验。
+    const missing = [...(plan.quarantine || []), ...(plan.review || []), ...(plan.revise || [])]
+        .filter((entry) => !fs.existsSync(path.join(knowledgeRoot, entry.path)));
+    if (missing.length) {
+        throw new Error(`计划引用了不存在的文件：${missing.map((entry) => entry.path).join(', ')}`);
+    }
+
+    const ledger = createDispositionLedger(path.join(forgeRoot, expertName, 'disposition-ledger.jsonl'));
+    const summary = {
+        apply,
+        planPath,
+        expertName,
+        quarantine: (plan.quarantine || []).length,
+        review: (plan.review || []).length,
+        revise: (plan.revise || []).length,
+        mergeProposals: (plan.mergeProposals || []).length,
+        moves: [],
+        revisions: []
+    };
+
+    const pollUnlink = () => {
+        try {
+            const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
+            const db = new Database(path.join(knowledgeRoot, '..', 'VectorStoreTDB', 'tdb_knowledge_meta.sqlite'), { readonly: true });
+            const row = db.prepare("SELECT COUNT(*) AS n FROM ingest_queue WHERE status IN ('pending','retry','processing')").get();
+            db.close();
+            return Number(row?.n) || 0;
+        } catch {
+            return null; // 未知按未收敛（fail closed）
+        }
+    };
+
+    if (!apply) {
+        for (const entry of plan.quarantine || []) {
+            summary.moves.push({ action: 'quarantine', path: entry.path, reason: entry.reason });
+        }
+        for (const entry of plan.review || []) {
+            summary.moves.push({ action: 'review', path: entry.path, reason: entry.reason });
+        }
+        for (const entry of plan.revise || []) {
+            summary.revisions.push({ path: entry.path, newPath: entry.newPath || entry.path, reason: entry.reason });
+        }
+        return { exitCode: 0, report: { ok: true, ...summary, note: 'dry-run：校验通过，未做任何修改（--apply 执行）' } };
+    }
+
+    // apply：必须持 cleanup 租约（§3.6.2），防与进修并发。
+    const { createExpertLeaseManager } = require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/maintenanceLock'));
+    const leaseManager = createExpertLeaseManager({ baseDir: forgeRoot });
+    const leaseOwner = `m3_disposition_${Date.now()}`;
+    const lease = leaseManager.acquire({ expertName, ownerJobId: leaseOwner, mode: 'cleanup', detached: true });
+    let releaseLease = () => lease.release();
+    try {
+        for (const entry of plan.quarantine || []) {
+            const fileName = path.basename(entry.path);
+            const library = path.basename(path.dirname(entry.path));
+            const toPath = path.join(forgeRoot, expertName, 'quarantine', library, fileName);
+            assertOutsideKnowledge(toPath, knowledgeRoot);
+            const record = await moveKnowledgeFile({
+                ledger, from: path.join(knowledgeRoot, entry.path), to: toPath,
+                reason: entry.reason, fromState: STATES.ACTIVE_LEGACY, toState: STATES.QUARANTINE,
+                knowledgeRoot
+            });
+            summary.moves.push({ action: 'quarantine', path: entry.path, to: toPath, recordId: record.id });
+        }
+        for (const entry of plan.review || []) {
+            const fileName = path.basename(entry.path);
+            const library = path.basename(path.dirname(entry.path));
+            const toPath = path.join(forgeRoot, expertName, 'review', library, fileName);
+            assertOutsideKnowledge(toPath, knowledgeRoot);
+            const record = await moveKnowledgeFile({
+                ledger, from: path.join(knowledgeRoot, entry.path), to: toPath,
+                reason: entry.reason, fromState: STATES.ACTIVE_LEGACY, toState: STATES.NEEDS_REVIEW,
+                knowledgeRoot
+            });
+            summary.moves.push({ action: 'review', path: entry.path, to: toPath, recordId: record.id });
+        }
+        for (const entry of plan.revise || []) {
+            const abs = path.join(knowledgeRoot, entry.path);
+            const oldContent = await fsp.readFile(abs, 'utf-8');
+            const oldHash = `sha256:${crypto.createHash('sha256').update(oldContent).digest('hex')}`;
+            const newHash = `sha256:${crypto.createHash('sha256').update(entry.newContent).digest('hex')}`;
+            // 修订（含可选改名）是 active-legacy → active 的内容替换，
+            // 物理位置不变（仍在 knowledge/ 内）——不走 moveKnowledgeFile 状态迁移；
+            // 旧内容哈希入台账，可从备份回退。
+            const targetAbs = entry.newPath && entry.newPath !== entry.path
+                ? path.join(knowledgeRoot, entry.newPath)
+                : abs;
+            await fsp.writeFile(targetAbs, entry.newContent, 'utf-8');
+            if (targetAbs !== abs) await fsp.rm(abs);
+            await ledger.append({
+                action: 'revise', path: entry.newPath || entry.path, oldPath: entry.path,
+                oldContentHash: oldHash, newContentHash: newHash,
+                reason: entry.reason, evidenceRefs: entry.evidenceRefs || []
+            });
+            summary.revisions.push({ path: entry.path, newPath: entry.newPath || entry.path, oldContentHash: oldHash, newContentHash: newHash });
+        }
+        if (plan.mergeProposals?.length) {
+            await ledger.append({
+                action: 'merge-proposal-recorded',
+                proposals: plan.mergeProposals,
+                reason: '内容型合并候选：等待用户复核（红线 6/7），不自动合并'
+            });
+        }
+
+        // 等索引消化（生产 watcher 的 unlink/add 队列）。
+        const quiet = await (require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/knowledgeStates')))
+            .waitForUnlinkConvergence({ pollUnlink, timeoutMs: Number(flags['settle-timeout-ms']) || 5 * 60 * 1000, pollIntervalMs: 3000 });
+        summary.indexConverged = quiet;
+        return { exitCode: quiet ? 0 : 1, report: { ok: quiet, ...summary } };
+    } finally {
+        releaseLease();
+        releaseLease = null;
+    }
+}
+
+
 // ── main ─────────────────────────────────────────────────────────────────
 
 
@@ -353,7 +511,7 @@ function parseArgs(argv) {
 async function main() {
     const [command, ...rest] = process.argv.slice(2);
     const flags = parseArgs(rest);
-    const commands = { inventory: cmdInventory, golden: cmdGolden };
+    const commands = { inventory: cmdInventory, golden: cmdGolden, disposition: cmdDisposition };
     const handler = commands[command];
     if (!handler) {
         process.stderr.write(`未知或缺失子命令：${command || '(none)'}（可用：${Object.keys(commands).join(' / ')}）\n`);
@@ -377,4 +535,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { cmdInventory, cmdGolden, parseFrontmatterLenient, normalizeTitleForDedup };
+module.exports = { cmdInventory, cmdGolden, cmdDisposition, parseFrontmatterLenient, normalizeTitleForDedup };

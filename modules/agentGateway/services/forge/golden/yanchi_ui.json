@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "expert": "yanchi_ui",
   "createdAt": "2026-11-15T00:00:00.000Z",
-  "note": "M2 基线集：每子技能概念/应用/边界 + 偏题负例（隔离前 informational）+ 23 新增/11 变更探针 + 跨库样本 + preview 无来源头探针。负例在 M3 隔离完成后以 --strict-negatives 阻断。",
+  "note": "M2 基线集 + M3 调整：ui-review-application 换为范围内评审流程卡；incremental-new-09/changed-05 因文件偏题隔离而退役（23 新增覆盖降为 22/23、11 变更降为 10/11，均为有意隔离），并新增架构治理负例。",
   "queries": [
     {
       "id": "visual-hierarchy-concept",
@@ -215,12 +215,12 @@
       "id": "ui-review-application",
       "library": "yanchi_ui知识库",
       "subskill": "application",
-      "query": "按优先级决定重大事件的提名方式",
+      "query": "完整设计评审流程包含哪些评审内容",
       "topK": 5,
       "expand": false,
       "kind": "required",
       "requiredSourceFiles": [
-        "yanchi_ui知识库/06_按优先级决定重大事件的提名方式.md"
+        "yanchi_ui知识库/26_完整设计评审流程与评审内容.md"
       ]
     },
     {
@@ -414,18 +414,6 @@
       "kind": "incremental",
       "requiredSourceFiles": [
         "yanchi_ui知识库/K_color-type-tokens_复合令牌与原子-css-输出.md"
-      ]
-    },
-    {
-      "id": "incremental-new-09",
-      "library": "yanchi_ui知识库",
-      "subskill": "design-system-governance",
-      "query": "企业架构视角下的复杂系统治理",
-      "topK": 5,
-      "expand": false,
-      "kind": "incremental",
-      "requiredSourceFiles": [
-        "yanchi_ui知识库/K_design-system-governance_企业架构视角下的复杂系统治理.md"
       ]
     },
     {
@@ -645,18 +633,6 @@
       ]
     },
     {
-      "id": "incremental-changed-05",
-      "library": "yanchi_ui知识库",
-      "subskill": "design-system-governance",
-      "query": "api 治理的定义与目标",
-      "topK": 5,
-      "expand": false,
-      "kind": "incremental",
-      "requiredSourceFiles": [
-        "yanchi_ui知识库/K_design-system-governance_api-治理的定义与目标.md"
-      ]
-    },
-    {
       "id": "incremental-changed-06",
       "library": "yanchi_ui知识库",
       "subskill": "layout-grid-typography",
@@ -738,6 +714,20 @@
       "kind": "required",
       "requiredSourceFiles": [
         "yanchi_ui知识库/K_design-system-governance_d2c-工具无法理解企业内部组件库.md"
+      ]
+    },
+    {
+      "id": "negative-arch-governance-sneak",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "治理的定义与团队赋能取向的关系",
+      "topK": 5,
+      "expand": false,
+      "kind": "negative",
+      "forbiddenSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_企业架构视角下的复杂系统治理.md",
+        "yanchi_ui知识库/K_design-system-governance_架构治理的定义.md",
+        "yanchi_ui知识库/K_design-system-governance_api-治理的定义与目标.md"
       ]
     }
   ]
