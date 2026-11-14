@@ -281,7 +281,66 @@ async function cmdInventory(flags) {
     return { exitCode: 0, report };
 }
 
+function requireQuiet(modulePath) {
+    const original = console.log;
+    console.log = () => {};
+    try {
+        return require(modulePath);
+    } finally {
+        console.log = original;
+    }
+}
+
+function silenceNativeStdout() {
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    return () => { process.stdout.write = originalWrite; };
+}
+
+function tdbConfigFor(root, flags) {
+    const maintenance = require(path.join(REPO_ROOT, 'scripts', 'forge_maintenance'));
+    return maintenance.tdbConfig(root, {
+        ...(flags.knowledge ? { rootPath: path.resolve(String(flags.knowledge)) } : {}),
+        ...(flags.store ? { storePath: path.resolve(String(flags.store)) } : {})
+    });
+}
+
+
+// ── golden 检索回归（§2.3.5/§3.2.3，M2.S2 T15） ──────────────────────────
+
+async function cmdGolden(flags) {
+    const root = path.resolve(String(flags.root || REPO_ROOT));
+    const setPath = String(flags.set || path.join(REPO_ROOT, 'modules', 'agentGateway/services/forge/golden/yanchi_ui.json'));
+    const config = {
+        ...tdbConfigFor(root, flags),
+        fullScanOnStartup: false
+    };
+    const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
+    const goldenSet = require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/goldenSet'));
+
+    const parsed = JSON.parse(await fsp.readFile(setPath, 'utf-8'));
+    const queries = goldenSet.loadGoldenSet(parsed);
+    const manager = new TDBKnowledgeManager(config);
+    const originalLog = console.log;
+    console.log = () => {};
+    const restoreNative = silenceNativeStdout();
+    try {
+        await manager.initialize();
+        const report = await goldenSet.runGoldenSet(manager, queries, { strictNegatives: Boolean(flags.strictNegatives) });
+        report.goldenSetPath = setPath;
+        return { exitCode: report.ok ? 0 : 1, report };
+    } finally {
+        await manager.shutdown().catch(() => undefined);
+        console.log = originalLog;
+        restoreNative();
+    }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────
+
+// ── main ─────────────────────────────────────────────────────────────────
+
+
 
 function parseArgs(argv) {
     const flags = {};
@@ -299,7 +358,7 @@ function parseArgs(argv) {
 async function main() {
     const [command, ...rest] = process.argv.slice(2);
     const flags = parseArgs(rest);
-    const commands = { inventory: cmdInventory };
+    const commands = { inventory: cmdInventory, golden: cmdGolden };
     const handler = commands[command];
     if (!handler) {
         process.stderr.write(`未知或缺失子命令：${command || '(none)'}（可用：${Object.keys(commands).join(' / ')}）\n`);
@@ -323,4 +382,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { cmdInventory, parseFrontmatterLenient, normalizeTitleForDedup };
+module.exports = { cmdInventory, cmdGolden, parseFrontmatterLenient, normalizeTitleForDedup };

@@ -8,10 +8,14 @@ const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const chokidar = require('chokidar');
 const { chunkText } = require('./TextChunker');
+const { effectiveOptions: chunkerEffectiveOptions } = require('./TextChunker');
+const { normalizeForIndex, normalizerIdentity } = require('./IndexNormalizer');
 const { getEmbeddingsBatch } = require('./EmbeddingUtils');
 const embeddingProvenance = require('./modules/embeddingProvenance');
 
-const STORE_MANIFEST_SCHEMA_VERSION = 1;
+// §3.1.3 schemaVersion 2：normalizer 与 chunker 有效参数纳入兼容性判定。
+// v1 store（无 normalizer 记录）与 v2 期望不兼容 → 重建（§8.8 全库回归）。
+const STORE_MANIFEST_SCHEMA_VERSION = 2;
 const STORE_MANIFEST_FILE = 'embedding-manifest.json';
 
 function codedError(code, message, detail = {}) {
@@ -160,6 +164,7 @@ class TDBKnowledgeManager {
 
     _expectedStoreManifest() {
         const corpus = this._coldCorpusIdentity();
+        const chunkerOptions = chunkerEffectiveOptions();
         return {
             schemaVersion: STORE_MANIFEST_SCHEMA_VERSION,
             embedding: {
@@ -171,7 +176,11 @@ class TDBKnowledgeManager {
                 root: path.basename(this.config.rootPath),
                 corpusFingerprint: corpus.fingerprint
             },
-            chunker: { version: this._chunkerVersion() }
+            normalizer: normalizerIdentity(),
+            chunker: {
+                version: this._chunkerVersion(),
+                optionsHash: embeddingProvenance.sha256(JSON.stringify(embeddingProvenance.stableValue(chunkerOptions)))
+            }
         };
     }
 
@@ -742,8 +751,16 @@ class TDBKnowledgeManager {
         this._beginLibraryUse(handle);
 
         try {
-            const chunks = chunkText(content).filter(Boolean);
-            if (chunks.length === 0) return;
+            // §3.2.1：raw → normalizeForIndex() → chunkText()。来源头不进入
+            // embedding / BM25 / text_preview / chunk checksum；畸形 frontmatter
+            // 在此显式失败（队列重试/失败），不静默回退为嵌入全部来源头。
+            const normalized = normalizeForIndex(content, { fileName: path.basename(relPath) });
+            const chunks = chunkText(normalized.text).filter(Boolean);
+            if (chunks.length === 0) {
+                throw codedError('TDB_NORMALIZED_EMPTY', `规范化后无有效 chunk：${relPath}`, {
+                    removed: normalized.removed
+                });
+            }
 
             const now = Math.floor(Date.now() / 1000);
             const [docVector] = await getEmbeddingsBatch([path.basename(relPath)], {
@@ -807,7 +824,11 @@ class TDBKnowledgeManager {
 
                     for (let offset = 0; offset < batchChunks.length; offset++) {
                         const vector = vectors[offset];
-                        if (!vector) continue;
+                        if (!vector) {
+                            // §3.2.1：缺向量 = chunk 空洞，按失败处理（队列重试），
+                            // 不得静默跳过留下部分摄取。
+                            throw codedError('TDB_EMBEDDING_VECTOR_MISSING', `chunk 向量缺失：${relPath}#${start + offset}`);
+                        }
                         const index = start + offset;
                         const text = chunks[index];
                         const chunkChecksum = crypto.createHash('sha256').update(text).digest('hex');

@@ -454,4 +454,16 @@ function forceSplitLongText(text, maxTokens, overlapTokens) {
     return chunks.filter(chunk => chunk.length > 0);
 }
 
-module.exports = { chunkText, getTokenCount, encoding };
+/**
+ * 有效分块参数（供 store provenance §3.1.3 使用：maxTokens/overlapTokens/
+ * tokenizer 变更都会改变 chunk 语义，必须参与兼容性判定）。
+ */
+function effectiveOptions() {
+    return Object.freeze({
+        maxTokens: safeMaxTokens,
+        overlapTokens: defaultOverlapTokens,
+        tokenizer: 'cl100k_base'
+    });
+}
+
+module.exports = { chunkText, getTokenCount, encoding, effectiveOptions };

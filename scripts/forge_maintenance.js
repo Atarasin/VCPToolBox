@@ -362,6 +362,7 @@ async function cmdAudit(flags) {
     });
     const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
     const { chunkText } = requireQuiet(path.join(REPO_ROOT, 'TextChunker'));
+    const { normalizeForIndex } = require(path.join(REPO_ROOT, 'IndexNormalizer'));
     const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
     let TriviumDB = null;
     try {
@@ -448,7 +449,8 @@ async function cmdAudit(flags) {
         const rows = chunkRowsByPath.get(relPath);
         if (!rows || rows.length === 0) continue; // layer1 的 new/changed 已覆盖
         const content = await fsp.readFile(path.join(config.rootPath, relPath), 'utf-8');
-        const chunks = chunkText(content).filter(Boolean);
+        // 与摄取管线同源（§3.2.1）：normalizeForIndex → chunkText → filter(Boolean)。
+        const chunks = chunkText(normalizeForIndex(content, { fileName: path.basename(relPath) }).text).filter(Boolean);
         const problems = [];
         if (rows.length !== chunks.length) {
             problems.push(`块数不一致（sqlite=${rows.length}, 重算=${chunks.length}）`);
@@ -531,7 +533,7 @@ async function cmdAudit(flags) {
                 const disk = diskFiles.get(row.path);
                 if (disk) {
                     const content = await fsp.readFile(path.join(config.rootPath, row.path), 'utf-8');
-                    const chunks = chunkText(content).filter(Boolean);
+                    const chunks = chunkText(normalizeForIndex(content, { fileName: path.basename(row.path) }).text).filter(Boolean);
                     const expectedPreview = (chunks[row.chunk_index] || '').slice(0, 500);
                     if (payload.text_preview !== expectedPreview) previewMismatch = `text_preview 不一致（chunk ${row.chunk_index}）`;
                 }
@@ -658,6 +660,7 @@ async function cmdSmoke(flags) {
     });
     const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
     const { chunkText } = requireQuiet(path.join(REPO_ROOT, 'TextChunker'));
+    const { normalizeForIndex } = require(path.join(REPO_ROOT, 'IndexNormalizer'));
     const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
 
     const manager = new TDBKnowledgeManager(config);
@@ -681,7 +684,8 @@ async function cmdSmoke(flags) {
                 continue;
             }
             const content = await fsp.readFile(path.join(config.rootPath, sample.path), 'utf-8');
-            const firstChunk = chunkText(content).filter(Boolean)[0] || content.slice(0, 400);
+            const normalized = normalizeForIndex(content, { fileName: path.basename(sample.path) });
+            const firstChunk = chunkText(normalized.text).filter(Boolean)[0] || normalized.text.slice(0, 400);
             const query = firstChunk.slice(0, 120).replace(/\s+/g, ' ').trim();
             const hits = await manager.search(query, { libraries: [library], topK: 5 });
             const topFile = hits[0]?.sourceFile || null;
