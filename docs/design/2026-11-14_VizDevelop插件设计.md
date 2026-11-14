@@ -247,18 +247,18 @@ prompt:「始」…图片描述原文…「末」
 #### M3.S1 README 与工具分发
 
 依赖：M2.S2
-- [ ] T1 编写 README.md：能力表、配置说明、显影 /admin 运维入口链接（§3.2）
-- [ ] T2 在 toolbox_map.json 中把 VizDevelop 加入收纳箱分组：优先现有媒体/图像类分组，无则新建 VCPVisualToolBox（Q3 定案）
-- [ ] 验收：默认 agent 系统提示词可见 VizDevelop 工具条目并正确拼出调用格式
+- [x] T1 编写 README.md：能力表、配置说明、显影 /admin 运维入口链接（§3.2）
+- [x] T2 在 toolbox_map.json 中把 VizDevelop 加入收纳箱分组：优先现有媒体/图像类分组，无则新建 VCPVisualToolBox（Q3 定案）
+- [x] 验收：默认 agent 系统提示词可见 VizDevelop 工具条目并正确拼出调用格式
 
 #### M3.S2 管理页（跳过，D7 定案）
 
 依赖：M3.S1
-- [ ] T3 按 D7 定案跳过 registerRoutes 管理页；README 提供显影 /admin 运维入口链接，决策记录在案
-- [ ] 验收：README 含 /admin 链接；插件代码无管理页路由（与 D7 定案一致）
+- [x] T3 按 D7 定案跳过 registerRoutes 管理页；README 提供显影 /admin 运维入口链接，决策记录在案
+- [x] 验收：README 含 /admin 链接；插件代码无管理页路由（与 D7 定案一致）
 
 里程碑门禁：
-- [ ] 任一默认 agent 无需特殊配置即可发现并正确调用本插件（经收纳箱分组验证）
+- [x] 任一默认 agent 无需特殊配置即可发现并正确调用本插件（经收纳箱分组验证）
 
 ## 5. 约束与红线
 
