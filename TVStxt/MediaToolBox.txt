@@ -16,7 +16,7 @@ model:「始」(可选) 省略则走服务默认模型；不确定可用命令 l
 
 编辑已有图片：command:「始」edit_image「末」 + 源图二选一 image_input_id（上传所得）或 image_artifact_token（已发布产物），其余必填项同上；可选 mask_input_id / markup_input_id（至多一个）。
 免费命令（command 参数）：health（探活）、list_image_models（模型目录）、create_image_input（上传源图：contentBase64 必须纯 base64，带 data: 前缀会被拒绝）、get_image_operation（凭 operationId 查任务状态与图片 URL）。
-纪律：零自动重试；查询返回 unknown 状态时绝不换 ID 重发，须原样告知用户人工核对。
+纪律：零自动重试；GPT 生图模型（gpt-image 系）调用不稳定，无用户明确要求不要指定使用；查询返回 unknown 状态时绝不换 ID 重发，须原样告知用户人工核对。
 
 ## 2. VCP点歌台 (MusicController)
 用于控制服务器音乐播放。

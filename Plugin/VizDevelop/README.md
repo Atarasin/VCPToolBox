@@ -47,6 +47,7 @@ operationId:「始」img-海报初稿-v1「末」
 - `display_title`（≤60 字符）/ `display_description`（≤240 字符）必填且为公开信息，禁止放密钥或隐私。
 - 零自动重试；查询返回 `unknown` 状态时绝不换 ID 重发，须原样告知用户人工核对。
 - 模型选择默认优先（省略 `model` 走服务默认）；不确定先 `list_image_models` 现查，不凭记忆猜模型名。
+- GPT 生图模型（gpt-image 系）调用不稳定：除非用户明确要求，不要指定使用。
 
 ## 配置说明
 
