@@ -201,6 +201,14 @@ OpenVCPChatBrowser(url)
 ```
 调用使用 `ink=mark_history`。打开后按工具返回的应用协议继续操作；后续支持串行指令。
 
+## 显影图像生成 (VizDevelop)
+接入显影（viz-develop）图像服务：文生图、图片编辑、源图上传与任务查询，是当前唯一启用的生图通道（旧生图插件已停用）。
+生图与编辑为**付费操作**：必须有主人的明确要求才可提交，提交前核对 operationId / display / prompt 完整；纪律与完整调用格式见下。
+{{VCPVizDevelop}}
+- 提交后立即返回 operationId 回执，之后每 1~2 分钟用 `command:get_image_operation + operationId` 轮询，不要连续催促查询。
+- 生成完成的图片是公网 URL：直接用 `<img src="图片URL" width="400">` 在回复里展示给主人。
+- 想换模型时先用 `command:list_image_models` 现查目录，不凭记忆猜模型名。
+
 实验性功能JevCall——
 {{VarJEVTool}}
 
