@@ -191,6 +191,7 @@ function createQualityVerdict(input) {
     if (input.status === 'pass' && issues.some((issue) => issue.blocking)) {
         throw invalid('status', '存在 blocking issue 时不得 pass', 'QualityVerdict');
     }
+    assertNonEmptyString(input?.ruleVersion, 'ruleVersion', 'QualityVerdict');
     return Object.freeze({
         subjectType: input.subjectType,
         subjectId: input.subjectId,
@@ -198,7 +199,7 @@ function createQualityVerdict(input) {
         topic: Object.freeze({ verdict: input.topic.verdict, reason: input.topic.reason }),
         claims: Object.freeze(claims),
         issues: Object.freeze(issues),
-        ruleVersion: input?.ruleVersion ?? RULE_VERSION,
+        ruleVersion: input.ruleVersion,
         createdAt: input?.createdAt ?? new Date().toISOString()
     });
 }

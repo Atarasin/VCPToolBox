@@ -133,10 +133,14 @@ function createDispositionLedger(ledgerPath) {
  * - moveKind=copy 保留原件（candidate 快照场景）；
  * - 返回台账记录与最终路径。
  */
-async function moveKnowledgeFile({ ledger, from, to, reason, fromState, toState, moveKind = 'move' }) {
+async function moveKnowledgeFile({ ledger, from, to, reason, fromState, toState, moveKind = 'move', knowledgeRoot = null }) {
     assertTransition(fromState, toState);
     const fromAbs = path.resolve(from);
     const toAbs = path.resolve(to);
+    // 内置守卫：非活跃目标状态必须在 knowledge 根之外（§2.2 禁止库内隔离）。
+    if (knowledgeRoot && NON_ACTIVE_STATES.has(toState)) {
+        assertOutsideKnowledge(toAbs, knowledgeRoot);
+    }
     if (fs.existsSync(toAbs)) {
         const error = new Error(`目标已存在，拒绝覆盖：${toAbs}`);
         error.code = 'FORGE_KNOWLEDGE_MOVE_TARGET_EXISTS';
@@ -187,7 +191,8 @@ async function demoteFromPublishing({ ledger, activePath, knowledgeRoot, forgeRo
         to: toPath,
         reason: `publishing 失败 demote：${reason}`,
         fromState: STATES.PUBLISHING,
-        toState: STATES.NEEDS_REVIEW
+        toState: STATES.NEEDS_REVIEW,
+        knowledgeRoot
     });
     const converged = await waitForUnlinkConvergence({ pollUnlink, timeoutMs, pollIntervalMs });
     return { record, toPath, converged };

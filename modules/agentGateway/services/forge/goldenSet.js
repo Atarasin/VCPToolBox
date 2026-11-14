@@ -68,7 +68,14 @@ function dcgAtK(relevance) {
 }
 
 function ndcgAtK(hits, relevantPaths, topK) {
-    const relevance = hits.slice(0, topK).map((hit) => (relevantPaths.includes(hit.sourceFile) ? 1 : 0));
+    // 同一文件多 chunk 命中只计一次（按分数序去重），否则 nDCG 会无界超 1。
+    const seen = new Set();
+    const deduped = hits.slice(0, topK).filter((hit) => {
+        if (seen.has(hit.sourceFile)) return false;
+        seen.add(hit.sourceFile);
+        return true;
+    });
+    const relevance = deduped.map((hit) => (relevantPaths.includes(hit.sourceFile) ? 1 : 0));
     const dcg = dcgAtK(relevance);
     const ideal = dcgAtK(new Array(Math.min(relevantPaths.length, topK)).fill(1));
     return ideal > 0 ? dcg / ideal : 0;
@@ -111,6 +118,7 @@ async function runGoldenSet(manager, queries, options = {}) {
             query: query.query,
             hitCount: hits.length,
             topFiles: hits.slice(0, 5).map((hit) => ({ sourceFile: hit.sourceFile, score: Number(hit.score?.toFixed?.(4) ?? hit.score) })),
+            requiredSourceFiles: Array.isArray(query.requiredSourceFiles) ? query.requiredSourceFiles : [],
             error: error ? `${error.code || 'ERROR'}: ${error.message}` : null,
             passed: false,
             verdict: null
@@ -157,7 +165,7 @@ async function runGoldenSet(manager, queries, options = {}) {
     const ndcg = rankable.length ? rankable.reduce((sum, r) => sum + (r.ndcg || 0), 0) / rankable.length : null;
     const noise = rankable.length
         ? rankable.reduce((sum, r) => {
-            const noiseHits = r.topFiles.filter((hit) => !(r._required || []).includes(hit.sourceFile)).length;
+            const noiseHits = r.topFiles.filter((hit) => !r.requiredSourceFiles.includes(hit.sourceFile)).length;
             return sum + noiseHits / Math.max(1, r.topFiles.length);
         }, 0) / rankable.length
         : null;
@@ -185,10 +193,11 @@ async function runGoldenSet(manager, queries, options = {}) {
             dimension: manager.config.dimension,
             retrievedAt: new Date().toISOString(),
             expand: false,
-            note: '指标只在同一语料快照 + chunker/embedding/K/alpha/minScore 下比较（§3.2.3）'
+            rankingDefaults: { managerTopKDefault: 10, hybridAlphaDefault: 0.7, minScoreDefault: 0.1, expandDepthDefault: 1 },
+            note: '指标只在同一语料快照 + chunker/embedding/K/alpha/minScore 下比较（§3.2.3）；topK 逐探针显式指定（见每条 query 的 topK 字段），alpha/minScore/expandDepth 未覆写、用 manager 默认'
         },
         results
     };
 }
 
-module.exports = { loadGoldenSet, runGoldenSet, validateGoldenQuery, QUERY_KINDS };
+module.exports = { loadGoldenSet, runGoldenSet, validateGoldenQuery, QUERY_KINDS, ndcgAtK };

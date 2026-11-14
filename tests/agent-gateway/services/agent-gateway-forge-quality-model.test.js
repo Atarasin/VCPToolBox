@@ -40,8 +40,12 @@ test('qualityModel：五个工厂接受合法输入并冻结', () => {
     const verdict = qualityModel.createQualityVerdict({
         subjectType: 'knowledgeUnit', subjectId: 'yanchi_ui知识库/K_x.md', status: 'pass',
         topic: { verdict: 'in_scope', reason: '视觉层级主题在蓝图职责内' },
-        claims: [claim], issues: [], createdAt: ISO
+        claims: [claim], issues: [], ruleVersion: 'forge-quality-v1', createdAt: ISO
     });
+    assert.throws(() => qualityModel.createQualityVerdict({
+        subjectType: 'knowledgeUnit', subjectId: 'x', status: 'pass',
+        topic: { verdict: 'in_scope', reason: 'r' }, claims: [], issues: []
+    }), /ruleVersion/);
     assert.equal(verdict.ruleVersion, 'forge-quality-v1');
 
     const manifest = qualityModel.createPublicationManifest({
@@ -182,4 +186,26 @@ test('knowledgeStates：移动 + 台账 + 拒绝覆盖 + demote 等 unlink 收�
     });
     assert.equal(stuck.converged, false);
     await fsp.rm(base, { recursive: true, force: true });
+});
+
+
+test('knowledgeStates：moveKnowledgeFile 传 knowledgeRoot 时内置库外守卫', async () => {
+    const base = makeTemp();
+    const forgeRoot = path.join(base, 'Agent', 'forge');
+    const knowledgeRoot = path.join(base, 'knowledge', 'yanchi_ui知识库');
+    fs.mkdirSync(knowledgeRoot, { recursive: true });
+    fs.writeFileSync(path.join(knowledgeRoot, 'K_x.md'), '# X\n', 'utf-8');
+    const ledger = knowledgeStates.createDispositionLedger(path.join(forgeRoot, 'ledger.jsonl'));
+    await assert.rejects(
+        knowledgeStates.moveKnowledgeFile({
+            ledger,
+            from: path.join(knowledgeRoot, 'K_x.md'),
+            to: path.join(knowledgeRoot, 'quarantine', 'K_x.md'), // 库内隔离（§2.2 禁止）
+            reason: 'x', fromState: 'active', toState: 'quarantine',
+            knowledgeRoot: path.dirname(knowledgeRoot)
+        }),
+        (error) => error.code === 'FORGE_KNOWLEDGE_ZONE_INSIDE_LIBRARY'
+    );
+    assert.equal(fs.existsSync(path.join(knowledgeRoot, 'K_x.md')), true, '守卫拒绝后原文件不动');
+    await require('node:fs/promises').rm(base, { recursive: true, force: true });
 });

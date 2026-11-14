@@ -113,6 +113,15 @@ test('goldenSet：required/preview/negative 语义与指标（离线建库）', 
                 ]
             });
 
+            // Expand 契约（§3.2.1）：expand:true 必须回读原始全文（含 sources 头）。
+            const expanded = await manager.search('对比度', { libraries: ['UI库'], topK: 5, expand: true });
+            assert.equal(expanded.length > 0, true);
+            assert.equal(expanded[0]._expanded, true);
+            assert.ok(
+                expanded.some((hit) => /fetchedAt|>\s*来源[：:]/.test(String(hit.text || ''))),
+                'expand:true 应回读含来源头（K 卡 fetchedAt 或长文档 > 来源：）的原始全文'
+            );
+
             const report = await goldenSet.runGoldenSet(manager, queries, {});
             assert.equal(report.ok, true, JSON.stringify(report.results, null, 1));
             const req = report.results.find((r) => r.id === 'req-contrast');
@@ -121,6 +130,8 @@ test('goldenSet：required/preview/negative 语义与指标（离线建库）', 
             const prev = report.results.find((r) => r.id === 'prev-no-header');
             assert.equal(prev.sourcesHeaderLeak, false, '规范化后 preview 不得含 sources 头');
             assert.ok(report.summary.mrr > 0);
+            assert.equal(report.summary.noise, 0, '唯一命中即必需文件时 noise 应为 0（修复 r._required 缺陷的回归）');
+            assert.ok(report.summary.ndcg <= 1, 'nDCG 不得超 1（修复同文件多 chunk 去重缺陷的回归）');
             assert.equal(report.provenance.expand, false);
             assert.match(report.provenance.storeManifestHash, /^sha256:/);
         } finally {
@@ -152,12 +163,24 @@ test('goldenSet：随库分发的砚尺基线集本身合法', () => {
     const parsed = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden/yanchi_ui.json'), 'utf-8'));
     const queries = goldenSet.loadGoldenSet(parsed);
     const kinds = queries.reduce((acc, q) => { acc[q.kind] = (acc[q.kind] || 0) + 1; return acc; }, {});
-    assert.equal(queries.length, 59);
-    assert.equal(kinds.required, 20);
+    assert.equal(queries.length, 60);
+    assert.equal(kinds.required, 21);
     assert.equal(kinds.incremental, 34); // 23 新增 + 11 变更
     assert.equal(kinds.negative, 3);
     assert.equal(kinds.preview, 2);
     // 23/11 探针覆盖设计指定的文件集。
     const incrementalFiles = new Set(queries.filter((q) => q.kind === 'incremental').flatMap((q) => q.requiredSourceFiles));
     assert.equal(incrementalFiles.size, 34);
+});
+
+
+test('goldenSet ndcgAtK：同文件多 chunk 命中按文件去重，不得超过 1', () => {
+    const hits = [
+        { sourceFile: 'L/a.md', score: 2 },
+        { sourceFile: 'L/a.md', score: 1.8 },
+        { sourceFile: 'L/b.md', score: 1.5 }
+    ];
+    const value = goldenSet.ndcgAtK(hits, ['L/a.md'], 5);
+    assert.ok(value <= 1, `去重后 nDCG 必须 ≤1，实际 ${value}`);
+    assert.ok(value > 0, '必需文件命中时 nDCG 应 >0');
 });

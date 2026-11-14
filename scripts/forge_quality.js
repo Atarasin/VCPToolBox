@@ -26,19 +26,15 @@ function parseFrontmatterLenient(raw) {
     if (!text.startsWith('---')) {
         return { hasFrontmatter: false, entries: {}, malformed: null };
     }
-    const endMarker = text.slice(3).match(/^(\r?\n)/) ? text.indexOf('\n---', 3) : -1;
-    const crlfClose = text.indexOf('\r\n---', 3);
     let closeAt = -1;
     for (const candidate of [text.indexOf('\n---\n', 3), text.indexOf('\n---\r\n', 3)]) {
         if (candidate !== -1 && (closeAt === -1 || candidate < closeAt)) closeAt = candidate;
     }
-    void endMarker; void crlfClose;
     if (closeAt === -1) {
         return { hasFrontmatter: true, entries: {}, malformed: 'frontmatter 缺少闭合 ---' };
     }
     const body = text.slice(text.indexOf('\n') + 1, closeAt);
     const entries = {};
-    const malformedLines = [];
     let currentKey = null;
     for (const line of body.split(/\r?\n/)) {
         if (!line.trim() || line.trim().startsWith('#')) continue;
@@ -53,7 +49,7 @@ function parseFrontmatterLenient(raw) {
             entries[currentKey].push(line.replace(/^\s+-\s*/, '').trim());
         }
     }
-    return { hasFrontmatter: true, entries, malformed: malformedLines.length ? malformedLines.join('; ') : null };
+    return { hasFrontmatter: true, entries, malformed: null };
 }
 
 function extractSourcesUrls(entries) {
@@ -336,7 +332,6 @@ async function cmdGolden(flags) {
     }
 }
 
-// ── main ─────────────────────────────────────────────────────────────────
 
 // ── main ─────────────────────────────────────────────────────────────────
 

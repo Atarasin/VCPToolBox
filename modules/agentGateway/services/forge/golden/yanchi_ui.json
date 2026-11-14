@@ -323,7 +323,7 @@
     {
       "id": "incremental-new-01",
       "library": "yanchi_ui知识库",
-      "subskill": "01",
+      "subskill": null,
       "query": "移动端 ui 的引导式设计方法",
       "topK": 5,
       "expand": false,
@@ -335,7 +335,7 @@
     {
       "id": "incremental-new-02",
       "library": "yanchi_ui知识库",
-      "subskill": "02",
+      "subskill": null,
       "query": "用sass构建12列栅格系统的方法",
       "topK": 5,
       "expand": false,
@@ -347,7 +347,7 @@
     {
       "id": "incremental-new-03",
       "library": "yanchi_ui知识库",
-      "subskill": "03",
+      "subskill": null,
       "query": "设计令牌从规范到代码的落地流程",
       "topK": 5,
       "expand": false,
@@ -359,7 +359,7 @@
     {
       "id": "incremental-new-04",
       "library": "yanchi_ui知识库",
-      "subskill": "04",
+      "subskill": null,
       "query": "dtcg 令牌构建流水线 一键输出多目标格式",
       "topK": 5,
       "expand": false,
@@ -371,7 +371,7 @@
     {
       "id": "incremental-new-05",
       "library": "yanchi_ui知识库",
-      "subskill": "05",
+      "subskill": null,
       "query": "企业级组件库的可治理建设要素",
       "topK": 5,
       "expand": false,
@@ -383,7 +383,7 @@
     {
       "id": "incremental-new-06",
       "library": "yanchi_ui知识库",
-      "subskill": "06",
+      "subskill": "color-type-tokens",
       "query": "dtcg 三层设计令牌架构 primitive semantic compone",
       "topK": 5,
       "expand": false,
@@ -395,7 +395,7 @@
     {
       "id": "incremental-new-07",
       "library": "yanchi_ui知识库",
-      "subskill": "07",
+      "subskill": "color-type-tokens",
       "query": "z index 层叠顺序令牌",
       "topK": 5,
       "expand": false,
@@ -407,7 +407,7 @@
     {
       "id": "incremental-new-08",
       "library": "yanchi_ui知识库",
-      "subskill": "08",
+      "subskill": "color-type-tokens",
       "query": "复合令牌与原子 css 输出",
       "topK": 5,
       "expand": false,
@@ -419,7 +419,7 @@
     {
       "id": "incremental-new-09",
       "library": "yanchi_ui知识库",
-      "subskill": "09",
+      "subskill": "design-system-governance",
       "query": "企业架构视角下的复杂系统治理",
       "topK": 5,
       "expand": false,
@@ -431,7 +431,7 @@
     {
       "id": "incremental-new-10",
       "library": "yanchi_ui知识库",
-      "subskill": "10",
+      "subskill": "design-system-governance",
       "query": "把组件库当作设计系统的认知偏差",
       "topK": 5,
       "expand": false,
@@ -443,7 +443,7 @@
     {
       "id": "incremental-new-11",
       "library": "yanchi_ui知识库",
-      "subskill": "11",
+      "subskill": "design-system-governance",
       "query": "设计系统治理流程 从组件资产到团队基础设施",
       "topK": 5,
       "expand": false,
@@ -455,7 +455,7 @@
     {
       "id": "incremental-new-12",
       "library": "yanchi_ui知识库",
-      "subskill": "12",
+      "subskill": "interaction-accessibility",
       "query": "wcag 2 2 aa 级无障碍承诺的声明方式",
       "topK": 5,
       "expand": false,
@@ -467,7 +467,7 @@
     {
       "id": "incremental-new-13",
       "library": "yanchi_ui知识库",
-      "subskill": "13",
+      "subskill": "interaction-accessibility",
       "query": "wcag 作为全球无障碍基准的定位",
       "topK": 5,
       "expand": false,
@@ -479,7 +479,7 @@
     {
       "id": "incremental-new-14",
       "library": "yanchi_ui知识库",
-      "subskill": "14",
+      "subskill": "interaction-accessibility",
       "query": "wcag 键盘导航要求的持续更新属性",
       "topK": 5,
       "expand": false,
@@ -491,7 +491,7 @@
     {
       "id": "incremental-new-15",
       "library": "yanchi_ui知识库",
-      "subskill": "15",
+      "subskill": "layout-grid-typography",
       "query": "12列栅格与多断点网页样式设计案例",
       "topK": 5,
       "expand": false,
@@ -503,7 +503,7 @@
     {
       "id": "incremental-new-16",
       "library": "yanchi_ui知识库",
-      "subskill": "16",
+      "subskill": "layout-grid-typography",
       "query": "24列栅格系统适用场景与灵活性",
       "topK": 5,
       "expand": false,
@@ -515,7 +515,7 @@
     {
       "id": "incremental-new-17",
       "library": "yanchi_ui知识库",
-      "subskill": "17",
+      "subskill": "layout-grid-typography",
       "query": "b端后台中栅格系统与间距的依存关系",
       "topK": 5,
       "expand": false,
@@ -527,7 +527,7 @@
     {
       "id": "incremental-new-18",
       "library": "yanchi_ui知识库",
-      "subskill": "18",
+      "subskill": "layout-grid-typography",
       "query": "栅格系统与响应式布局及开发协作的关系",
       "topK": 5,
       "expand": false,
@@ -539,7 +539,7 @@
     {
       "id": "incremental-new-19",
       "library": "yanchi_ui知识库",
-      "subskill": "19",
+      "subskill": "layout-grid-typography",
       "query": "栅格系统对一致性与设计决策效率的价值",
       "topK": 5,
       "expand": false,
@@ -551,7 +551,7 @@
     {
       "id": "incremental-new-20",
       "library": "yanchi_ui知识库",
-      "subskill": "20",
+      "subskill": "layout-grid-typography",
       "query": "栅格系统对多终端适配与视觉一致性的作用",
       "topK": 5,
       "expand": false,
@@ -563,7 +563,7 @@
     {
       "id": "incremental-new-21",
       "library": "yanchi_ui知识库",
-      "subskill": "21",
+      "subskill": "ui-review-priority",
       "query": "p0 p5 优先级分级体系及其局限",
       "topK": 5,
       "expand": false,
@@ -575,7 +575,7 @@
     {
       "id": "incremental-new-22",
       "library": "yanchi_ui知识库",
-      "subskill": "22",
+      "subskill": "visual-hierarchy",
       "query": "混淆扁平化 拟物化 写实与metro ui的层级关系",
       "topK": 5,
       "expand": false,
@@ -587,7 +587,7 @@
     {
       "id": "incremental-new-23",
       "library": "yanchi_ui知识库",
-      "subskill": "23",
+      "subskill": "visual-hierarchy",
       "query": "视觉层级与交互体验的联合优化",
       "topK": 5,
       "expand": false,
@@ -599,7 +599,7 @@
     {
       "id": "incremental-changed-01",
       "library": "yanchi_ui知识库",
-      "subskill": "01",
+      "subskill": "color-type-tokens",
       "query": "wcag 文本色彩对比度要求",
       "topK": 5,
       "expand": false,
@@ -611,7 +611,7 @@
     {
       "id": "incremental-changed-02",
       "library": "yanchi_ui知识库",
-      "subskill": "02",
+      "subskill": "color-type-tokens",
       "query": "设计令牌作为设计与开发的共同工作思维",
       "topK": 5,
       "expand": false,
@@ -623,7 +623,7 @@
     {
       "id": "incremental-changed-03",
       "library": "yanchi_ui知识库",
-      "subskill": "03",
+      "subskill": "color-type-tokens",
       "query": "设计令牌是 ui 元素的构建基块",
       "topK": 5,
       "expand": false,
@@ -635,7 +635,7 @@
     {
       "id": "incremental-changed-04",
       "library": "yanchi_ui知识库",
-      "subskill": "04",
+      "subskill": "color-type-tokens",
       "query": "设计令牌的定义与作用",
       "topK": 5,
       "expand": false,
@@ -647,7 +647,7 @@
     {
       "id": "incremental-changed-05",
       "library": "yanchi_ui知识库",
-      "subskill": "05",
+      "subskill": "design-system-governance",
       "query": "api 治理的定义与目标",
       "topK": 5,
       "expand": false,
@@ -659,7 +659,7 @@
     {
       "id": "incremental-changed-06",
       "library": "yanchi_ui知识库",
-      "subskill": "06",
+      "subskill": "layout-grid-typography",
       "query": "12列栅格与8px水槽的断点一致性",
       "topK": 5,
       "expand": false,
@@ -671,7 +671,7 @@
     {
       "id": "incremental-changed-07",
       "library": "yanchi_ui知识库",
-      "subskill": "07",
+      "subskill": "layout-grid-typography",
       "query": "24 栅格系统的构成公式",
       "topK": 5,
       "expand": false,
@@ -683,7 +683,7 @@
     {
       "id": "incremental-changed-08",
       "library": "yanchi_ui知识库",
-      "subskill": "08",
+      "subskill": "layout-grid-typography",
       "query": "24列栅格的列跨度表示法",
       "topK": 5,
       "expand": false,
@@ -695,7 +695,7 @@
     {
       "id": "incremental-changed-09",
       "library": "yanchi_ui知识库",
-      "subskill": "09",
+      "subskill": "ui-review-priority",
       "query": "直接套用外部 p 级定义导致分级误判",
       "topK": 5,
       "expand": false,
@@ -707,7 +707,7 @@
     {
       "id": "incremental-changed-10",
       "library": "yanchi_ui知识库",
-      "subskill": "10",
+      "subskill": "visual-hierarchy",
       "query": "视觉层次 定义与作用",
       "topK": 5,
       "expand": false,
@@ -719,13 +719,25 @@
     {
       "id": "incremental-changed-11",
       "library": "yanchi_ui知识库",
-      "subskill": "11",
+      "subskill": "visual-hierarchy",
       "query": "视觉层次的设计工具箱 色彩 对比 字体排印与间距",
       "topK": 5,
       "expand": false,
       "kind": "incremental",
       "requiredSourceFiles": [
         "yanchi_ui知识库/K_visual-hierarchy_视觉层次的设计工具箱-色彩-对比-字体排印与间距.md"
+      ]
+    },
+    {
+      "id": "ds-governance-application",
+      "library": "yanchi_ui知识库",
+      "subskill": "design-system-governance",
+      "query": "为什么 D2C 工具无法直接理解企业内部组件库",
+      "topK": 5,
+      "expand": false,
+      "kind": "required",
+      "requiredSourceFiles": [
+        "yanchi_ui知识库/K_design-system-governance_d2c-工具无法理解企业内部组件库.md"
       ]
     }
   ]
