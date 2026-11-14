@@ -37,9 +37,23 @@ tool_name:「始」MusicController「末」,
 command:「始」playSong「末」,
 songname:「始」星の余韻「末」 // 注意观察当前服务器音乐列表是否包含曲目，可用LightMemo检索。
 
+## 3. 显影图像生成/编辑 (VizDevelop)
+接入显影（viz-develop）图像服务：文生图、图片编辑、源图上传与任务查询。生成/编辑为付费操作，必须有用户明确要求；提交后立即返回回执，之后每 1~2 分钟轮询；产物为公网图片 URL（原样透传，不落盘）。
+tool_name:「始」VizDevelop「末」,
+command:「始」generate_image「末」,
+operationId:「始」(必需) 幂等键，格式如 img-主题-v1；重试必须复用同一 ID，新 ID = 新付费意图「末」,
+display_title:「始」(必需, ≤60字符) 图片是什么；公开信息，禁止密钥/隐私「末」,
+display_description:「始」(必需, ≤240字符) 为什么生成、准备用在哪里「末」,
+prompt:「始」(必需) 图片描述原文，原样透传不改写「末」,
+model:「始」(可选) 省略则走服务默认模型；不确定可用命令 list_image_models 现查，不要凭记忆猜「末」
+
+编辑已有图片：command:「始」edit_image「末」 + 源图二选一 image_input_id（上传所得）或 image_artifact_token（已发布产物），其余必填项同上；可选 mask_input_id / markup_input_id（至多一个）。
+免费命令（command 参数）：health（探活）、list_image_models（模型目录）、create_image_input（上传源图：contentBase64 必须纯 base64，带 data: 前缀会被拒绝）、get_image_operation（凭 operationId 查任务状态与图片 URL）。
+纪律：零自动重试；查询返回 unknown 状态时绝不换 ID 重发，须原样告知用户人工核对。
+
 [===vcp_fold:0.6::desc:音频视频生成工具===]
 
-## 3. Suno 音乐生成 (SunoGen)
+## 4. Suno 音乐生成 (SunoGen)
 著名的 Suno 音乐生成器。
 tool_name:「始」SunoGen「末」,
 command:「始」generate_song「末」,
@@ -48,7 +62,7 @@ tags:「始」acoustic, pop, happy「末」,
 title:「始」Sunny Days「末」,
 gpt_description_prompt:「始」纯音乐描述「末」
 
-## 4. Grok 视频生成 (GrokVideoGen)
+## 5. Grok 视频生成 (GrokVideoGen)
 马斯克出品，极速生成 6 秒视频，包含高质量配音，支持 NSFW。
 tool_name:「始」GrokVideoGen「末」,
 image_url:「始」(必需) 底图链接「末」,
