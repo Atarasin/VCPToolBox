@@ -94,7 +94,8 @@ function cmdLock(flags) {
     const manager = createExpertLeaseManager({ baseDir: forgeDirFrom(flags), ...(ttlMs ? { ttlMs } : {}) });
     // detached：CLI 编排进程随即退出，租约不绑定进程存活，
     // 由 TTL + 显式 unlock 管辖（§3.1.2 维护窗口语义）。
-    const handle = manager.acquire({ expertName: expert, ownerJobId: owner, mode, detached: true });
+    // force：允许接管损坏租约（人工恢复专用，正常路径不传）。
+    const handle = manager.acquire({ expertName: expert, ownerJobId: owner, mode, detached: true, force: Boolean(flags.force) });
     return {
         exitCode: 0,
         report: { ok: true, expertName: expert, ownerJobId: owner, mode, leasePath: handle.path, lease: handle.lease }
@@ -475,7 +476,9 @@ async function cmdAudit(flags) {
             issues.push(`L3 库文件缺失: ${dbPath}`);
             continue;
         }
-        const db = new TriviumDB(dbPath, { dim: openDim, dtype: 'f32', syncMode: 'normal', storageMode: 'mmap', autoBuildQuiver: true, loadTextIndex: true });
+        // readOnly：审计是零改动观察——不创建 WAL、不修改任何库文件
+        //（triviumdb accessMode 语义），可与运行中的生产进程共存。
+        const db = new TriviumDB(dbPath, { dim: openDim, dtype: 'f32', syncMode: 'normal', storageMode: 'mmap', autoBuildQuiver: true, loadTextIndex: true, accessMode: 'readOnly' });
         try {
             entry.dimension = db.dim();
             if (entry.dimension !== openDim) issues.push(`L3 ${library}: 维度不一致（store=${entry.dimension}, manifest=${openDim}）`);
@@ -608,6 +611,7 @@ async function cmdEstimateRebuild(flags) {
             filesIndexed,
             chunksIndexed,
             embeddingVectors: filesIndexed + chunksIndexed,
+            costNote: `全量重建约需 ${filesIndexed + chunksIndexed} 次 embedding（文档标题 + chunk）；按所用模型单价估算费用（§8.1：耗时和费用需先测算）。`,
             queueStatus: status,
             timedOutMs: timeoutMs,
             errors: silenced.filter(([level]) => level === 'error').map(([, message]) => message).slice(0, 20)

@@ -749,7 +749,14 @@ function createForgeRuntimeService(options = {}) {
                             subskillIds: result.state.gaps.map((gap) => gap.subskillId)
                         });
                     } catch (error) {
-                        log('forge.learn.schedule_failed', { jobId, message: error.message });
+                        if (error.code === 'FORGE_EXPERT_WRITE_PAUSED') {
+                            // learn-retest 收尾时本 job 仍持租约，回填撞自身互斥：
+                            // 缺口保持 open（closeGaps 只在进修成功后执行），
+                            // 下轮调度（§3.6.2 调度前检查放行）会重试——不算失败。
+                            log('forge.learn.backfill_deferred', { jobId, message: error.message });
+                        } else {
+                            log('forge.learn.schedule_failed', { jobId, message: error.message });
+                        }
                     }
                 }
                 log('forge.step.completed', {

@@ -97,7 +97,7 @@ test('maintenanceLock：过期租约可被接管，superseded 留痕', () => {
     takeover.release();
 });
 
-test('maintenanceLock：持约进程已死可接管；损坏租约保守拒绝', () => {
+test('maintenanceLock：持约进程已死可接管；损坏租约保守拒绝、--force 可人工接管', () => {
     const baseDir = createTempDir();
     // PID 已死（取一个几乎不可能存活的 PID）。
     writeLease(baseDir, 'e1', {
@@ -109,13 +109,39 @@ test('maintenanceLock：持约进程已死可接管；损坏租约保守拒绝',
     assert.equal(JSON.parse(fs.readFileSync(takeover.path, 'utf-8')).superseded.reason, 'pid-dead');
     takeover.release();
 
-    // 损坏文件：无法判定过期/PID → 保守拒绝写入。
+    // 损坏文件：无法判定过期/PID → 保守拒绝写入；force 显式接管（留痕）。
     const file = leasePath(baseDir, 'e1');
     fs.writeFileSync(file, '{not json', 'utf-8');
     assert.throws(
         () => createExpertLeaseManager({ baseDir, ttlMs: 60_000 }).acquire({ expertName: 'e1', ownerJobId: 'job_z', mode: 'learn' }),
         (error) => error.code === 'FORGE_EXPERT_WRITE_PAUSED' && /损坏/.test(error.message)
     );
+    const forced = createExpertLeaseManager({ baseDir, ttlMs: 60_000 })
+        .acquire({ expertName: 'e1', ownerJobId: 'job_force', mode: 'rebuild', force: true });
+    const forcedLease = JSON.parse(fs.readFileSync(forced.path, 'utf-8'));
+    assert.equal(forcedLease.ownerJobId, 'job_force');
+    assert.equal(forcedLease.superseded.reason, 'force-corrupted');
+    forced.release();
+});
+
+test('maintenanceLock：同 owner 跨进程续期时死 pid 被改写为本进程', () => {
+    const baseDir = createTempDir();
+    // 模拟：旧进程（pid 已死）崩溃时持有的 learn 租约，resume 后同 jobId 续期。
+    writeLease(baseDir, 'e1', {
+        ownerJobId: 'job_r', mode: 'learn', pid: 3_999_998,
+        heartbeatAt: new Date().toISOString(), expiresAt: Date.now() + 600_000
+    });
+    const manager = createExpertLeaseManager({ baseDir, ttlMs: 60_000 });
+    const handle = manager.acquire({ expertName: 'e1', ownerJobId: 'job_r', mode: 'learn' });
+    const lease = JSON.parse(fs.readFileSync(handle.path, 'utf-8'));
+    assert.equal(lease.pid, process.pid);
+    assert.equal(lease.superseded.reason, 'pid-dead-resume');
+    // 改写后第三方不再能按 pid-dead 接管。
+    assert.throws(
+        () => createExpertLeaseManager({ baseDir, ttlMs: 60_000 }).acquire({ expertName: 'e1', ownerJobId: 'other', mode: 'learn' }),
+        (error) => error.code === 'FORGE_EXPERT_WRITE_PAUSED'
+    );
+    handle.release();
 });
 
 test('maintenanceLock：heartbeat 续期；step 检查对未持有 job 明确报错', () => {

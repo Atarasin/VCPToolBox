@@ -149,8 +149,10 @@ function createExpertLeaseManager(options = {}) {
      * 其余抛 ForgeWritePausedError。
      * detached=true 供维护 CLI 编排：租约不绑定进程存活（pid=0），
      * 由 TTL + 显式 unlock 管辖——编排者崩溃则等 TTL 自然过期。
+     * force=true 允许接管"损坏"租约（无法判定过期/PID 的文件），
+     * 供人工恢复使用；正常路径绝不自动 force。
      */
-    function acquire({ expertName, ownerJobId, mode, detached = false }) {
+    function acquire({ expertName, ownerJobId, mode, detached = false, force = false }) {
         if (!LEASE_MODES.has(mode)) {
             throw new Error(`无效租约 mode：${mode}（允许 ${[...LEASE_MODES].join(' | ')}）`);
         }
@@ -185,11 +187,20 @@ function createExpertLeaseManager(options = {}) {
             throw new ForgeWritePausedError(expertName, { mode: 'unknown', ownerJobId: null }, '独占创建竞态，稍后重试');
         }
         if (state.lease.ownerJobId === normalizedOwner && !state.corrupted) {
-            // 幂等：同 owner 再次 acquire（如 resume）→ 续期即可（保持原 pid 语义）。
+            // 幂等：同 owner 再次 acquire（如 resume）→ 续期即可。
+            // 记录 pid 若非本进程且已死（旧进程崩溃后同 jobId 续跑），
+            // 改写为当前 pid——否则第三方按 pid-dead 接管会拿走运行中任务的写权。
+            const recordedPid = Number(state.lease.pid);
+            const stalePid = Number.isInteger(recordedPid)
+                && recordedPid !== process.pid
+                && isPidAlive(recordedPid) === false;
             const refreshedLease = {
                 ...buildLease({ expertName, ownerJobId: normalizedOwner, mode, detached }),
                 acquiredAt: state.lease.acquiredAt,
-                pid: Number.isInteger(Number(state.lease.pid)) ? state.lease.pid : process.pid
+                pid: stalePid ? process.pid : (Number.isInteger(recordedPid) ? recordedPid : process.pid),
+                superseded: stalePid
+                    ? { ownerJobId: state.lease.ownerJobId, mode: state.lease.mode, reason: 'pid-dead-resume', at: new Date(now()).toISOString() }
+                    : (state.lease.superseded || null)
             };
             writeJsonAtomic(file, refreshedLease);
             return register(expertName, normalizedOwner, refreshedLease);
@@ -211,10 +222,27 @@ function createExpertLeaseManager(options = {}) {
             writeJsonAtomic(file, takeover);
             return register(expertName, normalizedOwner, takeover);
         }
+        if (state.corrupted && force) {
+            // 人工恢复：损坏租约显式接管，被顶替内容留痕（能读多少记多少）。
+            const takeover = buildLease({
+                expertName,
+                ownerJobId: normalizedOwner,
+                mode,
+                detached,
+                superseded: {
+                    ownerJobId: state.lease?.ownerJobId || null,
+                    mode: state.lease?.mode || 'corrupted',
+                    reason: 'force-corrupted',
+                    at: new Date(now()).toISOString()
+                }
+            });
+            writeJsonAtomic(file, takeover);
+            return register(expertName, normalizedOwner, takeover);
+        }
         throw new ForgeWritePausedError(
             expertName,
             state.lease,
-            state.corrupted ? '租约文件损坏（人工清理或 --force 接管后重试）' : null
+            state.corrupted ? '租约文件损坏（人工清理文件或 lock --force 接管后重试）' : null
         );
     }
 
