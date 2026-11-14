@@ -199,25 +199,25 @@ prompt:「始」…图片描述原文…「末」
 #### M1.S1 manifest 与配置骨架
 
 依赖：无
-- [ ] T1 编写 plugin-manifest.json（§3.1：hybridservice/direct、2 条 invocationCommands、configSchema 5 键）
-- [ ] T2 落地 config.env（真实 token，不入库）与 config.env.example（§3.2）
-- [ ] 验收：VCP 启动日志显示插件加载成功，AdminPanel 插件列表出现 VizDevelop 且无报错
+- [x] T1 编写 plugin-manifest.json（§3.1：hybridservice/direct、2 条 invocationCommands、configSchema 5 键）
+- [x] T2 落地 config.env（真实 token，不入库）与 config.env.example（§3.2）
+- [x] 验收：VCP 启动日志显示插件加载成功，AdminPanel 插件列表出现 VizDevelop 且无报错
 
 #### M1.S2 MCP 客户端核心
 
 依赖：M1.S1
-- [ ] T3 实现 callTool(name, args, timeout)：fetch POST /mcp 直发 tools/call、SSE/JSON 双格式解析、initialize 预握手兜底（§3.3）
-- [ ] T4 错误整形与 token 脱敏 safeError（§3.6）
-- [ ] 验收：独立脚本调用 viz_list_image_models 返回模型目录；401/超时错误信息中不含 token
+- [x] T3 实现 callTool(name, args, timeout)：fetch POST /mcp 直发 tools/call、SSE/JSON 双格式解析、initialize 预握手兜底（§3.3）
+- [x] T4 错误整形与 token 脱敏 safeError（§3.6）
+- [x] 验收：独立脚本调用 viz_list_image_models 返回模型目录；401/超时错误信息中不含 token
 
 #### M1.S3 只读命令接线
 
 依赖：M1.S2
-- [ ] T5 命令分发器 + health / list_image_models 两个只读命令（§3.4）
-- [ ] 验收：VCP 对话中经「始」「末」协议调用 VizDevelop list_image_models 成功返回模型目录
+- [x] T5 命令分发器 + health / list_image_models 两个只读命令（§3.4）
+- [x] 验收：VCP 对话中经「始」「末」协议调用 VizDevelop list_image_models 成功返回模型目录
 
 里程碑门禁：
-- [ ] 停掉显影服务后重启 VCP：插件加载不报错，命令返回清晰错误与 health 指引
+- [x] 停掉显影服务后重启 VCP：插件加载不报错，命令返回清晰错误与 health 指引
 
 ### M2：图像命令与付费护栏
 
