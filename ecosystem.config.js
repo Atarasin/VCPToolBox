@@ -16,6 +16,10 @@ const NODE_INTERPRETER = process.env.VCP_NODE_INTERPRETER || process.execPath;
 // 显式清空代理变量，避免本地回环请求被错误转发到宿主代理。
 const proxylessEnv = {
   NODE_ENV: 'production',
+  // 本机 IPv6 路由残缺，Node fetch 会间歇卡死在不通的 AAAA 地址上
+  // （ParallelSearch 的 ETIMEDOUT 根因）；实测 ipv4first 单独不够，
+  // 必须同时关闭 Happy-Eyeballs 地址竞速才能稳定（8/8→10/10）。
+  NODE_OPTIONS: '--dns-result-order=ipv4first --no-network-family-autoselection',
   HTTP_PROXY: '',
   HTTPS_PROXY: '',
   ALL_PROXY: '',

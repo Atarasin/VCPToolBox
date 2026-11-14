@@ -83,6 +83,7 @@
     "node-imap": "^0.9.6",
     "node-schedule": "^2.1.1",
     "pdf-parse": "^2.2.16",
+    "pdfjs-dist": "^5.7.284",
     "pm2": "^7.1.1",
     "proper-lockfile": "^4.1.2",
     "puppeteer": "^25.16.0",
