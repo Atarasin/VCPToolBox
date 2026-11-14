@@ -206,9 +206,9 @@ prompt:「始」…图片描述原文…「末」
 #### M1.S2 MCP 客户端核心
 
 依赖：M1.S1
-- [ ] T3 实现 callTool(name, args, timeout)：fetch POST /mcp 直发 tools/call、SSE/JSON 双格式解析、initialize 预握手兜底（§3.3）
-- [ ] T4 错误整形与 token 脱敏 safeError（§3.6）
-- [ ] 验收：独立脚本调用 viz_list_image_models 返回模型目录；401/超时错误信息中不含 token
+- [x] T3 实现 callTool(name, args, timeout)：fetch POST /mcp 直发 tools/call、SSE/JSON 双格式解析、initialize 预握手兜底（§3.3）
+- [x] T4 错误整形与 token 脱敏 safeError（§3.6）
+- [x] 验收：独立脚本调用 viz_list_image_models 返回模型目录；401/超时错误信息中不含 token
 
 #### M1.S3 只读命令接线
 
