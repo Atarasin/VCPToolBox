@@ -15,6 +15,14 @@
 
 const { createMcpClient, VizMcpError, safeStringify } = require('./lib/mcpClient.js');
 
+/** 插件层参数护栏拒绝（§3.5）：不发网络请求，message 本身即给 AI 的修正指引。 */
+class GuardError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'GuardError';
+    }
+}
+
 // --- 配置（由 Plugin.js initialize(config) 注入，模块内不读 process.env）---
 let cfg = null;
 let client = null;
@@ -50,7 +58,9 @@ function success(text) {
 function mapError(error) {
     const redact = s => safeStringify(s, cfg?.VIZ_DEVELOP_AUTH_TOKEN);
     let message;
-    if (error instanceof VizMcpError) {
+    if (error instanceof GuardError) {
+        message = redact(error.message);
+    } else if (error instanceof VizMcpError) {
         if (error.category === 'tool') {
             // 显影结构化业务/校验错误：原样透传，不概括不改写（§3.6）。
             const detail = error.detail !== undefined ? error.detail : error.message;
@@ -76,8 +86,8 @@ function mapError(error) {
 // ---------------------------------------------------------------------------
 
 /** health：GET /healthz 探活，返回 ok / service / artifacts / projects 摘要。fast 档。 */
-async function cmdHealth() {
-    const h = await client.health(cfg.VIZ_DEVELOP_TIMEOUT_FAST_MS);
+async function cmdHealth(_data, timeoutMs) {
+    const h = await client.health(timeoutMs);
     const icon = h.ok === true ? '✅' : '⚠️';
     return `${icon} 显影服务健康检查\n\n` + [
         `- ok: ${h.ok}`,
@@ -88,19 +98,76 @@ async function cmdHealth() {
 }
 
 /** list_image_models：透传 defaultModel + models 目录（含各路由能力字段）。fast 档。 */
-async function cmdListImageModels() {
-    const r = await client.callTool('viz_list_image_models', {}, cfg.VIZ_DEVELOP_TIMEOUT_FAST_MS);
+async function cmdListImageModels(_data, timeoutMs) {
+    const r = await client.callTool('viz_list_image_models', {}, timeoutMs);
     const routes = (Array.isArray(r.models) ? r.models : [])
         .map(m => `- ${m.routeId}${m.default ? '（服务默认）' : ''}：${(m.operations || []).join('/')}，输出 ${(m.outputFormats || []).join('/')}`)
         .join('\n');
     return `显影图像模型目录（默认模型：${r.defaultModel}，共 ${(r.models || []).length} 个路由）：\n\n${routes}\n\n完整能力目录（含尺寸规则等，原样透传）：\n\`\`\`json\n${JSON.stringify(r, null, 2)}\n\`\`\``;
 }
 
-// 命令表：command → { handler, 时档 }。M2 将补 create_image_input / get_image_operation /
-// generate_image / edit_image。
+/** create_image_input：上传源图（纯 base64，拒绝 data: 前缀）。fast 档（§3.4 命令 3）。 */
+async function cmdCreateImageInput(data, timeoutMs) {
+    const contentBase64 = typeof data.contentBase64 === 'string' ? data.contentBase64.trim() : '';
+    if (!contentBase64) {
+        throw new GuardError('create_image_input 需要参数 contentBase64（纯 base64 图片内容，不带 data: 前缀）');
+    }
+    if (/^data:/i.test(contentBase64)) {
+        throw new GuardError('contentBase64 必须是纯 base64（服务端契约拒绝 data URL）。请去掉开头的 "data:image/...;base64," 前缀后重发');
+    }
+    const args = { contentBase64: data.contentBase64 };
+    if (data.filename !== undefined && data.filename !== '') args.filename = String(data.filename);
+    if (data.mimeType !== undefined && data.mimeType !== '') args.mimeType = String(data.mimeType);
+    const r = await client.callTool('viz_create_image_input', args, timeoutMs);
+    return `✅ 源图已上传（inputId 可用于 edit_image 的 image_input_id）\n\n` + [
+        `- inputId: ${r.inputId}`,
+        `- mimeType: ${r.mimeType}`,
+        `- 尺寸: ${r.width}x${r.height}`,
+        `- bytes: ${r.bytes}`,
+        `- sha256: ${r.sha256}`
+    ].join('\n');
+}
+
+/** get_image_operation：凭 operationId 只读查询透传。fast 档（§3.4 命令 4）。 */
+async function cmdGetImageOperation(data, timeoutMs) {
+    const operationId = String(data.operationId || '').trim();
+    if (!operationId) {
+        throw new GuardError('get_image_operation 需要参数 operationId');
+    }
+    const r = await client.callTool('viz_get_image_operation', { operationId }, timeoutMs);
+    const lines = [`显影任务查询（operationId: ${operationId}）\n`];
+    lines.push(`- status: ${r.status}${r.outcome !== undefined ? ` | outcome: ${r.outcome}` : ''}`);
+    if (r.upstreamAttempts !== undefined) lines.push(`- upstreamAttempts: ${r.upstreamAttempts}`);
+    if (Array.isArray(r.images) && r.images.length > 0) {
+        lines.push(`- 图片（${r.images.length} 张，公网 URL 原样透传）：`);
+        for (const img of r.images) {
+            const meta = [img.width, img.height].filter(v => v !== undefined).join('x');
+            lines.push(`  - ${img.url}${meta ? `（${meta}）` : ''}${img.sha256 ? ` sha256=${String(img.sha256).slice(0, 16)}…` : ''}`);
+        }
+    }
+    if (Array.isArray(r.previews) && r.previews.length > 0) {
+        lines.push(`- 当前有效预览（${r.previews.length} 个）：`);
+        for (const p of r.previews) lines.push(`  - ${typeof p === 'string' ? p : JSON.stringify(p)}`);
+    }
+    if (r.error !== undefined && r.error !== null) {
+        lines.push(`- error（原样透传）：${typeof r.error === 'string' ? r.error : JSON.stringify(r.error)}`);
+    }
+    if (r.status === 'unknown') {
+        // R2 纪律：unknown 状态绝不换 ID 重发（费用可能已发生），必须人工核对。
+        lines.push(`\n⚠️ 该 operationId 在服务端状态为 unknown：请原样告知用户人工核对，禁止换新 operationId 重发。`);
+    } else if (['queued', 'running', 'pending', 'executing', 'dispatching'].includes(String(r.status).toLowerCase())) {
+        lines.push(`\n提示：任务未完成，可每 1~2 分钟重新查询（command:get_image_operation + operationId）。`);
+    }
+    lines.push(`\n<details>完整记录（原样透传）：\n\`\`\`json\n${JSON.stringify(r, null, 2)}\n\`\`\`\n</details>`);
+    return lines.join('\n');
+}
+
+// 命令表：command → { handler, 时档 }。generate_image / edit_image 由 M2.S2 接入。
 const COMMANDS = {
     health: { handler: cmdHealth, tier: 'fast' },
-    list_image_models: { handler: cmdListImageModels, tier: 'fast' }
+    list_image_models: { handler: cmdListImageModels, tier: 'fast' },
+    create_image_input: { handler: cmdCreateImageInput, tier: 'fast' },
+    get_image_operation: { handler: cmdGetImageOperation, tier: 'fast' }
 };
 
 const SUPPORTED = 'health / list_image_models / create_image_input / get_image_operation / generate_image / edit_image';
@@ -119,8 +186,11 @@ async function processToolCall(data, _context = {}) {
     if (!client) {
         return { status: 'error', error: 'VizDevelop: 缺少 VIZ_DEVELOP_AUTH_TOKEN 配置，无法连接显影服务。建议：在插件目录 config.env 填入显影服务 config/auth-token 的内容后重载插件。' };
     }
+    const timeoutMs = entry.tier === 'slow'
+        ? cfg.VIZ_DEVELOP_TIMEOUT_SLOW_MS
+        : cfg.VIZ_DEVELOP_TIMEOUT_FAST_MS;
     try {
-        return success(await entry.handler(data));
+        return success(await entry.handler(data, timeoutMs));
     } catch (error) {
         return mapError(error);
     }

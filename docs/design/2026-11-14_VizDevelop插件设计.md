@@ -226,9 +226,9 @@ prompt:「始」…图片描述原文…「末」
 #### M2.S1 免费图像命令
 
 依赖：M1.S3
-- [ ] T1 create_image_input：纯 base64 校验（拒绝 data: 前缀）（§3.4）
-- [ ] T2 get_image_operation：只读查询透传（§3.4）
-- [ ] 验收：上传测试图片返回 inputId；凭 operationId 查询到真实状态
+- [x] T1 create_image_input：纯 base64 校验（拒绝 data: 前缀）（§3.4）
+- [x] T2 get_image_operation：只读查询透传（§3.4）
+- [x] 验收：上传测试图片返回 inputId；凭 operationId 查询到真实状态
 
 #### M2.S2 付费图像 submit/query
 
