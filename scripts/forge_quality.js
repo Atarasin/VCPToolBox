@@ -393,14 +393,12 @@ async function cmdDisposition(flags) {
     const missingMerge = (plan.mergeProposals || [])
         .flatMap((entry) => entry.paths.map((rel) => ({ path: rel, entry })))
         .filter(({ path: rel }) => !fs.existsSync(path.join(knowledgeRoot, rel)) && !zoneAlready(rel));
-    const allMissing = [...missing, ...missingRevise, ...missingMerge.map((m) => m.entry).filter(() => false).map(() => ({ path: '' }))];
     if (missing.length + missingRevise.length) {
         throw new Error(`计划引用了不存在的文件：${[...missing, ...missingRevise].map((entry) => entry.path).join(', ')}`);
     }
     if (missingMerge.length) {
         throw new Error(`合并候选引用了不存在的文件：${missingMerge.map((m) => m.path).join(', ')}`);
     }
-    void allMissing;
 
     // 证据归档存在性（红线 3：修订声称的证据必须真实在盘）。
     const missingEvidence = (plan.revise || [])
@@ -455,10 +453,15 @@ async function cmdDisposition(flags) {
     const lease = leaseManager.acquire({ expertName, ownerJobId: leaseOwner, mode: 'cleanup', detached: true });
     let releaseLease = () => lease.release();
     try {
+        const skipped = [];
         for (const entry of plan.quarantine || []) {
             const fileName = path.basename(entry.path);
             const library = path.basename(path.dirname(entry.path));
             const toPath = path.join(forgeRoot, expertName, 'quarantine', library, fileName);
+            if (zoneAlready(entry.path) || !fs.existsSync(path.join(knowledgeRoot, entry.path))) {
+                skipped.push({ action: 'quarantine', path: entry.path, note: '已处置（幂等跳过）' });
+                continue; // 断点重跑：已在隔离区/已移出的条目不重复处理
+            }
             assertOutsideKnowledge(toPath, knowledgeRoot);
             const record = await moveKnowledgeFile({
                 ledger, from: path.join(knowledgeRoot, entry.path), to: toPath,
@@ -471,6 +474,10 @@ async function cmdDisposition(flags) {
             const fileName = path.basename(entry.path);
             const library = path.basename(path.dirname(entry.path));
             const toPath = path.join(forgeRoot, expertName, 'review', library, fileName);
+            if (zoneAlready(entry.path) || !fs.existsSync(path.join(knowledgeRoot, entry.path))) {
+                skipped.push({ action: 'review', path: entry.path, note: '已处置（幂等跳过）' });
+                continue;
+            }
             assertOutsideKnowledge(toPath, knowledgeRoot);
             const record = await moveKnowledgeFile({
                 ledger, from: path.join(knowledgeRoot, entry.path), to: toPath,
@@ -481,6 +488,11 @@ async function cmdDisposition(flags) {
         }
         for (const entry of plan.revise || []) {
             const abs = path.join(knowledgeRoot, entry.path);
+            const targetRel = entry.newPath || entry.path;
+            if (!fs.existsSync(abs) && fs.existsSync(path.join(knowledgeRoot, targetRel))) {
+                skipped.push({ action: 'revise', path: entry.path, note: '已处置（幂等跳过）' });
+                continue; // 旧路径已消失且新路径在 → 上轮已修订
+            }
             const oldContent = await fsp.readFile(abs, 'utf-8');
             const oldHash = `sha256:${crypto.createHash('sha256').update(oldContent).digest('hex')}`;
             const newHash = `sha256:${crypto.createHash('sha256').update(entry.newContent).digest('hex')}`;
@@ -536,6 +548,7 @@ async function cmdDisposition(flags) {
         const quiet = await (require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/knowledgeStates')))
             .waitForUnlinkConvergence({ pollUnlink: pollWithFailed, timeoutMs: Number(flags['settle-timeout-ms']) || 5 * 60 * 1000, pollIntervalMs: 3000 });
         summary.indexConverged = quiet;
+        summary.skipped = skipped;
         return { exitCode: quiet ? 0 : 1, report: { ok: quiet, ...summary } };
     } finally {
         releaseLease();

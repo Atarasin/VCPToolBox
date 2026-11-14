@@ -6,25 +6,27 @@
       "file": "docs/m3-evidence/w3c-understanding-1-4-3-contrast-minimum.md",
       "url": "https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html",
       "fetchedAt": "2026-11-15T04:55:00.000Z",
-      "contentHash": "sha256:eae41cf8629d384ee7e24e61ad5a526251201e8c14693485385a9df466eb74d2",
+      "contentHash": "sha256:e968c27c2045d92435ad460820c0b0bc4ba7a6143cd8913f07efcf1956accc5f",
       "quotes": [
         "Large-scale text and images of large-scale text have a contrast ratio of at least 3:1",
         "with at least 18 point or 14 point bold or font size that would yield equivalent size for Chinese, Japanese and Korean (CJK) fonts",
         "The ratio between sizes in points and CSS pixels is 1pt = 1.333px, therefore 14pt and 18pt are equivalent to approximately 18.5px and 24px",
         "roughly equivalent to 1.2 and 1.5 em or to 120% or 150% of the default size for body text"
-      ]
+      ],
+      "archiveLevel": "关键引文+规范全文段落"
     },
     {
       "file": "docs/m3-evidence/w3c-understanding-2-1-1-keyboard.md",
       "url": "https://www.w3.org/WAI/WCAG22/Understanding/keyboard.html",
       "fetchedAt": "2026-11-15T04:56:00.000Z",
-      "contentHash": "sha256:fa101541c789540ec2b672bdd07524976e3bb01af800f4b9240b22bd53767f95",
+      "contentHash": "sha256:4200bf14986e84d3f2a6eaf5275025175c1871dcbdc217cd16952acf4f3fdc32",
       "quotes": [
         "All functionality of the content is operable through a keyboard interface without requiring specific timings for individual keystrokes, except where the underlying function requires input that depends on the path of the user's movement and not just the endpoints.",
         "Free hand drawing, or watercolor painting require path dependent input.",
         "Drawing straight lines, regular geometric shapes, re-sizing windows and dragging objects to a location (when the path to that location is not relevant) do not require path dependent input.",
         "Example 2: A drag and Drop Feature — An application that uses drag and drop also supports \"cut\" and \"paste\" or form controls to move objects."
-      ]
+      ],
+      "archiveLevel": "关键引文+规范全文段落"
     },
     {
       "file": "docs/m3-evidence/w3c-new-in-22.md",
