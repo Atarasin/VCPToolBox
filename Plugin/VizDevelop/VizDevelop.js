@@ -158,7 +158,7 @@ async function cmdGetImageOperation(data, timeoutMs) {
     if (r.error !== undefined && r.error !== null) {
         lines.push(`- error（原样透传）：${typeof r.error === 'string' ? r.error : JSON.stringify(r.error)}`);
     }
-    if (r.status === 'unknown') {
+    if (String(r.status).toLowerCase() === 'unknown') {
         // R2 纪律：unknown 状态绝不换 ID 重发（费用可能已发生），必须人工核对。
         lines.push(`\n⚠️ 该 operationId 在服务端状态为 unknown：请原样告知用户人工核对，禁止换新 operationId 重发。`);
     } else if (['queued', 'running', 'pending', 'executing', 'dispatching'].includes(String(r.status).toLowerCase())) {
@@ -181,7 +181,7 @@ const BOOLEAN_PARAMS = ['stream'];
 const STRING_PARAMS = ['model', 'size', 'outputFormat', 'quality', 'complexity', 'background', 'moderation', 'user'];
 
 /** 付费命令公共护栏：开关 / operationId / display / prompt（§3.5，全部插件层拒绝、不发网络请求）。 */
-function guardPaidCommand(data, { requireImage = false } = {}) {
+function guardPaidCommand(data) {
     if (cfg.VIZ_DEVELOP_ENABLE_IMAGE !== true) {
         throw new GuardError('付费图像命令已被关闭（VIZ_DEVELOP_ENABLE_IMAGE=false），本命令被拦截且未发起任何网络请求。开启方法：在插件目录 config.env 中设置 VIZ_DEVELOP_ENABLE_IMAGE=true，保存后重载插件（AdminPanel 插件管理）或重启 VCP 生效。');
     }
@@ -192,11 +192,12 @@ function guardPaidCommand(data, { requireImage = false } = {}) {
     if (!OPERATION_ID_RE.test(operationId)) {
         throw new GuardError(`operationId "${operationId.slice(0, 40)}" 不符合格式 ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$（字母/数字开头，可含 . _ : -，最长 128 字符）。请修正后重发（同一付费意图请保持同一 ID）。`);
     }
-    const title = String(data.display_title || '').trim();
-    if (!title) throw new GuardError('付费命令必须提供 display_title（公开信息，≤60 字符）：说明图片是什么。禁止填写密钥或隐私。');
+    // display 原文透传（R3 不 trim）：trim 仅用于"是否缺失"判定，长度按原文计，发送原文。
+    const title = data.display_title === undefined || data.display_title === null ? '' : String(data.display_title);
+    if (!title.trim()) throw new GuardError('付费命令必须提供 display_title（公开信息，≤60 字符）：说明图片是什么。禁止填写密钥或隐私。');
     if (title.length > 60) throw new GuardError(`display_title 超长（${title.length} > 60 字符）。请精简为图片内容的简短标题。`);
-    const description = String(data.display_description || '').trim();
-    if (!description) throw new GuardError('付费命令必须提供 display_description（公开信息，≤240 字符）：说明为什么生成、准备用在哪里。禁止填写密钥或隐私。');
+    const description = data.display_description === undefined || data.display_description === null ? '' : String(data.display_description);
+    if (!description.trim()) throw new GuardError('付费命令必须提供 display_description（公开信息，≤240 字符）：说明为什么生成、准备用在哪里。禁止填写密钥或隐私。');
     if (description.length > 240) throw new GuardError(`display_description 超长（${description.length} > 240 字符）。请精简用途说明。`);
     const prompt = typeof data.prompt === 'string' ? data.prompt : '';
     if (!prompt.trim()) throw new GuardError('付费命令必须提供 prompt（图片描述原文，服务端原样透传不 trim 不改写）。');
@@ -212,11 +213,20 @@ function buildMcpArgs(data, base) {
     for (const key of NUMBER_PARAMS) {
         if (data[key] !== undefined && data[key] !== '') {
             const num = Number(data[key]);
-            if (Number.isFinite(num)) args[key] = num;
+            if (!Number.isFinite(num)) {
+                throw new GuardError(`可选参数 ${key} 需要数字，收到 "${String(data[key]).slice(0, 20)}"。请修正后重发（付费命令，请保持同一 operationId）。`);
+            }
+            args[key] = num;
         }
     }
     for (const key of BOOLEAN_PARAMS) {
-        if (data[key] !== undefined && data[key] !== '') args[key] = String(data[key]).toLowerCase() === 'true';
+        if (data[key] !== undefined && data[key] !== '') {
+            const raw = String(data[key]).toLowerCase();
+            if (raw !== 'true' && raw !== 'false') {
+                throw new GuardError(`可选参数 ${key} 需要 true/false，收到 "${String(data[key]).slice(0, 20)}"。请修正后重发（付费命令，请保持同一 operationId）。`);
+            }
+            args[key] = raw === 'true';
+        }
     }
     return args;
 }
