@@ -206,6 +206,9 @@ ip_blacklist.json
 /VectorStore
 /VectorStoreTDB/
 
+# forge/TDB 维护备份（forge_maintenance.js backup 的默认落点，含全量运行数据）
+/backups/
+
 # 插件缓存文件
 # PlaceholderExplorer 的备份与运行时索引可能包含私密值或本机绝对路径，严禁入库。
 Plugin/PlaceholderExplorer/backups/

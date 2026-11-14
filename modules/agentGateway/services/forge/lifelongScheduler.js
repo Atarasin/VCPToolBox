@@ -18,6 +18,8 @@
 
 const schedule = require('node-schedule');
 
+const { assertExpertWritable, ForgeWritePausedError } = require('./maintenanceLock');
+
 const SCHEDULE_PRESETS = Object.freeze({
     daily: '0 4 * * *', // 每天 04:00
     weekly: '0 4 * * 1', // 每周一 04:00
@@ -44,6 +46,24 @@ function createLifelongScheduler({ forgeRuntimeService, gapRegistry, listExpertN
         const expertNames = listExpertNames();
         const launched = [];
         for (const expertName of expertNames) {
+            // 每轮调度前检查维护租约（§3.6.2）：维护期内的专家跳过本轮，
+            // 其余专家照常；被跳过的留明确审计事件，不算 schedule_failed。
+            const forgeBaseDir = forgeRuntimeService?.baseDir;
+            if (forgeBaseDir) {
+                try {
+                    assertExpertWritable(forgeBaseDir, expertName);
+                } catch (error) {
+                    if (error instanceof ForgeWritePausedError) {
+                        auditLogger?.logGatewayOperation?.('forge.learn.write_paused', {
+                            expertName,
+                            trigger,
+                            lease: error.details?.lease || null
+                        });
+                        continue;
+                    }
+                    throw error;
+                }
+            }
             try {
                 const since = await gapRegistry.lastLearningAt(expertName);
                 const result = await forgeRuntimeService.startExpertLearnJob({

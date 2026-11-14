@@ -20,6 +20,11 @@ const {
 } = require('./gapRegistry');
 const { PASS_RATIO } = require('./trial');
 const { isTransientLlmError, resolveLlmRetryPolicy, backoffDelay, sleep } = require('./llmRetry');
+const {
+    ForgeWritePausedError,
+    assertExpertWritable,
+    createExpertLeaseManager
+} = require('./maintenanceLock');
 
 /**
  * forge job 编排服务（§3.2）：
@@ -200,6 +205,9 @@ function createForgeRuntimeService(options = {}) {
 
     const runStore = createRunStore({ baseDir });
     const gapRegistry = createGapRegistry({ baseDir });
+    // 每专家维护租约（§3.6.2）：learn/cleanup/rebuild 写入互斥。
+    // 文件协议跨进程——生产 server 与维护 CLI（forge_maintenance.js）共用。
+    const expertLeaseManager = createExpertLeaseManager({ baseDir });
     // 瞬时失败退避重试策略（2026-10-14）：env 缺省 2 次 / 2s 起，可注入覆盖（测试用）。
     const effectiveLlmRetryPolicy = llmRetryPolicy || resolveLlmRetryPolicy(process.env);
     const effectiveKnowledgeRoot = knowledgeRoot || resolveKnowledgeRoot(baseDir);
@@ -618,6 +626,11 @@ function createForgeRuntimeService(options = {}) {
             }));
 
             try {
+                // 步骤执行前二次检查（§3.6.2）：维护租约接管后，运行中的 learn
+                // job 在下一个步骤边界停下（可续跑），不再继续写库。
+                if (runRecord.jobKind === 'expert.learn' && runRecord.expertName) {
+                    expertLeaseManager.ensureStepLease(jobId, runRecord.expertName);
+                }
                 const ctx = {
                     jobId,
                     jobKind: runRecord.jobKind,
@@ -736,7 +749,14 @@ function createForgeRuntimeService(options = {}) {
                             subskillIds: result.state.gaps.map((gap) => gap.subskillId)
                         });
                     } catch (error) {
-                        log('forge.learn.schedule_failed', { jobId, message: error.message });
+                        if (error.code === 'FORGE_EXPERT_WRITE_PAUSED') {
+                            // learn-retest 收尾时本 job 仍持租约，回填撞自身互斥：
+                            // 定向子技能 scope 丢失，退化为下轮调度发起的 since 增量进修
+                            //（trial 的 gaps 是内存态，不落 gaps.json）——不算失败。
+                            log('forge.learn.backfill_deferred', { jobId, message: error.message });
+                        } else {
+                            log('forge.learn.schedule_failed', { jobId, message: error.message });
+                        }
                     }
                 }
                 log('forge.step.completed', {
@@ -860,10 +880,41 @@ function createForgeRuntimeService(options = {}) {
     }
 
     // 异步驱动 job；取消/竞态类错误不改写终态，其余崩溃才 failJob。
+    // learn job 全程持有专家写租约（§3.6.2）：acquire 失败（维护中）时 job 按
+    // 可续跑失败落账，不启动任何步骤；finally 释放覆盖全部退出路径。
+    async function driveJobWithLease(jobId, authContext, driveOptions) {
+        let leaseHandle = null;
+        try {
+            const runRecord = await runStore.readRun(jobId);
+            if (runRecord?.jobKind === 'expert.learn' && runRecord.expertName) {
+                leaseHandle = expertLeaseManager.acquire({
+                    expertName: runRecord.expertName,
+                    ownerJobId: jobId,
+                    mode: 'learn'
+                });
+            }
+            return await driveJob(jobId, { authContext, ...driveOptions });
+        } finally {
+            leaseHandle?.release();
+        }
+    }
+
     function scheduleDrive(jobId, authContext, driveOptions = {}) {
         setImmediate(() => {
-            driveJob(jobId, { authContext, ...driveOptions }).catch((error) => {
+            driveJobWithLease(jobId, authContext, driveOptions).catch((error) => {
                 if (error instanceof JobCancelledError) {
+                    return;
+                }
+                if (error instanceof ForgeWritePausedError) {
+                    // 维护租约冲突：按可续跑失败落账（resume 后重取租约），不烧钱重试。
+                    log('forge.job.write_paused', {
+                        jobId,
+                        expertName: error.details?.expertName || null,
+                        lease: error.details?.lease || null
+                    });
+                    jobRuntimeService.failJob(jobId, {
+                        forge: { error: { code: error.code, message: error.message } }
+                    });
                     return;
                 }
                 console.error('[ForgeRuntimeService] driveJob crashed:', error);
@@ -971,6 +1022,19 @@ function createForgeRuntimeService(options = {}) {
                 const error = new Error(`专家已归档（${expertArchive.archivedAt}）：不再接受新的进修；如确需继续学习，先解除归档`);
                 error.status = 409;
                 error.code = 'FORGE_EXPERT_ARCHIVED';
+                throw error;
+            }
+            // 维护租约前置检查（§3.6.2）：手动/定期/试岗回填统一在这里拿到明确的
+            // FORGE_EXPERT_WRITE_PAUSED（409），而不是创建 job 后再异步失败。
+            try {
+                assertExpertWritable(baseDir, normalizedExpertName);
+            } catch (error) {
+                if (error instanceof ForgeWritePausedError) {
+                    log('forge.learn.write_paused', {
+                        expertName: normalizedExpertName,
+                        lease: error.details?.lease || null
+                    });
+                }
                 throw error;
             }
             const job = jobRuntimeService.createAcceptedJob({
