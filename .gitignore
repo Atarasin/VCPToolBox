@@ -210,6 +210,13 @@ ip_blacklist.json
 /backups/
 # forge 维护租约是跨进程运行时状态，不入库
 Agent/forge/*/maintenance-lease.json
+# forge 知识状态区（隔离/待复核卡）是 /knowledge/* 运行语料的搬运副本，随处置流转，不入库；
+# 回滚依据是 disposition-ledger.jsonl（已被全局 *.jsonl 覆盖）+ backups/forge-maintenance/
+Agent/forge/*/quarantine/
+Agent/forge/*/review/
+# 金标基线是本机 store 快照的度量产物（语料本身不入库，指标不可跨机复现），需要时用
+# scripts/forge_quality.js golden 重新生成；历史证据以 backups/ 为准
+Agent/forge/*/golden-baselines/
 
 # 插件缓存文件
 # PlaceholderExplorer 的备份与运行时索引可能包含私密值或本机绝对路径，严禁入库。
