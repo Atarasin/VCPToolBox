@@ -317,3 +317,60 @@ test('service：needs_review 批次不关闭缺口、档案记 completed_needs_r
     assert.equal(water, null, '无成功批次时不推水位');
     fs.rmSync(baseDir, { recursive: true, force: true });
 });
+
+
+test('qualityGate.assertIndexReady：端口缺 getInitializationStatus 必须 fail closed（复审遗留补口）', async () => {
+    const port = {
+        available: true,
+        search: async () => [{ sourceFile: 'L/a.md' }],
+        pendingIngestCount: () => 0
+        // 故意不提供 getInitializationStatus
+    };
+    const result = await qualityGate.assertIndexReady({ knowledgeStorePort: port, expectedFiles: ['L/a.md'], timeoutMs: 500 });
+    assert.equal(result.ok, false);
+    assert.match(result.reasons[0], /getInitializationStatus|未知/);
+});
+
+test('qualityGate.verifyClaims：确定性阻断 issue 携带 unitTitle（同批合格单元不连带，D4）', async () => {
+    const llm = claimLlm({
+        claims: [
+            { unitTitle: '坏单元', id: 'claim-bad', text: 'x', kind: 'factual', scope: 'g', sourceUrl: 'https://not-in-batch.example.com/x', quote: 'q' },
+            { unitTitle: '好单元', id: 'claim-good', text: 'y', kind: 'factual', scope: 'g', sourceUrl: 'https://w3.example.org/contrast', quote: 'contrast ratio of at least 4.5:1' }
+        ],
+        judged: [{ id: 'claim-good', support: 'supported', reason: 'ok' }]
+    });
+    const result = await qualityGate.verifyClaims({
+        units: [{ title: '坏单元' }, { title: '好单元' }],
+        evidenceBySourceUrl: EVIDENCE,
+        materialUrls: Object.keys(EVIDENCE),
+        llm, llmConfig: { url: 't', apiKey: 'k', model: 'm' }
+    });
+    const badIssues = result.issues.filter((i) => i.unitTitle === '坏单元' && i.blocking);
+    assert.ok(badIssues.length >= 1, '坏单元的阻断 issue 带 unitTitle');
+    assert.ok(result.issues.every((i) => i.unitTitle !== '好单元' || !i.blocking), '好单元不被连带');
+});
+
+test('qualityGate.verifyClaims：低置信主张阻断（CLAIM_LOW_CONFIDENCE，§3.5.3 顺序 5）', async () => {
+    const llm = claimLlm({
+        claims: [{ unitTitle: '对比度阈值', id: 'claim-001', text: '大字号文本阈值', kind: 'normative', scope: 'WCAG', sourceUrl: 'https://w3.example.org/contrast', quote: 'contrast ratio of at least 4.5:1' }],
+        judged: [{ id: 'claim-001', support: 'uncertain', reason: '证据与主张的对应关系不明确' }]
+    });
+    const result = await qualityGate.verifyClaims({
+        units: [UNIT], evidenceBySourceUrl: EVIDENCE, materialUrls: Object.keys(EVIDENCE),
+        llm, llmConfig: { url: 't', apiKey: 'k', model: 'm' }
+    });
+    assert.ok(result.issues.some((i) => i.code === 'CLAIM_LOW_CONFIDENCE' && i.blocking));
+    assert.equal(result.allClaims[0].support, 'uncertain');
+});
+
+test('qualityGate.classifyMerge：单元为旧卡超集 → content-revision（不静默丢弃新增）', () => {
+    const oldBody = '对比度正文：普通文本 4.5:1。'.repeat(8);
+    const superset = oldBody + '新增小节：深色模式下的对比度调整策略与实现细节。'.repeat(4);
+    assert.equal(qualityGate.classifyMerge({ unit: { content: superset } }, { targetCard: { content: oldBody } }), 'content-revision');
+    // 反方向（单元⊂旧卡）仍可纯重复合并（截断子集，无新增主张；子集分支
+    // 要求规范化正文 ≥200 字符，用足够长的旧卡验证）。
+    const oldLong = '对比度正文：普通文本 4.5:1。'.repeat(60);
+    const subset = oldLong.slice(0, Math.floor(oldLong.length * 0.5));
+    // 注意单对象参数形制：classifyMerge({ unit, targetCard })。
+    assert.equal(qualityGate.classifyMerge({ unit: { content: subset }, targetCard: { content: oldLong } }), 'source-only');
+});

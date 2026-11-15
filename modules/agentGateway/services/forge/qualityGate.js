@@ -283,16 +283,16 @@ async function verifyClaims({ units, evidenceBySourceUrl, materialUrls, llm, llm
         const sourceUrl = String(claim?.sourceUrl || '');
         const quote = String(claim?.quote || '');
         if (sourceUrl && !urlSet.has(sourceUrl)) {
-            issues.push({ code: 'CLAIM_URL_NOT_IN_BATCH', message: `主张 ${id} 的来源 ${sourceUrl} 不在本批材料中（疑似编造）`, blocking: true });
+            issues.push({ code: 'CLAIM_URL_NOT_IN_BATCH', message: `主张 ${id} 的来源 ${sourceUrl} 不在本批材料中（疑似编造）`, blocking: true, unitTitle: claim.unitTitle });
             continue;
         }
         const evidenceText = evidenceBySourceUrl?.[sourceUrl];
         if (!evidenceText || String(evidenceText).trim().length < 200) {
-            issues.push({ code: 'CLAIM_EVIDENCE_SNIPPET_ONLY', message: `主张 ${id} 的来源 ${sourceUrl} 无归档全文（仅摘要不构成证据，红线 3）`, blocking: true });
+            issues.push({ code: 'CLAIM_EVIDENCE_SNIPPET_ONLY', message: `主张 ${id} 的来源 ${sourceUrl} 无归档全文（仅摘要不构成证据，红线 3）`, blocking: true, unitTitle: claim.unitTitle });
             continue;
         }
         if (quote && !quoteMatchesEvidence(quote, evidenceText)) {
-            issues.push({ code: 'CLAIM_QUOTE_NOT_MATCHED', message: `主张 ${id} 的引文未能在证据全文中精确匹配（疑似虚构引文）`, blocking: true });
+            issues.push({ code: 'CLAIM_QUOTE_NOT_MATCHED', message: `主张 ${id} 的引文未能在证据全文中精确匹配（疑似虚构引文）`, blocking: true, unitTitle: claim.unitTitle });
             continue;
         }
         verified.push({ id, ...claim, sourceUrl, quote, quoteMatched: quote.length > 0 });
@@ -324,7 +324,8 @@ async function verifyClaims({ units, evidenceBySourceUrl, materialUrls, llm, llm
             issues.push({
                 code: 'CLAIM_NORMATIVE_WITHOUT_QUOTE',
                 message: `${claim.kind} 主张 ${claim.id} 无精确匹配引文（标题/摘要孤证不得通过）`,
-                blocking: true
+                blocking: true,
+                unitTitle: claim.unitTitle
             });
         }
         if (support === 'unsupported' || support === 'conflicted') {
@@ -550,7 +551,7 @@ async function assertIndexReady({ knowledgeStorePort, expectedFiles = [], probes
                     ? (hits || []).some((item) => String(item.sourceFile || '').startsWith(`${probe.library}/`))
                     : (hits || []).some((item) => item.sourceFile === probe.expectSourceFile || item.sourceFile?.endsWith(`/${probe.expectSourceFile}`));
                 if (hit) probesPassed += 1;
-                else reasons.push(`探针未命中：${probe.expectSourceFile || probe.expectAny ? `${probe.library}（库内任意卡）` : probe.expectSourceFile}（query="${probe.query.slice(0, 40)}"）`);
+                else reasons.push(`探针未命中：${probe.expectAny ? `${probe.library}（库内任意卡）` : probe.expectSourceFile}（query="${probe.query.slice(0, 40)}"）`);
             } catch (error) {
                 reasons.push(`探针查询失败：${error.message}`);
             }
