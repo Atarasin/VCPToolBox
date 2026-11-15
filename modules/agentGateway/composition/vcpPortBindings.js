@@ -423,6 +423,11 @@ function bindVcpPorts(pluginManager, options = {}) {
                 // 索引就绪闸门（试岗开考前检查）：未消化摄取项数，能力可选
                 ...(typeof tdbKnowledgeManager.pendingIngestCount === 'function'
                     ? { pendingIngestCount: () => tdbKnowledgeManager.pendingIngestCount() }
+                    : {}),
+                // §3.6.1 合取条件需要 initializationState==compatible；缺状态能力
+                // 时消费方按未知 fail closed。
+                ...(typeof tdbKnowledgeManager.getInitializationStatus === 'function'
+                    ? { getInitializationStatus: () => tdbKnowledgeManager.getInitializationStatus() }
                     : {})
             })
             : createKnowledgeStorePort({ enabled: false, reason: 'tdb_knowledge_unavailable', optional: true }),

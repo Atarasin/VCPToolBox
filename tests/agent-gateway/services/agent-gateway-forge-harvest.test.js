@@ -51,13 +51,16 @@ test('harvest：多域名材料采集、永久存档与完整元数据', async (
     await writeBlueprint(blueprintPath, buildUiDesignerBlueprint());
 
     const searchCalls = [];
+    // D7 链（M4 T25）：ParallelSearch 质量优先 → AnySearch 快速回退 →
+    // TavilySearch 补充 → BrowserSearch 兜底；FlashDeepSearch 已移除。
     const toolInvoker = {
         async invoke(toolName, args) {
             searchCalls.push({ toolName, args });
-            const isEnglishQuery = String(args.query || '').includes('color theory');
-            if (toolName === 'AnySearch') {
+            const query = String(args.query || args.objective || (Array.isArray(args.search_queries) ? args.search_queries[0] : '') || '');
+            const isEnglishQuery = query.includes('color theory');
+            if (toolName === 'ParallelSearch') {
                 if (!isEnglishQuery) {
-                    throw new Error('AnySearch: rate limited on this query');
+                    throw new Error('ParallelSearch: rate limited on this query');
                 }
                 return {
                     content: [{
@@ -69,6 +72,22 @@ test('harvest：多域名材料采集、永久存档与完整元数据', async (
                     }]
                 };
             }
+            if (toolName === 'AnySearch') {
+                if (!isEnglishQuery) {
+                    throw new Error('AnySearch: rate limited on this query');
+                }
+                return {
+                    content: [{
+                        type: 'text',
+                        text: anySearchText([
+                            { title: 'Color and UI', url: 'https://www.smashingmagazine.com/2020/04/color-ui-design/', snippet: 'UI 配色实践指南。' }
+                        ])
+                    }]
+                };
+            }
+            if (toolName === 'TavilySearch') {
+                return { content: [{ type: 'text', text: '' }] }; // 空结果 → 继续回退
+            }
             if (toolName === 'BrowserSearch') {
                 return {
                     content: [{
@@ -79,7 +98,9 @@ test('harvest：多域名材料采集、永久存档与完整元数据', async (
                     }]
                 };
             }
-            throw new Error('FlashDeepSearch is blocked');
+            // 全文取证链（UrlFetch/ChromeBridge 等）：返回短文本 → 按正文过短回退，
+            // 材料保留发现价值但无归档全文（M4 T25 的 snippetOnly 路径）。
+            return { content: [{ type: 'text', text: 'short' }] };
         }
     };
 
@@ -121,7 +142,7 @@ test('harvest：多域名材料采集、永久存档与完整元数据', async (
         assert.ok(meta.url && /^https?:\/\//.test(meta.url), 'url');
         assert.ok(meta.fetchedAt && /\d{4}-\d{2}-\d{2}T/.test(meta.fetchedAt), '抓取时间戳');
         assert.ok(meta.contentHash && meta.contentHash.startsWith('sha256:'), '内容哈希');
-        assert.ok(['AnySearch', 'BrowserSearch'].includes(meta.plugin), '插件名');
+        assert.ok(['ParallelSearch', 'AnySearch', 'BrowserSearch'].includes(meta.plugin), '插件名');
     }
 
     const manifest = JSON.parse(fs.readFileSync(path.join(rawDir, 'manifest.json'), 'utf8'));
@@ -129,11 +150,15 @@ test('harvest：多域名材料采集、永久存档与完整元数据', async (
     assert.equal(manifest.domains.length, 3);
     assert.deepEqual(manifest.warnings, [], '域名多样性达标无警告');
 
-    // fallback 顺序：中文 query 上 AnySearch 失败 → FlashDeepSearch（block）→ BrowserSearch 兜底成功
-    assert.ok(searchCalls.some((c) => c.toolName === 'AnySearch'));
-    assert.ok(searchCalls.some((c) => c.toolName === 'FlashDeepSearch'));
-    assert.ok(searchCalls.some((c) => c.toolName === 'BrowserSearch'));
-    assert.deepEqual(SEARCH_TOOL_CHAIN, ['AnySearch', 'FlashDeepSearch', 'BrowserSearch']);
+    // D7 fallback 顺序：中文 query 上 ParallelSearch/AnySearch 失败 → TavilySearch 空结果 → BrowserSearch 兜底成功
+    assert.ok(searchCalls.some((c) => c.toolName === 'ParallelSearch'), '质量优先主入口');
+    assert.ok(searchCalls.some((c) => c.toolName === 'AnySearch'), '快速回退');
+    assert.ok(searchCalls.some((c) => c.toolName === 'TavilySearch'), '补充发现');
+    assert.ok(searchCalls.some((c) => c.toolName === 'BrowserSearch'), '兜底');
+    assert.ok(!searchCalls.some((c) => c.toolName === 'FlashDeepSearch'), 'FlashDeepSearch 已彻底移除');
+    assert.deepEqual(SEARCH_TOOL_CHAIN, ['ParallelSearch', 'AnySearch', 'TavilySearch', 'BrowserSearch']);
+    // 全文取证链尝试留痕（UrlFetch 先行；正文过短按 §3.4.4 回退，非"成功但内容少"）
+    assert.ok(searchCalls.some((c) => c.toolName === 'UrlFetch'), '全文链 UrlFetch 先行');
 });
 
 test('harvest：全部插件与关键词失败时报 FORGE_HARVEST_EMPTY', async () => {

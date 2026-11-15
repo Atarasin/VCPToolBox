@@ -65,7 +65,9 @@ function createLifelongScheduler({ forgeRuntimeService, gapRegistry, listExpertN
                 }
             }
             try {
-                const since = await gapRegistry.lastLearningAt(expertName);
+                // §3.6.3：since 取最后一次成功 active 发布——失败/待复核批次后的
+            // 新增内容不因坏批次被跳过（水位不被推过它们）。
+            const since = await (gapRegistry.lastSuccessfulLearningAt || gapRegistry.lastLearningAt).call(gapRegistry, expertName);
                 const result = await forgeRuntimeService.startExpertLearnJob({
                     expertName,
                     since,

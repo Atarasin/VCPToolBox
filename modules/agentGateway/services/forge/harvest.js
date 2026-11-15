@@ -8,8 +8,8 @@ const path = require('path');
  * 采集（harvest）步骤：按画像 subskills 逐项检索抓取，原始材料永久存档（D6）。
  * 设计：docs/design/2026-10-10_专家铸造炉.md §3.3。
  *
- * - 检索走 toolInvoker（forge 白名单：AnySearch → FlashDeepSearch → BrowserSearch
- *   顺序 fallback，前者失败/空结果才换下一个）；
+ * - 检索走 toolInvoker（D7 白名单链：ParallelSearch → AnySearch → TavilySearch
+ *   → BrowserSearch 顺序 fallback，前者失败/空结果才换下一个）；
  * - 来源多样性：每 subskill 统计不同域名数，不足 minDomainsPerSubskill 记
  *   warning 继续（蒸馏红线 4：宁可缺，不可编——材料不足不虚构）；
  * - 每份材料落盘 runs/<jobId>/raw/<subskillId>/ 下一个文件 + 元数据
@@ -18,7 +18,19 @@ const path = require('path');
  *   同域名二次请求（正文扩展位）经 per-domain 节流 ≥2s。
  */
 
-const SEARCH_TOOL_CHAIN = ['AnySearch', 'FlashDeepSearch', 'BrowserSearch'];
+// D7（第 3 轮评审实测）：日常发现 ParallelSearch 质量优先，AnySearch 快速回退，
+// TavilySearch 补充发现（含精确日期能力），BrowserSearch 独立引擎兜底。
+// FlashDeepSearch 已禁用，彻底移出链与白名单。
+const SEARCH_TOOL_CHAIN = ['ParallelSearch', 'AnySearch', 'TavilySearch', 'BrowserSearch'];
+// D7 全文取证主链：UrlFetch(text) → ParallelSearch.web_fetch(full_content=true)
+// → AnySearch.extract → ChromeBridge(get_page_info)。摘要仅用于发现（红线 3）。
+const FETCH_TOOL_CHAIN = [
+    { tool: 'UrlFetch', mode: 'text', build: (url, objective) => ({ url, mode: 'text' }) },
+    { tool: 'ParallelSearch', mode: 'web_fetch', build: (url, objective) => ({ command: 'web_fetch', urls: [url], full_content: true, ...(objective ? { objective } : {}) }) },
+    { tool: 'AnySearch', mode: 'extract', build: (url) => ({ command: 'extract', url }) },
+    { tool: 'ChromeBridge', mode: 'get_page_info', build: (url) => ({ command: 'get_page_info', url }) }
+];
+const EVIDENCE_MAX_CHARS = 40000;
 const SAME_DOMAIN_INTERVAL_MS = 2000;
 const URL_PATTERN = /^https?:\/\/\S+$/i;
 
@@ -93,11 +105,30 @@ function parsePlainBlocks(text) {
     return entries;
 }
 
+// TavilySearch / ParallelSearch：返回 JSON 对象（results[] / data[]）——先按
+// 结构化字段解析，失败再走文本启发式（§2.3.1：不得用 Markdown 反解析替代
+// 已有结构化字段，反之亦然）。
+function extractEntriesFromStructured(toolName, text) {
+    const raw = String(text || '').trim();
+    if (!raw.startsWith('{') && !raw.startsWith('[')) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        const results = Array.isArray(parsed?.results) ? parsed.results
+            : Array.isArray(parsed?.data?.results) ? parsed.data.results
+            : Array.isArray(parsed) ? parsed : [];
+        return results
+            .map((item) => ({ title: item?.title || item?.name || '', url: item?.url || item?.link || '', snippet: item?.content || item?.snippet || item?.summary || '' }))
+            .filter((entry) => entry.title && URL_PATTERN.test(entry.url));
+    } catch {
+        return [];
+    }
+}
+
 function extractEntriesFromText(toolName, text) {
     const raw = String(text || '');
     const parsed = toolName === 'BrowserSearch'
         ? [...parseBrowserSearchMarkdown(raw), ...parsePlainBlocks(raw)]
-        : [...parsePlainBlocks(raw), ...parseBrowserSearchMarkdown(raw)];
+        : [...extractEntriesFromStructured(toolName, raw), ...parsePlainBlocks(raw), ...parseBrowserSearchMarkdown(raw)];
     const byUrl = new Map();
     for (const entry of parsed) {
         if (!byUrl.has(entry.url)) {
@@ -105,6 +136,69 @@ function extractEntriesFromText(toolName, text) {
         }
     }
     return Array.from(byUrl.values());
+}
+
+// ── 全文取证（§3.4.3/§3.4.4） ────────────────────────────────────────
+
+function responseText(result) {
+    return String(result?.content?.[0]?.text ||
+        (typeof result?.original_plugin_output === 'string' ? result.original_plugin_output : '') ||
+        (typeof result === 'string' ? result : '') || '');
+}
+
+/**
+ * 全文取证链：依次尝试四条路径。§3.4.4——HTTP/额度/超时、200 但空正文、
+ * 应用壳均视为该路径失败（回退）；最小正文阈值 200 字符与证据门禁
+ *（qualityGate 的 snippet-only 判定）对齐——短于它的正文撑不起主张核验。
+ * 返回 {text, fetchTool, fetchMode, truncated, attempts: [{tool, ok, error}]}；
+ * 全链失败 text=null。
+ */
+async function fetchFullText(toolInvoker, url, { objective = null, logger = null, minChars = 200 } = {}) {
+    const attempts = [];
+    let bestSoFar = null;
+    for (const step of FETCH_TOOL_CHAIN) {
+        try {
+            const result = await toolInvoker.invoke(step.tool, step.build(url, objective));
+            // §3.4.4：blocked=true / documentGeneration 异常 / 批量 errors 含目标
+            // URL ——结构化失败信号优先于正文判断。
+            const structured = result?.structuredContent || result?.data?.structured || null;
+            if (structured?.blocked === true || (typeof structured?.documentGeneration === 'string' && structured.documentGeneration !== 'completed')) {
+                attempts.push({ tool: step.tool, ok: false, error: `结构化失败信号：blocked=${structured.blocked ?? false}，documentGeneration=${structured.documentGeneration}` });
+                continue;
+            }
+            const structuredErrors = structured?.errors;
+            if (Array.isArray(structuredErrors) && structuredErrors.length > 0) {
+                attempts.push({ tool: step.tool, ok: false, error: `批量结果 errors 非空：${JSON.stringify(structuredErrors).slice(0, 140)}` });
+                continue;
+            }
+            const text = responseText(result).trim();
+            const shellOnly = /^(loading|just a moment|enable javascript|sign in|登录|403|429)/i.test(text.slice(0, 120));
+            if (text.length < minChars || shellOnly) {
+                attempts.push({ tool: step.tool, ok: false, error: `正文过短或应用壳（${text.length} 字符${shellOnly ? '，疑似壳页' : ''}）` });
+                continue;
+            }
+            const truncated = text.length >= EVIDENCE_MAX_CHARS;
+            if (truncated) {
+                // §3.4.4：触发截断视为该路径未完全成功——记录后继续尝试下一条
+                //（可能拿到更完整全文）；全链皆截断时最终接受最长的并显式标注。
+                attempts.push({ tool: step.tool, ok: true, chars: text.length, truncated: true });
+                if (!bestSoFar || text.length > bestSoFar.text.length) {
+                    bestSoFar = { text: text.slice(0, EVIDENCE_MAX_CHARS), fetchTool: step.tool, fetchMode: step.mode, truncated: true, attempts };
+                }
+                continue;
+            }
+            attempts.push({ tool: step.tool, ok: true, chars: text.length });
+            return { text, fetchTool: step.tool, fetchMode: step.mode, truncated: false, attempts };
+        } catch (error) {
+            attempts.push({ tool: step.tool, ok: false, error: error.message });
+            logger?.(`evidence fetch: ${step.tool} 失败（${error.message}），回退下一条`);
+        }
+    }
+    // 全链未拿到完整正文：若至少有截断版本，接受最长的（显式标 truncated）。
+    if (bestSoFar) {
+        return { ...bestSoFar, attempts };
+    }
+    return { text: null, fetchTool: null, fetchMode: null, truncated: false, attempts };
 }
 
 // sourcePolicy.preferOfficialDocs：官方文档域名轻量加权（排序优先，不丢弃其他来源）。
@@ -159,10 +253,18 @@ function timeRangeFromSince(since) {
 
 function buildSearchArgs(toolName, query, since = null) {
     switch (toolName) {
+    case 'ParallelSearch':
+        return { command: 'web_search', objective: query, search_queries: [query] };
     case 'AnySearch':
         return { query, max_results: 10 };
-    case 'FlashDeepSearch':
-        return { SearchContent: query, SearchBroadness: 8 };
+    case 'TavilySearch': {
+        const args = { query, search_depth: 'advanced', max_results: 10 };
+        if (since) {
+            // §3.4.2 周增量：Tavily 精确日期过滤（时效验收后视为合格路径）。
+            args.start_date = new Date(new Date(since).getTime()).toISOString().slice(0, 10);
+        }
+        return args;
+    }
     case 'BrowserSearch': {
         const args = { query, maxResults: 10 };
         const timeRange = timeRangeFromSince(since);
@@ -274,6 +376,7 @@ function createHarvestStepRunner() {
 
             const fetchedAt = new Date().toISOString();
             const savedFiles = [];
+            const evidenceStats = { fullTextOk: 0, fullTextFailed: 0 };
             let sequence = 0;
             for (const material of materials) {
                 sequence += 1;
@@ -281,6 +384,26 @@ function createHarvestStepRunner() {
                 const slug = slugify(material.title);
                 const baseName = `${String(sequence).padStart(2, '0')}-${slug}`;
                 const body = `# ${material.title}\n\n来源: ${material.url}\n\n${material.snippet || '（无摘要）'}\n`;
+
+                // 全文取证（§3.4.3）：证据归档到 runs/<jobId>/evidence/，摘要仅用于
+                // 发现。失败不淘汰材料（发现价值仍在），但 distill 的主张门禁会把
+                // 无全文来源的规范/事实主张降级为不可证（红线 3）。
+                const evidence = await fetchFullText(toolInvoker, material.url, {
+                    objective: subskill.title,
+                    logger
+                });
+                let evidencePath = null;
+                if (evidence.text) {
+                    const evidenceDir = path.join(runDir, 'evidence', subskill.id);
+                    await fsp.mkdir(evidenceDir, { recursive: true });
+                    const evidenceFile = `${baseName}.evidence.md`;
+                    await fsp.writeFile(path.join(evidenceDir, evidenceFile), evidence.text, 'utf8');
+                    evidencePath = `evidence/${subskill.id}/${evidenceFile}`;
+                    evidenceStats.fullTextOk += 1;
+                } else {
+                    evidenceStats.fullTextFailed += 1;
+                }
+
                 const meta = {
                     url: material.url,
                     domain: domainOf(material.url),
@@ -288,7 +411,15 @@ function createHarvestStepRunner() {
                     fetchedAt,
                     contentHash: sha256(body),
                     plugin: material.plugin,
-                    query: material.query
+                    query: material.query,
+                    // 证据取证记录（EvidenceDocument 语义，§2.3.2）
+                    evidencePath,
+                    hasFullText: Boolean(evidence.text),
+                    fetchTool: evidence.fetchTool,
+                    fetchMode: evidence.fetchMode,
+                    truncated: evidence.truncated,
+                    fetchAttempts: evidence.attempts,
+                    evidenceContentHash: evidence.text ? sha256(evidence.text) : null
                 };
                 await fsp.writeFile(path.join(rawDir, `${baseName}.md`), body, 'utf8');
                 await fsp.writeFile(path.join(rawDir, `${baseName}.meta.json`), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
@@ -307,6 +438,7 @@ function createHarvestStepRunner() {
                 queries,
                 searchRuns: usedBy,
                 materials: savedFiles.length,
+                evidence: evidenceStats,
                 domains,
                 warnings: domains.length < minDomains ? [`${domains.length}/${minDomains}`] : [],
                 ...(ctx.since ? { since: ctx.since, incremental: true } : {})
@@ -340,6 +472,8 @@ function createHarvestStepRunner() {
 
 module.exports = {
     SEARCH_TOOL_CHAIN,
+    FETCH_TOOL_CHAIN,
+    fetchFullText,
     timeRangeFromSince,
     SAME_DOMAIN_INTERVAL_MS,
     createHarvestStepRunner,

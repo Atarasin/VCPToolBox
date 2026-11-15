@@ -207,10 +207,29 @@ function buildEnv(baseDir, { agentMap = {}, policy = null, guidance = null, memo
         toolInvokerPort: {
             invoke: async () => ({ content: [{ type: 'text', text: anySearchText() }] })
         },
+        // M4 索引就绪替身：探针按已写文件命中。
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ text: 'hit', score: 0.9 }]
+            search: async () => {
+                // 扫描 knowledge 下全部库目录（改名场景库名会迁移）。
+                try {
+                    const root = path.join(baseDir, 'knowledge');
+                    const hits = [];
+                    for (const lib of fs.readdirSync(root)) {
+                        const libDir = path.join(root, lib);
+                        if (!fs.statSync(libDir).isDirectory()) continue;
+                        for (const f of fs.readdirSync(libDir)) {
+                            hits.push({ sourceFile: `${lib}/${f}`, text: f, score: 1 });
+                        }
+                    }
+                    return hits;
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),

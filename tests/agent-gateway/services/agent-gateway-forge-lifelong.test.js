@@ -27,8 +27,12 @@ function blueprint() {
 
 const DISTILL_JSON = JSON.stringify({
     knowledgeUnits: [{
-        type: 'concept', title: '新知识卡', oneLiner: 'o', content: 'c', tags: [],
-        sourceUrls: ['https://fresh.example.com/new'], mergeInto: null
+        type: 'concept',
+        title: '新知识卡',
+        oneLiner: '深色模式下的配色策略。',
+        content: '深色模式配色以配色理论为基础：先降低大面积背景明度，再提升前景与背景对比度，语义色沿用色板体系并按对比度阈值校验。',
+        tags: [],
+        sourceUrls: ['https://a.com/x'], mergeInto: null
     }],
     droppedSources: []
 });
@@ -37,9 +41,11 @@ function buildEnv(baseDir, options = {}) {
     const jobRuntimeService = createJobRuntimeService();
     const defaultComplete = async (config, payload) => {
         const content = payload.messages[0].content;
-        const output = (content.includes('知识蒸馏') || content.includes('材料清单'))
-            ? DISTILL_JSON
-            : 'answer';
+        const output = content.includes('知识主张提取器')
+            ? JSON.stringify({ claims: [] })
+            : content.includes('独立主张核验员')
+                ? JSON.stringify({ judged: [] })
+                : (content.includes('知识蒸馏') || content.includes('材料清单')) ? DISTILL_JSON : 'answer';
         return { data: { choices: [{ message: { content: output } }], usage: { prompt_tokens: 100, completion_tokens: 50 } } };
     };
     const forgeRuntimeService = createForgeRuntimeService({
@@ -50,12 +56,32 @@ function buildEnv(baseDir, options = {}) {
         },
         ...(options.llmRetryPolicy ? { llmRetryPolicy: options.llmRetryPolicy } : {}),
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: '新材料\nhttps://fresh.example.com/new\n增量内容' }] })
+            // M4 主题门禁：材料需与子技能词廓相关（配色理论/color theory）。
+            invoke: async (toolName, args) => {
+                // 全文取证链（M4 T25）：取证调用返回 >500 字主题全文（UrlFetch 命中首链）；
+                // 搜索调用返回发现摘要。
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                const text = isFetch
+                    ? '配色理论完整指南（证据归档全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。在 UI 配色实践中，先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1，UI 组件边界另按非文本对比度要求校验。深色模式不是简单反色：先降低大面积背景明度，再提升前景与背景的对比度，保证信息层级不因暗色环境损失；阴影与高度改用亮度叠加表达。色彩可访问性还包括不依赖纯色相传递信息，色盲安全配对在蓝橙轴上取值，红绿对比需辅以其他区分手段。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。'
+                    : 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。';
+                return { content: [{ type: 'text', text }] };
+            }
         },
+        // M4 索引就绪端口替身：探针按已写文件命中（sourceFile），状态 compatible。
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: '新知识卡', text: 'x', score: 0.9 }]
+            search: async () => {
+                try {
+                    const libDir = path.join(baseDir, 'knowledge', 'UIDesigner知识库');
+                    return fs.readdirSync(libDir).map((f) => ({ sourceFile: `UIDesigner知识库/${f}`, text: f, score: 1 }));
+                } catch {
+                    return [];
+                }
+            },
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
         },
         baseDir: path.join(baseDir, 'forge'),
         knowledgeRoot: path.join(baseDir, 'knowledge'),
@@ -128,7 +154,7 @@ test('gap 登记缺口 → 手动进修（forge.expert.learn）→ 新卡入库 
     const newCardFile = fs.readdirSync(libDir).find((f) => f.startsWith('K_') && f !== 'K_color-theory_jiuka.md');
     assert.ok(newCardFile, `新知识卡入库，实际：${fs.readdirSync(libDir)}`);
     const newCard = fs.readFileSync(path.join(libDir, newCardFile), 'utf8');
-    assert.match(newCard, /url: https:\/\/fresh\.example\.com\/new/, '新卡带出处');
+    assert.match(newCard, /url: https:\/\/a\.com\/x/, '新卡带出处');
     assert.equal(fs.readFileSync(path.join(libDir, 'K_color-theory_jiuka.md'), 'utf8'), oldCard, '既有旧卡未被删除/修改（红线 3）');
 
     // 4. 缺口关闭 + 学习档案留痕（§3.8）
@@ -140,7 +166,7 @@ test('gap 登记缺口 → 手动进修（forge.expert.learn）→ 新卡入库 
     assert.equal(history.length, 1);
     const entry = JSON.parse(history[0]);
     assert.equal(entry.trigger, 'manual');
-    assert.equal(entry.sources, 1, '档案记录来源数');
+    assert.equal(entry.sources, 2, '档案记录来源数（取证夹具 2 份材料）');
     assert.equal(entry.distilledFiles, 1, '档案记录产出文件数');
     assert.ok(entry.jobId);
 
@@ -768,7 +794,8 @@ test('LLM 首次瞬时超时被退避重试救回：learn job 正常完成，档
 
     const job = env.jobRuntimeService.pollJob(jobId, null).data.job;
     assert.equal(job.status, 'completed', `一次超时后应重试救回：${JSON.stringify(job.error || null)}`);
-    assert.equal(calls, 2, '首次超时 + 重试成功 = 2 次物理调用');
+    // M4：+1 次调用来自主张提取（空主张集，判定调用因零主张跳过）。
+    assert.equal(calls, 3, '首次超时 + 重试成功 + 主张提取 = 3 次物理调用');
 
     const history = fs.readFileSync(path.join(baseDir, 'forge', 'UIDesigner', 'learning-history.jsonl'), 'utf8')
         .trim().split('\n').map((line) => JSON.parse(line));

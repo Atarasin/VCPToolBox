@@ -427,7 +427,7 @@ test('updateJob 终态迁出需显式 resumeFromTerminal，防止迟到回写覆
 
 // ── 红线 1：toolInvoker 检索白名单（非检索插件被拒）──────────────────────
 
-test('铸造流程 toolInvoker 仅允许检索类插件（AnySearch/FlashDeepSearch/BrowserSearch）', async () => {
+test('铸造流程 toolInvoker 仅允许检索/取证类插件（D7 双链白名单）', async () => {
     const baseDir = createTempDir();
     const invoked = [];
     const captured = {};
@@ -456,8 +456,9 @@ test('铸造流程 toolInvoker 仅允许检索类插件（AnySearch/FlashDeepSea
     );
     const ok = await captured.toolInvoker.invoke('AnySearch', { query: 'color theory' });
     assert.equal(ok, 'ok');
-    assert.deepEqual(invoked, ['AnySearch']);
-    assert.deepEqual(svc.FORGE_ALLOWED_TOOLS, new Set(['AnySearch', 'FlashDeepSearch', 'BrowserSearch']));
+    assert.deepEqual(invoked, ['AnySearch']); // 白名单内插件直调放行（链序由 harvest 测试覆盖）
+    assert.deepEqual(svc.FORGE_ALLOWED_TOOLS, new Set(['ParallelSearch', 'AnySearch', 'TavilySearch', 'BrowserSearch', 'UrlFetch', 'ChromeBridge']));
+    assert.ok(!svc.FORGE_ALLOWED_TOOLS.has('FlashDeepSearch'), 'FlashDeepSearch 彻底移除');
 });
 
 // ── 费用计量：DeepSeek 双档时段计价（元/1K，高峰/空闲动态判定）──────────

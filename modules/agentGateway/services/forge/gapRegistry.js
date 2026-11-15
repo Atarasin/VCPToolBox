@@ -109,6 +109,25 @@ function createGapRegistry({ baseDir }) {
             await fsp.mkdir(path.dirname(historyFile(expertName)), { recursive: true });
             await fsp.appendFile(historyFile(expertName), `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`, 'utf8');
         },
+        // §3.6.3（M4 T31）：学习水位取「最后一次成功 active 发布」——
+        // needs_review / quarantine / failed / 零合格产物的批次不推水位，
+        // 历史最后一行不代表成功。条目缺 waterAdvance 字段（旧档案）按
+        // status==='completed' 认定，不伪造成功。
+        async lastSuccessfulLearningAt(expertName) {
+            const history = await this.readLearningHistory(expertName);
+            for (let i = history.length - 1; i >= 0; i -= 1) {
+                const entry = history[i];
+                if (entry?.waterAdvance === true) return entry.ts;
+                // 旧格式条目（M4 前无质量标记）：completed 或无状态字段视为成功，
+                // 失败/待复核档案不推水位。
+                if (entry?.waterAdvance === undefined
+                    && !['failed', 'completed_needs_review'].includes(entry?.status)
+                    && !entry?.reviewItems && !entry?.quarantineItems) {
+                    return entry.ts;
+                }
+            }
+            return null;
+        },
         async lastLearningAt(expertName) {
             try {
                 const raw = await fsp.readFile(historyFile(expertName), 'utf8');
