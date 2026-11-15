@@ -260,8 +260,10 @@ function buildSearchArgs(toolName, query, since = null) {
     case 'TavilySearch': {
         const args = { query, search_depth: 'advanced', max_results: 10 };
         if (since) {
-            // §3.4.2 周增量：Tavily 精确日期过滤（时效验收后视为合格路径）。
+            // §3.4.2 周增量：Tavily 精确日期过滤。end_date 缺省为今天——
+            // 时效验收（已知发布日期样本）通过前，本链结果视为候选增量。
             args.start_date = new Date(new Date(since).getTime()).toISOString().slice(0, 10);
+            args.end_date = new Date().toISOString().slice(0, 10);
         }
         return args;
     }
@@ -270,6 +272,8 @@ function buildSearchArgs(toolName, query, since = null) {
         const timeRange = timeRangeFromSince(since);
         if (timeRange) {
             args.timeRange = timeRange; // §3.8：增量进修只检索上次学习后的新增内容
+            args.bypassCache = true; // §3.4.2：周增量不走缓存（旧缓存会短路时间门禁）
+            args.closeTab = true;
         }
         return args;
     }
@@ -278,10 +282,17 @@ function buildSearchArgs(toolName, query, since = null) {
     }
 }
 
+// §3.4.2 周增量链（since 场景）：Tavily（精确日期）先行 → BrowserSearch
+// （timeRange=week + bypassCache）→ AnySearch（配已有 URL 去重）。静态单页
+// 可提前 AnySearch.extract 属全文链，此处是发现链。D7：不得让 AnySearch 的
+// 任意旧结果短路时间门禁——时间过滤未验收前，结果只作候选并标注待时效验收。
+const INCREMENTAL_TOOL_CHAIN = ['TavilySearch', 'BrowserSearch', 'AnySearch'];
+
 async function searchWithFallback(toolInvoker, queries, { logger, since = null } = {}) {
     const attempts = [];
+    const chain = since ? INCREMENTAL_TOOL_CHAIN : SEARCH_TOOL_CHAIN;
     for (const query of queries) {
-        for (const toolName of SEARCH_TOOL_CHAIN) {
+        for (const toolName of chain) {
             try {
                 const result = await toolInvoker.invoke(toolName, buildSearchArgs(toolName, query, since));
                 const text = result?.content?.[0]?.text ||
@@ -472,6 +483,7 @@ function createHarvestStepRunner() {
 
 module.exports = {
     SEARCH_TOOL_CHAIN,
+    INCREMENTAL_TOOL_CHAIN,
     FETCH_TOOL_CHAIN,
     fetchFullText,
     timeRangeFromSince,

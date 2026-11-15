@@ -93,7 +93,7 @@ const FALLBACK_EXAMINE_TEMPLATE = `你是出题官。按考纲为{{displayName}}
 {{examOutline}}
 要求：每子技能 1 概念题+1 应用题，另 1 实操题（{{practicalPrompt}}，维度：{{gradingDimensions}}）。每题带 referencePoints 与 searchKeywords。只输出 JSON：{"questions":[{"id":"","subskillId":"","kind":"concept|applied|practical","prompt":"","gradingDimensions":["..."],"referencePoints":[],"searchKeywords":[]}]}`;
 
-const FALLBACK_GRADE_TEMPLATE = `你是判卷官。对{{displayName}}的答卷逐题五维打分（correctness/completeness/professionalism/antiAiFlavor/actionability 各 0-5，0.5 步进）+评语+引用知识卡。考卷与答卷：{{examWithAnswers}}。只输出 JSON：{"gradedQuestions":[{"id":"","scores":{},"comment":"","citedKnowledgeCards":[]}],"overallComment":""}`;
+const FALLBACK_GRADE_TEMPLATE = `你是判卷官。对{{displayName}}的答卷逐题五维打分（correctness/completeness/professionalism/antiAiFlavor/actionability 各 0-5，0.5 步进）+评语+引用知识卡。考卷与答卷（每题附 retrievalEvidence 检索证据：zeroCore=知识库零命中，searchErrors=检索失败）：分别评价「库内依据答案」与「通行原则补充」——零核心命中却给出完整具体答案的，correctness 与 professionalism 必须低分并列出 unsupportedClaims；referencePoints 若来自判卷官自己的专业常识而非库内命中内容，请在评语标注 general reference，不作为知识库覆盖的证据。考卷与答卷：{{examWithAnswers}}。只输出 JSON：{"gradedQuestions":[{"id":"","scores":{},"comment":"","citedKnowledgeCards":[],"unsupportedClaims":[]}],"overallComment":""}`;
 
 function loadTemplate(baseDir, fileName, fallback) {
     try {
@@ -196,8 +196,9 @@ const ANSWER_ISSUE_NOTES = {
     'reasoning-only': '（注：本答卷取自模型推理段（正文未输出）——按内容质量正常评分，评语注明「推理段作答」）'
 };
 
-// 判卷输入条目：考题 + 答卷 + 作答异常注记。
-function buildGradeEntries({ exam, answers, answerMeta = {} }) {
+// 判卷输入条目：考题 + 答卷 + 作答异常注记 + 检索证据（§3.7 5——判卷官
+// 分别评价库内依据答案与通行原则补充；零核心/检索失败如实入卷）。
+function buildGradeEntries({ exam, answers, answerMeta = {}, retrievalEvidence = {} }) {
     return exam.questions.map((question) => ({
         id: question.id,
         kind: question.kind,
@@ -206,6 +207,16 @@ function buildGradeEntries({ exam, answers, answerMeta = {} }) {
         referencePoints: question.referencePoints,
         gradingDimensions: question.gradingDimensions,
         answer: answers[question.id],
+        ...(retrievalEvidence[question.id]
+            ? {
+                retrievalEvidence: {
+                    zeroCore: retrievalEvidence[question.id].zeroCore,
+                    cardCount: retrievalEvidence[question.id].cardCount,
+                    hitFiles: retrievalEvidence[question.id].hitFiles.slice(0, 5),
+                    searchErrors: retrievalEvidence[question.id].searchErrors.slice(0, 3)
+                }
+            }
+            : {}),
         ...(answerMeta[question.id]
             ? { answerIssue: ANSWER_ISSUE_NOTES[answerMeta[question.id].issue] || answerMeta[question.id].issue }
             : {})
@@ -360,7 +371,7 @@ function scoreGrading({ exam, gradedQuestions, overallComment, answerMeta = {} }
         // 推理段作答保留（内容仍有信号）。
         const answerIssue = answerMeta[question.id]?.issue;
         if (questionRatio < PASS_RATIO && question.subskillId !== 'practical'
-            && answerIssue !== 'empty' && answerIssue !== 'tool-leak') {
+            && answerIssue !== 'empty' && answerIssue !== 'tool-leak' && answerIssue !== 'search-error') {
             weakQuestions.push({ id: question.id, subskillId: question.subskillId, ratio: questionRatio });
         }
     }
@@ -398,35 +409,51 @@ async function writeExamFile(examsDir, name, payload) {
 }
 
 // 盲测代查：只查专属库（红线 1：白名单仅 gateway_knowledge_search 的库面）。
+// §3.7 1/2：遍历全部关键词（不再只取 keywords[0]）；检索异常与真实零命中
+// 分开报告——queries 逐条记录 ok/hitCount/error，异常不吞成"无知识"。
 async function blindSearch(knowledgeStorePort, libraryName, keywords, { topK = 5 } = {}) {
     if (!knowledgeStorePort || knowledgeStorePort.available === false) {
-        return { cards: [], skipped: true };
+        return { cards: [], skipped: true, queries: [] };
     }
     const cards = [];
     const seenCards = new Set();
-    try {
-        const hits = await knowledgeStorePort.search(keywords[0] || '', { libraries: [libraryName], topK });
-        for (const hit of Array.isArray(hits) ? hits : []) {
-            const title = hit.title || hit.sourceFile || '(untitled)';
-            // 同一知识卡的多 chunk 会重复占位（2026-10-11 实测：topK 5 实际仅
-            // 3 张唯一卡）——按标题去重，把配额还给多样性。
-            if (seenCards.has(title)) {
-                continue;
+    const queries = [];
+    for (const keyword of (keywords.length > 0 ? keywords : [''])) {
+        try {
+            const hits = await knowledgeStorePort.search(keyword, { libraries: [libraryName], topK });
+            let uniqueHits = 0;
+            for (const hit of Array.isArray(hits) ? hits : []) {
+                const title = hit.title || hit.sourceFile || '(untitled)';
+                // 同一知识卡的多 chunk 会重复占位（2026-10-11 实测：topK 5 实际仅
+                // 3 张唯一卡）——按标题去重，把配额还给多样性。
+                if (seenCards.has(title)) {
+                    continue;
+                }
+                seenCards.add(title);
+                uniqueHits += 1;
+                cards.push({
+                    title,
+                    text: String(hit.text || hit.content || '').slice(0, 1200),
+                    score: hit.score,
+                    sourceFile: hit.sourceFile || null,
+                    keyword
+                });
             }
-            seenCards.add(title);
-            cards.push({
-                title,
-                text: String(hit.text || hit.content || '').slice(0, 1200),
-                score: hit.score
-            });
+            queries.push({ keyword, ok: true, hitCount: uniqueHits });
+        } catch (error) {
+            // 检索异常 ≠ 无知识：逐条记录，判卷/报告可回放归因（§3.7 2）。
+            queries.push({ keyword, ok: false, hitCount: 0, error: `${error.code || 'SEARCH_ERROR'}: ${error.message}` });
         }
-    } catch {
-        // 检索异常视为无可用知识——被考者按知识边界作答。
     }
-    return { cards, skipped: false };
+    return { cards, skipped: false, queries };
 }
 
-function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {}, indexReadiness = null, retrievals = null }) {
+// 展示辅助：分数达线（ratio≥及格线）但总体未通过——用于报告说明行。
+function scorePassedDisplayed(passed, ratio) {
+    return !passed && ratio >= PASS_RATIO;
+}
+
+function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps = [], answerMeta = {}, indexReadiness = null, retrievals = null, retrievalVerdict = null }) {
     const ISSUE_TAGS = {
         empty: '⚠️ 作答失败（模型未输出正文，非知识缺口）',
         'tool-leak': '⚠️ 工具调用标记泄漏（已剥离标记，非知识缺口）',
@@ -445,6 +472,12 @@ function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio
     }
     if (indexReadiness && indexReadiness.ok === false) {
         lines.push(`- ⚠️ 开考前索引就绪门禁未通过：${(indexReadiness.reasons || []).slice(0, 2).join('；')}`);
+    }
+    if (retrievalVerdict) {
+        lines.push(`- 检索证据：${retrievalVerdict.coverageOk ? '✅ 非实操题库内覆盖完整' : `⚠️ ${retrievalVerdict.coverageFailures.length} 题零核心命中（${retrievalVerdict.coverageFailures.map((f) => f.id).join('、')}）`}${retrievalVerdict.unsupportedClaimsFound ? `；⚠️ ${retrievalVerdict.unsupported.length} 题含判卷官标记的凭空主张` : ''}${retrievalVerdict.searchErrorQuestions.length > 0 ? `；⚠️ 检索失败题（与零命中分开）：${retrievalVerdict.searchErrorQuestions.join('、')}` : ''}`);
+        if (scorePassedDisplayed(passed, ratio)) {
+            lines.push('- （分数达线但检索证据未过 → 总体不通过，§3.7：高作答分不得抵消检索失败）');
+        }
     }
     lines.push('');
     for (const question of exam.questions) {
@@ -887,15 +920,31 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         const answers = {};
         const answerMeta = {};
         const retrievals = {};
+        const retrievalEvidence = {};
         for (const question of exam.questions) {
             const keywords = Array.isArray(question.searchKeywords) && question.searchKeywords.length > 0
                 ? question.searchKeywords
                 : [question.prompt.slice(0, 40)];
-            const { cards } = await blindSearch(knowledgeStorePort, libraryName, keywords);
+            const { cards, queries } = await blindSearch(knowledgeStorePort, libraryName, keywords);
             retrievals[question.id] = cards.map((card) => card.title);
+            // §3.7 5：检索证据可回放——逐关键词记录 ok/hitCount/error、命中文件
+            // 与零核心标记；搜索错误与真实零命中分开。
+            const searchErrors = queries.filter((query) => !query.ok);
+            retrievalEvidence[question.id] = {
+                keywords,
+                queries,
+                cardCount: cards.length,
+                hitFiles: cards.map((card) => card.sourceFile).filter(Boolean),
+                zeroCore: cards.length === 0,
+                searchErrors: searchErrors.map((query) => query.error)
+            };
+            if (searchErrors.length > 0 && searchErrors.length === queries.length) {
+                // 全部关键词检索失败：执行面问题，不是知识缺口——与零命中分开（§3.7 2）。
+                answerMeta[question.id] = { issue: 'search-error', notedAt: new Date().toISOString() };
+            }
             const knowledgeBlock = cards.length > 0
                 ? cards.map((card, index) => `[${index + 1}] ${card.title}\n${card.text}`).join('\n\n')
-                : '（知识库未命中——按知识边界作答，明确说明不确定，不编造）';
+                : '（知识库未命中——本题按知识边界作答：明确说明库内无对应资料、给出稳妥的通用方向并说明不确定，不编造具体数字、版本或条款）';
             const answerPrompt = [
                 persona,
                 '',
@@ -907,7 +956,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
                 '',
                 // 正文先行：先给结论/清单本体，依据与边界说明收尾——避免大段
                 // 前置免责声明稀释交付物（判卷 antiAiFlavor 实测扣分点）。
-                '要求：依据上面的知识库资料作答；直接以答案正文开头（结论/清单/方案本体在前）；依据的知识卡编号与不确定处放在正文末尾；资料未覆盖的部分，先用公认专业原则给出判断并标注「（通行原则，库内无直接资料）」，不要整体拒答（2026-10-11 教训：单纯声明边界导致概念题漏气）；给出处；不编造。篇幅纪律：正文控制在约 1500 字内，表格与要点优先、论述从简——超出部分视为未作答。本环境无任何可调用工具，严禁输出工具调用语法。'
+                '要求：依据上面的知识库资料作答；直接以答案正文开头（结论/清单/方案本体在前）；依据的知识卡编号与不确定处放在正文末尾。通行原则使用边界（严格）：只有当知识库资料已覆盖本题核心、个别局部未展开时，才可用公认专业原则补充该局部，并在该段末标注「（通行原则，库内无直接资料）」；知识库零命中或核心未覆盖时，不得用通行原则凑成完整答案——按知识边界作答并说明不确定；通行原则段落不得引入新的具体数字、版本号或可验证主张。给出处；不编造。篇幅纪律：正文控制在约 1500 字内，表格与要点优先、论述从简——超出部分视为未作答。本环境无任何可调用工具，严禁输出工具调用语法。'
             ].join('\n');
             const { text, issue } = await completeBlindAnswer({
                 llm, llmConfig, prompt: answerPrompt, questionId: question.id, logger
@@ -920,19 +969,44 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         await writeExamFile(examsDir, 'answers.json', {
             answers,
             retrievals,
+            retrievalEvidence,
             ...(Object.keys(answerMeta).length > 0 ? { answerMeta } : {})
         });
 
         // 3. 判卷（D7 第一步：五维 0-5 + 评语 + 知识卡引用）——覆盖式：
         // 分块 → 块内缺失补判 → 仍缺失 FORGE_GRADE_MISSING 显式失败
         //（绝不静默按 0 分计，2026-10-12 缺陷 4）。
-        const entriesForGrading = buildGradeEntries({ exam, answers, answerMeta });
+        const entriesForGrading = buildGradeEntries({ exam, answers, answerMeta, retrievalEvidence });
         const { gradedQuestions, overallComment } = await gradeEntriesWithCoverage({
             llm, llmConfig, baseDir, runDir, logger, blueprint, entries: entriesForGrading
         });
-        const { grading, ratio, passed, gaps } = scoreGrading({
+        const { grading, ratio, passed: scorePassed, gaps } = scoreGrading({
             exam, gradedQuestions, overallComment, answerMeta
         });
+
+        // §3.7 5/8：scoreGrading 只管分数；最终通过与检索覆盖/无凭空主张合取
+        // ——高作答分不得抵消检索失败，零核心命中不得靠通行原则通过。
+        const nonPractical = exam.questions.filter((question) => question.subskillId !== 'practical');
+        const coverageFailures = nonPractical
+            .filter((question) => retrievalEvidence[question.id]?.zeroCore)
+            .map((question) => ({ id: question.id, subskillId: question.subskillId, reason: 'zero-core（知识库零命中）' }));
+        const unsupported = gradedQuestions
+            .filter((graded) => Array.isArray(graded.unsupportedClaims) && graded.unsupportedClaims.length > 0)
+            .map((graded) => ({ id: graded.id, claims: graded.unsupportedClaims }));
+        const retrievalVerdict = {
+            coverageOk: coverageFailures.length === 0,
+            coverageFailures,
+            unsupportedClaimsFound: unsupported.length > 0,
+            unsupported,
+            searchErrorQuestions: Object.entries(retrievalEvidence)
+                .filter(([, evidence]) => (evidence.searchErrors || []).length > 0
+                    && (evidence.queries || []).every((query) => !query.ok))
+                .map(([questionId]) => questionId)
+        };
+        const passed = scorePassed && retrievalVerdict.coverageOk && !retrievalVerdict.unsupportedClaimsFound;
+        if (scorePassed && !passed) {
+            logger?.(`trial: 分数 ${(ratio * 100).toFixed(1)}}% 达线但检索证据不通过（${coverageFailures.length} 题零核心 / ${unsupported.length} 题含凭空主张）——总体判不通过（§3.7）`);
+        }
 
         // 4. Jev 对照试点（D7 方案 C）
         const jev = await jevCrossCheck(ctx.jevPort, { displayName: blueprint.displayName, answers });
@@ -946,13 +1020,13 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         await writeExamFile(examsDir, 'gaps.json', { gaps, generatedAt: new Date().toISOString() });
 
         // 5. 报告落盘（JSON + 用户可读 markdown，含缺口清单）
-        const report = { passed, ratio, passLine: PASS_RATIO, grading, gaps, libraryName };
+        const report = { passed, scorePassed, ratio, passLine: PASS_RATIO, grading, gaps, libraryName, retrievalVerdict };
         await writeExamFile(examsDir, 'grade-report.json', report);
-        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta, indexReadiness, retrievals });
+        const reportMarkdown = renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio, libraryName, gaps, answerMeta, indexReadiness, retrievals, retrievalVerdict });
         assertNoSecrets(reportMarkdown, '验收报告');
         await fsp.writeFile(path.join(examsDir, 'grade-report.md'), reportMarkdown, 'utf8');
 
-        return { answers, grading, ratio, passed, gaps, jev, answerMeta, indexReadiness, retrievals };
+        return { answers, grading, ratio, passed, scorePassed, gaps, jev, answerMeta, indexReadiness, retrievals, retrievalEvidence, retrievalVerdict };
 }
 
 /**
@@ -1069,10 +1143,17 @@ function createRegradeStepRunner() {
 
         const answers = saved.answers || {};
         const answerMeta = saved.answerMeta || {};
+        // §3.7 7：旧答卷没有 retrievalEvidence（检索正文/逐关键词记录）时，
+        // 补判结论标 legacy/unverified——不伪造证据、不回溯套用覆盖合取；
+        // 新答卷（含 retest）天然带证据走同门禁。
+        const sourceRetrievalEvidence = saved.retrievalEvidence && typeof saved.retrievalEvidence === 'object'
+            ? saved.retrievalEvidence
+            : null;
+        const evidenceStatus = sourceRetrievalEvidence ? 'verified（源答卷带检索证据）' : 'legacy/unverified（源答卷无检索正文，覆盖合取不适用）';
         const previousGraded = Array.isArray(previousReport?.grading?.gradedQuestions)
             ? previousReport.grading.gradedQuestions.filter((g) => g && typeof g.id === 'string' && g.scores && typeof g.scores === 'object')
             : [];
-        const missingEntries = buildGradeEntries({ exam, answers, answerMeta })
+        const missingEntries = buildGradeEntries({ exam, answers, answerMeta, retrievalEvidence: sourceRetrievalEvidence || {} })
             .filter((entry) => !previousGraded.some((g) => g.id === entry.id));
         if (missingEntries.length === 0) {
             const error = new Error('源任务判卷完整，无缺失题可补判（如需重考请走补试岗）');
@@ -1118,6 +1199,7 @@ function createRegradeStepRunner() {
                 fromJobId: regradeOf.jobId || null,
                 regradedQuestionIds: missingEntries.map((entry) => entry.id),
                 previousRatio,
+                evidenceStatus,
                 at: new Date().toISOString()
             }
         };
@@ -1139,7 +1221,7 @@ function createRegradeStepRunner() {
             passed,
             gapCount: gaps.length
         });
-        const summary = `补判完成（${missingEntries.length} 题）：${(previousRatio * 100).toFixed(1)}% → ${(ratio * 100).toFixed(1)}%（${passed ? '✅ 翻转为及格，待用户抽查' : '仍未及格，缺口 ' + gaps.length + ' 项'}）`;
+        const summary = `补判完成（${missingEntries.length} 题）：${(previousRatio * 100).toFixed(1)}% → ${(ratio * 100).toFixed(1)}%（${passed ? '✅ 翻转为及格，待用户抽查' : '仍未及格，缺口 ' + gaps.length + ' 项'}；证据 ${evidenceStatus}）`;
         return {
             summary,
             artifacts: ['exams/grade-report.md', 'exams/comparison.json'],

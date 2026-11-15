@@ -557,6 +557,86 @@ async function cmdDisposition(flags) {
 }
 
 
+// ── 定期质量回归（§3.2/§3.8.4，M5.S2 T38） ───────────────────────────────
+
+async function cmdRegress(flags) {
+    const root = path.resolve(String(flags.root || REPO_ROOT));
+    const expertName = String(flags.expert || 'yanchi_ui');
+    const forgeRoot = path.resolve(String(flags['forge-root'] || path.join(root, 'Agent', 'forge')));
+    const maintenance = require(path.join(REPO_ROOT, 'scripts', 'forge_maintenance'));
+    const goldenSetLib = require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/goldenSet'));
+
+    // 1) 三层一致性审计（任一差异非零退出）。
+    const audit = await maintenance.cmdAudit({ root, ...(flags.knowledge ? { knowledge: flags.knowledge } : {}), ...(flags.store ? { store: flags.store } : {}) });
+    // 2) strict 金标回归（负例零命中 + MRR/nDCG 对照）。
+    const goldenPath = String(flags.golden || path.join(REPO_ROOT, 'modules/agentGateway/services/forge/golden', `${expertName}.json`));
+    const goldenConfig = {
+        ...maintenance.tdbConfig(root, {
+            ...(flags.knowledge ? { rootPath: path.resolve(String(flags.knowledge)) } : {}),
+            ...(flags.store ? { storePath: path.resolve(String(flags.store)) } : {})
+        }),
+        fullScanOnStartup: false
+    };
+    const { TDBKnowledgeManager } = requireQuiet(path.join(REPO_ROOT, 'TDBKnowledge'));
+    const parsed = JSON.parse(await fsp.readFile(goldenPath, 'utf-8'));
+    const queries = goldenSetLib.loadGoldenSet(parsed);
+    const manager = new TDBKnowledgeManager(goldenConfig);
+    const originalLog = console.log;
+    console.log = () => {};
+    const restoreNative = silenceNativeStdout();
+    let golden;
+    try {
+        await manager.initialize();
+        golden = await goldenSetLib.runGoldenSet(manager, queries, { strictNegatives: true });
+    } finally {
+        await manager.shutdown().catch(() => undefined);
+        console.log = originalLog;
+        restoreNative();
+    }
+
+    // 3) 趋势对比：与上一条趋势记录比 MRR/nDCG（同快照语义；无故下降即回归）。
+    const trendDir = path.join(forgeRoot, expertName, 'golden-baselines');
+    const trendPath = path.join(trendDir, 'trend.jsonl');
+    let previous = null;
+    try {
+        const lines = (await fsp.readFile(trendPath, 'utf-8')).split('\n').filter((line) => line.trim());
+        previous = lines.length > 0 ? JSON.parse(lines[lines.length - 1]) : null;
+    } catch { /* 首次基线 */ }
+    const alerts = [];
+    if (previous?.golden && golden.summary.mrr != null && previous.golden.mrr != null) {
+        const drop = previous.golden.mrr - golden.summary.mrr;
+        if (drop > 0.02) alerts.push(`MRR 回归：${previous.golden.mrr} → ${golden.summary.mrr}（降 ${drop.toFixed(4)}）`);
+        const ndcgDrop = previous.golden.ndcg - golden.summary.ndcg;
+        if (ndcgDrop > 0.02) alerts.push(`nDCG 回归：${previous.golden.ndcg} → ${golden.summary.ndcg}（降 ${ndcgDrop.toFixed(4)}）`);
+    }
+    if (golden.summary.negativeLeaks > 0) alerts.push(`隔离负例泄漏 ${golden.summary.negativeLeaks} 条（活动库被污染？）`);
+    if (!audit.report.ok) alerts.push(`三层审计发现 ${audit.report.issueCount} 项差异`);
+
+    const entry = {
+        at: new Date().toISOString(),
+        expertName,
+        auditOk: audit.report.ok,
+        auditIssues: audit.report.issueCount,
+        goldenOk: golden.ok,
+        golden: golden.summary,
+        provenance: golden.provenance,
+        alerts
+    };
+    await fsp.mkdir(trendDir, { recursive: true });
+    await fsp.appendFile(trendPath, `${JSON.stringify(entry)}\n`, 'utf-8');
+    // 最后成功 active 发布点（水位）一并入趋势记录，便于回滚定位。
+    try {
+        const { createGapRegistry } = require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/gapRegistry'));
+        const registry = createGapRegistry({ baseDir: forgeRoot });
+        entry.lastSuccessfulActiveAt = await registry.lastSuccessfulLearningAt(expertName);
+    } catch { /* 档案缺失如实留空 */ }
+
+    const ok = audit.exitCode === 0 && golden.ok && alerts.length === 0;
+    return { exitCode: ok ? 0 : 1, report: { ok, trendEntry: entry, trendPath, alerts } };
+}
+
+// ── main ─────────────────────────────────────────────────────────────────
+
 // ── main ─────────────────────────────────────────────────────────────────
 
 
@@ -577,7 +657,7 @@ function parseArgs(argv) {
 async function main() {
     const [command, ...rest] = process.argv.slice(2);
     const flags = parseArgs(rest);
-    const commands = { inventory: cmdInventory, golden: cmdGolden, disposition: cmdDisposition };
+    const commands = { inventory: cmdInventory, golden: cmdGolden, disposition: cmdDisposition, regress: cmdRegress };
     const handler = commands[command];
     if (!handler) {
         process.stderr.write(`未知或缺失子命令：${command || '(none)'}（可用：${Object.keys(commands).join(' / ')}）\n`);
@@ -601,4 +681,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { cmdInventory, cmdGolden, cmdDisposition, parseFrontmatterLenient, normalizeTitleForDedup };
+module.exports = { cmdInventory, cmdGolden, cmdDisposition, cmdRegress, parseFrontmatterLenient, normalizeTitleForDedup };
