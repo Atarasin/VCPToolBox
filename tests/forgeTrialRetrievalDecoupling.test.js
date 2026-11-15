@@ -203,3 +203,15 @@ test('trial：判卷官标记 unsupportedClaims → 总体不通过（§3.7 5）
     assert.equal(report.retrievalVerdict.unsupportedClaimsFound, true);
     fs.rmSync(baseDir, { recursive: true, force: true });
 });
+
+
+// §3.8.2/§6.6：生产模板与内置 fallback 必须同步——判卷的 unsupportedClaims/
+// 分别评价/general reference 指令若只存在于 fallback，生产运行时（loadTemplate
+// 优先读 Agent/forge/templates/）将静默失去这些能力（M5 评审发现的假绿路径）。
+test('模板同步：生产判卷模板含 unsupportedClaims/分别评价/general reference（防漂移）', () => {
+    const template = fs.readFileSync(path.join(REPO_ROOT, 'Agent', 'forge', 'templates', 'grade.md'), 'utf8');
+    assert.match(template, /unsupportedClaims/, '输出格式含 unsupportedClaims');
+    assert.match(template, /通行原则/, '含分别评价库内依据/通行原则的指令');
+    assert.match(template, /general reference/, '含 referencePoints 标注要求');
+    assert.match(template, /retrievalEvidence|zeroCore|检索证据/, '含检索证据使用说明');
+});

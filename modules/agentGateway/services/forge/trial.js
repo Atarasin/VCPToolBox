@@ -458,7 +458,8 @@ function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio
         empty: '⚠️ 作答失败（模型未输出正文，非知识缺口）',
         'tool-leak': '⚠️ 工具调用标记泄漏（已剥离标记，非知识缺口）',
         truncated: '⚠️ 答卷被输出上限截断',
-        'reasoning-only': '⚠️ 以推理段作答（正文未输出）'
+        'reasoning-only': '⚠️ 以推理段作答（正文未输出）',
+        'search-error': '⚠️ 全部关键词检索失败（执行面故障，非知识缺口，与零命中分开归因）'
     };
     const lines = [];
     lines.push(`# ${blueprint.displayName}（${blueprint.name}）上岗验收报告`);
@@ -988,7 +989,8 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         // ——高作答分不得抵消检索失败，零核心命中不得靠通行原则通过。
         const nonPractical = exam.questions.filter((question) => question.subskillId !== 'practical');
         const coverageFailures = nonPractical
-            .filter((question) => retrievalEvidence[question.id]?.zeroCore)
+            .filter((question) => retrievalEvidence[question.id]?.zeroCore
+                && answerMeta[question.id]?.issue !== 'search-error')
             .map((question) => ({ id: question.id, subskillId: question.subskillId, reason: 'zero-core（知识库零命中）' }));
         const unsupported = gradedQuestions
             .filter((graded) => Array.isArray(graded.unsupportedClaims) && graded.unsupportedClaims.length > 0)
@@ -1005,7 +1007,7 @@ async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
         };
         const passed = scorePassed && retrievalVerdict.coverageOk && !retrievalVerdict.unsupportedClaimsFound;
         if (scorePassed && !passed) {
-            logger?.(`trial: 分数 ${(ratio * 100).toFixed(1)}}% 达线但检索证据不通过（${coverageFailures.length} 题零核心 / ${unsupported.length} 题含凭空主张）——总体判不通过（§3.7）`);
+            logger?.(`trial: 分数 ${(ratio * 100).toFixed(1)}% 达线但检索证据不通过（${coverageFailures.length} 题零核心 / ${unsupported.length} 题含凭空主张）——总体判不通过（§3.7）`);
         }
 
         // 4. Jev 对照试点（D7 方案 C）

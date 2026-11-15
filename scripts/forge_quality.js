@@ -612,6 +612,14 @@ async function cmdRegress(flags) {
     if (golden.summary.negativeLeaks > 0) alerts.push(`隔离负例泄漏 ${golden.summary.negativeLeaks} 条（活动库被污染？）`);
     if (!audit.report.ok) alerts.push(`三层审计发现 ${audit.report.issueCount} 项差异`);
 
+    // 最后成功 active 发布点（水位）先查再落盘——trend.jsonl 每行完整
+    //（§3.8.4：趋势含最后成功发布点，供回滚定位）。
+    let lastSuccessfulActiveAt = null;
+    try {
+        const { createGapRegistry } = require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/gapRegistry'));
+        const registry = createGapRegistry({ baseDir: forgeRoot });
+        lastSuccessfulActiveAt = await registry.lastSuccessfulLearningAt(expertName);
+    } catch { /* 档案缺失如实留空 */ }
     const entry = {
         at: new Date().toISOString(),
         expertName,
@@ -620,16 +628,11 @@ async function cmdRegress(flags) {
         goldenOk: golden.ok,
         golden: golden.summary,
         provenance: golden.provenance,
+        lastSuccessfulActiveAt,
         alerts
     };
     await fsp.mkdir(trendDir, { recursive: true });
     await fsp.appendFile(trendPath, `${JSON.stringify(entry)}\n`, 'utf-8');
-    // 最后成功 active 发布点（水位）一并入趋势记录，便于回滚定位。
-    try {
-        const { createGapRegistry } = require(path.join(REPO_ROOT, 'modules/agentGateway/services/forge/gapRegistry'));
-        const registry = createGapRegistry({ baseDir: forgeRoot });
-        entry.lastSuccessfulActiveAt = await registry.lastSuccessfulLearningAt(expertName);
-    } catch { /* 档案缺失如实留空 */ }
 
     const ok = audit.exitCode === 0 && golden.ok && alerts.length === 0;
     return { exitCode: ok ? 0 : 1, report: { ok, trendEntry: entry, trendPath, alerts } };
