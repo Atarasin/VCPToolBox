@@ -8,8 +8,8 @@ const path = require('path');
  * 采集（harvest）步骤：按画像 subskills 逐项检索抓取，原始材料永久存档（D6）。
  * 设计：docs/design/2026-10-10_专家铸造炉.md §3.3。
  *
- * - 检索走 toolInvoker（forge 白名单：AnySearch → FlashDeepSearch → BrowserSearch
- *   顺序 fallback，前者失败/空结果才换下一个）；
+ * - 检索走 toolInvoker（D7 白名单链：ParallelSearch → AnySearch → TavilySearch
+ *   → BrowserSearch 顺序 fallback，前者失败/空结果才换下一个）；
  * - 来源多样性：每 subskill 统计不同域名数，不足 minDomainsPerSubskill 记
  *   warning 继续（蒸馏红线 4：宁可缺，不可编——材料不足不虚构）；
  * - 每份材料落盘 runs/<jobId>/raw/<subskillId>/ 下一个文件 + 元数据
@@ -148,15 +148,29 @@ function responseText(result) {
 
 /**
  * 全文取证链：依次尝试四条路径。§3.4.4——HTTP/额度/超时、200 但空正文、
- * 应用壳、截断、批量 errors 均视为该路径失败（回退），不是"成功但内容少"。
+ * 应用壳均视为该路径失败（回退）；最小正文阈值 200 字符与证据门禁
+ *（qualityGate 的 snippet-only 判定）对齐——短于它的正文撑不起主张核验。
  * 返回 {text, fetchTool, fetchMode, truncated, attempts: [{tool, ok, error}]}；
  * 全链失败 text=null。
  */
-async function fetchFullText(toolInvoker, url, { objective = null, logger = null, minChars = 500 } = {}) {
+async function fetchFullText(toolInvoker, url, { objective = null, logger = null, minChars = 200 } = {}) {
     const attempts = [];
+    let bestSoFar = null;
     for (const step of FETCH_TOOL_CHAIN) {
         try {
             const result = await toolInvoker.invoke(step.tool, step.build(url, objective));
+            // §3.4.4：blocked=true / documentGeneration 异常 / 批量 errors 含目标
+            // URL ——结构化失败信号优先于正文判断。
+            const structured = result?.structuredContent || result?.data?.structured || null;
+            if (structured?.blocked === true || (typeof structured?.documentGeneration === 'string' && structured.documentGeneration !== 'completed')) {
+                attempts.push({ tool: step.tool, ok: false, error: `结构化失败信号：blocked=${structured.blocked ?? false}，documentGeneration=${structured.documentGeneration}` });
+                continue;
+            }
+            const structuredErrors = structured?.errors;
+            if (Array.isArray(structuredErrors) && structuredErrors.length > 0) {
+                attempts.push({ tool: step.tool, ok: false, error: `批量结果 errors 非空：${JSON.stringify(structuredErrors).slice(0, 140)}` });
+                continue;
+            }
             const text = responseText(result).trim();
             const shellOnly = /^(loading|just a moment|enable javascript|sign in|登录|403|429)/i.test(text.slice(0, 120));
             if (text.length < minChars || shellOnly) {
@@ -164,12 +178,25 @@ async function fetchFullText(toolInvoker, url, { objective = null, logger = null
                 continue;
             }
             const truncated = text.length >= EVIDENCE_MAX_CHARS;
+            if (truncated) {
+                // §3.4.4：触发截断视为该路径未完全成功——记录后继续尝试下一条
+                //（可能拿到更完整全文）；全链皆截断时最终接受最长的并显式标注。
+                attempts.push({ tool: step.tool, ok: true, chars: text.length, truncated: true });
+                if (!bestSoFar || text.length > bestSoFar.text.length) {
+                    bestSoFar = { text: text.slice(0, EVIDENCE_MAX_CHARS), fetchTool: step.tool, fetchMode: step.mode, truncated: true, attempts };
+                }
+                continue;
+            }
             attempts.push({ tool: step.tool, ok: true, chars: text.length });
-            return { text: text.slice(0, EVIDENCE_MAX_CHARS), fetchTool: step.tool, fetchMode: step.mode, truncated, attempts };
+            return { text, fetchTool: step.tool, fetchMode: step.mode, truncated: false, attempts };
         } catch (error) {
             attempts.push({ tool: step.tool, ok: false, error: error.message });
             logger?.(`evidence fetch: ${step.tool} 失败（${error.message}），回退下一条`);
         }
+    }
+    // 全链未拿到完整正文：若至少有截断版本，接受最长的（显式标 truncated）。
+    if (bestSoFar) {
+        return { ...bestSoFar, attempts };
     }
     return { text: null, fetchTool: null, fetchMode: null, truncated: false, attempts };
 }

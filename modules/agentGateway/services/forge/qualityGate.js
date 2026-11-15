@@ -331,7 +331,16 @@ async function verifyClaims({ units, evidenceBySourceUrl, materialUrls, llm, llm
             issues.push({
                 code: `CLAIM_${support.toUpperCase()}`,
                 message: `主张 ${claim.id} 独立判定为 ${support}：${judgment?.reason || ''}`,
-                blocking: true
+                blocking: true,
+                unitTitle: claim.unitTitle
+            });
+        } else if (support === 'uncertain' && ['normative', 'factual', 'heuristic'].includes(claim.kind)) {
+            // §3.5.3 顺序 5：低置信 → needs_review（opinion 除外——本就不当标准发布）。
+            issues.push({
+                code: 'CLAIM_LOW_CONFIDENCE',
+                message: `主张 ${claim.id}（${claim.kind}）独立判定为 uncertain：${judgment?.reason || '无判定理由'}——低置信不得作为已核验知识发布`,
+                blocking: true,
+                unitTitle: claim.unitTitle
             });
         }
         const built = qualityModel.createClaim({
@@ -440,8 +449,11 @@ function classifyMerge({ unit, targetCard }) {
     }
     const shorter = Math.min(unitBody.length, cardBody.length);
     const longer = Math.max(unitBody.length, cardBody.length);
-    if (shorter >= 200 && unitBody.includes(cardBody.slice(0, Math.floor(shorter * 0.8)))) {
-        return 'source-only'; // 一方是另一方的截断子集（同一材料的重蒸）
+    // 只允许"单元 ⊂ 旧卡"（重蒸子集，无新增主张）；单元是超集 = 有补充内容，
+    // 静默并来源会丢弃新增主张 → 必须走 content-revision 复核（§3.3.3）。
+    if (shorter >= 200 && unitBody.length <= cardBody.length
+        && cardBody.includes(unitBody.slice(0, Math.floor(shorter * 0.8)))) {
+        return 'source-only';
     }
     if (shorter / longer > 0.85) {
         // 高相似但不相同：数值类主张不同 → conflict，否则 content-revision。
@@ -503,7 +515,8 @@ async function assertIndexReady({ knowledgeStorePort, expectedFiles = [], probes
                 return readinessFail([`getInitializationStatus 失败：${error.message}`]);
             }
         } else {
-            snapshot.state = 'unknown（端口未暴露状态能力）';
+            // 红线 5：未知状态不得放行——端口缺状态能力即 fail closed。
+            return readinessFail(['端口未暴露 getInitializationStatus——索引状态未知，不得放行（§3.6.1）']);
         }
         if (typeof pendingFn === 'function') {
             try {
@@ -517,7 +530,7 @@ async function assertIndexReady({ knowledgeStorePort, expectedFiles = [], probes
         reasons.length = 0;
         if (snapshot.initialized === false || snapshot.state === 'uninitialized' || snapshot.state === 'disabled') {
             reasons.push(`store 未初始化（state=${snapshot.state}）`);
-        } else if (snapshot.state && !['compatible', 'empty', 'unknown（端口未暴露状态能力）'].includes(snapshot.state)) {
+        } else if (snapshot.state && !['compatible', 'empty'].includes(snapshot.state)) {
             reasons.push(`store 状态非 compatible：${snapshot.state}`);
         }
         if (snapshot.pending === null) {
@@ -527,13 +540,17 @@ async function assertIndexReady({ knowledgeStorePort, expectedFiles = [], probes
         }
 
         // 全部探针：预期 sourceFile 命中才算过（任一未命中继续轮询直到超时）。
+        // expectAny（trial 开考）：库内任一 sourceFile 命中即过——考卷探针
+        // 关心的是"库可检索"，不绑定具体文件。
         let probesPassed = 0;
         for (const probe of allProbes) {
             try {
                 const hits = await knowledgeStorePort.search(probe.query, { libraries: [probe.library], topK: 5, expand: false });
-                const hit = (hits || []).some((item) => item.sourceFile === probe.expectSourceFile || item.sourceFile?.endsWith(`/${probe.expectSourceFile}`));
+                const hit = probe.expectAny
+                    ? (hits || []).some((item) => String(item.sourceFile || '').startsWith(`${probe.library}/`))
+                    : (hits || []).some((item) => item.sourceFile === probe.expectSourceFile || item.sourceFile?.endsWith(`/${probe.expectSourceFile}`));
                 if (hit) probesPassed += 1;
-                else reasons.push(`探针未命中：${probe.expectSourceFile}（query="${probe.query.slice(0, 40)}"）`);
+                else reasons.push(`探针未命中：${probe.expectSourceFile || probe.expectAny ? `${probe.library}（库内任意卡）` : probe.expectSourceFile}（query="${probe.query.slice(0, 40)}"）`);
             } catch (error) {
                 reasons.push(`探针查询失败：${error.message}`);
             }

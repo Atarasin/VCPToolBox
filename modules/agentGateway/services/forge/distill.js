@@ -439,7 +439,8 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
 
                     // 红线 4 白名单：sourceUrls 只认本批材料的 URL——LLM 幻觉出的
                     // 「貌似可信」来源一律降级进 dropped，不混入知识卡。
-                    const materialUrlToFetchedAt = new Map(materials.map((material) => [material.url, material.fetchedAt]));
+                    // 白名单只认本批且已过材料门禁的来源（被隔离材料的 URL 不得再入卡）。
+                    const materialUrlToFetchedAt = new Map(batch.map((material) => [material.url, material.fetchedAt]));
                     const titleToCard = new Map(existingCards.map((card) => [card.title, card.file]));
                     // 本批格式合法、过了来源白名单的单元 → 先主张核验再单元门禁。
                     const candidateUnits = [];
@@ -470,7 +471,16 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                     const fullTextUrls = Object.keys(evidenceBySourceUrl);
                     let claimsByTitle = new Map();
                     let claimIssues = [];
-                    if (candidateUnits.length > 0 && fullTextUrls.length > 0) {
+                    if (candidateUnits.length > 0 && fullTextUrls.length === 0) {
+                        // 红线 3 / D6：本批零归档全文——摘要不构成证据，纯摘要蒸馏的
+                        // 单元一律转复核，不得凭主题+完整性直接写卡。
+                        logger?.(`distill: subskill ${subskill.id} 本批 ${candidateUnits.length} 个单元无任何归档全文（摘要仅用于发现），全部转待复核`);
+                        for (const unit of candidateUnits) {
+                            needsReviewUnits.push({ subskillId: subskill.id, title: unit.title, reason: 'CLAIM_EVIDENCE_SNIPPET_ONLY：本批材料无归档全文（红线 3）' });
+                            await writeUnitToZone(path.join(runDir, 'review', libraryName), unit, subskill.id, materialUrlToFetchedAt, fetchedAt);
+                        }
+                        candidateUnits.length = 0;
+                    } else if (candidateUnits.length > 0) {
                         try {
                             const verified = await qualityGate.verifyClaims({
                                 units: candidateUnits,
@@ -499,7 +509,10 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
 
                     for (const unit of candidateUnits) {
                         const unitClaims = claimsByTitle.get(unit.title) || [];
-                        const unitClaimIssues = claimIssues.filter((issue) => !issue.blocking || issue.code !== 'CLAIM_VERIFY_FAILED');
+                        // D4：issue 按单元归属（带 unitTitle 的只算该单元；批级
+                        // 基础设施失败已单独清场 candidateUnits，不再连带合格单元）。
+                        const unitClaimIssues = claimIssues.filter((issue) => !issue.blocking || issue.code !== 'CLAIM_VERIFY_FAILED')
+                            .filter((issue) => !issue.unitTitle || issue.unitTitle === unit.title);
                         const uncertainMaterialOnly = unit.sourceMaterials.length > 0
                             && unit.sourceMaterials.every((material) => material.topicUncertain);
                         const verdict = qualityGate.assessUnit({
@@ -525,6 +538,8 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                                 title: unit.title,
                                 reason: verdict.topic.reason
                             });
+                            // D2：隔离单元内容落 runs/<jobId>/quarantine/ 留档（可恢复路径）。
+                            await writeUnitToZone(path.join(runDir, 'quarantine', libraryName), unit, subskill.id, materialUrlToFetchedAt, fetchedAt);
                             continue;
                         }
                         if (verdict.status === 'needs_review' || uncertainMaterialOnly) {
@@ -641,7 +656,9 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                 knowledgeStorePort: ctx.knowledgeStorePort,
                 expectedFiles,
                 probes: [],
-                timeoutMs: smokeRetries * smokeIntervalMs,
+                // 显式配置的 FORGE_INDEX_READINESS_TIMEOUT_MS 优先；否则用
+                // smoke 轮询窗口（测试可注入短窗口）。
+                timeoutMs: process.env.FORGE_INDEX_READINESS_TIMEOUT_MS || smokeRetries * smokeIntervalMs,
                 pollIntervalMs: Math.min(smokeIntervalMs, 5000),
                 logger
             });
@@ -664,15 +681,42 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
                     }).catch(() => undefined); // 移动失败不掩盖门禁结论
                     demoted.push(item.fileName);
                 }
+                // §2.2：demote 后等待 unlink 队列消化（未收敛显式记录，不冒充干净）。
+                // 端口不可用/缺队列能力 = 无索引在跑，无从等待——记 not-applicable，
+                // 不空转 60s（fail closed 语义由「不落 marker + demote」承担）。
+                let unlinkConverged = 'not-applicable（端口不可用，无索引队列）';
+                if (ctx.knowledgeStorePort && ctx.knowledgeStorePort.available !== false
+                    && typeof ctx.knowledgeStorePort.pendingIngestCount === 'function') {
+                    unlinkConverged = await (require('./knowledgeStates')).waitForUnlinkConvergence({
+                        pollUnlink: () => ctx.knowledgeStorePort.pendingIngestCount(),
+                        timeoutMs: 60000,
+                        pollIntervalMs: 2000
+                    });
+                    if (!unlinkConverged) {
+                        logger?.('distill: demote 后索引 unlink 队列 60s 内未收敛——重发布须待收敛（§2.2）');
+                    }
+                }
                 const failure = new Error(
                     `索引就绪门禁失败（fail closed）：${indexReady.reasons.join('；')}——`
                     + `${demoted.length} 个已写文件 demote 到复核区，本步骤不落成功 marker（可修复后 resume）`
                 );
                 failure.code = 'FORGE_INDEX_NOT_READY';
                 failure.status = 503;
+                // source-only 合并只追加 frontmatter 来源（normalize 后不影响索引），
+                // 但合并已发生——显式留台账与错误信息，不冒充"活动库零改动"。
+                const mergedTargets = merged.filter((m) => m.targetFile).map((m) => m.targetFile);
+                if (mergedTargets.length > 0) {
+                    await ledger.append({
+                        action: 'merge-not-reverted',
+                        files: mergedTargets,
+                        reason: '索引就绪门禁失败：来源合并未回退（仅 frontmatter 追加，索引语义不变）；复核时按 restoreHint 核对'
+                    }).catch(() => undefined);
+                }
                 failure.details = {
                     indexReady,
                     demotedFiles: demoted,
+                    mergedTargetsNotReverted: mergedTargets,
+                    unlinkConverged,
                     partial: { writtenCount: written.length, demotedCount: demoted.length, reviewCount: needsReviewUnits.length }
                 };
                 throw failure;
@@ -688,6 +732,10 @@ function createDistillStepRunner({ knowledgeRoot, smokeRetries = SMOKE_RETRY_COU
             ruleVersion: qualityGate.QUALITY_RULE_VERSION,
             generatedAt: new Date().toISOString(),
             libraryName,
+            evidence: {
+                claimsVerified: qualityClaims.length,
+                note: '全文成功率与插件尝试链见 runs/<jobId>/raw/<subskill>/manifest.json 的 evidence 统计与各 meta.fetchAttempts'
+            },
             verdicts: {
                 total: qualityVerdicts.length,
                 byStatus: qualityVerdicts.reduce((acc, v) => { acc[v.status] = (acc[v.status] || 0) + 1; return acc; }, {}),

@@ -135,7 +135,19 @@ function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, 
     const jobRuntimeService = createJobRuntimeService();
     const llmCalls = [];
     const toolInvoker = {
-        async invoke() {
+        // M4 T25：取证链调用返回主题全文（>200 字符）供证据归档与主张核验；
+        // 搜索调用返回发现摘要。主张提示由 llmOutputs 单输出风格兜底
+        //（返回蒸馏 JSON → claims 为空 → CLAIMS_EMPTY 非阻断）。
+        async invoke(toolName, args) {
+            const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                || args?.command === 'web_fetch' || args?.command === 'extract';
+            if (isFetch) {
+                const long = '配色理论完整指南（证据全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。'
+                    + 'UI 配色实践中先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，'
+                    + '大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1。深色模式先降低大面积背景明度，再提升前景与背景对比度。'
+                    + '栅格与间距遵循 8pt 体系，本全文超过取证链 200 字符最小阈值，用于证据归档与主张核验。';
+                return { content: [{ type: 'text', text: long }] };
+            }
             return { content: [{ type: 'text', text: anySearchText(materials) }] };
         }
     };
@@ -148,6 +160,15 @@ function buildPipeline({ baseDir, llmOutputs, finishReason, knowledgeStorePort, 
             }
             : async (config, payload) => {
                 llmCalls.push(payload);
+                const content = payload.messages[0].content;
+                // M4 主张核验提示：返回空集（无主张 → CLAIMS_EMPTY 非阻断），
+                // 不与蒸馏批输出混用（截断输出会给核验器喂坏 JSON）。
+                if (content.includes('知识主张提取器')) {
+                    return llmResponse(JSON.stringify({ claims: [] }));
+                }
+                if (content.includes('独立主张核验员')) {
+                    return llmResponse(JSON.stringify({ judged: [] }));
+                }
                 const next = llmOutputs.length > 1 ? llmOutputs.shift() : llmOutputs[0];
                 return llmResponse(next, finishReason);
             }
@@ -462,7 +483,9 @@ test('distill：LLM 输出不可解析时带重试指令重试一次（费用入
     await waitFor(() => jrs.pollJob(jobId, null).data.job.terminal);
     const job = jrs.pollJob(jobId, null).data.job;
     assert.equal(job.metadata.forge.error.step, 'synthesize', '重试后 distill 应完成');
-    assert.equal(llmCalls.length, 2, '恰好调用两次');
+    // M4：主张提取/判定会追加 LLM 调用——蒸馏批调用按 prompt 过滤计数。
+    const distillCalls = llmCalls.filter((call) => call.messages[0].content.includes('知识蒸馏引擎'));
+    assert.equal(distillCalls.length, 2, '蒸馏批恰好调用两次（重试一次）');
     // 2026-10-17：重试不再原样重放——基 prompt 相同，重试附「直接输出 JSON」强指令。
     const basePrompt = llmCalls[0].messages[0].content;
     assert.ok(llmCalls[1].messages[0].content.startsWith(basePrompt), '重试 prompt 保留基 prompt');
@@ -534,8 +557,9 @@ test('distill：正文为空（推理段吃满预算）时抬预算重试并完�
     const jobId = await runToDistillComplete(jobRuntimeService, forgeRuntimeService);
     const job = jobRuntimeService.pollJob(jobId, null).data.job;
     assert.equal(job.metadata.forge.error.step, 'synthesize', '抬预算重试后 distill 应完成（不再整单报废）');
-    assert.deepEqual(calls.map((call) => call.max_tokens), [8000, 16000], '空正文触发抬预算');
-    assert.deepEqual(calls[0].thinking, { type: 'disabled' }, '蒸馏关思考（缺省）');
+    const distillCalls = calls.filter((call) => call.messages[0].content.includes('知识蒸馏引擎'));
+    assert.deepEqual(distillCalls.map((call) => call.max_tokens), [8000, 16000], '空正文触发抬预算');
+    assert.deepEqual(distillCalls[0].thinking, { type: 'disabled' }, '蒸馏关思考（缺省）');
     assert.ok(fs.readdirSync(path.join(baseDir, 'knowledge', 'UIDesigner知识库')).length > 0, '知识卡已入库');
 });
 
@@ -565,7 +589,8 @@ test('distill：全部尝试正文为空 → FORGE_LLM_EMPTY_CONTENT（与不可
     assert.equal(job.metadata.forge.error.step, 'distill');
     assert.match(job.metadata.forge.error.message, /正文为空/);
     assert.match(job.metadata.forge.error.message, /推理段 token/, '错误消息点名推理段 token 用量');
-    assert.deepEqual(calls.map((call) => call.max_tokens), [8000, 16000, 16000], '三次尝试：抬预算后不再回退');
+    const distillCalls = calls.filter((call) => call.messages[0].content.includes('知识蒸馏引擎'));
+    assert.deepEqual(distillCalls.map((call) => call.max_tokens), [8000, 16000, 16000], '三次尝试：抬预算后不再回退');
     const failedDir = path.join(baseDir, 'runs', jobId, 'distill-failed');
     assert.equal(fs.readdirSync(failedDir).length, 3, '三次尝试的原始输出都留档');
 });

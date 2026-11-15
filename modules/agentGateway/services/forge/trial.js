@@ -443,8 +443,8 @@ function renderReportMarkdown({ blueprint, exam, answers, grading, passed, ratio
         const meta = exam.meta;
         lines.push(`- 考卷：${meta.questionCount} 题 / 覆盖 ${meta.coveredSubskills.length}/${meta.outlinedSubskills.length} 子技能 / 哈希 ${meta.examHash}${meta.salvagedGenerations > 0 ? `（含 ${meta.salvagedGenerations} 批截断抢救）` : ''}${meta.degradedEntries.length > 0 ? `（⚠️ 题量不足条目：${meta.degradedEntries.join('、')}）` : ''}`);
     }
-    if (indexReadiness && indexReadiness.checked && indexReadiness.ready === false) {
-        lines.push(`- ⚠️ 开考时索引队列未清空（剩余 ${indexReadiness.pending} 项）：检索可能缺最新入库知识`);
+    if (indexReadiness && indexReadiness.ok === false) {
+        lines.push(`- ⚠️ 开考前索引就绪门禁未通过：${(indexReadiness.reasons || []).slice(0, 2).join('；')}`);
     }
     lines.push('');
     for (const question of exam.questions) {
@@ -771,35 +771,25 @@ function createTrialStepRunner() {
     };
 }
 
-// 索引就绪闸门：pendingIngestCount 归零或超时；端口无此能力按「未知」放行。
-async function waitForIndexReadiness(knowledgeStorePort, { logger, timeoutMs = resolvePositiveEnvInt('FORGE_INDEX_READINESS_TIMEOUT_MS', 120000), intervalMs = resolvePositiveEnvInt('FORGE_INDEX_READINESS_INTERVAL_MS', 5000) } = {}) {
-    if (!knowledgeStorePort || knowledgeStorePort.available === false) {
-        return { checked: false };
-    }
-    if (typeof knowledgeStorePort.pendingIngestCount !== 'function') {
-        return { checked: false, reason: '端口未暴露 pendingIngestCount' };
-    }
-    const readCount = async () => {
-        try {
-            const value = await knowledgeStorePort.pendingIngestCount();
-            return Number.isFinite(value) ? value : null;
-        } catch {
-            return null;
-        }
-    };
-    let pending = await readCount();
-    if (pending === null) {
-        return { checked: false, reason: '队列深度不可读' };
-    }
-    const deadline = Date.now() + timeoutMs;
-    while (pending > 0 && Date.now() < deadline) {
-        logger?.(`trial: TDB 摄取队列未清空（${pending} 项），等待索引就绪…`);
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
-        pending = await readCount();
-    }
-    return pending > 0
-        ? { checked: true, ready: false, pending }
-        : { checked: true, ready: true, pending };
+// 索引就绪闸门（§3.6.1：distill 与 trial 同一合取条件）：状态 compatible +
+// 队列收敛 + 每个子技能的检索探针命中（库内任意卡）。未知/不可用/超时一律
+// fail closed——开考带旧库应考比不开考更糟（2026-10-11 实测教训）。
+async function waitForIndexReadiness(knowledgeStorePort, { logger, blueprint = null, libraryName = null } = {}) {
+    const qualityGate = require('./qualityGate');
+    const probes = (blueprint?.subskills || [])
+        .map((subskill) => ({
+            query: (subskill.searchQueries && subskill.searchQueries[0]) || subskill.title || subskill.id,
+            library: libraryName || 'Root',
+            expectAny: true
+        }));
+    return qualityGate.assertIndexReady({
+        knowledgeStorePort,
+        expectedFiles: [],
+        probes,
+        timeoutMs: resolvePositiveEnvInt('FORGE_INDEX_READINESS_TIMEOUT_MS', 120000),
+        pollIntervalMs: resolvePositiveEnvInt('FORGE_INDEX_READINESS_INTERVAL_MS', 5000),
+        logger
+    });
 }
 
 /**
@@ -877,8 +867,16 @@ function stripWorkLogForExam(persona) {
 async function runBlindAndGrade(ctx, { blueprint, exam, examsDir }) {
     const { llm, llmConfig, knowledgeStorePort, baseDir, logger, runDir } = ctx;
     const libraryName = blueprintLibraryName(blueprint.name);
-    // 索引就绪闸门（P1.3）：刚写盘的知识未被消化时盲测检索不到——等待或显式告警。
-    const indexReadiness = await waitForIndexReadiness(knowledgeStorePort, { logger });
+    // 索引就绪闸门（§3.6.1）：不就绪不开考（fail closed）——探针逐子技能
+    // 验证库可检索；端口能力缺失按未知拒绝。
+    const indexReadiness = await waitForIndexReadiness(knowledgeStorePort, { logger, blueprint, libraryName });
+    if (!indexReadiness.ok) {
+        const error = new Error(`开考前索引就绪门禁未通过（fail closed，§3.6.1）：${(indexReadiness.reasons || []).slice(0, 2).join('；')}`);
+        error.code = 'FORGE_INDEX_NOT_READY';
+        error.status = 503;
+        error.details = { indexReadiness };
+        throw error;
+    }
     // 盲测（红线 1）：代查专属库 + 人设作答（人设中的工作日志指令整段剥除）
     let persona = '';
         try {

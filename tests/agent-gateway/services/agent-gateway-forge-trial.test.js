@@ -119,17 +119,31 @@ function buildEnv(baseDir, { gradeRatio, gradeRatios = null, jevPort = null, kno
         toolInvokerPort: {
             // 按子技能查询词返回不同域名集（避免跨子技能同域 2s 节流拖慢测试）
             invoke: async (toolName, args) => {
-                const isLayout = String(args?.query || '').includes('layout');
+                // M4 T25/主题门禁：搜索返回主题相关材料（color/layout 两子技能），
+                // 取证链调用返回 >500 字全文供证据归档与主张核验。
+                const isLayout = String(args?.query || args?.objective || '').includes('layout')
+                    || (Array.isArray(args?.search_queries) && args.search_queries[0]?.includes('layout'));
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                if (isFetch) {
+                    const long = isLayout
+                        ? '栅格与版式完整指南（证据归档全文）：12 列栅格与 8pt 间距体系是版式设计的基础，列宽按断点适配，水槽取 8 的倍数，内容区与边距对齐栅格。字号按字阶系统取值，常用比例 1.2/1.25/1.333，行高与字号配对保证多行文本可读性；中文正文字号建议不小于 14px。栅格间隔推荐公式 16-8n px 用于紧凑场景；硬栅格与软栅格是 8pt 体系的两种落地方式。断点设计遵循内容优先原则：先确定最小可用布局，再按内容溢出点定义断点，而非机械套用设备宽度；跨断点保持栅格列数与水槽节奏一致。排版层级通过字号、字重、行高与间距共同表达：标题加大字号与字重，正文保持中性，辅助信息降低对比度并缩小一档。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。'
+                        : '配色理论完整指南（证据归档全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。在 UI 配色实践中，先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1，UI 组件边界另按非文本对比度要求校验。深色模式不是简单反色：先降低大面积背景明度，再提升前景与背景的对比度，保证信息层级不因暗色环境损失；阴影与高度改用亮度叠加表达。色彩可访问性还包括不依赖纯色相传递信息，色盲安全配对在蓝橙轴上取值，红绿对比需辅以其他区分手段。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。';
+                    return { content: [{ type: 'text', text: long }] };
+                }
                 const text = isLayout
-                    ? 'D\nhttps://d.dev/grid\ns\n\nE\nhttps://e.org/type\ns2\n\nF\nhttps://f.io/scale\ns3'
-                    : 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2\n\nC\nhttps://c.io/z\ns3';
+                    ? 'Layout grid guide D\nhttps://d.dev/grid\n栅格版式要点。\n\nType scale E\nhttps://e.org/type\n字阶要点。\n\nF\nhttps://f.io/scale\n间距要点。'
+                    : 'Color theory A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nC\nhttps://c.io/z\n配色理论要点三。';
                 return { content: [{ type: 'text', text }] };
             }
         },
         knowledgeStorePort: {
             available: true,
             listLibraries: async () => ['UIDesigner知识库'],
-            search: async () => [{ title: '色轮与色彩三属性', text: '色轮组织颜色……', score: 0.9 }],
+            // 同时服务盲测（title/text）与索引就绪探针（sourceFile，§3.6.1 trial fail-closed）。
+            search: async () => [{ title: '色轮与色彩三属性', text: '色轮组织颜色……', score: 0.9, sourceFile: 'UIDesigner知识库/K_color-theory_seelun.md' }],
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0,
             ...(knowledgeStoreOverrides || {})
         },
         jevPort,
@@ -371,6 +385,10 @@ test('trial：判卷输出不可解析时重试一次（logger 回归用例）',
                     output = gradeCalls === 1 ? '判卷官无法输出 JSON 的抖动输出' : gradeJson(0.9, content);
                 } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                     output = DISTILL_JSON;
+                } else if (content.includes('知识主张提取器')) {
+                    output = JSON.stringify({ claims: [] });
+                } else if (content.includes('独立主张核验员')) {
+                    output = JSON.stringify({ judged: [] });
                 } else {
                     output = 'answer';
                 }
@@ -379,7 +397,16 @@ test('trial：判卷输出不可解析时重试一次（logger 回归用例）',
         },
         toolInvokerPort: {
             // M4 主题门禁：材料需与子技能词廓（配色理论/color）相关。
-            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette guide A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nC\nhttps://c.io/z\n配色理论要点三。' }] })
+            invoke: async (toolName, args) => {
+                // 全文取证链（M4 T25）：取证调用返回 >500 字主题全文（UrlFetch 命中首链）；
+                // 搜索调用返回发现摘要。
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                const text = isFetch
+                    ? '配色理论完整指南（证据归档全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。在 UI 配色实践中，先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1，UI 组件边界另按非文本对比度要求校验。深色模式不是简单反色：先降低大面积背景明度，再提升前景与背景的对比度，保证信息层级不因暗色环境损失；阴影与高度改用亮度叠加表达。色彩可访问性还包括不依赖纯色相传递信息，色盲安全配对在蓝橙轴上取值，红绿对比需辅以其他区分手段。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。'
+                    : 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。';
+                return { content: [{ type: 'text', text }] };
+            }
         },
         knowledgeStorePort: {
             available: true,
@@ -490,6 +517,10 @@ function buildTrialParseEnv(baseDir, { examOutput, examFinishReason = null, grad
                     output = typeof gradeOutput === 'function' ? gradeOutput(content) : (gradeOutput || gradeJson(0.9, content));
                 } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                     output = DISTILL_JSON;
+                } else if (content.includes('知识主张提取器')) {
+                    output = JSON.stringify({ claims: [] });
+                } else if (content.includes('独立主张核验员')) {
+                    output = JSON.stringify({ judged: [] });
                 } else {
                     output = 'answer';
                 }
@@ -502,7 +533,16 @@ function buildTrialParseEnv(baseDir, { examOutput, examFinishReason = null, grad
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nColor wheel C\nhttps://c.io/z\n配色理论要点三。' }] })
+            invoke: async (toolName, args) => {
+                // 全文取证链（M4 T25）：取证调用返回 >500 字主题全文（UrlFetch 命中首链）；
+                // 搜索调用返回发现摘要。
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                const text = isFetch
+                    ? '配色理论完整指南（证据归档全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。在 UI 配色实践中，先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1，UI 组件边界另按非文本对比度要求校验。深色模式不是简单反色：先降低大面积背景明度，再提升前景与背景的对比度，保证信息层级不因暗色环境损失；阴影与高度改用亮度叠加表达。色彩可访问性还包括不依赖纯色相传递信息，色盲安全配对在蓝橙轴上取值，红绿对比需辅以其他区分手段。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。'
+                    : 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。';
+                return { content: [{ type: 'text', text }] };
+            }
         },
         knowledgeStorePort: {
             available: true,
@@ -717,6 +757,10 @@ test('trial：盲测作答弹性——空正文重试/推理段兜底/作答失�
                     message = { content: scopeAwareExamOutput(content) };
                 } else if (content.includes('判卷官')) {
                     message = { content: mixedGrade };
+                } else if (content.includes('知识主张提取器')) {
+                    message = { content: JSON.stringify({ claims: [] }) };
+                } else if (content.includes('独立主张核验员')) {
+                    message = { content: JSON.stringify({ judged: [] }) };
                 } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                     message = { content: DISTILL_JSON };
                 }
@@ -729,7 +773,16 @@ test('trial：盲测作答弹性——空正文重试/推理段兜底/作答失�
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nColor wheel C\nhttps://c.io/z\n配色理论要点三。' }] })
+            invoke: async (toolName, args) => {
+                // 全文取证链（M4 T25）：取证调用返回 >500 字主题全文（UrlFetch 命中首链）；
+                // 搜索调用返回发现摘要。
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                const text = isFetch
+                    ? '配色理论完整指南（证据归档全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。在 UI 配色实践中，先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1，UI 组件边界另按非文本对比度要求校验。深色模式不是简单反色：先降低大面积背景明度，再提升前景与背景的对比度，保证信息层级不因暗色环境损失；阴影与高度改用亮度叠加表达。色彩可访问性还包括不依赖纯色相传递信息，色盲安全配对在蓝橙轴上取值，红绿对比需辅以其他区分手段。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。'
+                    : 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。';
+                return { content: [{ type: 'text', text }] };
+            }
         },
         knowledgeStorePort: {
             available: true,
@@ -818,6 +871,10 @@ test('trial：两轮空正文但推理段可用 → 以推理段兜底作答并�
                     message = { content: scopeAwareExamOutput(content) };
                 } else if (content.includes('判卷官')) {
                     message = { content: gradeJson(0.9, content) };
+                } else if (content.includes('知识主张提取器')) {
+                    message = { content: JSON.stringify({ claims: [] }) };
+                } else if (content.includes('独立主张核验员')) {
+                    message = { content: JSON.stringify({ judged: [] }) };
                 } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                     message = { content: DISTILL_JSON };
                 }
@@ -830,7 +887,16 @@ test('trial：两轮空正文但推理段可用 → 以推理段兜底作答并�
             }
         },
         toolInvokerPort: {
-            invoke: async () => ({ content: [{ type: 'text', text: 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。\n\nColor wheel C\nhttps://c.io/z\n配色理论要点三。' }] })
+            invoke: async (toolName, args) => {
+                // 全文取证链（M4 T25）：取证调用返回 >500 字主题全文（UrlFetch 命中首链）；
+                // 搜索调用返回发现摘要。
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                const text = isFetch
+                    ? '配色理论完整指南（证据归档全文）：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅，三者共同构成配色的坐标系。在 UI 配色实践中，先确定品牌主色，再由主色生成完整色阶，语义色沿用同一色板体系命名。对比度校验遵循 WCAG：普通文本与背景对比度至少 4.5:1，大字号文本（≥18pt 或 ≥14pt 粗体）至少 3:1，UI 组件边界另按非文本对比度要求校验。深色模式不是简单反色：先降低大面积背景明度，再提升前景与背景的对比度，保证信息层级不因暗色环境损失；阴影与高度改用亮度叠加表达。色彩可访问性还包括不依赖纯色相传递信息，色盲安全配对在蓝橙轴上取值，红绿对比需辅以其他区分手段。本指南全文用于取证链归档与主张核验，字符数超过取证链 500 字符的最小阈值，足以让 UrlFetch 首链成功并写入 evidence 目录。'
+                    : 'Color theory palette A\nhttps://a.com/x\n配色理论要点一。\n\nColor palette UI B\nhttps://b.com/y\n配色理论要点二。';
+                return { content: [{ type: 'text', text }] };
+            }
         },
         knowledgeStorePort: {
             available: true,
@@ -934,7 +1000,13 @@ test('trial：残卷被完整性门禁拦截——FORGE_EXAM_INCOMPLETE，不进
             }
         },
         toolInvokerPort: { async invoke() { return { content: [{ type: 'text', text: 'A\nhttps://a.com/x\ns' }] }; } },
-        knowledgeStorePort: { available: true, listLibraries: async () => ['UIDesigner知识库'], search: async () => [{ title: 't', text: 'x', score: 1 }] },
+        knowledgeStorePort: {
+            available: true,
+            listLibraries: async () => ['UIDesigner知识库'],
+            search: async () => [{ title: 't', text: 'x', score: 1, sourceFile: 'UIDesigner知识库/K_x.md' }],
+            getInitializationStatus: () => ({ state: 'compatible', initialized: true }),
+            pendingIngestCount: () => 0
+        },
         baseDir: path.join(baseDir, 'forge2'),
         knowledgeRoot: path.join(baseDir, 'knowledge2'),
         llmConfig: { url: 'http://t', apiKey: 'k', model: 'm' },
@@ -991,7 +1063,7 @@ test('trial：完整考卷带元数据——exam.json meta + 报告考卷行 + �
 
 // ── P1.3 索引就绪闸门：队列未清空 → 等待；超时 → 放行但显式告警 ────────────
 
-test('trial：TDB 队列短时未清空 → 等待后开考（无告警）；持续未清空 → 超时放行并告警', async () => {
+test('trial：队列短时未清空 → 等待后开考；持续未清空 → fail closed 不开考（§3.6.1/§6.5 反转）', async () => {
     const previousTimeout = process.env.FORGE_INDEX_READINESS_TIMEOUT_MS;
     const previousInterval = process.env.FORGE_INDEX_READINESS_INTERVAL_MS;
     process.env.FORGE_INDEX_READINESS_TIMEOUT_MS = '150';
@@ -1011,22 +1083,24 @@ test('trial：TDB 队列短时未清空 → 等待后开考（无告警）；持
     assert.equal(job.status, 'pending_confirm', '队列清零后正常开考');
     const marker = JSON.parse(fs.readFileSync(
         path.join(baseDir, 'forge', 'runs', jobId, 'steps', 'trial.json'), 'utf8'));
-    assert.equal(marker.state.indexReadiness.ready, true);
-    assert.ok(!marker.summary.includes('索引队列未清空'));
+    assert.equal(marker.state.indexReadiness.ok, true);
+    assert.ok(!marker.summary.includes('索引就绪门禁未通过'));
 
-    // 持续未清空 → 超时放行 + summary/报告告警
+    // 持续未清空 → fail closed：开考不得完成（§3.6.1：超时是可重试错误，
+    // 不是警告放行——旧 fail-open 语义已反转，§6.5）。
     const baseDir2 = createTempDir();
     const env2 = buildEnv(baseDir2, {
         gradeRatio: 0.9,
         knowledgeStoreOverrides: { pendingIngestCount: () => 7 }
     });
     const jobId2 = await driveToTrial(env2);
+    const job2 = env2.jobRuntimeService.pollJob(jobId2, null).data.job;
+    assert.equal(job2.status, 'failed', '持续未清空不开考');
+    assert.equal(job2.metadata.forge.error.code, 'FORGE_INDEX_NOT_READY');
+    assert.equal(job2.metadata.forge.error.step, 'trial');
     const runDir2 = path.join(baseDir2, 'forge', 'runs', jobId2);
-    const marker2 = JSON.parse(fs.readFileSync(path.join(runDir2, 'steps', 'trial.json'), 'utf8'));
-    assert.match(marker2.summary, /⚠️ 开考时索引队列未清空（剩余 7 项）/);
-    assert.equal(marker2.state.indexReadiness.ready, false);
-    const md = fs.readFileSync(path.join(runDir2, 'exams', 'grade-report.md'), 'utf8');
-    assert.match(md, /开考时索引队列未清空（剩余 7 项）/, '报告头显式告警');
+    assert.ok(!fs.existsSync(path.join(runDir2, 'steps', 'trial.json')), '未开考不落 trial marker');
+    assert.ok(!fs.existsSync(path.join(runDir2, 'exams', 'grade-report.md')), '未开考不产报告');
 
     if (previousTimeout === undefined) delete process.env.FORGE_INDEX_READINESS_TIMEOUT_MS;
     else process.env.FORGE_INDEX_READINESS_TIMEOUT_MS = previousTimeout;
@@ -1185,6 +1259,10 @@ test('trial：DSML 工具调用泄漏——首答泄漏触发重答恢复；持�
                     message = { content: scopeAwareExamOutput(content) };
                 } else if (content.includes('判卷官')) {
                     message = { content: mixedGrade };
+                } else if (content.includes('知识主张提取器')) {
+                    message = { content: JSON.stringify({ claims: [] }) };
+                } else if (content.includes('独立主张核验员')) {
+                    message = { content: JSON.stringify({ judged: [] }) };
                 } else if (content.includes('知识蒸馏') || content.includes('材料清单')) {
                     message = { content: DISTILL_JSON };
                 }
@@ -1193,8 +1271,16 @@ test('trial：DSML 工具调用泄漏——首答泄漏触发重答恢复；持�
         },
         toolInvokerPort: {
             invoke: async (toolName, args) => {
-                const isLayout = String(args?.query || '').includes('layout');
-                return { content: [{ type: 'text', text: isLayout ? 'D\nhttps://d.dev/g\ns' : 'A\nhttps://a.com/x\ns\n\nB\nhttps://b.com/y\ns2' }] };
+                const isLayout = String(args?.query || args?.objective || '').includes('layout');
+                const isFetch = ['UrlFetch', 'ChromeBridge'].includes(toolName)
+                    || args?.command === 'web_fetch' || args?.command === 'extract';
+                if (isFetch) {
+                    const longBase = isLayout
+                        ? '栅格系统与版式设计完整指南：12 列栅格与 8pt 间距体系是版式设计的基础，列宽按断点适配，水槽取 8 的倍数，内容区与边距对齐栅格。字号按字阶系统取值，行高与字号配对保证多行文本可读性。断点设计遵循内容优先原则，跨断点保持栅格列数与水槽节奏一致。排版层级通过字号、字重、行高与间距共同表达。'
+                        : '配色理论完整指南：色轮以色相环组织颜色，色相决定色系，饱和度决定纯度，明度决定深浅。UI 配色先确定品牌主色再生成色阶，语义色沿用色板体系，对比度按 WCAG 阈值校验（普通文本 4.5:1）。深色模式先降低背景明度再提升前景对比度。色彩可访问性不依赖纯色相传递信息。';
+                    return { content: [{ type: 'text', text: longBase + '本全文供证据归档与主张核验使用，为保证取证链判定成功，此处补足正文长度：设计系统将上述原则沉淀为令牌与组件约束，评审时按优先级给出可落地修复项，并附验证口径与回归清单，确保每次修改可复查、可回滚、可解释，本段文字用于超过取证链 200 字符的最小阈值。' }] };
+                }
+                return { content: [{ type: 'text', text: isLayout ? 'Layout D\nhttps://d.dev/g\n栅格要点。' : 'Color theory A\nhttps://a.com/x\n配色要点一。\n\nB\nhttps://b.com/y\n配色要点二。' }] };
             }
         },
         knowledgeStorePort: {
